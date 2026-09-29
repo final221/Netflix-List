@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.0.0
+// @version      1.0.1
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -55,8 +55,8 @@
     const STATUS_TEXT_CLASS = 'tm-netflix-mylist-v20-status-text';
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
-    const SCRIPT_NAME = 'Legacy My List for Netflix';
-    const SCRIPT_VERSION = '1.0.0';
+    const SCRIPT_NAME = 'My List for Netflix';
+    const SCRIPT_VERSION = '1.0.1';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     const FAST_MOVE_CLASS = 'tm-netflix-mylist-v22-fast-move';
@@ -75,7 +75,7 @@
      *    languages as Netflix. Unknown or unsupported locales fall back to English.
      * 4. CopyLogs and diagnostic log text support English and Japanese only;
      *    Japanese is used for ja, and English is the default for every other locale.
-     * 5. The script name "Legacy My List for Netflix" is never localized.
+     * 5. The script name "My List for Netflix" is never localized.
      *
      * Localization architecture:
      * - UI_MESSAGES + tUi()/tUiPlural() are for user-visible script UI only.
@@ -655,7 +655,7 @@
         routeChangeDetected: { en: 'Route change detected', ja: '\u30da\u30fc\u30b8\u9077\u79fb\u691c\u51fa' },
         clipboardFallback: { en: 'Clipboard API failed; using fallback', ja: '\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9API\u306b\u5931\u6557\u3002fallback\u3078\u79fb\u884c' },
         execCommandCopyFailed: { en: 'execCommand(copy) failed.', ja: 'execCommand(copy) \u304c\u5931\u6557\u3057\u307e\u3057\u305f\u3002' },
-        copyLogsTooltip: { en: 'Copy the Legacy My List for Netflix log to the clipboard', ja: '\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306bLegacy My List for Netflix\u306e\u30ed\u30b0\u3092\u30b3\u30d4\u30fc\u3057\u307e\u3059' },
+        copyLogsTooltip: { en: 'Copy the My List for Netflix log to the clipboard', ja: '\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306bMy List for Netflix\u306e\u30ed\u30b0\u3092\u30b3\u30d4\u30fc\u3057\u307e\u3059' },
         copied: { en: 'Copied.', ja: '\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f\u3002' },
         copyLogsRequested: { en: 'CopyLogs requested', ja: 'CopyLogs\u8981\u6c42' },
         copyLogsCompleted: { en: 'CopyLogs completed', ja: 'CopyLogs\u5b8c\u4e86' },
@@ -1418,7 +1418,7 @@
     function buildInvestigationLogText() {
         const snapshot = collectRuntimeSnapshot();
         return [
-            'Legacy My List for Netflix Diagnostic Log',
+            'My List for Netflix Diagnostic Log',
             `version: ${SCRIPT_VERSION}`,
             `copiedAt: ${formatSystemTimestamp()}`,
             `url: ${location.href}`,
@@ -4129,7 +4129,7 @@
                 );
             }
 
-            // Fully discard the existing Legacy My List session using the same
+            // Fully discard the existing My List for Netflix session using the same
             // teardown path as a route leave, then start a fresh normal session.
             suspendTargetSession('order-mismatch-reinitialize');
             if (!isTargetPage()) return;
