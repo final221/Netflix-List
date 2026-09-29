@@ -30,6 +30,8 @@ what it should not contain
 
 ## User working preferences
 
+- For this repository, the user has given standing authorization to commit and push each change to `origin`; do not ask for per-commit confirmation. Use the configured GitHub SSH remote. SSH authentication is available for the user's GitHub account, and the app's approval review has allowed the push. The approval review remains an independent system gate.
+
 ## Cross-cutting repository knowledge
 
 
