@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.0.2
+// @version      1.0.3
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -17,6 +17,7 @@
     'use strict';
 
     const TARGET_PATH = '/browse/my-list';
+    const BROWSE_PAGE_SECTIONS_SELECTOR = '[data-uia="browse-page-sections"]';
     // Hawkins controls can apply a virtual-page transform after several paint
     // cycles when the source row is under load. Keep the observation window
     // longer than that deferred update so a legitimate move is not retried
@@ -56,7 +57,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.0.2';
+    const SCRIPT_VERSION = '1.0.3';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     const FAST_MOVE_CLASS = 'tm-netflix-mylist-v22-fast-move';
@@ -953,6 +954,10 @@
     let targetSessionReason = 'route:initial';
     let targetListenersActive = false;
     let targetDocumentObserver = null;
+    let targetObservedBrowseHost = null;
+    let targetObservedMyListSection = null;
+    let targetObservedAncestors = [];
+    let targetDocumentDiscoveryActive = false;
     let activeCarouselStyleCleanup = null;
     let viewOriginalMyList = true;
     let viewOriginalMenuId = null;
@@ -1938,7 +1943,7 @@
 
         // Generation 2 fallback: match the live My List row to the GraphQL section.
         // Do not rely on translated heading text or on the removed page indicators.
-        const host = document.querySelector('[data-uia="browse-page-sections"]');
+        const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
         const domSection = host?.querySelector?.(':scope > section[data-uia="carousel-row-section-1"]') || null;
         const domSectionId = String(domSection?.id || '');
         if (domSectionId) {
@@ -2032,7 +2037,7 @@
     }
 
     function findMyListSection() {
-        const host = document.querySelector('[data-uia="browse-page-sections"]');
+        const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
         if (!host) return null;
 
         const nativeSections = nativeBrowseSections(host);
@@ -2111,7 +2116,7 @@
     }
 
     function ensureSyntheticMyListSection() {
-        const host = document.querySelector('[data-uia="browse-page-sections"]');
+        const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
         if (!host) return null;
 
         let section = document.getElementById(SYNTHETIC_SECTION_ID);
@@ -4242,7 +4247,7 @@
     }
 
     function syncStatusTypography(section, status) {
-        const heading = section?.querySelector('h2') || document.querySelector('[data-uia="browse-page-sections"] section h2');
+        const heading = section?.querySelector('h2') || document.querySelector(`${BROWSE_PAGE_SECTIONS_SELECTOR} section h2`);
         if (!heading || !status) return;
 
         const style = getComputedStyle(heading);
@@ -8984,12 +8989,63 @@
         scheduleResponsiveRefresh(140, 'visualViewport.resize');
     }
 
-    function handleTargetDocumentMutation() {
-        if (location.href !== lastObservedUrl) {
-            handleRouteChange('MutationObserver-url');
+    function targetDocumentObserverAncestors(host) {
+        const ancestors = [];
+        for (let node = host?.parentElement; node; node = node.parentElement) {
+            ancestors.push(node);
         }
-        if (!targetSessionActive || !isTargetPage()) return;
-        if (initializationBlockedSessionToken === routeSessionToken) return;
+        return ancestors;
+    }
+
+    function bindTargetDocumentObserver(host, section) {
+        if (!targetDocumentObserver) return false;
+
+        const ancestors = host ? targetDocumentObserverAncestors(host) : [];
+        const sameAncestors = ancestors.length === targetObservedAncestors.length &&
+            ancestors.every((ancestor, index) => ancestor === targetObservedAncestors[index]);
+        const isAlreadyWatchingDiscovery = !host && targetDocumentDiscoveryActive && !targetObservedBrowseHost;
+        if (isAlreadyWatchingDiscovery) return false;
+
+        if (host === targetObservedBrowseHost &&
+            section === targetObservedMyListSection &&
+            sameAncestors &&
+            !targetDocumentDiscoveryActive) {
+            return false;
+        }
+
+        targetDocumentObserver.disconnect();
+        targetObservedBrowseHost = null;
+        targetObservedMyListSection = null;
+        targetObservedAncestors = [];
+        targetDocumentDiscoveryActive = false;
+
+        if (!host) {
+            if (document.documentElement) {
+                // Watch broadly only until Netflix mounts the browse sections host.
+                targetDocumentObserver.observe(document.documentElement, { childList: true, subtree: true });
+                targetDocumentDiscoveryActive = true;
+            }
+            return true;
+        }
+
+        // The host's direct children identify/reorder carousel rows. Observe the
+        // selected My List row deeply, plus only direct child changes along the
+        // host's ancestor path so replacement of the host is still detected.
+        targetDocumentObserver.observe(host, { childList: true, subtree: !section });
+        if (section?.isConnected) {
+            targetDocumentObserver.observe(section, { childList: true, subtree: true });
+        }
+        for (const ancestor of ancestors) {
+            targetDocumentObserver.observe(ancestor, { childList: true });
+        }
+
+        targetObservedBrowseHost = host;
+        targetObservedMyListSection = section?.isConnected ? section : null;
+        targetObservedAncestors = ancestors;
+        return true;
+    }
+
+    function handleRelevantTargetDocumentMutation() {
         if (waitingForNativeEmpty && sourceState?.empty) {
             ensureLiveNativeBinding('document-mutation-empty-wait');
             return;
@@ -9001,6 +9057,61 @@
         scheduleRun(40, routeSessionToken);
     }
 
+    function mutationChangesObservedAncestorPath(mutation) {
+        const ancestorIndex = targetObservedAncestors.indexOf(mutation.target);
+        if (ancestorIndex < 0) return false;
+
+        const branch = ancestorIndex === 0
+            ? targetObservedBrowseHost
+            : targetObservedAncestors[ancestorIndex - 1];
+        if (!branch) return false;
+
+        return [...mutation.addedNodes, ...mutation.removedNodes].some(node =>
+            node === branch || (node.nodeType === 1 && node.contains(branch))
+        );
+    }
+
+    function handleTargetDocumentMutation(mutations = []) {
+        if (location.href !== lastObservedUrl) {
+            handleRouteChange('MutationObserver-url');
+        }
+        if (!targetSessionActive || !isTargetPage() || !targetDocumentObserver) return;
+        if (initializationBlockedSessionToken === routeSessionToken) return;
+
+        let relevantMutation = false;
+        if (targetDocumentDiscoveryActive) {
+            // This is the only phase that watches the full document. Switch to
+            // the browse host once it appears, then narrow to My List when found.
+            const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
+            if (!host) return;
+            const section = findMyListSection();
+            relevantMutation = bindTargetDocumentObserver(host, section);
+        } else {
+            const ancestorChanged = mutations.some(mutationChangesObservedAncestorPath);
+            const hostChanged = mutations.some(mutation => mutation.target === targetObservedBrowseHost);
+            const hostDiscoveryChanged = Boolean(targetObservedBrowseHost && !targetObservedMyListSection) &&
+                mutations.some(mutation => targetObservedBrowseHost.contains(mutation.target));
+            const sectionChanged = mutations.some(mutation =>
+                targetObservedMyListSection && targetObservedMyListSection.contains(mutation.target)
+            );
+
+            if (ancestorChanged || hostChanged) {
+                const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
+                const section = host ? findMyListSection() : null;
+                const bindingChanged = bindTargetDocumentObserver(host, section);
+                relevantMutation = bindingChanged || hostChanged || sectionChanged;
+            } else if (hostDiscoveryChanged) {
+                const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
+                const section = host ? findMyListSection() : null;
+                relevantMutation = bindTargetDocumentObserver(host, section) || hostDiscoveryChanged;
+            } else {
+                relevantMutation = sectionChanged;
+            }
+        }
+
+        if (relevantMutation) handleRelevantTargetDocumentMutation();
+    }
+
     function startTargetEventListeners() {
         if (targetListenersActive) return;
         targetListenersActive = true;
@@ -9009,7 +9120,8 @@
         window.addEventListener('resize', handleTargetWindowResize, { passive: true });
         window.visualViewport?.addEventListener('resize', handleTargetVisualViewportResize, { passive: true });
         targetDocumentObserver = new MutationObserver(handleTargetDocumentMutation);
-        targetDocumentObserver.observe(document.documentElement, { childList: true, subtree: true });
+        const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
+        bindTargetDocumentObserver(host, host ? findMyListSection() : null);
     }
 
     function stopTargetEventListeners() {
@@ -9021,6 +9133,10 @@
         window.visualViewport?.removeEventListener('resize', handleTargetVisualViewportResize);
         targetDocumentObserver?.disconnect();
         targetDocumentObserver = null;
+        targetObservedBrowseHost = null;
+        targetObservedMyListSection = null;
+        targetObservedAncestors = [];
+        targetDocumentDiscoveryActive = false;
     }
 
     async function runScript(sessionToken = routeSessionToken) {
