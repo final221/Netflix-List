@@ -56,7 +56,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'Legacy My List for Netflix';
-    const SCRIPT_VERSION = '2.2.0';
+    const SCRIPT_VERSION = '1.0.0';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     const FAST_MOVE_CLASS = 'tm-netflix-mylist-v22-fast-move';
