@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.0.7
+// @version      1.0.8
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -49,7 +49,9 @@
     const SCRIPT_MOVE_SETTLE_TIMEOUT_MS = 260;
     const HOVER_SOURCE_TIMEOUT_MS = 500;
     const HOVER_SOURCE_INTERVAL_MS = 10;
-    const HOVER_ACTIVATION_DELAY_MS = 0;
+    const HOVER_ACTIVATION_DELAY_MS = 120;
+    const HOVER_SCROLL_QUIET_MS = 180;
+    const CANCELLED_MOVE_POLL_MS = 80;
     const ORDER_MISMATCH_POSITION_THRESHOLD = 10;
     const LOGICAL_COLLECTION_TIMEOUT_MS = 120000;
     const TOTAL_COUNT_TIMEOUT_MS = 5000;
@@ -69,7 +71,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.0.7';
+    const SCRIPT_VERSION = '1.0.8';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     const FAST_MOVE_CLASS = 'tm-netflix-mylist-v22-fast-move';
@@ -952,6 +954,9 @@
     let lastPageShape = '';
     let lastPointerX = -1;
     let lastPointerY = -1;
+    let lastTargetScrollAt = -Infinity;
+    let hoverNeedsPointerMove = false;
+    let pendingGridHoverClone = null;
     let pageMoveSequence = 0;
     let carouselMoveQueue = Promise.resolve();
     let carouselDomRuntime = new WeakMap();
@@ -966,6 +971,7 @@
     let targetSessionReason = 'route:initial';
     let targetListenersActive = false;
     let targetDocumentObserver = null;
+    let targetMutationFrame = null;
     let targetObservedBrowseHost = null;
     let targetObservedMyListSection = null;
     let targetObservedAncestors = [];
@@ -1008,6 +1014,10 @@
         if (!isRouteSessionActive(sessionToken)) throw createRouteSessionCancelledError();
     }
 
+    function hoverPreparationCancelled(token) {
+        return token !== null && token !== undefined && token !== hoverToken;
+    }
+
     function clearRunningSession(sessionToken) {
         if (runningSessionToken !== sessionToken) return;
         running = false;
@@ -1032,6 +1042,7 @@
     function resetDetachedTargetState() {
         if (completedSection?.isConnected && document.getElementById(GRID_ID)) return;
 
+        cancelPendingGridHover();
         completedSection = null;
         if (sourceState?.section && !sourceState.section.isConnected) {
             sourceState = null;
@@ -3921,8 +3932,17 @@
         return true;
     }
 
-    function ensureLiveNativeBinding(reason = 'live-check') {
+    function ensureLiveNativeBinding(reason = 'live-check', bindingOnly = false) {
         if (!sourceState || !isTargetPage()) return null;
+        if (bindingOnly && !waitingForNativeEmpty && !sourceState.empty) {
+            // Observer callbacks need element identity, not page geometry, React
+            // indices, or counts when Netflix still owns the same mounted source.
+            const section = findMyListSection();
+            const scroller = section?.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller) || null;
+            const track = scroller && netflixDom.findTrack(scroller);
+            const binding = { section, scroller, track };
+            if (section && scroller && track && !nativeBindingChanged(binding)) return binding;
+        }
         let live = readNativeMyListDomState();
 
         if (waitingForNativeEmpty && (sourceState.items?.length ?? 0) === 0) {
@@ -4154,13 +4174,10 @@
             textNode.appendChild(metaNode);
         }
 
-        if (content && typeof content === 'object') {
-            labelNode.textContent = content.label || '';
-            metaNode.textContent = content.meta || '';
-        } else {
-            labelNode.textContent = String(content ?? '');
-            metaNode.textContent = '';
-        }
+        const label = content && typeof content === 'object' ? content.label || '' : String(content ?? '');
+        const meta = content && typeof content === 'object' ? content.meta || '' : '';
+        if (labelNode.textContent !== label) labelNode.textContent = label;
+        if (metaNode.textContent !== meta) metaNode.textContent = meta;
 
         let link = node.querySelector(`#${LOG_LINK_ID}`);
         if (!link) {
@@ -4536,13 +4553,16 @@
             button.getAttribute('tabindex') === '-1';
     }
 
-    async function waitLogicalPageChange(section, scroller, track, beforePage, direction, beforeTransform, beforeSignature, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null) {
+    async function waitLogicalPageChange(section, scroller, track, beforePage, direction, beforeTransform, beforeSignature, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
         const runtime = getCarouselDomRuntime(section);
         const started = performance.now();
         let lastTransform = beforeTransform;
         let lastSignature = beforeSignature;
         while (performance.now() - started < timeout) {
-            await new Promise(resolve => requestAnimationFrame(resolve));
+            // A click cannot be undone. Keep its acknowledgement serialized, but
+            // stop spending every animation frame on an obsolete hover request.
+            if (hoverPreparationCancelled(token)) await sleep(CANCELLED_MOVE_POLL_MS);
+            else await new Promise(resolve => requestAnimationFrame(resolve));
             assertRouteSession(sessionToken);
             const transform = track.style.getPropertyValue('transform') || getComputedStyle(track).transform;
             const signature = visibleSignature(currentPageSlots(scroller, track));
@@ -4571,6 +4591,9 @@
             };
         }
         assertRouteSession(sessionToken);
+        if (hoverPreparationCancelled(token)) {
+            return { page: beforePage, changed: false, transform: lastTransform, signature: lastSignature };
+        }
         const details = {
             direction: direction < 0 ? 'left' : 'right',
             beforePage,
@@ -4586,10 +4609,10 @@
         throw initializationTimeoutError('logical-page-change', timeout, details);
     }
 
-    async function waitPageByPolling(section, before, timeout, sessionToken = null) {
+    async function waitPageByPolling(section, before, timeout, sessionToken = null, token = null) {
         const start = performance.now();
         while (performance.now() - start < timeout) {
-            await sleep(12);
+            await sleep(hoverPreparationCancelled(token) ? CANCELLED_MOVE_POLL_MS : 12);
             assertRouteSession(sessionToken);
             const now = selectedPage(section);
             if (now !== before) return now;
@@ -4598,7 +4621,7 @@
         return selectedPage(section);
     }
 
-    async function waitPage(section, before, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null) {
+    async function waitPage(section, before, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
         assertRouteSession(sessionToken);
         const immediate = selectedPage(section);
         if (immediate !== before) return immediate;
@@ -4608,7 +4631,7 @@
         // window remains as a fallback in case Netflix changes the indicator in a
         // way that does not trigger the expected mutation record.
         if (typeof MutationObserver !== 'function') {
-            return waitPageByPolling(section, before, timeout, sessionToken);
+            return waitPageByPolling(section, before, timeout, sessionToken, token);
         }
 
         const started = performance.now();
@@ -4648,7 +4671,7 @@
 
         const elapsed = performance.now() - started;
         const remaining = Math.max(0, timeout - elapsed);
-        return waitPageByPolling(section, before, remaining, sessionToken);
+        return waitPageByPolling(section, before, remaining, sessionToken, token);
     }
 
     function captureInlineStyleProperty(element, property) {
@@ -4802,14 +4825,15 @@
                         beforeTransform,
                         beforeSignature,
                         PAGE_CHANGE_TIMEOUT_MS,
-                        sessionToken
+                        sessionToken,
+                        token
                     );
                     after = logicalMove.page;
                     afterTransform = logicalMove.transform;
                     afterSignature = logicalMove.signature;
                     settleObservedChange = logicalMove.changed;
                 } else {
-                    after = await waitPage(section, before, PAGE_CHANGE_TIMEOUT_MS, sessionToken);
+                    after = await waitPage(section, before, PAGE_CHANGE_TIMEOUT_MS, sessionToken, token);
                 }
                 assertRouteSession(sessionToken);
                 if (sharedFastMode) {
@@ -5281,7 +5305,9 @@
         const seenKeys = options.seenKeys instanceof Set ? options.seenKeys : null;
         const requiredKeys = options.requiredKeys instanceof Set ? options.requiredKeys : null;
         const sessionToken = options.sessionToken ?? null;
+        const token = options.hoverToken ?? null;
         assertRouteSession(sessionToken);
+        if (hoverPreparationCancelled(token)) return [];
         const start = performance.now();
         let lastSignature = '';
         let stableFrames = 0;
@@ -5324,6 +5350,7 @@
         while (performance.now() - start < timeout) {
             await new Promise(resolve => requestAnimationFrame(resolve));
             assertRouteSession(sessionToken);
+            if (hoverPreparationCancelled(token)) return [];
             const slots = currentPageSlots(scroller, track);
             const newItems = countNewItems(slots);
             const requiredMatches = countRequiredMatches(slots);
@@ -5364,6 +5391,7 @@
             }
         }
         assertRouteSession(sessionToken);
+        if (hoverPreparationCancelled(token)) return [];
         return best;
     }
 
@@ -7061,10 +7089,15 @@
 
     function applyGridGeometry(section, grid, layout) {
         const geometry = currentGridGeometry(section, layout);
-        grid.style.setProperty('--tm-cols', String(geometry.columns));
-        grid.style.setProperty('--tm-grid-width', `${geometry.width}px`);
-        grid.style.setProperty('--tm-grid-left', `${geometry.left}px`);
-        grid.style.setProperty('--tm-gap', `${layout.gap}px`);
+        const properties = {
+            '--tm-cols': String(geometry.columns),
+            '--tm-grid-width': `${geometry.width}px`,
+            '--tm-grid-left': `${geometry.left}px`,
+            '--tm-gap': `${layout.gap}px`
+        };
+        for (const [property, value] of Object.entries(properties)) {
+            if (grid.style.getPropertyValue(property) !== value) grid.style.setProperty(property, value);
+        }
         return geometry;
     }
 
@@ -7196,14 +7229,16 @@
         return findMountedSourceSlot(sourceState.track, item, true);
     }
 
-    async function waitForMountedSourceItem(item, timeout = HOVER_SOURCE_TIMEOUT_MS, activeOnly = true, sessionToken = null) {
+    async function waitForMountedSourceItem(item, timeout = HOVER_SOURCE_TIMEOUT_MS, activeOnly = true, sessionToken = null, token = null) {
         assertRouteSession(sessionToken);
+        if (hoverPreparationCancelled(token)) return null;
         ensureLiveNativeBinding('hover-source-wait');
         let track = sourceState?.track;
         const start = performance.now();
         let slot = null;
         while (performance.now() - start < timeout) {
             assertRouteSession(sessionToken);
+            if (hoverPreparationCancelled(token)) return null;
             if (!track?.isConnected || sourceState?.track !== track) {
                 ensureLiveNativeBinding('hover-source-wait-disconnected');
                 track = sourceState?.track;
@@ -7215,6 +7250,7 @@
             assertRouteSession(sessionToken);
         }
         assertRouteSession(sessionToken);
+        if (hoverPreparationCancelled(token)) return null;
         ensureLiveNativeBinding('hover-source-wait-final');
         track = sourceState?.track;
         return track ? findMountedSourceSlot(track, item, activeOnly) : null;
@@ -7244,6 +7280,7 @@
 
     async function resolveExpectedPageSourceItem(item, expectedPage = item.page, token = null, sessionToken = null) {
         assertRouteSession(sessionToken);
+        if (hoverPreparationCancelled(token)) return { status: 'unknown', reason: 'hover-cancelled' };
         ensureLiveNativeBinding('hover-expected-page-start');
         clearSourceAlignment();
         activeVideoId = null;
@@ -7316,7 +7353,8 @@
             minimumSlots,
             requiredKeys: new Set([itemKey(item)]),
             timeout: 650,
-            sessionToken
+            sessionToken,
+            hoverToken: token
         });
         if (token !== null && token !== hoverToken) {
             return { status: 'unknown', reason: 'token-changed-after-stability-wait' };
@@ -7437,6 +7475,7 @@
 
     async function refreshStaleSourceOnPreferredPage(item, preferredPage = item.page, token = null, sessionToken = null) {
         assertRouteSession(sessionToken);
+        if (hoverPreparationCancelled(token)) return null;
         const rebound = ensureLiveNativeBinding('hover-stale-refresh-start');
         let section = rebound?.section || sourceState?.section;
         let scroller = rebound?.scroller || sourceState?.scroller;
@@ -7473,7 +7512,7 @@
 
         await goToPage(section, scroller, preferredPage, token, sessionToken, true);
         if (token !== null && token !== hoverToken) return null;
-        slot = await waitForMountedSourceItem(item, 700, true, sessionToken);
+        slot = await waitForMountedSourceItem(item, 700, true, sessionToken, token);
         if (token !== null && token !== hoverToken) return null;
         if (!slot) return null;
 
@@ -7488,6 +7527,7 @@
 
     async function locateActiveSourceItem(item, preferredPage = item.page, token = null, sessionToken = null, repairLogicalMapping = true, maxRadius = null) {
         assertRouteSession(sessionToken);
+        if (hoverPreparationCancelled(token)) return null;
         ensureLiveNativeBinding('hover-locate-start');
         let { section, scroller, track } = sourceState || {};
         if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) return null;
@@ -7520,6 +7560,7 @@
 
         for (const page of order) {
             assertRouteSession(sessionToken);
+            if (hoverPreparationCancelled(token)) return null;
             const rebound = ensureLiveNativeBinding('hover-locate-page');
             if (rebound?.section && rebound?.scroller && rebound?.track) {
                 section = rebound.section;
@@ -7544,7 +7585,8 @@
                 item,
                 page === preferredPage ? HOVER_SOURCE_TIMEOUT_MS : 280,
                 true,
-                sessionToken
+                sessionToken,
+                token
             );
             if (token !== null && token !== hoverToken) {
                 log(tLog('hoverSourceSearchCancelled'), { reason: 'token-changed-after-mount-wait', token, hoverToken });
@@ -7556,8 +7598,10 @@
                     previousSignature: beforeSig,
                     minElapsed: 120,
                     timeout: 520,
-                    sessionToken
+                    sessionToken,
+                    hoverToken: token
                 });
+                if (hoverPreparationCancelled(token)) return null;
                 slot = findMountedSourceSlot(track, item, true);
             }
 
@@ -7752,6 +7796,7 @@
 
     function scheduleNativeHoverReplay(sourceSlot, item, clone, triggerEvent, actualPage, reason) {
         requestAnimationFrame(() => {
+            if (gridHoverSuppressed()) return;
             if (!sourceSlot?.isConnected || !clone?.isConnected) return;
             if (activeClone !== clone || activeVideoId !== item.videoId) return;
 
@@ -7799,6 +7844,7 @@
 
     async function prepareMountedPage(page, targetItem = null, triggerEvent = null, token = null, sessionToken = null) {
         assertRouteSession(sessionToken);
+        if (hoverPreparationCancelled(token)) return null;
         ensureLiveNativeBinding('hover-prepare-start');
         const { section, scroller, track } = sourceState || {};
         if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
@@ -7984,8 +8030,10 @@
             await waitStableCurrentPage(scroller, track, {
                 previousSignature: beforeSignature,
                 minElapsed: 160,
-                sessionToken
+                sessionToken,
+                hoverToken: token
             });
+            if (hoverPreparationCancelled(token)) return null;
             actualPage = selectedPage(section);
         }
 
@@ -8106,7 +8154,8 @@
         return freshTarget;
     }
 
-    async function activateClone(item, clone, triggerEvent = null) {
+    async function activateClone(item, clone, triggerEvent = null, generation = clone?.__tmHoverActivationGeneration) {
+        if (!gridHoverTargetActive(clone, generation)) return;
         const seq = ++hoverSequence;
         const started = performance.now();
 
@@ -8122,7 +8171,7 @@
         if (responsiveRefreshPromise) {
             log(tLog('hoverWaitingResponsiveRefreshInProgress'), { seq, item: itemSummary(item) });
             try { await responsiveRefreshPromise; } catch (_) {}
-            clone = findGridClone(item) || clone;
+            if (!gridHoverTargetActive(clone, generation)) return;
         }
         if (!clone?.isConnected) {
             warn(tLog('hoverCancelled'), { seq, reason: 'clone-disconnected', item: itemSummary(item) });
@@ -8217,13 +8266,13 @@
             }
         } finally {
             const current = findGridClone(item);
-            if (current?.isConnected) {
+            if (current?.isConnected && current.getAttribute('data-tm-hover-token') === String(token)) {
                 current.removeAttribute('data-tm-preparing');
-                if (Number(current.getAttribute('data-tm-hover-token')) === token) current.removeAttribute('data-tm-hover-token');
+                current.removeAttribute('data-tm-hover-token');
             }
-            if (clone?.isConnected) {
+            if (clone?.isConnected && clone.getAttribute('data-tm-hover-token') === String(token)) {
                 clone.removeAttribute('data-tm-preparing');
-                if (Number(clone.getAttribute('data-tm-hover-token')) === token) clone.removeAttribute('data-tm-hover-token');
+                clone.removeAttribute('data-tm-hover-token');
             }
         }
     }
@@ -8237,52 +8286,49 @@
         return null;
     }
 
+    function gridHoverSuppressed() {
+        return hoverNeedsPointerMove || performance.now() - lastTargetScrollAt < HOVER_SCROLL_QUIET_MS;
+    }
+
+    function gridHoverTargetActive(clone, generation) {
+        return !gridHoverSuppressed() && Boolean(sourceState?.grid?.isConnected) &&
+            Boolean(clone?.isConnected) && generation === clone.__tmHoverActivationGeneration &&
+            clone.matches(':hover');
+    }
+
+    function cancelPendingGridHover() {
+        const clone = pendingGridHoverClone;
+        pendingGridHoverClone = null;
+        if (!clone) return;
+        clone.__tmHoverActivationGeneration = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
+        clearTimeout(clone.__tmHoverActivationTimer);
+        clone.__tmHoverActivationTimer = null;
+    }
+
     function handleGridClonePointerOver(event, clone, item) {
         if (orderMismatchDialogOpen || orderMismatchReinitializing) return;
         if (event.relatedTarget && clone.contains(event.relatedTarget)) return;
-        if (!sourceState?.section) return;
+        if (!sourceState?.section || gridHoverSuppressed()) return;
+        if (pendingGridHoverClone === clone || activeClone === clone) return;
+        if (clone.getAttribute('data-tm-preparing') === 'true' &&
+            clone.getAttribute('data-tm-hover-token') === String(hoverToken)) return;
 
-        const selected = selectedPage(sourceState.section);
-        const backedPage = Number(clone.getAttribute('data-tm-backed-page'));
-        log(tLog('legacyCardHoverInput'), {
-            event: event.type,
-            item: itemSummary(item),
-            selectedPage: selected,
-            backedPage: Number.isFinite(backedPage) ? backedPage : null,
-            hoverReady: clone.getAttribute('data-tm-hover-ready') === 'true',
-            pointer: { x: event.clientX, y: event.clientY }
-        });
-
-        if (clone.getAttribute('data-tm-hover-ready') === 'true' &&
-            Number.isFinite(backedPage) && selected === backedPage) {
-            const sourceSlot = findActiveSourceSlot(item);
-            if (sourceSlot && alignSourceSlotToClone(sourceSlot, clone)) {
-                activePage = selected;
-                activeVideoId = item.videoId;
-                activeClone = clone;
-                log(tLog('legacyCardHoverReusedMountedNativeSource'), {
-                    item: itemSummary(item),
-                    selectedPage: selected,
-                    source: slotDescriptor(sourceSlot)
-                });
-                scheduleNativeHoverReplay(sourceSlot, item, clone, event, selected, 'mounted-source-reuse');
-                return;
-            }
-        }
-
-        if (clone.__tmHoverActivationTimer !== null && clone.__tmHoverActivationTimer !== undefined) {
-            clearTimeout(clone.__tmHoverActivationTimer);
-        }
+        // All preparation, including ready-source reuse, goes through the dwell.
+        // Keep only the latest target and do not read native layout on entry.
+        cancelPendingGridHover();
         const generation = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
         clone.__tmHoverActivationGeneration = generation;
+        pendingGridHoverClone = clone;
         clone.__tmHoverActivationTimer = setTimeout(() => {
             clone.__tmHoverActivationTimer = null;
-            if (generation !== clone.__tmHoverActivationGeneration || !clone.isConnected) return;
-            activateClone(item, clone, event);
+            if (pendingGridHoverClone === clone) pendingGridHoverClone = null;
+            if (!gridHoverTargetActive(clone, generation)) return;
+            activateClone(item, clone, event, generation);
         }, HOVER_ACTIVATION_DELAY_MS);
     }
 
     function handleGridClonePointerLeave(clone, item) {
+        if (pendingGridHoverClone === clone) cancelPendingGridHover();
         clone.__tmHoverActivationGeneration = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
         if (clone.__tmHoverActivationTimer !== null && clone.__tmHoverActivationTimer !== undefined) {
             clearTimeout(clone.__tmHoverActivationTimer);
@@ -8294,6 +8340,7 @@
         if (Number.isFinite(cloneToken) && cloneToken === hoverToken) {
             hoverToken++;
             clone.removeAttribute('data-tm-hover-token');
+            clone.removeAttribute('data-tm-preparing');
             log(tLog('pendingHoverCancelledOnLeave'), {
                 item: itemSummary(item),
                 token: cloneToken,
@@ -8905,11 +8952,38 @@
     }
 
     function handleTargetPointerMove(event) {
+        const moved = event.clientX !== lastPointerX || event.clientY !== lastPointerY;
         lastPointerX = event.clientX;
         lastPointerY = event.clientY;
+        // Native hover replay emits synthetic moves. Only physical movement can
+        // restore hover intent after scrolling, and scrolling never auto-replays it.
+        if (!moved || !event.isTrusted || performance.now() - lastTargetScrollAt < HOVER_SCROLL_QUIET_MS) return;
+        hoverNeedsPointerMove = false;
+        const grid = sourceState?.grid;
+        if (!grid?.isConnected) return;
+        const clone = gridCloneFromPointerEvent(event, grid);
+        if (clone) handleGridClonePointerOver(event, clone, clone.__tmMyListItem);
+    }
+
+    function handleTargetScroll() {
+        const now = performance.now();
+        const starting = now - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS;
+        lastTargetScrollAt = now;
+        hoverNeedsPointerMove = true;
+        cancelPendingGridHover();
+        if (!starting) return;
+        hoverToken++;
+        clearSourceAlignment();
+        activeVideoId = null;
+        activeClone = null;
+        activePage = null;
+        // Grafted React props also receive Netflix's delegated mouse events.
+        // Clear them once per scroll burst so they cannot bypass the script guard.
+        invalidateGridReact();
     }
 
     function handleTargetWindowResize() {
+        cancelPendingGridHover();
         hoverToken++;
         clearSourceAlignment();
         activeVideoId = null;
@@ -8923,6 +8997,7 @@
     }
 
     function handleTargetVisualViewportResize() {
+        cancelPendingGridHover();
         hoverToken++;
         clearSourceAlignment();
         activeVideoId = null;
@@ -8997,15 +9072,32 @@
     }
 
     function handleRelevantTargetDocumentMutation() {
-        if (waitingForNativeEmpty && sourceState?.empty) {
-            ensureLiveNativeBinding('document-mutation-empty-wait');
-            return;
-        }
-        if (completedSection && document.getElementById(GRID_ID)) {
-            ensureLiveNativeBinding('document-mutation');
+        if (completedSection || (waitingForNativeEmpty && sourceState?.empty)) {
+            if (targetMutationFrame !== null) return;
+            const sessionToken = routeSessionToken;
+            targetMutationFrame = requestAnimationFrame(() => {
+                targetMutationFrame = null;
+                if (!isRouteSessionActive(sessionToken)) return;
+                if (sourceState?.grid?.isConnected) {
+                    ensureLiveNativeBinding('document-mutation', true);
+                } else {
+                    scheduleRun(40, sessionToken);
+                }
+            });
             return;
         }
         scheduleRun(40, routeSessionToken);
+    }
+
+    function isScriptOwnedMyListNode(node) {
+        const element = node?.nodeType === 1 ? node : node?.parentElement;
+        return Boolean(element?.closest?.(`#${GRID_ID}, #${STATUS_ID}, #${LEGACY_EMPTY_STATE_ID}, #${ORDER_MISMATCH_DIALOG_ID}`));
+    }
+
+    function mutationOnlyChangesScriptUi(mutation) {
+        if (isScriptOwnedMyListNode(mutation.target)) return true;
+        const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+        return changedNodes.length > 0 && changedNodes.every(isScriptOwnedMyListNode);
     }
 
     function mutationChangesObservedAncestorPath(mutation) {
@@ -9028,6 +9120,13 @@
         }
         if (!targetSessionActive || !isTargetPage() || !targetDocumentObserver) return;
         if (initializationBlockedSessionToken === routeSessionToken) return;
+        // External removal of our whole grid still needs recovery, even though
+        // mutations wholly inside the connected script UI are otherwise ignored.
+        if (completedSection && sourceState?.grid && !sourceState.grid.isConnected) {
+            handleRelevantTargetDocumentMutation();
+        }
+        mutations = mutations.filter(mutation => !mutationOnlyChangesScriptUi(mutation));
+        if (!mutations.length) return;
 
         let relevantMutation = false;
         if (targetDocumentDiscoveryActive) {
@@ -9067,6 +9166,8 @@
         if (targetListenersActive) return;
         targetListenersActive = true;
         document.addEventListener('pointermove', handleTargetPointerMove, { passive: true, capture: true });
+        document.addEventListener('wheel', handleTargetScroll, { passive: true, capture: true });
+        document.addEventListener('scroll', handleTargetScroll, { passive: true, capture: true });
         document.addEventListener('click', handleObservedMyListToggleClick, { capture: true, passive: true });
         window.addEventListener('resize', handleTargetWindowResize, { passive: true });
         window.visualViewport?.addEventListener('resize', handleTargetVisualViewportResize, { passive: true });
@@ -9078,7 +9179,16 @@
     function stopTargetEventListeners() {
         if (!targetListenersActive && !targetDocumentObserver) return;
         targetListenersActive = false;
+        cancelPendingGridHover();
+        lastTargetScrollAt = -Infinity;
+        hoverNeedsPointerMove = false;
+        lastPointerX = -1;
+        lastPointerY = -1;
+        if (targetMutationFrame !== null) cancelAnimationFrame(targetMutationFrame);
+        targetMutationFrame = null;
         document.removeEventListener('pointermove', handleTargetPointerMove, true);
+        document.removeEventListener('wheel', handleTargetScroll, true);
+        document.removeEventListener('scroll', handleTargetScroll, true);
         document.removeEventListener('click', handleObservedMyListToggleClick, true);
         window.removeEventListener('resize', handleTargetWindowResize);
         window.visualViewport?.removeEventListener('resize', handleTargetVisualViewportResize);

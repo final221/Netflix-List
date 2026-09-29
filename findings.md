@@ -40,7 +40,7 @@ Changing this would affect diagnostics, not Netflix's list or server behavior. K
 
 ## Performance review — userscript 1.0.7
 
-Review date: 2026-09-30. The user reports stutters while scrolling the grid and observes the native My List carousel moving when scrolling back upwards. This review covers scrolling, hover, rendering, initialization, memory, and network work. No performance implementation step has been selected or applied.
+Review date: 2026-09-30. The user reports stutters while scrolling the grid and observes the native My List carousel moving when scrolling back upwards. This review covers scrolling, hover, rendering, initialization, memory, and network work. The user subsequently selected scroll-triggered hover, obsolete hover work, and observer duplication; those changes are implemented in userscript 1.0.8. The remaining proposals are not selected. Locations and descriptions below refer to the reviewed 1.0.7 source unless a result is explicitly stated.
 
 ### Evidence and limits
 
@@ -48,6 +48,14 @@ Review date: 2026-09-30. The user reports stutters while scrolling the grid and 
 - Ran isolated Node checks against functions extracted from the unchanged userscript, with mock DOM objects. These confirm control flow and operation counts; they do not measure browser frame times, layout, image decoding, or Netflix's own React work.
 - There is no live browser performance recording for the reported session. List size, browser, source-card dimensions, and whether thumbnails were already cached are unknown. Findings below distinguish definite work in the code from possible explanations of the observed stutters.
 - Existing C and D improvements remain useful: the document observer is scoped to My List after discovery, images in displayed clones use lazy loading and async decoding, and hover listeners are delegated. Those changes do not eliminate the work described below.
+
+### First performance pass — implemented in 1.0.8
+
+- **Scroll-triggered hover:** Both new preparation and mounted-source reuse now require a 120 ms hover dwell before native state is read. Passive wheel/scroll listeners cancel pending hover and release source alignment; React grafts are invalidated once per scroll burst so Netflix's delegated events cannot bypass the script guard. Hover resumes only after physical pointer movement following a 180 ms quiet period; synthetic replay and a stationary pointer do not automatically restart preparation. Only the latest pending card is retained.
+- **Obsolete preparation:** Hover hydration and mounted-source waits stop at their next frame/timer checkpoint. Expected-page and recovery retries check cancellation before native state reads. A target waiting for responsive refresh is revalidated afterwards, and old async cleanup cannot erase a newer preparation's markers. A native move already clicked retains its serialized acknowledgement and settlement; cancelled move acknowledgement polls at 80 ms instead of every frame (or the 12 ms indicator fallback). The existing move timeout remains a correctness bound, so cancellation does not undo an in-flight click or instantly release its queue slot.
+- **Observer duplication:** Mutations wholly inside script-owned grid/status/empty/dialog UI are ignored. Relevant native mutations coalesce to one check per animation frame, and an unchanged populated binding skips geometry, React index, and count reads. Native track/section/host replacement, empty-list transitions, and external grid removal retain their recovery paths. Repeated status text and grid custom-property values are not rewritten.
+- **Verification:** `node --check "Legacy My List for Netflix.user.js"`; `node --test tests/performance.test.cjs` (23 deterministic tests of shipped functions); `git diff --check`. Tests cover hover intent and mounted-source reuse, scroll suppression/resumption, stale cleanup and retries, cancellation in logical/indicator modes, initialization waits, serialized movement/style restoration, observer filtering/coalescing, replacement/empty/grid recovery, and route cleanup. They use DOM/timer mocks and do not establish measured browser performance or Netflix hover compatibility.
+- **Browser verification:** The user will test the script themselves and explicitly asked the assistant not to inspect their browser. Confirm that scrolling over cards no longer drives repeated native navigation, then move the pointer after scrolling settles to check deliberate hover. One native move that was already clicked may still finish. Also check resize, add/remove/undo, and SPA leave/re-entry.
 
 ### P1. Scrolling can start native-carousel hover preparation
 
@@ -135,19 +143,20 @@ Fetch controllers are local to the bootstrap functions; route suspension invalid
 
 Proposed improvement: distinguish count/first-ID bootstrap from full-item pagination based on the native mode, retain valid bootstrap data if optional collection fails, and tie fetch cancellation to the route session. Preserve authoritative count reconciliation, complete-list validation, and fresh data after SPA navigation. Cursor pagination itself has dependencies and should not simply be parallelized blindly.
 
-### Proposed order — discussion only
+### Follow-up order and current status
 
-| Order | Work | Reason |
+| Order | Work | Status and next scope |
 | --- | --- | --- |
-| 1 | Capture a scrolling baseline, then address scroll-triggered hover and obsolete preparation | Most closely matches the reported native-carousel movement; prevents work before making it cheaper. |
-| 2 | Filter script-owned mutations, make binding checks cheap, and skip unchanged status/layout writes | Removes duplicate work across scrolling, hover, initialization, and resize. |
-| 3 | Reuse native state/rectangles and track grafted clones directly | Reduces repeated DOM/React scans and list-wide invalidation while retaining the existing grid. |
-| 4 | Verify thumbnail request timing and reserved geometry; filter irrelevant resize notifications | Targets cold-scroll/network/decode/layout effects if present. |
-| 5 | Reduce snapshot retention, chunk initial construction, and improve bootstrap/lifecycle work | Improves memory, startup responsiveness, and wasted network work. |
-| 6 | Evaluate row virtualization/containment and diagnostic gating against the remaining trace | Larger compatibility/behavior tradeoffs; prioritize according to measured residual cost. |
+| 1 | Scroll-triggered hover and obsolete preparation | Implemented in 1.0.8; user browser feedback pending. Already-clicked native moves still settle safely. |
+| 2 | Script-owned mutation filtering, cheap observer binding checks, and unchanged UI writes | Implemented in 1.0.8; replacement/empty/grid recovery covered locally. Broader resize filtering remains in step 4. |
+| 3 | Reuse native state/rectangles and track grafted clones directly | Open, not selected. Reduce repeated DOM/React scans, logical-page candidate generation, and list-wide invalidation. |
+| 4 | Thumbnail request timing, reserved geometry, and irrelevant resize notifications | Open, not selected. Establish inherited image behavior and target cold-scroll/network/decode/layout effects. |
+| 5 | Snapshot retention, initial construction, and bootstrap/lifecycle work | Open, not selected. Reduce retained DOM, yield during large builds, avoid unused pagination, and abort obsolete route fetches. |
+| 6 | Row virtualization/containment | Open, not selected. Consider larger rendering changes if the remaining scrolling cost warrants their compatibility tradeoffs. |
+| 7 | Diagnostic overhead | Open, not selected. Gate expensive trace construction and consider a circular log buffer. Separate from the user's deferred copied-log-detail point E. |
 
 ### Browser validation needed
 
-Use the same list, viewport, and browser for comparisons. Record fast downward/upward scrolling with the pointer over cards, then over an empty margin; compare the script enabled/disabled and cold/warm thumbnails. Record deliberate same-page/distant-page hover, resize, add/remove/undo, and SPA leave/re-entry separately.
+User-owned validation, not a prerequisite for the authorized first implementation pass: use the same list, viewport, and browser for comparisons. Record fast downward/upward scrolling with the pointer over cards, then over an empty margin; compare the script enabled/disabled and cold/warm thumbnails. Record deliberate same-page/distant-page hover, resize, add/remove/undo, and SPA leave/re-entry separately.
 
 Inspect native page moves, hover activation/cancellation, observer callbacks, resize callbacks, main-thread tasks, forced layout, paints, image requests/decodes, allocation/GC, and retained DOM. Existing logs can distinguish initialization/full collection from hover/page preparation, but they do not measure frame smoothness. Comparing performance with DevTools closed also checks diagnostic overhead. A successful fix needs smoother scrolling and less unnecessary work while preserving exact membership/order, native hover actions, focus/click behavior, and restoration/route cleanup.
