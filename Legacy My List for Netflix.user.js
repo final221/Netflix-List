@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.0.5
+// @version      1.0.6
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -17,7 +17,19 @@
     'use strict';
 
     const TARGET_PATH = '/browse/my-list';
-    const BROWSE_PAGE_SECTIONS_SELECTOR = '[data-uia="browse-page-sections"]';
+    // Netflix-owned selectors used by discovery and card handling live here.
+    const NETFLIX_DOM_SELECTORS = Object.freeze({
+        browseSections: '[data-uia="browse-page-sections"]',
+        progressCard: '[data-uia="progress-card"]',
+        carouselRowZero: 'carousel-row-section-0',
+        carouselRowOne: 'carousel-row-section-1',
+        carouselRowOneSection: 'section[data-uia="carousel-row-section-1"]',
+        emptyCarouselSection: 'empty-carousel-section',
+        carouselScroller: '[data-uia="carousel-scroller"]',
+        standardCard: 'a[data-uia="standard-card"]',
+        standardCardWithHref: 'a[data-uia="standard-card"][href]',
+        virtualSlot: '[data-virtual-slot]'
+    });
     // Hawkins controls can apply a virtual-page transform after several paint
     // cycles when the source row is under load. Keep the observation window
     // longer than that deferred update so a legitimate move is not retried
@@ -57,7 +69,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.0.5';
+    const SCRIPT_VERSION = '1.0.6';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     const FAST_MOVE_CLASS = 'tm-netflix-mylist-v22-fast-move';
@@ -1305,7 +1317,7 @@
 
     function slotDescriptor(slot) {
         if (!slot) return null;
-        const card = slot.querySelector?.('a[data-uia="standard-card"]');
+        const card = slot.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard);
         const href = card?.href || card?.getAttribute?.('href') || '';
         const itemIndex = netflixItemIndexFromSlot(slot);
         const logicalIndex = normalizeNetflixLogicalIndex(itemIndex, sourceState?.totalCount);
@@ -1356,8 +1368,8 @@
 
     function collectRuntimeSnapshot() {
         const section = sourceState?.section || findMyListSection();
-        const scroller = sourceState?.scroller || section?.querySelector?.('[data-uia="carousel-scroller"]');
-        const track = sourceState?.track || (scroller && findTrack(scroller));
+        const scroller = sourceState?.scroller || section?.querySelector?.(NETFLIX_DOM_SELECTORS.carouselScroller);
+        const track = sourceState?.track || (scroller && netflixDom.findTrack(scroller));
         const grid = document.getElementById(GRID_ID);
         const statusNode = document.getElementById(STATUS_ID);
         const statusLabel = statusNode?.querySelector?.(`.${STATUS_LABEL_CLASS}`)?.textContent || '';
@@ -1384,8 +1396,8 @@
             carouselDom: section ? carouselDomProfileSummary(section) : null,
             totalCount: sourceState?.totalCount ?? null,
             collectedItems: sourceState?.items?.length ?? 0,
-            sourceSlots: track ? directSlots(track).length : 0,
-            sourceCards: track ? filledSlots(track).length : 0,
+            sourceSlots: track ? netflixDom.directSlots(track).length : 0,
+            sourceCards: track ? netflixDom.filledSlots(track).length : 0,
             currentPageCards: scroller && track ? currentPageSlots(scroller, track).length : 0,
             gridCards: grid ? grid.querySelectorAll(':scope > [data-virtual-slot]').length : 0,
             sourceScan: Boolean(scroller?.classList?.contains(SOURCE_SCAN_CLASS)),
@@ -1861,7 +1873,7 @@
         const values = [];
         const sectionRect = section.getBoundingClientRect();
         const siblings = [...section.parentElement?.children || []].filter(node =>
-            node instanceof HTMLElement && node !== section && node.matches('section') && node.querySelector('[data-uia="carousel-scroller"]')
+            node instanceof HTMLElement && node !== section && node.matches('section') && node.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller)
         );
         const index = [...section.parentElement?.children || []].indexOf(section);
         const previous = [...section.parentElement?.children || []].slice(0, index).reverse().find(node => siblings.includes(node));
@@ -1943,8 +1955,8 @@
 
         // Generation 2 fallback: match the live My List row to the GraphQL section.
         // Do not rely on translated heading text or on the removed page indicators.
-        const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
-        const domSection = host?.querySelector?.(':scope > section[data-uia="carousel-row-section-1"]') || null;
+        const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
+        const domSection = host?.querySelector?.(`:scope > ${NETFLIX_DOM_SELECTORS.carouselRowOneSection}`) || null;
         const domSectionId = String(domSection?.id || '');
         if (domSectionId) {
             const matched = candidates.find(([, value]) => String(value?.id || '') === domSectionId);
@@ -1955,7 +1967,7 @@
         }
 
         if (domSection) {
-            const domIds = sectionStandardCardVideoIds(domSection);
+            const domIds = netflixDom.sectionVideoIds(domSection);
             if (domIds.size) {
                 let best = null;
                 let bestOverlap = 0;
@@ -1987,166 +1999,179 @@
         return ids;
     }
 
-    function sectionStandardCardVideoIds(section) {
-        const ids = new Set();
-        for (const card of section?.querySelectorAll?.('a[data-uia="standard-card"][href]') || []) {
-            const id = videoIdFromHref(card.getAttribute('href') || card.href || '');
-            if (id) ids.add(String(id));
-        }
-        return ids;
-    }
+    // This adapter owns Netflix's browse-row and virtual-carousel DOM contracts.
+    const netflixDom = Object.freeze({
+        selectors: NETFLIX_DOM_SELECTORS,
 
-    function isSyntheticMyListSection(section) {
-        return !section ||
-            section.id === SYNTHETIC_SECTION_ID ||
-            section.getAttribute('data-tm-synthetic-mylist') === 'true';
-    }
+        sectionVideoIds(section) {
+            const ids = new Set();
+            for (const card of section?.querySelectorAll?.(this.selectors.standardCardWithHref) || []) {
+                const id = videoIdFromHref(card.getAttribute('href') || card.href || '');
+                if (id) ids.add(String(id));
+            }
+            return ids;
+        },
 
-    function nativeBrowseSections(host) {
-        if (!host) return [];
-        return [...host.querySelectorAll(':scope > section')].filter(section => !isSyntheticMyListSection(section));
-    }
+        isSyntheticSection(section) {
+            return !section ||
+                section.id === SYNTHETIC_SECTION_ID ||
+                section.getAttribute('data-tm-synthetic-mylist') === 'true';
+        },
 
-    function nextNativeBrowseSection(section, host) {
-        if (!section || !host) return null;
-        let node = section.nextElementSibling;
-        while (node) {
-            if (node.matches?.('section') && !isSyntheticMyListSection(node)) return node;
-            node = node.nextElementSibling;
-        }
-        return null;
-    }
+        nativeSections(host) {
+            if (!host) return [];
+            return [...host.querySelectorAll(':scope > section')].filter(section => !this.isSyntheticSection(section));
+        },
 
-    function findContinueWatchingSection(host) {
-        const sections = nativeBrowseSections(host);
-        if (!sections.length) return null;
+        nextNativeSection(section, host) {
+            if (!section || !host) return null;
+            let node = section.nextElementSibling;
+            while (node) {
+                if (node.matches?.('section') && !this.isSyntheticSection(node)) return node;
+                node = node.nextElementSibling;
+            }
+            return null;
+        },
 
-        // Non-empty Continue Watching has progress cards. Its row index is also
-        // exposed as a language-neutral Uia. When the row is empty Netflix uses
-        // the generic empty-carousel-section Uia, so the first native section on
-        // /browse/my-list remains the structural anchor.
-        const progressSection = sections.find(section => section.querySelector('[data-uia="progress-card"]'));
-        if (progressSection) return progressSection;
+        findContinueWatchingSection(host) {
+            const sections = this.nativeSections(host);
+            if (!sections.length) return null;
 
-        const rowZero = sections.find(section => section.getAttribute('data-uia') === 'carousel-row-section-0');
-        if (rowZero) return rowZero;
+            // Non-empty Continue Watching has progress cards. Its row index is also
+            // exposed as a language-neutral Uia. When the row is empty Netflix uses
+            // the generic empty-carousel-section Uia, so the first native section on
+            // /browse/my-list remains the structural anchor.
+            const progressSection = sections.find(section => section.querySelector(this.selectors.progressCard));
+            if (progressSection) return progressSection;
 
-        const first = sections[0];
-        if (first?.getAttribute('data-uia') === 'empty-carousel-section') return first;
-        return null;
-    }
+            const rowZero = sections.find(section => section.getAttribute('data-uia') === this.selectors.carouselRowZero);
+            if (rowZero) return rowZero;
 
-    function findMyListSection() {
-        const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
-        if (!host) return null;
+            const first = sections[0];
+            if (first?.getAttribute('data-uia') === this.selectors.emptyCarouselSection) return first;
+            return null;
+        },
 
-        const nativeSections = nativeBrowseSections(host);
-        const alreadyBound = nativeSections.find(section => section.getAttribute(SECTION_ATTR) === 'true');
-        if (alreadyBound) return alreadyBound;
+        findStructuralMyListSection(host) {
+            if (!host) return null;
+            const nativeSections = this.nativeSections(host);
+            const alreadyBound = nativeSections.find(section => section.getAttribute(SECTION_ATTR) === 'true');
+            if (alreadyBound) return alreadyBound;
 
-        // On /browse/my-list Netflix assigns the native My List carousel row the
-        // language-neutral structural Uia for row 1. This remains available even
-        // when Continue Watching is empty, which has no progress-card elements.
-        const indexedMyList = nativeSections.find(section =>
-            section.getAttribute('data-uia') === 'carousel-row-section-1'
-        );
-        if (indexedMyList) return indexedMyList;
+            // On /browse/my-list Netflix assigns the native My List carousel row the
+            // language-neutral structural Uia for row 1. This remains available even
+            // when Continue Watching is empty, which has no progress-card elements.
+            const indexedMyList = nativeSections.find(section =>
+                section.getAttribute('data-uia') === this.selectors.carouselRowOne
+            );
+            if (indexedMyList) return indexedMyList;
 
-        // Empty My List has the generic empty-carousel-section Uia. In that case
-        // use the page structure: My List immediately follows Continue Watching.
-        // nextNativeBrowseSection() deliberately skips our synthetic placeholder.
-        const continueWatching = findContinueWatchingSection(host);
-        const adjacent = nextNativeBrowseSection(continueWatching, host);
-        if (adjacent) return adjacent;
+            // Empty My List has the generic empty-carousel-section Uia. In that case
+            // use the page structure: My List immediately follows Continue Watching.
+            // nextNativeSection() deliberately skips our synthetic placeholder.
+            const continueWatching = this.findContinueWatchingSection(host);
+            const adjacent = this.nextNativeSection(continueWatching, host);
+            if (adjacent) return adjacent;
 
-        // Fallback: use the semantic GraphQL playlist section. Prefer its native
-        // section id when it matches the live DOM, then compare card video IDs.
-        // No translated heading text participates in either decision.
-        const graphqlEntry = findMyListGraphqlEntry();
-        const graphqlSectionId = String(graphqlEntry?.value?.id || '');
-        const byGraphqlId = graphqlSectionId ? document.getElementById(graphqlSectionId) : null;
-        if (byGraphqlId?.matches?.('section') && byGraphqlId.parentElement === host &&
-            !isSyntheticMyListSection(byGraphqlId)) {
-            return byGraphqlId;
-        }
+            return null;
+        },
 
-        const expectedIds = graphqlSectionVideoIds(graphqlEntry?.value);
-        if (expectedIds.size) {
-            let bestSection = null;
-            let bestOverlap = 0;
-            for (const section of nativeSections) {
-                const ids = sectionStandardCardVideoIds(section);
-                let overlap = 0;
-                for (const id of ids) if (expectedIds.has(id)) overlap++;
-                if (overlap > bestOverlap) {
-                    bestOverlap = overlap;
-                    bestSection = section;
+        findSectionByGraphqlIdentity(host, graphqlIdentity) {
+            if (!host || !graphqlIdentity) return null;
+            const graphqlSectionId = graphqlIdentity.sectionId;
+            const byGraphqlId = graphqlSectionId ? document.getElementById(graphqlSectionId) : null;
+            if (byGraphqlId?.matches?.('section') && byGraphqlId.parentElement === host &&
+                !this.isSyntheticSection(byGraphqlId)) {
+                return byGraphqlId;
+            }
+
+            const expectedIds = new Set(graphqlIdentity.videoIds);
+            if (expectedIds.size) {
+                let bestSection = null;
+                let bestOverlap = 0;
+                for (const section of nativeSections) {
+                    const ids = this.sectionVideoIds(section);
+                    let overlap = 0;
+                    for (const id of ids) if (expectedIds.has(id)) overlap++;
+                    if (overlap > bestOverlap) {
+                        bestOverlap = overlap;
+                        bestSection = section;
+                    }
                 }
+                if (bestSection && bestOverlap >= Math.min(2, expectedIds.size)) return bestSection;
             }
-            if (bestSection && bestOverlap >= Math.min(2, expectedIds.size)) return bestSection;
-        }
 
-        return null;
-    }
+            return null;
+        },
 
-    function positionSyntheticMyListSection(section, host) {
-        if (!section || !host) return;
-
-        // On the My List browse page Netflix places the My List rail immediately
-        // after Continue Watching. A synthetic empty/loading rail must occupy that
-        // same slot; prepending it to the sections host makes it jump above all
-        // native rows while Netflix is still building the page.
-        const continueWatching = findContinueWatchingSection(host);
-        if (continueWatching) {
-            if (continueWatching.nextElementSibling !== section) {
-                continueWatching.insertAdjacentElement('afterend', section);
+        findTrack(scroller) {
+            if (!scroller) return null;
+            for (const div of scroller.querySelectorAll('div')) {
+                if (div.querySelector(`:scope > ${this.selectors.virtualSlot}`)) return div;
             }
-            return;
-        }
+            return null;
+        },
 
-        const firstNativeSection = [...host.querySelectorAll(':scope > section')].find(node => node !== section);
-        if (firstNativeSection) {
-            if (firstNativeSection.nextElementSibling !== section) {
-                firstNativeSection.insertAdjacentElement('afterend', section);
+        directSlots(track) {
+            return track ? [...track.querySelectorAll(`:scope > ${this.selectors.virtualSlot}`)] : [];
+        },
+
+        filledSlots(track) {
+            return this.directSlots(track).filter(slot => slot.querySelector(this.selectors.standardCard));
+        },
+
+        positionSyntheticSection(section, host) {
+            if (!section || !host) return;
+
+            // On the My List browse page Netflix places the My List rail immediately
+            // after Continue Watching. A synthetic empty/loading rail must occupy that
+            // same slot; prepending it to the sections host makes it jump above all
+            // native rows while Netflix is still building the page.
+            const continueWatching = this.findContinueWatchingSection(host);
+            if (continueWatching) {
+                if (continueWatching.nextElementSibling !== section) {
+                    continueWatching.insertAdjacentElement('afterend', section);
+                }
+                return;
             }
-            return;
+
+            const firstNativeSection = [...host.querySelectorAll(':scope > section')].find(node => node !== section);
+            if (firstNativeSection) {
+                if (firstNativeSection.nextElementSibling !== section) {
+                    firstNativeSection.insertAdjacentElement('afterend', section);
+                }
+                return;
+            }
+
+            if (section.parentElement !== host) host.appendChild(section);
+        },
+
+        ensureSyntheticMyListSection() {
+            const host = document.querySelector(this.selectors.browseSections);
+            if (!host) return null;
+
+            let section = document.getElementById(SYNTHETIC_SECTION_ID);
+            const nativeSections = [...host.querySelectorAll(':scope > section')].filter(node => node !== section);
+            // Do not guess a position before Netflix has rendered at least one native row.
+            // The MutationObserver/poll will call us again as soon as the row stack exists.
+            if (!nativeSections.length) return null;
+
+            if (!section) {
+                section = document.createElement('section');
+                section.id = SYNTHETIC_SECTION_ID;
+                section.setAttribute('data-tm-synthetic-mylist', 'true');
+            }
+            this.positionSyntheticSection(section, host);
+            return section;
         }
+    });
 
-        if (section.parentElement !== host) host.appendChild(section);
-    }
-
-    function ensureSyntheticMyListSection() {
-        const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
+    // Joins structural DOM discovery with GraphQL identity as the last fallback.
+    function findMyListSection() {
+        const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
         if (!host) return null;
-
-        let section = document.getElementById(SYNTHETIC_SECTION_ID);
-        const nativeSections = [...host.querySelectorAll(':scope > section')].filter(node => node !== section);
-        // Do not guess a position before Netflix has rendered at least one native row.
-        // The MutationObserver/poll will call us again as soon as the row stack exists.
-        if (!nativeSections.length) return null;
-
-        if (!section) {
-            section = document.createElement('section');
-            section.id = SYNTHETIC_SECTION_ID;
-            section.setAttribute('data-tm-synthetic-mylist', 'true');
-        }
-        positionSyntheticMyListSection(section, host);
-        return section;
-    }
-
-    function findTrack(scroller) {
-        for (const div of scroller.querySelectorAll('div')) {
-            if (div.querySelector(':scope > [data-virtual-slot]')) return div;
-        }
-        return null;
-    }
-
-    function directSlots(track) {
-        return [...track.querySelectorAll(':scope > [data-virtual-slot]')];
-    }
-
-    function filledSlots(track) {
-        return directSlots(track).filter(slot => slot.querySelector('a[data-uia="standard-card"]'));
+        return netflixDom.findStructuralMyListSection(host) ||
+            netflixDom.findSectionByGraphqlIdentity(host, netflixGraphql.myListDomIdentity());
     }
 
     function median(values) {
@@ -2157,7 +2182,7 @@
     }
 
     function parseSlotLayoutFormula(track) {
-        const slot = directSlots(track).find(node => node.getAttribute('style')?.includes('calc('));
+        const slot = netflixDom.directSlots(track).find(node => node.getAttribute('style')?.includes('calc('));
         if (!slot) return null;
 
         const style = slot.getAttribute('style') || '';
@@ -2214,11 +2239,11 @@
         }
 
         // Fallback: prefer the current page card count instead of the number visible in the viewport.
-        const activeSlots = filledSlots(track).filter(slot => {
-            const card = slot.querySelector('a[data-uia="standard-card"]');
+        const activeSlots = netflixDom.filledSlots(track).filter(slot => {
+            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
             return card?.getAttribute('tabindex') === '0';
         });
-        const sample = activeSlots.length ? activeSlots : filledSlots(track);
+        const sample = activeSlots.length ? activeSlots : netflixDom.filledSlots(track);
         const rects = sample
             .map(slot => slot.getBoundingClientRect())
             .filter(rect => rect.width > 1)
@@ -2473,8 +2498,8 @@
                 }
             }
 
-            const scroller = section.querySelector('[data-uia="carousel-scroller"]');
-            const track = scroller && findTrack(scroller);
+            const scroller = section.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller);
+            const track = scroller && netflixDom.findTrack(scroller);
             if (scroller && track) return { found: true, scroller, track, elapsedMs: Math.round(performance.now() - started) };
             await sleep(NATIVE_READY_POLL_MS);
         }
@@ -2540,29 +2565,6 @@
             elapsedMs: Math.round(elapsedMs),
             layout: layoutSummary(layout)
         });
-    }
-
-    function readMyListTotalCountSilent() {
-        try {
-            const entry = findMyListGraphqlEntry();
-            const n = Number(entry?.value?.entities?.totalCount);
-            if (Number.isFinite(n) && n >= 0) return n;
-        } catch (_) {}
-        return null;
-    }
-
-    function detectTotalCount() {
-        const entry = findMyListGraphqlEntry();
-        const n = Number(entry?.value?.entities?.totalCount);
-        if (Number.isFinite(n) && n >= 0) {
-            log(tLog('totalCountDetected'), {
-                totalCount: n,
-                graphqlKey: entry?.key || null,
-                detectionReason: entry?.reason || null
-            });
-            return n;
-        }
-        return null;
     }
 
     function extractFreshMyListBootstrap(html) {
@@ -2797,7 +2799,7 @@
             const videoId = videoIdFromGraphqlNode(node);
             if (!videoId || seen.has(videoId)) continue;
             const snapshot = templateSlot.cloneNode(true);
-            const card = snapshot.querySelector('a[data-uia="standard-card"]');
+            const card = snapshot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
             if (!card) return null;
             const href = `${location.origin}/browse?jbv=${encodeURIComponent(videoId)}`;
             const title = firstGraphqlText(node?.displayString) || firstGraphqlText(node) || `Netflix ${videoId}`;
@@ -3109,14 +3111,79 @@
         }
     }
 
+    // Owns Netflix cache reads, fresh bootstrap fallbacks, and response normalization.
+    const netflixGraphql = Object.freeze({
+        isAvailable() {
+            return Boolean(graphqlData());
+        },
+
+        myListDomIdentity() {
+            const entry = findMyListGraphqlEntry();
+            return {
+                sectionId: String(entry?.value?.id || ''),
+                videoIds: [...graphqlSectionVideoIds(entry?.value)]
+            };
+        },
+
+        readMyListTotalCount() {
+            try {
+                const count = Number(findMyListGraphqlEntry()?.value?.entities?.totalCount);
+                return Number.isFinite(count) && count >= 0 ? count : null;
+            } catch (_) {
+                return null;
+            }
+        },
+
+        detectMyListTotalCount() {
+            const entry = findMyListGraphqlEntry();
+            const count = Number(entry?.value?.entities?.totalCount);
+            if (!Number.isFinite(count) || count < 0) return null;
+            log(tLog('totalCountDetected'), {
+                totalCount: count,
+                graphqlKey: entry?.key || null,
+                detectionReason: entry?.reason || null
+            });
+            return count;
+        },
+
+        firstMyListVideoId() {
+            const entry = findMyListGraphqlEntry();
+            for (const edge of entry?.value?.entities?.edges || []) {
+                const ref = String(edge?.node?.__ref || '');
+                const match = ref.match(/(?:standardBoxshot_Video:|Video:)(\d+)/);
+                if (match) return match[1];
+            }
+            return '';
+        },
+
+        fetchBootstrap(sessionToken = null) {
+            return fetchFreshMyListBootstrap(sessionToken);
+        },
+
+        async collectLogicalItems({ bootstrap, totalCount, columns, templateSlot, sessionToken = null }) {
+            const freshBootstrap = bootstrap?.graphqlEdges?.length
+                ? bootstrap
+                : await fetchFreshMyListBootstrapViaCarousel(sessionToken);
+            return {
+                bootstrap: freshBootstrap,
+                items: buildGraphqlMyListItems(
+                    freshBootstrap?.graphqlEdges,
+                    totalCount,
+                    columns,
+                    templateSlot
+                )
+            };
+        }
+    });
+
     async function waitForMyListTotalCount(timeout = TOTAL_COUNT_TIMEOUT_MS, sessionToken = null) {
         assertRouteSession(sessionToken);
         const started = performance.now();
         let lastGraphqlAvailable = false;
         while (performance.now() - started < timeout) {
             assertRouteSession(sessionToken);
-            lastGraphqlAvailable = Boolean(graphqlData());
-            const n = detectTotalCount();
+            lastGraphqlAvailable = netflixGraphql.isAvailable();
+            const n = netflixGraphql.detectMyListTotalCount();
             if (Number.isFinite(n) && n >= 0) return n;
             await sleep(NATIVE_READY_POLL_MS);
         }
@@ -3131,7 +3198,7 @@
     }
 
     function nativeCardIdentity(slot) {
-        const card = slot?.querySelector?.('a[data-uia="standard-card"]');
+        const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard);
         if (!card) return '';
         const href = card.href || card.getAttribute('href') || '';
         return videoIdFromHref(href) || href || card.getAttribute('aria-label') || '';
@@ -3140,7 +3207,7 @@
     function readNativeMyListDomState() {
         const section = findMyListSection();
         if (!section) {
-            const graphqlCount = readMyListTotalCountSilent();
+            const graphqlCount = netflixGraphql.readMyListTotalCount();
             return {
                 section: null,
                 scroller: null,
@@ -3158,8 +3225,8 @@
             };
         }
 
-        const scroller = section.querySelector('[data-uia="carousel-scroller"]');
-        const track = scroller && findTrack(scroller);
+        const scroller = section.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller);
+        const track = scroller && netflixDom.findTrack(scroller);
         const runtime = getCarouselDomRuntime(section);
         const profile = runtime?.profile || detectCarouselDomProfile(section);
         const pages = pageCount(section);
@@ -3167,7 +3234,7 @@
         const pageTopologyKnown = profile.pageMode === 'indicator'
             ? profile.indicatorCount > 0
             : Boolean(runtime?.pageCountFinalized);
-        const graphqlCount = readMyListTotalCountSilent();
+        const graphqlCount = netflixGraphql.readMyListTotalCount();
 
         if (!scroller || !track) {
             return {
@@ -3197,8 +3264,8 @@
         const exactCount = Number.isFinite(domExactCount)
             ? domExactCount
             : (Number.isFinite(graphqlCount) ? graphqlCount : null);
-        const sourceSlots = directSlots(track).length;
-        const sourceCards = filledSlots(track).length;
+        const sourceSlots = netflixDom.directSlots(track).length;
+        const sourceCards = netflixDom.filledSlots(track).length;
 
         return {
             section,
@@ -3239,7 +3306,7 @@
         const unifiedMatch = unified.match(/Video:(\d+)/i);
         if (unifiedMatch) return unifiedMatch[1];
 
-        const slot = button?.closest?.('[data-virtual-slot]');
+        const slot = button?.closest?.(NETFLIX_DOM_SELECTORS.virtualSlot);
         if (slot) {
             for (const anchor of slot.querySelectorAll('a[href]')) {
                 const videoId = videoIdFromHref(anchor.href || anchor.getAttribute('href') || '');
@@ -3350,7 +3417,7 @@
         const live = liveState || readNativeMyListDomState();
         const track = live.track;
         if (!track) return null;
-        for (const slot of directSlots(track)) {
+        for (const slot of netflixDom.directSlots(track)) {
             const item = itemFromSlot(slot, live.selectedPage || 0);
             if (item?.videoId === String(videoId)) return item;
         }
@@ -3359,11 +3426,11 @@
 
     function findAnyStandardCardItemByVideoId(videoId) {
         const wanted = String(videoId);
-        for (const card of document.querySelectorAll('a[data-uia="standard-card"][href]')) {
+        for (const card of document.querySelectorAll(NETFLIX_DOM_SELECTORS.standardCardWithHref)) {
             if (card.closest(`#${GRID_ID}`)) continue;
             const href = card.href || card.getAttribute('href') || '';
             if (videoIdFromHref(href) !== wanted) continue;
-            const slot = card.closest('[data-virtual-slot]');
+            const slot = card.closest(NETFLIX_DOM_SELECTORS.virtualSlot);
             if (!slot) continue;
             const item = itemFromSlot(slot, 0);
             if (item?.videoId === wanted) return item;
@@ -3393,7 +3460,7 @@
         if (live.section && !live.scroller && !live.track) {
             return adoptLiveEmptyMyListSection(live);
         }
-        const synthetic = ensureSyntheticMyListSection();
+        const synthetic = netflixDom.ensureSyntheticMyListSection();
         if (!synthetic) return false;
         const status = sourceState.status || document.getElementById(STATUS_ID);
         const grid = sourceState.grid || document.getElementById(GRID_ID);
@@ -3543,7 +3610,7 @@
         // re-anchor only the page that is actually visible now.
         const votes = new Map();
         for (const slot of slots) {
-            const card = slot.querySelector('a[data-uia="standard-card"]');
+            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
             const videoId = card ? videoIdFromHref(card.getAttribute('href') || card.href || '') : '';
             const item = videoId ? sourceState.itemMap?.get(`v:${videoId}`) : null;
             if (!Number.isFinite(item?.page)) continue;
@@ -3581,7 +3648,7 @@
             pageCountFinalized: runtime.pageCountFinalized,
             pageMappingStale: runtime.pageMappingStale,
             visibleSignature: signature,
-            visibleIds: slots.map(slot => videoIdFromHref(slot.querySelector('a[data-uia="standard-card"]')?.href || '')).filter(Boolean),
+            visibleIds: slots.map(slot => videoIdFromHref(slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard)?.href || '')).filter(Boolean),
             itemIndices: nativePageState.itemIndices,
             logicalIndices: nativePageState.logicalIndices,
             totalCount: items.length
@@ -4248,7 +4315,7 @@
     }
 
     function syncStatusTypography(section, status) {
-        const heading = section?.querySelector('h2') || document.querySelector(`${BROWSE_PAGE_SECTIONS_SELECTOR} section h2`);
+        const heading = section?.querySelector('h2') || document.querySelector(`${NETFLIX_DOM_SELECTORS.browseSections} section h2`);
         if (!heading || !status) return;
 
         const style = getComputedStyle(heading);
@@ -4286,8 +4353,8 @@
                 hawkinsControls,
                 pageIndicators: indicatorItems.length > 0,
                 selectedIndicator: indicatorItems.some(x => x.getAttribute('data-indicator-selected') === 'true'),
-                virtualSlots: Boolean(section?.querySelector?.('[data-virtual-slot]')),
-                standardCards: Boolean(section?.querySelector?.('a[data-uia="standard-card"]'))
+                virtualSlots: Boolean(section?.querySelector?.(NETFLIX_DOM_SELECTORS.virtualSlot)),
+                standardCards: Boolean(section?.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard))
             },
             indicatorCount: indicatorItems.length
         };
@@ -4351,8 +4418,8 @@
     function logicalVisibleSignature(section) {
         const scroller = sourceState?.scroller?.isConnected
             ? sourceState.scroller
-            : section?.querySelector?.('[data-uia="carousel-scroller"]');
-        const track = sourceState?.track?.isConnected ? sourceState.track : (scroller && findTrack(scroller));
+            : section?.querySelector?.(NETFLIX_DOM_SELECTORS.carouselScroller);
+        const track = sourceState?.track?.isConnected ? sourceState.track : (scroller && netflixDom.findTrack(scroller));
         if (!scroller || !track) return '';
         return visibleSignature(currentPageSlots(scroller, track));
     }
@@ -4407,10 +4474,10 @@
         if (profile.pageMode === 'logical' && runtime) {
             const scroller = sourceState?.section === section && sourceState?.scroller?.isConnected
                 ? sourceState.scroller
-                : section?.querySelector?.('[data-uia="carousel-scroller"]');
+                : section?.querySelector?.(NETFLIX_DOM_SELECTORS.carouselScroller);
             const track = sourceState?.section === section && sourceState?.track?.isConnected
                 ? sourceState.track
-                : (scroller && findTrack(scroller));
+                : (scroller && netflixDom.findTrack(scroller));
             const totalCount = sourceState?.section === section ? sourceState?.totalCount : null;
             const columns = sourceState?.section === section
                 ? Math.max(1, sourceState?.layout?.columns || 1)
@@ -4664,7 +4731,7 @@
             const runtime = getCarouselDomRuntime(section);
             const profile = runtime?.profile || detectCarouselDomProfile(section);
             const { button, selector } = carouselMoveButton(section, scroller, direction);
-            const track = sourceState?.track?.isConnected ? sourceState.track : findTrack(scroller);
+            const track = sourceState?.track?.isConnected ? sourceState.track : netflixDom.findTrack(scroller);
             if (!button || !track) {
                 warn(tLog('carouselMoveControlNotFound'), {
                     seq,
@@ -4896,7 +4963,7 @@
     }
 
     function currentPageSlots(scroller, track) {
-        const all = filledSlots(track);
+        const all = netflixDom.filledSlots(track);
         if (!all.length) return [];
 
         const sr = scroller.getBoundingClientRect();
@@ -4910,7 +4977,7 @@
             .map(x => x.slot);
 
         const active = all.filter(slot => {
-            const card = slot.querySelector('a[data-uia="standard-card"]');
+            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
             return card?.getAttribute('tabindex') === '0';
         });
         if (active.length) {
@@ -4926,14 +4993,14 @@
 
     function visibleSignature(slots) {
         return slots.map(slot => {
-            const card = slot.querySelector('a[data-uia="standard-card"]');
+            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
             return card?.href || card?.getAttribute('href') || '';
         }).filter(Boolean).join('|');
     }
 
     function nativeCarouselReadiness(section, scroller, track) {
-        const slots = directSlots(track);
-        const cards = filledSlots(track);
+        const slots = netflixDom.directSlots(track);
+        const cards = netflixDom.filledSlots(track);
         const currentSlots = currentPageSlots(scroller, track);
         const pages = pageCount(section);
         const formula = parseSlotLayoutFormula(track);
@@ -5226,7 +5293,7 @@
         const slotKeys = slots => {
             const keys = new Set();
             for (const slot of slots) {
-                const card = slot.querySelector('a[data-uia="standard-card"]');
+                const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
                 const key = itemKeyFromCard(card);
                 if (key) keys.add(key);
             }
@@ -5247,7 +5314,7 @@
             if (!seenKeys || minimumNewItems <= 0) return 0;
             const keys = new Set();
             for (const slot of slots) {
-                const card = slot.querySelector('a[data-uia="standard-card"]');
+                const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
                 const key = itemKeyFromCard(card);
                 if (key && !seenKeys.has(key)) keys.add(key);
             }
@@ -5313,7 +5380,7 @@
     }
 
     function itemFromSlot(slot, page) {
-        const card = slot.querySelector('a[data-uia="standard-card"]');
+        const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
         if (!card) return null;
 
         const href = card.href || card.getAttribute('href') || '';
@@ -5352,7 +5419,7 @@
     function mountedItemKeys(slots) {
         const keys = new Set();
         for (const slot of slots) {
-            const card = slot.querySelector('a[data-uia="standard-card"]');
+            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
             const key = itemKeyFromCard(card);
             if (key) keys.add(key);
         }
@@ -5900,20 +5967,10 @@
         return fallback.complete;
     }
 
-    function firstMyListGraphqlVideoId() {
-        const entry = findMyListGraphqlEntry();
-        for (const edge of entry?.value?.entities?.edges || []) {
-            const ref = String(edge?.node?.__ref || '');
-            const match = ref.match(/(?:standardBoxshot_Video:|Video:)(\d+)/);
-            if (match) return match[1];
-        }
-        return '';
-    }
-
     function currentPageVideoIds(scroller, track) {
         return currentPageSlots(scroller, track)
             .map(slot => {
-                const card = slot.querySelector('a[data-uia="standard-card"]');
+                const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
                 return card ? videoIdFromHref(card.getAttribute('href') || card.href || '') : '';
             })
             .filter(Boolean);
@@ -6015,25 +6072,79 @@
         );
     }
 
-    function reactFiberForNode(node) {
-        if (!node) return null;
-        for (const key of Object.getOwnPropertyNames(node)) {
-            if (!key.startsWith('__reactFiber$') && !key.startsWith('__reactInternalInstance$')) continue;
-            const fiber = node[key];
-            if (fiber && typeof fiber === 'object') return fiber;
-        }
-        return null;
-    }
+    // Reads the private React props needed to order and validate Netflix's logical carousel.
+    const netflixReactCarousel = Object.freeze({
+        fiberForNode(node) {
+            if (!node) return null;
+            for (const key of Object.getOwnPropertyNames(node)) {
+                if (!key.startsWith('__reactFiber$') && !key.startsWith('__reactInternalInstance$')) continue;
+                const fiber = node[key];
+                if (fiber && typeof fiber === 'object') return fiber;
+            }
+            return null;
+        },
 
-    function reactFiberTypeName(fiber) {
-        const type = fiber?.elementType || fiber?.type;
-        if (typeof type === 'string') return type;
-        if (typeof type === 'function') return type.displayName || type.name || '(anonymous)';
-        if (type && typeof type === 'object') {
-            return String(type.displayName || type.name || type.$$typeof || '(object)');
+        typeName(fiber) {
+            const type = fiber?.elementType || fiber?.type;
+            if (typeof type === 'string') return type;
+            if (typeof type === 'function') return type.displayName || type.name || '(anonymous)';
+            if (type && typeof type === 'object') {
+                return String(type.displayName || type.name || type.$$typeof || '(object)');
+            }
+            return type == null ? '' : String(type);
+        },
+
+        readFiberProp(roots, property, isValid) {
+            for (const root of roots) {
+                let fiber = this.fiberForNode(root);
+                const visited = new Set();
+                let depth = 0;
+                while (fiber && typeof fiber === 'object' && depth < 16 && !visited.has(fiber)) {
+                    visited.add(fiber);
+                    const sources = [
+                        ['memoizedProps', fiber.memoizedProps],
+                        ['pendingProps', fiber.pendingProps],
+                        ['alternate.memoizedProps', fiber.alternate?.memoizedProps],
+                        ['alternate.pendingProps', fiber.alternate?.pendingProps]
+                    ];
+                    for (const [source, props] of sources) {
+                        const value = props?.[property];
+                        if (isValid(value)) {
+                            return {
+                                value,
+                                depth,
+                                source,
+                                fiberKey: fiber.key ?? null,
+                                typeName: this.typeName(fiber)
+                            };
+                        }
+                    }
+                    fiber = fiber.return;
+                    depth++;
+                }
+            }
+            return { value: null, depth: null, source: null, fiberKey: null, typeName: '' };
+        },
+
+        readItemIndex(slot) {
+            const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard) || null;
+            return this.readFiberProp(
+                [slot?.firstElementChild || null, card?.parentElement || null, card],
+                'itemIndex',
+                Number.isSafeInteger
+            );
+        },
+
+        readCarouselTotalCount(slot) {
+            const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard) || null;
+            const reading = this.readFiberProp(
+                [slot, slot?.firstElementChild || null, card?.parentElement || null, card],
+                'totalCount',
+                value => Number.isSafeInteger(value) && value >= 0
+            );
+            return reading.value;
         }
-        return type == null ? '' : String(type);
-    }
+    });
 
     function diagnosticPrimitiveProps(props) {
         if (!props || typeof props !== 'object') return null;
@@ -6052,7 +6163,7 @@
     }
 
     function diagnosticFiberChain(node, maxDepth = 16) {
-        const fiber = reactFiberForNode(node);
+        const fiber = netflixReactCarousel.fiberForNode(node);
         const chain = [];
         let current = fiber;
         const visited = new Set();
@@ -6065,7 +6176,7 @@
                 tag: current.tag ?? null,
                 key: current.key ?? null,
                 alternateKey: current.alternate?.key ?? null,
-                typeName: reactFiberTypeName(current),
+                typeName: netflixReactCarousel.typeName(current),
                 stateNodeName: stateNode instanceof Element ? stateNode.tagName.toLowerCase() : '',
                 stateVirtualSlot: stateNode instanceof Element ? (stateNode.getAttribute('data-virtual-slot') || '') : '',
                 memoizedProps: diagnosticPrimitiveProps(current.memoizedProps),
@@ -6092,7 +6203,7 @@
 
     function logVirtualRawIndexDiagnostic(slots, totalCount, columns, stage) {
         const entries = slots.slice(0, Math.min(slots.length, 6)).map((slot, index) => {
-            const card = slot.querySelector('a[data-uia="standard-card"]');
+            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
             const child = slot.firstElementChild;
             const cardParent = card?.parentElement || null;
             return {
@@ -6115,63 +6226,9 @@
         });
     }
 
-    function readNativeItemIndexFromSlot(slot) {
-        const card = slot?.querySelector?.('a[data-uia="standard-card"]') || null;
-        const roots = [slot?.firstElementChild || null, card?.parentElement || null, card];
-        for (const root of roots) {
-            let fiber = reactFiberForNode(root);
-            const visited = new Set();
-            let depth = 0;
-            while (fiber && typeof fiber === 'object' && depth < 16 && !visited.has(fiber)) {
-                visited.add(fiber);
-                const sources = [
-                    ['memoizedProps', fiber.memoizedProps],
-                    ['pendingProps', fiber.pendingProps],
-                    ['alternate.memoizedProps', fiber.alternate?.memoizedProps],
-                    ['alternate.pendingProps', fiber.alternate?.pendingProps]
-                ];
-                for (const [source, props] of sources) {
-                    const value = props?.itemIndex;
-                    if (Number.isSafeInteger(value)) {
-                        return { value, depth, source, fiberKey: fiber.key ?? null, typeName: reactFiberTypeName(fiber) };
-                    }
-                }
-                fiber = fiber.return;
-                depth++;
-            }
-        }
-        return { value: null, depth: null, source: null, fiberKey: null, typeName: '' };
-    }
-
-    function reactCarouselTotalCountFromSlot(slot) {
-        const card = slot?.querySelector?.('a[data-uia="standard-card"]') || null;
-        const roots = [slot, slot?.firstElementChild || null, card?.parentElement || null, card];
-        for (const root of roots) {
-            let fiber = reactFiberForNode(root);
-            const visited = new Set();
-            let depth = 0;
-            while (fiber && typeof fiber === 'object' && depth < 16 && !visited.has(fiber)) {
-                visited.add(fiber);
-                const sources = [
-                    fiber.memoizedProps,
-                    fiber.pendingProps,
-                    fiber.alternate?.memoizedProps,
-                    fiber.alternate?.pendingProps
-                ];
-                for (const props of sources) {
-                    const value = props?.totalCount;
-                    if (Number.isSafeInteger(value) && value >= 0) return value;
-                }
-                fiber = fiber.return;
-                depth++;
-            }
-        }
-        return null;
-    }
-
     function nativeReactCarouselTotalCount(scroller, track) {
         const slots = currentPageSlots(scroller, track);
-        const readings = slots.map(slot => reactCarouselTotalCountFromSlot(slot));
+        const readings = slots.map(slot => netflixReactCarousel.readCarouselTotalCount(slot));
         const finiteReadings = readings.filter(value => Number.isSafeInteger(value) && value >= 0);
         const unique = [...new Set(finiteReadings)];
         return {
@@ -6234,7 +6291,7 @@
     }
 
     function netflixItemIndexFromSlot(slot) {
-        return readNativeItemIndexFromSlot(slot).value;
+        return netflixReactCarousel.readItemIndex(slot).value;
     }
 
     function normalizeNetflixLogicalIndex(itemIndex, totalCount) {
@@ -6528,7 +6585,7 @@
 
                 const newKeys = new Set();
                 for (const position of pageState.positions) {
-                    const card = position.slot.querySelector('a[data-uia="standard-card"]');
+                    const card = position.slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
                     const key = itemKeyFromCard(card);
                     if (key && !seenKeys.has(key)) newKeys.add(key);
                 }
@@ -6843,7 +6900,7 @@
                 stablePageTransforms.set(actualPage, stabilizedTransform);
                 const newKeys = new Set();
                 for (const slot of slots) {
-                    const card = slot.querySelector('a[data-uia="standard-card"]');
+                    const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
                     const key = itemKeyFromCard(card);
                     if (key && !seen.has(key)) newKeys.add(key);
                 }
@@ -6979,7 +7036,7 @@
         slot.style.removeProperty('visibility');
         slot.style.removeProperty('pointer-events');
 
-        const card = slot.querySelector('a[data-uia="standard-card"]');
+        const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
         if (card) {
             card.tabIndex = 0;
             card.setAttribute('data-tm-clone-card', 'true');
@@ -7030,98 +7087,101 @@
         return { domMap, pairs };
     }
 
-    function getReactKeys(node) {
-        const keys = Object.getOwnPropertyNames(node);
-        return {
-            fiberKeys: keys.filter(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')),
-            propsKeys: keys.filter(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$')),
-            otherKeys: keys.filter(k =>
-                k.startsWith('__react') &&
-                !k.startsWith('__reactFiber$') &&
-                !k.startsWith('__reactInternalInstance$') &&
-                !k.startsWith('__reactProps$') &&
-                !k.startsWith('__reactEventHandlers$')
-            )
-        };
-    }
-
-    function clearReactKeys(root) {
-        const nodes = [root, ...root.querySelectorAll('*')];
-        for (const node of nodes) {
-            for (const key of Object.getOwnPropertyNames(node)) {
-                if (!key.startsWith('__react')) continue;
-                if (key.startsWith('__reactContainer$')) continue;
-                try { delete node[key]; } catch (_) {}
+    // Contains the private React-key graft used only to make cloned cards hoverable.
+    const netflixReactHover = Object.freeze({
+        clearClone(root) {
+            const nodes = [root, ...root.querySelectorAll('*')];
+            for (const node of nodes) {
+                for (const key of Object.getOwnPropertyNames(node)) {
+                    if (!key.startsWith('__react')) continue;
+                    if (key.startsWith('__reactContainer$')) continue;
+                    try { delete node[key]; } catch (_) {}
+                }
             }
-        }
-    }
+        },
 
-    function graftReactTree(sourceRoot, cloneRoot) {
-        const { domMap, pairs } = pairDomTrees(sourceRoot, cloneRoot);
-        const fiberMap = new Map();
-        let fiberAssignments = 0;
-        let propsAssignments = 0;
+        graftTreeToClone(sourceRoot, cloneRoot) {
+            const { domMap, pairs } = pairDomTrees(sourceRoot, cloneRoot);
+            const fiberMap = new Map();
+            let fiberAssignments = 0;
+            let propsAssignments = 0;
 
-        function cloneFiberChain(sourceFiber) {
-            if (!sourceFiber || typeof sourceFiber !== 'object') return sourceFiber;
-            if (fiberMap.has(sourceFiber)) return fiberMap.get(sourceFiber);
-
-            const clonedFiber = Object.assign(
-                Object.create(Object.getPrototypeOf(sourceFiber) || Object.prototype),
-                sourceFiber
-            );
-            fiberMap.set(sourceFiber, clonedFiber);
-
-            if (sourceFiber.stateNode instanceof Node && domMap.has(sourceFiber.stateNode)) {
-                clonedFiber.stateNode = domMap.get(sourceFiber.stateNode);
+            function reactKeysForNode(node) {
+                const keys = Object.getOwnPropertyNames(node);
+                return {
+                    fiberKeys: keys.filter(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')),
+                    propsKeys: keys.filter(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$')),
+                    otherKeys: keys.filter(k =>
+                        k.startsWith('__react') &&
+                        !k.startsWith('__reactFiber$') &&
+                        !k.startsWith('__reactInternalInstance$') &&
+                        !k.startsWith('__reactProps$') &&
+                        !k.startsWith('__reactEventHandlers$')
+                    )
+                };
             }
 
-            // Preserve the structure that produced working hover behavior in legacy 1.2.0.
-            clonedFiber.return = cloneFiberChain(sourceFiber.return);
-            return clonedFiber;
-        }
+            function cloneFiberChain(sourceFiber) {
+                if (!sourceFiber || typeof sourceFiber !== 'object') return sourceFiber;
+                if (fiberMap.has(sourceFiber)) return fiberMap.get(sourceFiber);
 
-        for (const [source, clone] of pairs) {
-            const { fiberKeys, propsKeys, otherKeys } = getReactKeys(source);
+                const clonedFiber = Object.assign(
+                    Object.create(Object.getPrototypeOf(sourceFiber) || Object.prototype),
+                    sourceFiber
+                );
+                fiberMap.set(sourceFiber, clonedFiber);
 
-            for (const key of fiberKeys) {
-                try {
-                    clone[key] = cloneFiberChain(source[key]);
-                    fiberAssignments++;
-                } catch (error) {
-                    warn(tLog('fiberGraftFailed'), key, error);
+                if (sourceFiber.stateNode instanceof Node && domMap.has(sourceFiber.stateNode)) {
+                    clonedFiber.stateNode = domMap.get(sourceFiber.stateNode);
+                }
+
+                // Preserve the structure that produced working hover behavior in legacy 1.2.0.
+                clonedFiber.return = cloneFiberChain(sourceFiber.return);
+                return clonedFiber;
+            }
+
+            for (const [source, clone] of pairs) {
+                const { fiberKeys, propsKeys, otherKeys } = reactKeysForNode(source);
+
+                for (const key of fiberKeys) {
+                    try {
+                        clone[key] = cloneFiberChain(source[key]);
+                        fiberAssignments++;
+                    } catch (error) {
+                        warn(tLog('fiberGraftFailed'), key, error);
+                    }
+                }
+
+                for (const key of propsKeys) {
+                    try {
+                        clone[key] = source[key];
+                        propsAssignments++;
+                    } catch (error) {
+                        warn(tLog('propsGraftFailed'), key, error);
+                    }
+                }
+
+                for (const key of otherKeys) {
+                    if (key.startsWith('__reactContainer$')) continue;
+                    try { clone[key] = source[key]; } catch (_) {}
                 }
             }
 
-            for (const key of propsKeys) {
-                try {
-                    clone[key] = source[key];
-                    propsAssignments++;
-                } catch (error) {
-                    warn(tLog('propsGraftFailed'), key, error);
-                }
-            }
-
-            for (const key of otherKeys) {
-                if (key.startsWith('__reactContainer$')) continue;
-                try { clone[key] = source[key]; } catch (_) {}
-            }
+            cloneRoot.setAttribute('data-tm-react-grafted', 'true');
+            return { fiberAssignments, propsAssignments, clonedFibers: fiberMap.size };
         }
-
-        cloneRoot.setAttribute('data-tm-react-grafted', 'true');
-        return { fiberAssignments, propsAssignments, clonedFibers: fiberMap.size };
-    }
+    });
 
     function findMountedSourceSlot(track, item, activeOnly = false) {
         let candidates;
         if (activeOnly && sourceState?.scroller) {
             candidates = currentPageSlots(sourceState.scroller, track);
         } else {
-            candidates = filledSlots(track);
+            candidates = netflixDom.filledSlots(track);
         }
 
         return candidates.find(slot => {
-            const card = slot.querySelector('a[data-uia="standard-card"]');
+            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
             if (!card) return false;
             const href = card.href || card.getAttribute('href') || '';
             if (href === item.href) return true;
@@ -7161,7 +7221,7 @@
     }
 
     function viewportPageSlots(scroller, track, columns = sourceState?.layout?.columns || 1) {
-        const all = filledSlots(track);
+        const all = netflixDom.filledSlots(track);
         if (!all.length) return [];
         const count = Math.max(1, columns || 1);
         const sr = scroller.getBoundingClientRect();
@@ -7235,7 +7295,7 @@
 
         let pageSlots = viewportPageSlots(scroller, track, columns);
         let slot = pageSlots.find(sourceSlot => {
-            const card = sourceSlot.querySelector('a[data-uia="standard-card"]');
+            const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
             return itemKeyFromCard(card) === itemKey(item);
         }) || null;
         if (slot) {
@@ -7267,7 +7327,7 @@
 
         pageSlots = viewportPageSlots(scroller, track, columns);
         slot = pageSlots.find(sourceSlot => {
-            const card = sourceSlot.querySelector('a[data-uia="standard-card"]');
+            const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
             return itemKeyFromCard(card) === itemKey(item);
         }) || null;
         if (slot) {
@@ -7283,7 +7343,7 @@
 
         const visibleSlots = pageSlots.length ? pageSlots : (stableSlots?.length ? stableSlots.slice(0, columns) : []);
         const visibleIds = visibleSlots
-            .map(sourceSlot => videoIdFromHref(sourceSlot.querySelector('a[data-uia="standard-card"]')?.href || ''))
+            .map(sourceSlot => videoIdFromHref(sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard)?.href || ''))
             .filter(Boolean);
         if (visibleSlots.length < minimumSlots || visibleIds.length < minimumSlots) {
             log(tLog('hoverExpectedPageUnknown'), {
@@ -7330,7 +7390,7 @@
         const expectedIndex = Number.isSafeInteger(expectedIndexFromItems) && expectedIndexFromItems >= 0
             ? expectedIndexFromItems
             : item.logicalIndex;
-        const actualIndex = readNativeItemIndexFromSlot(slot).value;
+        const actualIndex = netflixReactCarousel.readItemIndex(slot).value;
         if (!Number.isSafeInteger(expectedIndex) || expectedIndex < 0 ||
             !Number.isSafeInteger(actualIndex) || actualIndex < 0) {
             return null;
@@ -7356,7 +7416,7 @@
     function rejectLargeNativePositionDeviation(item, slot, expectedPage, visibleIds = []) {
         const deviation = nativePositionDeviation(item, slot);
         if (!deviation || deviation.absoluteDelta < ORDER_MISMATCH_POSITION_THRESHOLD) return false;
-        const actualVideoId = videoIdFromHref(slot.querySelector('a[data-uia="standard-card"]')?.href || '');
+        const actualVideoId = videoIdFromHref(slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard)?.href || '');
         const diagnostic = {
             item: itemSummary(item),
             expectedPage,
@@ -7561,7 +7621,7 @@
     }
 
     function findItemForSourceSlot(slot) {
-        const card = slot?.querySelector('a[data-uia="standard-card"]');
+        const card = slot?.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
         if (!card || !sourceState?.itemMap) return null;
         return sourceState.itemMap.get(itemKeyFromCard(card)) || null;
     }
@@ -7572,7 +7632,7 @@
         for (const clone of grid.querySelectorAll(':scope > [data-virtual-slot]')) {
             if (clone === except) continue;
             if (clone.getAttribute('data-tm-hover-ready') === 'true') {
-                clearReactKeys(clone);
+                netflixReactHover.clearClone(clone);
                 clone.removeAttribute('data-tm-hover-ready');
                 clone.removeAttribute('data-tm-backed-page');
             }
@@ -7666,7 +7726,7 @@
 
     function replayHoverOnNativeSource(sourceSlot, triggerEvent) {
         if (!sourceSlot?.isConnected) return;
-        const card = sourceSlot.querySelector('a[data-uia="standard-card"]') || sourceSlot;
+        const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard) || sourceSlot;
         const rect = card.getBoundingClientRect();
         const x = Number.isFinite(triggerEvent?.clientX) ? triggerEvent.clientX : rect.left + rect.width / 2;
         const y = Number.isFinite(triggerEvent?.clientY) ? triggerEvent.clientY : rect.top + rect.height / 2;
@@ -7695,7 +7755,7 @@
             if (!sourceSlot?.isConnected || !clone?.isConnected) return;
             if (activeClone !== clone || activeVideoId !== item.videoId) return;
 
-            const card = sourceSlot.querySelector('a[data-uia="standard-card"]');
+            const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
             const sourceVideoId = videoIdFromHref(card?.href || card?.getAttribute?.('href') || '');
             if (!sourceVideoId || sourceVideoId !== item.videoId) {
                 warn(tLog('nativeHoverReplayCancelled'), {
@@ -7725,7 +7785,7 @@
     function makeLiveClone(sourceSlot, item, oldClone) {
         // Keep the legacy 1.2.0 order: clone the live source, graft React data, then insert into the DOM.
         const fresh = sourceSlot.cloneNode(true);
-        const stats = graftReactTree(sourceSlot, fresh);
+        const stats = netflixReactHover.graftTreeToClone(sourceSlot, fresh);
         normalizeClone(fresh);
 
         const order = oldClone?.getAttribute('data-tm-item-order');
@@ -8973,7 +9033,7 @@
         if (targetDocumentDiscoveryActive) {
             // This is the only phase that watches the full document. Switch to
             // the browse host once it appears, then narrow to My List when found.
-            const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
+            const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
             if (!host) return;
             const section = findMyListSection();
             relevantMutation = bindTargetDocumentObserver(host, section);
@@ -8987,12 +9047,12 @@
             );
 
             if (ancestorChanged || hostChanged) {
-                const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
+                const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
                 const section = host ? findMyListSection() : null;
                 const bindingChanged = bindTargetDocumentObserver(host, section);
                 relevantMutation = bindingChanged || hostChanged || sectionChanged;
             } else if (hostDiscoveryChanged) {
-                const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
+                const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
                 const section = host ? findMyListSection() : null;
                 relevantMutation = bindTargetDocumentObserver(host, section) || hostDiscoveryChanged;
             } else {
@@ -9011,7 +9071,7 @@
         window.addEventListener('resize', handleTargetWindowResize, { passive: true });
         window.visualViewport?.addEventListener('resize', handleTargetVisualViewportResize, { passive: true });
         targetDocumentObserver = new MutationObserver(handleTargetDocumentMutation);
-        const host = document.querySelector(BROWSE_PAGE_SECTIONS_SELECTOR);
+        const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
         bindTargetDocumentObserver(host, host ? findMyListSection() : null);
     }
 
@@ -9046,7 +9106,7 @@
                 scheduleRun(Math.max(40, NATIVE_EMPTY_STABLE_MS - elapsed), sessionToken);
                 return;
             }
-            section = ensureSyntheticMyListSection();
+            section = netflixDom.ensureSyntheticMyListSection();
             if (!section) {
                 scheduleRun(120, sessionToken);
                 return;
@@ -9064,8 +9124,8 @@
         markOriginalHeader(section);
 
         const initializationStarted = performance.now();
-        let scroller = section.querySelector('[data-uia="carousel-scroller"]');
-        let track = scroller && findTrack(scroller);
+        let scroller = section.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller);
+        let track = scroller && netflixDom.findTrack(scroller);
         let provisionalLayout = scroller && track ? measureVisibleLayout(section, scroller, track) : measureEmptyLayout(section);
         provisionalLayout.rowGap = measureNativeCarouselGap(section);
         const provisionalFrame = placeLegacyFrame(section, scroller, provisionalLayout, { elapsedMs: null, finalized: false, totalCount: null });
@@ -9108,7 +9168,7 @@
                 earlyTotalCount = await waitForMyListTotalCount(TOTAL_COUNT_TIMEOUT_MS, sessionToken);
                 freshMyListBootstrap = {
                     totalCount: earlyTotalCount,
-                    firstVideoId: firstMyListGraphqlVideoId()
+                    firstVideoId: netflixGraphql.firstMyListVideoId()
                 };
             } else {
                 const mountedFast = scroller && track
@@ -9131,7 +9191,7 @@
                     if (scroller && track && currentPageSlots(scroller, track).length > 0) {
                         startParallelReadiness();
                     }
-                    freshMyListBootstrap = await fetchFreshMyListBootstrap(sessionToken);
+                    freshMyListBootstrap = await netflixGraphql.fetchBootstrap(sessionToken);
                     earlyTotalCount = freshMyListBootstrap.totalCount;
                     log(tLog('totalCountDetected'), {
                         totalCount: earlyTotalCount,
@@ -9342,17 +9402,17 @@
 
         if (mountedProfile.pageMode === 'logical') {
             try {
-                if (!freshMyListBootstrap?.graphqlEdges?.length) {
-                    freshMyListBootstrap = await fetchFreshMyListBootstrapViaCarousel(sessionToken);
-                }
                 const graphqlLayout = measureVisibleLayout(section, scroller, track);
-                const templateSlot = currentPageSlots(scroller, track)[0] || filledSlots(track)[0];
-                graphqlItems = buildGraphqlMyListItems(
-                    freshMyListBootstrap?.graphqlEdges,
-                    earlyTotalCount,
-                    graphqlLayout.columns,
-                    templateSlot
-                );
+                const templateSlot = currentPageSlots(scroller, track)[0] || netflixDom.filledSlots(track)[0];
+                const graphqlCollection = await netflixGraphql.collectLogicalItems({
+                    bootstrap: freshMyListBootstrap,
+                    totalCount: earlyTotalCount,
+                    columns: graphqlLayout.columns,
+                    templateSlot,
+                    sessionToken
+                });
+                freshMyListBootstrap = graphqlCollection.bootstrap;
+                graphqlItems = graphqlCollection.items;
                 if (graphqlItems) {
                     const runtime = getCarouselDomRuntime(section);
                     runtime.knownPageCount = Math.max(1, Math.ceil(earlyTotalCount / Math.max(1, graphqlLayout.columns)));
@@ -9393,8 +9453,8 @@
             devicePixelRatio: window.devicePixelRatio,
             selectedPage: selectedPage(section),
             pages: pageCount(section),
-            sourceSlots: directSlots(track).length,
-            sourceCards: filledSlots(track).length,
+            sourceSlots: netflixDom.directSlots(track).length,
+            sourceCards: netflixDom.filledSlots(track).length,
             carouselDom: carouselDomProfileSummary(section)
         });
 
@@ -9431,7 +9491,7 @@
                     collected: items.length,
                     totalCount,
                     pages: pageCount(section),
-                    sourceCards: filledSlots(track).length,
+                    sourceCards: netflixDom.filledSlots(track).length,
                     carouselDom: carouselDomProfileSummary(section)
                 });
             } else {
@@ -9441,8 +9501,8 @@
                 log(tLog('nativeCarouselScanModeStarted'), {
                     selectedPage: selectedPage(section),
                     pages: pageCount(section),
-                    sourceSlots: directSlots(track).length,
-                    sourceCards: filledSlots(track).length,
+                    sourceSlots: netflixDom.directSlots(track).length,
+                    sourceCards: netflixDom.filledSlots(track).length,
                     carouselDom: carouselDomProfileSummary(section)
                 });
                 items = await collectAllItems(section, scroller, track, totalCount, sessionToken);
