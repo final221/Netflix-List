@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.0.3
+// @version      1.0.4
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -57,7 +57,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.0.3';
+    const SCRIPT_VERSION = '1.0.4';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     const FAST_MOVE_CLASS = 'tm-netflix-mylist-v22-fast-move';
@@ -3679,6 +3679,7 @@
         const items = sourceState.items || (sourceState.items = []);
         const grid = sourceState.grid || document.getElementById(GRID_ID);
         if (!grid) return false;
+        ensureGridHoverBehavior(grid);
         const index = Math.max(0, Math.min(items.length, Number.isFinite(preferredIndex) ? Math.floor(preferredIndex) : 0));
         item.page = Math.floor(index / Math.max(1, sourceState.layout?.columns || 1));
         items.splice(index, 0, item);
@@ -3686,7 +3687,7 @@
         const clone = item.snapshot.cloneNode(true);
         normalizeClone(clone);
         copyItemAttributes(clone, item, index);
-        addHoverBehavior(item, clone);
+        associateGridHoverItem(item, clone);
         const before = grid.children[index] || null;
         grid.insertBefore(clone, before);
         sourceState.cloneMap ||= new Map();
@@ -7117,6 +7118,11 @@
             card.tabIndex = 0;
             card.setAttribute('data-tm-clone-card', 'true');
         }
+
+        for (const image of slot.querySelectorAll('img')) {
+            image.loading = 'lazy';
+            image.decoding = 'async';
+        }
     }
 
     function currentGridGeometry(section, layout) {
@@ -7860,7 +7866,8 @@
         copyItemAttributes(fresh, item, order === null || order === undefined ? null : Number(order));
         fresh.setAttribute('data-tm-hover-ready', 'true');
         fresh.setAttribute('data-tm-backed-page', String(selectedPage(sourceState.section)));
-        addHoverBehavior(item, fresh);
+        ensureGridHoverBehavior(sourceState.grid);
+        associateGridHoverItem(item, fresh);
         return { fresh, stats };
     }
 
@@ -8295,85 +8302,102 @@
         }
     }
 
-    function addHoverBehavior(item, clone) {
-        clone.__tmMyListItem = item;
-        let hoverActivationTimer = null;
-        let hoverActivationGeneration = 0;
+    function gridCloneFromPointerEvent(event, grid) {
+        let node = event.target instanceof Element ? event.target : event.target?.parentElement;
+        while (node && node !== grid) {
+            if (node.parentElement === grid && node.__tmMyListItem) return node;
+            node = node.parentElement;
+        }
+        return null;
+    }
 
-        const handle = (event) => {
-            if (orderMismatchDialogOpen || orderMismatchReinitializing) return;
-            if (event.type === 'pointerover' && event.relatedTarget && clone.contains(event.relatedTarget)) return;
-            const selected = selectedPage(sourceState.section);
-            const backedPage = Number(clone.getAttribute('data-tm-backed-page'));
+    function handleGridClonePointerOver(event, clone, item) {
+        if (orderMismatchDialogOpen || orderMismatchReinitializing) return;
+        if (event.relatedTarget && clone.contains(event.relatedTarget)) return;
+        if (!sourceState?.section) return;
 
-            if (event.type === 'pointerover') {
-                log(tLog('legacyCardHoverInput'), {
-                    event: event.type,
+        const selected = selectedPage(sourceState.section);
+        const backedPage = Number(clone.getAttribute('data-tm-backed-page'));
+        log(tLog('legacyCardHoverInput'), {
+            event: event.type,
+            item: itemSummary(item),
+            selectedPage: selected,
+            backedPage: Number.isFinite(backedPage) ? backedPage : null,
+            hoverReady: clone.getAttribute('data-tm-hover-ready') === 'true',
+            pointer: { x: event.clientX, y: event.clientY }
+        });
+
+        if (clone.getAttribute('data-tm-hover-ready') === 'true' &&
+            Number.isFinite(backedPage) && selected === backedPage) {
+            const sourceSlot = findActiveSourceSlot(item);
+            if (sourceSlot && alignSourceSlotToClone(sourceSlot, clone)) {
+                activePage = selected;
+                activeVideoId = item.videoId;
+                activeClone = clone;
+                log(tLog('legacyCardHoverReusedMountedNativeSource'), {
                     item: itemSummary(item),
                     selectedPage: selected,
-                    backedPage: Number.isFinite(backedPage) ? backedPage : null,
-                    hoverReady: clone.getAttribute('data-tm-hover-ready') === 'true',
-                    pointer: { x: event.clientX, y: event.clientY }
+                    source: slotDescriptor(sourceSlot)
                 });
+                scheduleNativeHoverReplay(sourceSlot, item, clone, event, selected, 'mounted-source-reuse');
+                return;
             }
+        }
 
-            if (clone.getAttribute('data-tm-hover-ready') === 'true' &&
-                Number.isFinite(backedPage) && selected === backedPage) {
-                const sourceSlot = findActiveSourceSlot(item);
-                if (sourceSlot && alignSourceSlotToClone(sourceSlot, clone)) {
-                    activePage = selected;
-                    activeVideoId = item.videoId;
-                    activeClone = clone;
-                    if (event.type === 'pointerover') {
-                        log(tLog('legacyCardHoverReusedMountedNativeSource'), {
-                            item: itemSummary(item),
-                            selectedPage: selected,
-                            source: slotDescriptor(sourceSlot)
-                        });
-                        scheduleNativeHoverReplay(sourceSlot, item, clone, event, selected, 'mounted-source-reuse');
-                    }
-                    return;
-                }
-            }
+        if (clone.__tmHoverActivationTimer !== null && clone.__tmHoverActivationTimer !== undefined) {
+            clearTimeout(clone.__tmHoverActivationTimer);
+        }
+        const generation = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
+        clone.__tmHoverActivationGeneration = generation;
+        clone.__tmHoverActivationTimer = setTimeout(() => {
+            clone.__tmHoverActivationTimer = null;
+            if (generation !== clone.__tmHoverActivationGeneration || !clone.isConnected) return;
+            activateClone(item, clone, event);
+        }, HOVER_ACTIVATION_DELAY_MS);
+    }
 
-            if (event.type !== 'pointerover') return;
-            if (hoverActivationTimer !== null) clearTimeout(hoverActivationTimer);
-            const generation = ++hoverActivationGeneration;
-            hoverActivationTimer = setTimeout(() => {
-                hoverActivationTimer = null;
-                if (generation !== hoverActivationGeneration || !clone.isConnected) return;
-                activateClone(item, clone, event);
-            }, HOVER_ACTIVATION_DELAY_MS);
-        };
+    function handleGridClonePointerLeave(clone, item) {
+        clone.__tmHoverActivationGeneration = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
+        if (clone.__tmHoverActivationTimer !== null && clone.__tmHoverActivationTimer !== undefined) {
+            clearTimeout(clone.__tmHoverActivationTimer);
+            clone.__tmHoverActivationTimer = null;
+        }
 
-        clone.addEventListener('pointerover', handle, { capture: true, passive: true });
+        const cloneTokenText = clone.getAttribute('data-tm-hover-token');
+        const cloneToken = cloneTokenText === null ? NaN : Number(cloneTokenText);
+        if (Number.isFinite(cloneToken) && cloneToken === hoverToken) {
+            hoverToken++;
+            clone.removeAttribute('data-tm-hover-token');
+            log(tLog('pendingHoverCancelledOnLeave'), {
+                item: itemSummary(item),
+                token: cloneToken,
+                hoverToken
+            });
+        }
+        if (activeClone !== clone) return;
+        clearSourceAlignment();
+        activeVideoId = null;
+        activeClone = null;
+        activePage = null;
+        log(tLog('hoverCoordinateProxyReleased'), { item: itemSummary(item) });
+    }
 
-        const releaseGeometryProxy = () => {
-            hoverActivationGeneration++;
-            if (hoverActivationTimer !== null) {
-                clearTimeout(hoverActivationTimer);
-                hoverActivationTimer = null;
-            }
-            const cloneTokenText = clone.getAttribute('data-tm-hover-token');
-            const cloneToken = cloneTokenText === null ? NaN : Number(cloneTokenText);
-            if (Number.isFinite(cloneToken) && cloneToken === hoverToken) {
-                hoverToken++;
-                clone.removeAttribute('data-tm-hover-token');
-                log(tLog('pendingHoverCancelledOnLeave'), {
-                    item: itemSummary(item),
-                    token: cloneToken,
-                    hoverToken
-                });
-            }
-            if (activeClone !== clone) return;
-            clearSourceAlignment();
-            activeVideoId = null;
-            activeClone = null;
-            activePage = null;
-            log(tLog('hoverCoordinateProxyReleased'), { item: itemSummary(item) });
-        };
-        clone.addEventListener('pointerleave', releaseGeometryProxy, { passive: true });
-        clone.addEventListener('mouseleave', releaseGeometryProxy, { passive: true });
+    function associateGridHoverItem(item, clone) {
+        clone.__tmMyListItem = item;
+    }
+
+    function ensureGridHoverBehavior(grid) {
+        if (!grid || grid.__tmHoverBehaviorInstalled) return;
+        grid.__tmHoverBehaviorInstalled = true;
+        grid.addEventListener('pointerover', event => {
+            const clone = gridCloneFromPointerEvent(event, grid);
+            if (clone) handleGridClonePointerOver(event, clone, clone.__tmMyListItem);
+        }, { capture: true, passive: true });
+        grid.addEventListener('pointerout', event => {
+            const clone = gridCloneFromPointerEvent(event, grid);
+            if (!clone || (event.relatedTarget && clone.contains(event.relatedTarget))) return;
+            handleGridClonePointerLeave(clone, clone.__tmMyListItem);
+        }, { capture: true, passive: true });
     }
 
     function buildGrid(section, scroller, items, layout, totalCount) {
@@ -8384,6 +8408,7 @@
         grid.id = GRID_ID;
         grid.setAttribute('data-tm-purpose', 'exact-items-and-live-react-hover');
         grid.removeAttribute('data-tm-empty');
+        ensureGridHoverBehavior(grid);
 
         sourceState.cloneMap = new Map();
         sourceState.itemMap = new Map(items.map(item => [itemKey(item), item]));
@@ -8392,7 +8417,7 @@
             const clone = item.snapshot.cloneNode(true);
             normalizeClone(clone);
             copyItemAttributes(clone, item, index);
-            addHoverBehavior(item, clone);
+            associateGridHoverItem(item, clone);
             grid.appendChild(clone);
             setGridClone(item, clone);
         });
