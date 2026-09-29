@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.0.4
+// @version      1.0.5
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -57,7 +57,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.0.4';
+    const SCRIPT_VERSION = '1.0.5';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     const FAST_MOVE_CLASS = 'tm-netflix-mylist-v22-fast-move';
@@ -6025,18 +6025,6 @@
         return null;
     }
 
-    function numericReactFiberKey(fiber) {
-        for (const candidate of [fiber, fiber?.alternate]) {
-            const key = candidate?.key;
-            if (typeof key !== 'string' && typeof key !== 'number') continue;
-            const text = String(key);
-            if (!/^-?\d+$/.test(text)) continue;
-            const value = Number(text);
-            if (Number.isSafeInteger(value)) return value;
-        }
-        return null;
-    }
-
     function reactFiberTypeName(fiber) {
         const type = fiber?.elementType || fiber?.type;
         if (typeof type === 'string') return type;
@@ -6127,12 +6115,7 @@
         });
     }
 
-    function diagnosticParentNumericKeyFromSlot(slot) {
-        const fiber = reactFiberForNode(slot);
-        return numericReactFiberKey(fiber?.return);
-    }
-
-    function diagnosticItemIndexFromSlot(slot) {
+    function readNativeItemIndexFromSlot(slot) {
         const card = slot?.querySelector?.('a[data-uia="standard-card"]') || null;
         const roots = [slot?.firstElementChild || null, card?.parentElement || null, card];
         for (const root of roots) {
@@ -6250,125 +6233,8 @@
         );
     }
 
-    function compactVirtualIndexDiagnosticEntry(slot) {
-        const card = slot?.querySelector?.('a[data-uia="standard-card"]') || null;
-        const href = card?.getAttribute('href') || card?.href || '';
-        const itemIndex = diagnosticItemIndexFromSlot(slot);
-        return {
-            virtualSlot: slot?.getAttribute?.('data-virtual-slot') || '',
-            videoId: href ? videoIdFromHref(href) : '',
-            parentFiberKey: diagnosticParentNumericKeyFromSlot(slot),
-            itemIndex: itemIndex.value,
-            itemIndexDepth: itemIndex.depth,
-            itemIndexSource: itemIndex.source,
-            itemIndexFiberKey: itemIndex.fiberKey,
-            itemIndexTypeName: itemIndex.typeName
-        };
-    }
-
-    async function runVirtualIndexPagingDiagnostic(section, scroller, track, totalCount, columns, sessionToken = null) {
-        assertRouteSession(sessionToken);
-        const estimatedPages = Math.max(1, Math.ceil(totalCount / Math.max(1, columns)));
-        const pageLimit = Math.min(estimatedPages, 60);
-        const initialSignature = visibleSignature(currentPageSlots(scroller, track));
-        let previousSignature = '';
-        let movesRight = 0;
-        let stopReason = 'page-limit-reached';
-        let diagnosticError = null;
-
-        warn('Netflix virtual index paging diagnostic started', {
-            totalCount,
-            columns,
-            estimatedPages,
-            pageLimit,
-            initialSignature
-        });
-
-        try {
-            for (let step = 0; step < pageLimit; step++) {
-                const stableSlots = await waitStableCurrentPage(scroller, track, {
-                    previousSignature,
-                    minimumSlots: Math.max(1, Math.min(columns, totalCount)),
-                    requiredStableFrames: 2,
-                    sessionToken
-                });
-                assertRouteSession(sessionToken);
-                const signature = visibleSignature(stableSlots);
-                const entries = stableSlots.map(compactVirtualIndexDiagnosticEntry);
-                log('Netflix virtual index page diagnostic', {
-                    step,
-                    selectedPage: selectedPage(section),
-                    signature,
-                    entries
-                });
-
-                if (step >= pageLimit - 1) {
-                    stopReason = estimatedPages > pageLimit ? 'diagnostic-page-cap' : 'estimated-last-page-recorded';
-                    break;
-                }
-
-                const rightControl = carouselMoveButton(section, scroller, 1);
-                if (!rightControl.button) {
-                    stopReason = 'right-control-not-found';
-                    break;
-                }
-                if (carouselMoveButtonDisabled(rightControl.button)) {
-                    stopReason = 'right-control-disabled';
-                    break;
-                }
-
-                const beforeSignature = signature;
-                await moveOnePage(section, scroller, 1, null, sessionToken);
-                movesRight++;
-                assertRouteSession(sessionToken);
-                const afterSignature = visibleSignature(currentPageSlots(scroller, track));
-                if (!afterSignature || afterSignature === beforeSignature) {
-                    stopReason = 'right-move-did-not-change-signature';
-                    break;
-                }
-                previousSignature = beforeSignature;
-            }
-        } catch (error) {
-            diagnosticError = {
-                name: error?.name || null,
-                message: error?.message || String(error || ''),
-                code: error?.code || null,
-                stage: error?.stage || null
-            };
-            stopReason = 'diagnostic-error';
-            warn('Netflix virtual index paging diagnostic error', diagnosticError);
-        } finally {
-            let restoredLeftMoves = 0;
-            try {
-                while (restoredLeftMoves < movesRight) {
-                    assertRouteSession(sessionToken);
-                    await moveOnePage(section, scroller, -1, null, sessionToken);
-                    restoredLeftMoves++;
-                }
-            } catch (restoreError) {
-                warn('Netflix virtual index paging diagnostic restore error', {
-                    restoredLeftMoves,
-                    movesRight,
-                    name: restoreError?.name || null,
-                    message: restoreError?.message || String(restoreError || '')
-                });
-            }
-            assertRouteSession(sessionToken);
-            const restoredSignature = visibleSignature(currentPageSlots(scroller, track));
-            warn('Netflix virtual index paging diagnostic completed', {
-                stopReason,
-                movesRight,
-                restoredLeftMoves,
-                initialSignature,
-                restoredSignature,
-                restored: Boolean(initialSignature) && initialSignature === restoredSignature,
-                diagnosticError
-            });
-        }
-    }
-
     function netflixItemIndexFromSlot(slot) {
-        return diagnosticItemIndexFromSlot(slot).value;
+        return readNativeItemIndexFromSlot(slot).value;
     }
 
     function normalizeNetflixLogicalIndex(itemIndex, totalCount) {
@@ -7464,7 +7330,7 @@
         const expectedIndex = Number.isSafeInteger(expectedIndexFromItems) && expectedIndexFromItems >= 0
             ? expectedIndexFromItems
             : item.logicalIndex;
-        const actualIndex = diagnosticItemIndexFromSlot(slot).value;
+        const actualIndex = readNativeItemIndexFromSlot(slot).value;
         if (!Number.isSafeInteger(expectedIndex) || expectedIndex < 0 ||
             !Number.isSafeInteger(actualIndex) || actualIndex < 0) {
             return null;
