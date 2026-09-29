@@ -55,7 +55,7 @@ Review date: 2026-09-30. The user reports stutters while scrolling the grid and 
 - **Obsolete preparation:** Hover hydration and mounted-source waits stop at their next frame/timer checkpoint. Expected-page and recovery retries check cancellation before native state reads. A target waiting for responsive refresh is revalidated afterwards, and old async cleanup cannot erase a newer preparation's markers. A native move already clicked retains its serialized acknowledgement and settlement; cancelled move acknowledgement polls at 80 ms instead of every frame (or the 12 ms indicator fallback). The existing move timeout remains a correctness bound, so cancellation does not undo an in-flight click or instantly release its queue slot.
 - **Observer duplication:** Mutations wholly inside script-owned grid/status/empty/dialog UI are ignored. Relevant native mutations coalesce to one check per animation frame, and an unchanged populated binding skips geometry, React index, and count reads. Native track/section/host replacement, empty-list transitions, and external grid removal retain their recovery paths. Repeated status text and grid custom-property values are not rewritten.
 - **Verification:** `node --check "Legacy My List for Netflix.user.js"`; `node --test tests/performance.test.cjs` (23 deterministic tests of shipped functions); `git diff --check`. Tests cover hover intent and mounted-source reuse, scroll suppression/resumption, stale cleanup and retries, cancellation in logical/indicator modes, initialization waits, serialized movement/style restoration, observer filtering/coalescing, replacement/empty/grid recovery, and route cleanup. They use DOM/timer mocks and do not establish measured browser performance or Netflix hover compatibility.
-- **Browser verification:** The user will test the script themselves and explicitly asked the assistant not to inspect their browser. Confirm that scrolling over cards no longer drives repeated native navigation, then move the pointer after scrolling settles to check deliberate hover. One native move that was already clicked may still finish. Also check resize, add/remove/undo, and SPA leave/re-entry.
+- **User feedback:** The user reports that 1.0.8 increased stability substantially. They also report that a film/series hover popup sometimes appears only after two or three hover attempts. This does not establish which hover path failed; the analysis below records the remaining reliability gaps. The user tests the browser themselves and explicitly asked the assistant not to inspect it. Resize, add/remove/undo, and SPA leave/re-entry remain user-owned checks; one native move already clicked may still finish safely.
 
 ### P1. Scrolling can start native-carousel hover preparation
 
@@ -143,17 +143,52 @@ Fetch controllers are local to the bootstrap functions; route suspension invalid
 
 Proposed improvement: distinguish count/first-ID bootstrap from full-item pagination based on the native mode, retain valid bootstrap data if optional collection fails, and tie fetch cancellation to the route session. Preserve authoritative count reconciliation, complete-list validation, and fresh data after SPA navigation. Cursor pagination itself has dependencies and should not simply be parallelized blindly.
 
-### Follow-up order and current status
+## Hover popup reliability — userscript 1.0.8
+
+Review date: 2026-09-30. The user selected analysis only and adding findings to this work list. No userscript or committed test changes were made; the release remains 1.0.8. Findings below describe confirmed control flow and possible causes of the reported repeated-hover symptom, without claiming a live Netflix reproduction.
+
+### P1. An unsuccessful hover can lack recovery until another user attempt
+
+Locations in 1.0.8: `prepareMountedPage` (8124–8144), `activateClone` (8196–8259), `scheduleNativeHoverReplay` (7797–7827), `handleGridClonePointerOver` (8308–8327), `handleGridClonePointerLeave` (8330–8355).
+
+- **Preparation success is broader than hover success.** After replacing the target clone, failed source-to-grid geometry alignment returns the fresh clone without scheduling native replay. `activateClone` treats any returned clone as success, so its existing bounded retry is skipped. That retry also relies on the original clone still being connected and hovered, rather than resolving the current replacement for the same item. A transient source replacement or alignment failure can therefore finish preparation without making the popup appear or recovering within that attempt.
+- **A skipped replay can leave the card marked active.** Both reuse and preparation set `activeClone` before the animation-frame replay. If the native source disconnects before that frame, replay returns without clearing that state or retrying. Subsequent pointer movement on the same card is ignored because `activeClone === clone`. Leaving clears the state, and re-entering permits another attempt. The source-ID-mismatch branch already clears active state; the disconnected-source branch does not.
+- **Native popup success is not acknowledged.** The replay path sends pointer/mouse events and records that replay was attempted. It does not establish that Netflix displayed the expected title's popup. If Netflix ignores those events or the source is not yet ready, the card can remain active with no bounded recovery. “Hover native page preparation result” and “Native hover replayed from live source” are therefore not evidence that a popup appeared.
+
+Proposed scope: distinguish a refreshed clone, successful alignment, replay dispatch, and confirmed/failed native hover; recover on the current clone for the same item. Release failed active state and allow a bounded retry only while the deliberate hover remains valid. Validate title identity, source binding, route/session, cancellation, and order before replay, and cancel on leave/scroll/resize. Any native popup acknowledgement must use a verified Netflix signal; avoid unlimited retry loops or broad carousel searches for popup readiness.
+
+### P2. The scroll guard can discard a deliberate hover just after scrolling
+
+Locations in 1.0.8: `gridHoverSuppressed` (8289–8296), `handleGridClonePointerOver` (8308–8312), `handleTargetPointerMove` (8954–8965), `handleTargetScroll` (8968–8982).
+
+Scrolling requires another trusted physical pointer movement before hovering can resume, and movements inside the 180 ms quiet period are ignored. If the user deliberately moves onto a card during that period and then holds still, there is no pending activation to reconsider when it expires. Waiting longer does not resume the hover; a further physical movement or leave/re-entry is needed. This is an edge case of the new performance guard. It can explain misses immediately after scrolling, but cannot explain every repeated-hover report away from scrolling. The separate 120 ms dwell intentionally rejects brief visits.
+
+Proposed scope: retain deliberate physical hover intent received during the quiet period and revalidate it once scrolling settles. Keep the protection against automatically preparing a card that merely passed under a stationary pointer; require a real movement/entry, a still-hovered current target, and cancellation if another scroll or target change occurs.
+
+### Conditional compatibility factors to check within the hover step
+
+`resolveExpectedPageSourceItem` (7333–7345) accepts a matching visible source immediately; DOM/title presence does not prove that Netflix's hover handlers are ready. `netflixReactHover.graftTreeToClone` (7136–7204) records assignment counts but marks the graft complete even with no assignments, and `makeLiveClone` (7830–7842) marks the card hover-ready unconditionally. The replay also uses the original event coordinates (7771–7786), which can be old after asynchronous page preparation. Transient React readiness or stale coordinates could contribute, but their effect on Netflix's popup is unverified. Keep these checks in the hover reliability work rather than assuming Netflix's private React contract is broken or adding a speculative fallback.
+
+### Evidence and validation limits
+
+Three inline Node scenarios exercised functions extracted from the unchanged 1.0.8 source, reusing the existing DOM/timer mocks: a physical entry during scroll suppression stayed inactive until another movement; a disconnected-source replay retained active state and blocked movement retries until leave/re-entry; and an alignment failure after replacement logged preparation success with no replay and no retry. These confirm the gaps under the stated conditions. They do not establish their frequency, actual source disconnections/alignment failures, or Netflix popup behavior. No browser was inspected and no new tests were committed.
+
+User-owned checks when this step is implemented: distinguish hovering immediately after scrolling from hovering after a pause; compare a first hover on a distant native page with repeating the same title and an already-mounted title. Hold the pointer on a card long enough for native preparation; verify one deliberate entry opens the correct popup, leaving cancels it, popup controls work, and rapid target changes or scrolling do not restart carousel churn. Existing performance tests cover intent/cancellation and observer work, not actual Netflix popup compatibility.
+
+## Follow-up order and current status
 
 | Order | Work | Status and next scope |
 | --- | --- | --- |
-| 1 | Scroll-triggered hover and obsolete preparation | Implemented in 1.0.8; user browser feedback pending. Already-clicked native moves still settle safely. |
-| 2 | Script-owned mutation filtering, cheap observer binding checks, and unchanged UI writes | Implemented in 1.0.8; replacement/empty/grid recovery covered locally. Broader resize filtering remains in step 4. |
-| 3 | Reuse native state/rectangles and track grafted clones directly | Open, not selected. Reduce repeated DOM/React scans, logical-page candidate generation, and list-wide invalidation. |
-| 4 | Thumbnail request timing, reserved geometry, and irrelevant resize notifications | Open, not selected. Establish inherited image behavior and target cold-scroll/network/decode/layout effects. |
-| 5 | Snapshot retention, initial construction, and bootstrap/lifecycle work | Open, not selected. Reduce retained DOM, yield during large builds, avoid unused pagination, and abort obsolete route fetches. |
+| Completed | Scroll-triggered hover and obsolete preparation | Implemented in 1.0.8; user reports substantially improved stability. Hover reliability gaps are separately open below. Already-clicked native moves still settle safely. |
+| Completed | Script-owned mutation filtering, cheap observer binding checks, and unchanged UI writes | Implemented in 1.0.8; replacement/empty/grid recovery covered locally. Broader resize filtering remains open below. |
+| 1 | Hover popup reliability | Analysis complete; implementation not selected. Recover from failed alignment/replay on the current clone, clear unsuccessful active state, and retain deliberate hover intent during the scroll quiet period. Check native readiness, replay coordinates, and a trustworthy popup acknowledgement within this step. Preserve the scrolling gains and all cancellation/order checks. |
+| 2 | Reuse native state/rectangles and track grafted clones directly | Open, not selected. Reduce repeated DOM/React scans, logical-page candidate generation, and list-wide invalidation. |
+| 3 | Thumbnail request timing, reserved geometry, and irrelevant resize notifications | Open, not selected. Establish inherited image behavior and target cold-scroll/network/decode/layout effects. |
+| 4 | Snapshot retention and initial construction | Open, not selected. Reduce retained DOM and yield during large builds. |
+| 5 | Bootstrap pagination and fetch lifecycle | Open, not selected. Avoid unused pagination and abort obsolete route fetches while preserving complete-list/count validation. |
 | 6 | Row virtualization/containment | Open, not selected. Consider larger rendering changes if the remaining scrolling cost warrants their compatibility tradeoffs. |
 | 7 | Diagnostic overhead | Open, not selected. Gate expensive trace construction and consider a circular log buffer. Separate from the user's deferred copied-log-detail point E. |
+| Deferred | E. Limit copied log details | Deferred by user; retain current detailed copied logs. The earlier A–D, F, and G work remains complete, as recorded in the original plan above. |
 
 ### Browser validation needed
 
