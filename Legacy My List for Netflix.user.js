@@ -1,70 +1,8 @@
 // ==UserScript==
-// @name         Legacy My List for Netflix
-// @name:da      Legacy My List for Netflix
-// @name:de      Legacy My List for Netflix
-// @name:en      Legacy My List for Netflix
-// @name:es      Legacy My List for Netflix
-// @name:fil     Legacy My List for Netflix
-// @name:fr      Legacy My List for Netflix
-// @name:hr      Legacy My List for Netflix
-// @name:id      Legacy My List for Netflix
-// @name:it      Legacy My List for Netflix
-// @name:hu      Legacy My List for Netflix
-// @name:ms      Legacy My List for Netflix
-// @name:nl      Legacy My List for Netflix
-// @name:nb      Legacy My List for Netflix
-// @name:pl      Legacy My List for Netflix
-// @name:pt      Legacy My List for Netflix
-// @name:ro      Legacy My List for Netflix
-// @name:fi      Legacy My List for Netflix
-// @name:sv      Legacy My List for Netflix
-// @name:vi      Legacy My List for Netflix
-// @name:tr      Legacy My List for Netflix
-// @name:cs      Legacy My List for Netflix
-// @name:el      Legacy My List for Netflix
-// @name:ru      Legacy My List for Netflix
-// @name:uk      Legacy My List for Netflix
-// @name:he      Legacy My List for Netflix
-// @name:ar      Legacy My List for Netflix
-// @name:hi      Legacy My List for Netflix
-// @name:th      Legacy My List for Netflix
-// @name:zh      Legacy My List for Netflix
-// @name:ja      Legacy My List for Netflix
-// @name:ko      Legacy My List for Netflix
-// @version      2.2.0
-// @description  Displays your Netflix My List in an easy-to-browse grid similar to the previous layout. The original My List and hover UI remain available.
-// @description:da Viser din Netflix Min liste i et overskueligt gitter, der minder om det tidligere layout. Den oprindelige Min liste og hover-grænsefladen er fortsat tilgængelige.
-// @description:de Zeigt deine Netflix-Liste „Meine Liste“ in einem übersichtlichen Raster ähnlich dem früheren Layout an. Die ursprüngliche „Meine Liste“ und die Hover-Oberfläche bleiben verfügbar.
-// @description:en Displays your Netflix My List in an easy-to-browse grid similar to the previous layout. The original My List and hover UI remain available.
-// @description:es Muestra Mi lista de Netflix en una cuadrícula fácil de consultar, similar al diseño anterior. La Mi lista original y la interfaz al pasar el cursor siguen disponibles.
-// @description:fil Ipinapakita ang Netflix My List sa madaling tingnang grid na katulad ng dating layout. Magagamit pa rin ang orihinal na My List at hover UI.
-// @description:fr Affiche Ma liste Netflix dans une grille facile à parcourir, similaire à l’ancienne présentation. Ma liste d’origine et l’interface au survol restent disponibles.
-// @description:hr Prikazuje Netflixov Moj popis u preglednoj mreži nalik prijašnjem rasporedu. Izvorni Moj popis i sučelje pri prelasku pokazivačem ostaju dostupni.
-// @description:id Menampilkan Daftar Saya Netflix dalam kisi yang mudah dijelajahi, mirip tata letak sebelumnya. Daftar Saya asli dan antarmuka hover tetap tersedia.
-// @description:it Mostra La mia lista di Netflix in una griglia facile da consultare, simile al layout precedente. La mia lista originale e l’interfaccia al passaggio del mouse restano disponibili.
-// @description:hu A Netflix Saját lista tartalmát a korábbi elrendezéshez hasonló, könnyen áttekinthető rácsban jeleníti meg. Az eredeti Saját lista és a rámutatási felület továbbra is elérhető.
-// @description:ms Memaparkan Senarai Saya Netflix dalam grid yang mudah dilihat, serupa dengan susun atur sebelumnya. Senarai Saya asal dan antara muka hover kekal tersedia.
-// @description:nl Toont Netflix Mijn lijst in een overzichtelijk raster dat lijkt op de eerdere indeling. De oorspronkelijke Mijn lijst en hoverinterface blijven beschikbaar.
-// @description:nb Viser Netflix Min liste i et oversiktlig rutenett som ligner det tidligere oppsettet. Den opprinnelige Min liste og hover-grensesnittet er fortsatt tilgjengelige.
-// @description:pl Wyświetla listę „Moja lista” Netflix w przejrzystej siatce podobnej do wcześniejszego układu. Oryginalna „Moja lista” i interfejs po najechaniu pozostają dostępne.
-// @description:pt Exibe a Minha lista da Netflix numa grelha fácil de consultar, semelhante ao layout anterior. A Minha lista original e a interface ao passar o cursor continuam disponíveis.
-// @description:ro Afișează Lista mea Netflix într-o grilă ușor de parcurs, similară aspectului anterior. Lista mea originală și interfața la trecerea cursorului rămân disponibile.
-// @description:fi Näyttää Netflixin Oma lista -sisällön helposti selattavana ruudukkona, joka muistuttaa aiempaa asettelua. Alkuperäinen Oma lista ja hover-käyttöliittymä ovat edelleen käytettävissä.
-// @description:sv Visar Netflix Min lista i ett lättöverskådligt rutnät som liknar den tidigare layouten. Den ursprungliga Min lista och hover-gränssnittet finns fortfarande kvar.
-// @description:vi Hiển thị Danh sách của tôi trên Netflix dưới dạng lưới dễ xem, tương tự bố cục trước đây. Danh sách gốc và giao diện khi di chuột vẫn có thể sử dụng.
-// @description:tr Netflix Listem’i önceki düzene benzeyen, kolayca göz atılabilen bir ızgarada gösterir. Orijinal Listem ve üzerine gelme arayüzü kullanılmaya devam edilebilir.
-// @description:cs Zobrazí Můj seznam na Netflixu v přehledné mřížce podobné dřívějšímu rozvržení. Původní Můj seznam i rozhraní při najetí zůstávají dostupné.
-// @description:el Εμφανίζει τη λίστα «Η λίστα μου» του Netflix σε ένα ευανάγνωστο πλέγμα παρόμοιο με την παλαιότερη διάταξη. Η αρχική «Η λίστα μου» και το περιβάλλον κατά την κατάδειξη παραμένουν διαθέσιμα.
-// @description:ru Отображает «Мой список» Netflix в удобной сетке, похожей на прежний интерфейс. Исходный «Мой список» и интерфейс при наведении остаются доступными.
-// @description:uk Відображає «Мій список» Netflix у зручній сітці, схожій на попередній інтерфейс. Оригінальний «Мій список» та інтерфейс під час наведення залишаються доступними.
-// @description:he מציג את „הרשימה שלי” של Netflix ברשת נוחה לעיון, בדומה לפריסה הקודמת. „הרשימה שלי” המקורית וממשק הריחוף נשארים זמינים.
-// @description:ar يعرض «قائمتي» في Netflix ضمن شبكة سهلة التصفح تشبه التخطيط السابق. تظل «قائمتي» الأصلية وواجهة التحويم متاحتين.
-// @description:hi Netflix की मेरी सूची को पिछले लेआउट जैसी, आसानी से देखी जा सकने वाली ग्रिड में दिखाता है। मूल मेरी सूची और होवर UI उपलब्ध रहते हैं।
-// @description:th แสดงรายการของฉันใน Netflix เป็นกริดที่ดูง่ายคล้ายรูปแบบก่อนหน้า โดยยังคงใช้งานรายการของฉันต้นฉบับและ UI เมื่อวางเมาส์ได้
-// @description:zh 以类似先前布局、便于浏览的网格显示 Netflix“我的片单”。原始“我的片单”和悬停界面仍可继续使用。
-// @description:ja Netflixの「マイリスト」を、以前のような見やすいグリッド形式で一覧表示します。オリジナルのマイリストやホバー表示もそのまま利用できます。
-// @description:ko Netflix 내 목록을 이전 레이아웃과 비슷한 보기 쉬운 그리드로 표시합니다. 원래 내 목록과 호버 UI도 계속 사용할 수 있습니다.
-// @author       shinot with ChatGPT
+// @name         My List for Netflix
+// @version      1.0.0
+// @description  Displays your Netflix My List in an easy-to-browse grid.
+// @author       final221
 // @license      MIT
 // @match        https://www.netflix.com/*
 // @run-at       document-idle
@@ -73,8 +11,6 @@
 // @grant        GM_unregisterMenuCommand
 // @noframes
 // @namespace local.netflix.mylist.grid
-// @downloadURL https://update.greasyfork.org/scripts/596553/Legacy%20My%20List%20for%20Netflix.user.js
-// @updateURL https://update.greasyfork.org/scripts/596553/Legacy%20My%20List%20for%20Netflix.meta.js
 // ==/UserScript==
 
 (() => {
