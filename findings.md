@@ -175,20 +175,19 @@ Three inline Node scenarios exercised functions extracted from the unchanged 1.0
 
 User-owned checks when this step is implemented: distinguish hovering immediately after scrolling from hovering after a pause; compare a first hover on a distant native page with repeating the same title and an already-mounted title. Hold the pointer on a card long enough for native preparation; verify one deliberate entry opens the correct popup, leaving cancels it, popup controls work, and rapid target changes or scrolling do not restart carousel churn. Existing performance tests cover intent/cancellation and observer work, not actual Netflix popup compatibility.
 
-## Follow-up order and current status
+## Prioritized open performance and reliability work
 
-| Order | Work | Status and next scope |
+The user requested a filtered priority list focused on performance and reliability. Completed work, deferred work, and maintenance-only proposals are excluded from this active view; their history remains above. The order weighs the reported hover failure, confirmed recurring work, likely performance benefit, and compatibility risk. It is a code-based ranking, not a measured comparison of speedups. All steps remain open and unselected for implementation.
+
+| Priority | Work | Benefit and next scope |
 | --- | --- | --- |
-| Completed | Scroll-triggered hover and obsolete preparation | Implemented in 1.0.8; user reports substantially improved stability. Hover reliability gaps are separately open below. Already-clicked native moves still settle safely. |
-| Completed | Script-owned mutation filtering, cheap observer binding checks, and unchanged UI writes | Implemented in 1.0.8; replacement/empty/grid recovery covered locally. Broader resize filtering remains open below. |
-| 1 | Hover popup reliability | Analysis complete; implementation not selected. Recover from failed alignment/replay on the current clone, clear unsuccessful active state, and retain deliberate hover intent during the scroll quiet period. Check native readiness, replay coordinates, and a trustworthy popup acknowledgement within this step. Preserve the scrolling gains and all cancellation/order checks. |
-| 2 | Reuse native state/rectangles and track grafted clones directly | Open, not selected. Reduce repeated DOM/React scans, logical-page candidate generation, and list-wide invalidation. |
-| 3 | Thumbnail request timing, reserved geometry, and irrelevant resize notifications | Open, not selected. Establish inherited image behavior and target cold-scroll/network/decode/layout effects. |
-| 4 | Snapshot retention and initial construction | Open, not selected. Reduce retained DOM and yield during large builds. |
-| 5 | Bootstrap pagination and fetch lifecycle | Open, not selected. Avoid unused pagination and abort obsolete route fetches while preserving complete-list/count validation. |
-| 6 | Row virtualization/containment | Open, not selected. Consider larger rendering changes if the remaining scrolling cost warrants their compatibility tradeoffs. |
-| 7 | Diagnostic overhead | Open, not selected. Gate expensive trace construction and consider a circular log buffer. Separate from the user's deferred copied-log-detail point E. |
-| Deferred | E. Limit copied log details | Deferred by user; retain current detailed copied logs. The earlier A–D, F, and G work remains complete, as recorded in the original plan above. |
+| 1 | Hover popup reliability | Address the current reported interaction failure and confirmed recovery gaps. Recover from failed alignment/replay on the current clone, clear unsuccessful active state, and retain deliberate hover intent during the scroll quiet period. Check native readiness, replay coordinates, and a trustworthy popup acknowledgement within this step. Keep retries bounded and preserve the scrolling gains and cancellation/order checks. |
+| 2 | Reuse native state/rectangles and track grafted clones directly | Reduce known recurring CPU and layout work during hover and scroll bursts: repeated DOM/React scans, logical-page candidate generation, and list-wide graft invalidation. Reuse state only within validated binding/content/layout generations. |
+| 3 | Snapshot retention and initial construction | Reduce duplicate retained card DOM and allocation pressure, and yield during large builds to shorten uninterrupted initialization work. Preserve exact membership/order and native hover compatibility. |
+| 4 | Diagnostic overhead | Reduce synchronous formatting, diagnostic-only geometry/React reads, console writes, and log-buffer maintenance on interaction paths. Gate expensive trace construction while retaining useful errors and timings; use a circular buffer if volume warrants it. Copied-log-detail changes remain outside this step. |
+| 5 | Bootstrap pagination and fetch lifecycle | Improve startup/SPA efficiency rather than normal scrolling: avoid unused pagination, retain valid bootstrap information if optional collection fails, and abort obsolete route fetches. Preserve complete-list/count validation and fresh data. |
+
+Thumbnail request timing, reserved image geometry, height-only resize filtering, and row virtualization/containment remain unselected conditional proposals in the performance review, outside this filtered priority list. The image/resize changes depend on establishing unnecessary requests, missing inherited dimensions, or irrelevant refreshes in Netflix; those conditions have not been confirmed. Virtualization/containment needs evidence of significant remaining layout/paint cost and can affect hover geometry, focus, browser find/accessibility, and scroll position. Additional adapter centralization or speculative fallbacks are also outside this list; the concrete hover reliability work is retained because reliability is an explicit priority.
 
 ### Browser validation needed
 
