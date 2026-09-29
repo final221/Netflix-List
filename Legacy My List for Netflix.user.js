@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.0.1
+// @version      1.0.2
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -56,7 +56,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.0.1';
+    const SCRIPT_VERSION = '1.0.2';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     const FAST_MOVE_CLASS = 'tm-netflix-mylist-v22-fast-move';
@@ -995,6 +995,7 @@
         if (runningSessionToken !== sessionToken) return;
         running = false;
         runningSessionToken = null;
+        retryPendingMyListMutations('after-initialization');
     }
 
     function registerActiveCarouselStyleCleanup(cleanup) {
@@ -3763,6 +3764,43 @@
         pendingMyListMutations.delete(key);
     }
 
+    function scheduleMyListMutationTimeout(mutation) {
+        if (!mutation || pendingMyListMutations.get(mutation.videoId) !== mutation) return;
+        if (mutation.timeoutId !== null && mutation.timeoutId !== undefined) clearTimeout(mutation.timeoutId);
+        mutation.timeoutId = setTimeout(() => {
+            if (pendingMyListMutations.get(mutation.videoId) !== mutation) return;
+            mutation.timeoutId = null;
+
+            const applied = tryApplyMyListMutation(mutation, 'observer-timeout');
+            if (applied || pendingMyListMutations.get(mutation.videoId) !== mutation) return;
+            if (running || responsiveRefreshing) {
+                mutation.deferredWhileBusy = true;
+                return;
+            }
+
+            warn(tLog('differentialUpdateTimedOutWaitingForAUsableCardSnapshot'), {
+                seq: mutation.seq,
+                videoId: mutation.videoId,
+                action: mutation.action,
+                timeoutMs: DELTA_MUTATION_TIMEOUT_MS
+            });
+            disposeMyListMutation(mutation.videoId, mutation);
+        }, DELTA_MUTATION_TIMEOUT_MS);
+    }
+
+    function retryPendingMyListMutations(reason) {
+        if (running || responsiveRefreshing || !isTargetPage()) return;
+
+        for (const mutation of [...pendingMyListMutations.values()]) {
+            if (!mutation.deferredWhileBusy) continue;
+            mutation.deferredWhileBusy = false;
+            const applied = tryApplyMyListMutation(mutation, reason);
+            if (!applied && pendingMyListMutations.get(mutation.videoId) === mutation) {
+                scheduleMyListMutationTimeout(mutation);
+            }
+        }
+    }
+
     function clearPendingMyListMutations() {
         for (const [videoId, mutation] of [...pendingMyListMutations.entries()]) {
             disposeMyListMutation(videoId, mutation);
@@ -3897,7 +3935,12 @@
 
     function tryApplyMyListMutation(mutation, reason = 'event') {
         if (!mutation || pendingMyListMutations.get(mutation.videoId) !== mutation) return false;
-        if (!sourceState || !isTargetPage() || running || responsiveRefreshing) return false;
+        if (!sourceState || !isTargetPage()) return false;
+        if (running || responsiveRefreshing) {
+            mutation.deferredWhileBusy = true;
+            return false;
+        }
+        mutation.deferredWhileBusy = false;
 
         const videoId = mutation.videoId;
         let live = refreshNativeSectionAfterDelta() || readNativeMyListDomState();
@@ -3960,7 +4003,8 @@
             preferredIndex: Number.isFinite(descriptor.preferredIndex) ? Math.max(0, Math.floor(descriptor.preferredIndex)) : null,
             undo: Boolean(descriptor.undo),
             observer: null,
-            timeoutId: null
+            timeoutId: null,
+            deferredWhileBusy: false
         };
         pendingMyListMutations.set(videoId, mutation);
 
@@ -3979,20 +4023,9 @@
             });
         }
 
-        // A one-shot timeout only disposes a temporary observer. It is not a poll.
-        mutation.timeoutId = setTimeout(() => {
-            if (pendingMyListMutations.get(videoId) !== mutation) return;
-            const applied = tryApplyMyListMutation(mutation, 'observer-timeout');
-            if (!applied && pendingMyListMutations.get(videoId) === mutation) {
-                warn(tLog('differentialUpdateTimedOutWaitingForAUsableCardSnapshot'), {
-                    seq,
-                    videoId,
-                    action: mutation.action,
-                    timeoutMs: DELTA_MUTATION_TIMEOUT_MS
-                });
-                disposeMyListMutation(videoId, mutation);
-            }
-        }, DELTA_MUTATION_TIMEOUT_MS);
+        // A one-shot timeout bounds ordinary waiting. If the script is busy,
+        // defer disposal until the busy operation ends and retry then.
+        scheduleMyListMutationTimeout(mutation);
 
         log(tLog('myListMutationQueued'), {
             seq,
@@ -8804,6 +8837,7 @@
             if (isRouteSessionActive(sessionToken)) {
                 responsiveRefreshing = false;
                 activeResponsiveReason = '';
+                retryPendingMyListMutations('after-responsive-refresh');
                 const runtime = sourceState?.section ? getCarouselDomRuntime(sourceState.section) : null;
                 if (deferredLogicalRemap && runtime?.pageMappingStale && (runtime.logicalRemapRetryCount || 0) === 1) {
                     scheduleResponsiveRefresh(
