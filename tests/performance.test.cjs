@@ -2349,7 +2349,7 @@ const viewingFunctions = [
     'unwrapViewingAtom', 'readViewingGraph', 'readViewingGraphReference', 'viewingNumber', 'viewingVideoRecord',
     'classifyViewingVideo', 'viewingReferenceId', 'viewingSeasonPlan', 'classifyViewingSeries',
     'viewingRequestContext', 'assertViewingJob', 'fetchViewingGraph', 'collectViewingStatuses', 'collectViewingSeriesBatch',
-    'gridOwnsClone', 'ensureWatchGroupUi', 'syncWatchChildOrder', 'syncWatchGroups',
+    'gridOwnsClone', 'createWatchTypeFilter', 'syncWatchTypeFilter', 'ensureWatchGroupUi', 'syncWatchChildOrder', 'syncWatchGroups',
     'initializeWatchGroups', 'refreshViewingStatus', 'createRouteFetch', 'finishRouteFetch',
     'abortObsoleteRouteFetches', 'gridCloneFromPointerEvent', 'gridHoverTargetActive', 'gridHoverSuppressed', 'cancelPendingGridHover',
     'formatHeaderParts', 'tUi', 'tUiPlural', 'formatItemCount', 'formatMessage'
@@ -2431,6 +2431,17 @@ function mainViewingIds(e) {
 }
 function completedViewingIds(e) {
     return e.state.watchStatus.ui.watchedGrid.children.map(node => node.__tmMyListItem.videoId);
+}
+
+function filteredViewingIds(e, group = 'main') {
+    const parent = group === 'main' ? e.state.grid : e.state.watchStatus.ui.watchedGrid;
+    return parent.children.filter(node => node.__tmMyListItem && node.getAttribute('data-tm-type-hidden') !== 'true')
+        .map(node => node.__tmMyListItem.videoId);
+}
+
+function clickViewingFilter(e, group, type) {
+    const control = group === 'main' ? e.state.watchStatus.ui.mainFilter : e.state.watchStatus.ui.watchedFilter;
+    control.buttons.get(type).button.listeners.get('click')();
 }
 
 function useCompleteSeriesResponses(e, episodeCounts = {}) {
@@ -2517,7 +2528,7 @@ test('background viewing collection groups finished movies and complete series w
     assert.equal(e.state.watchStatus.completedCount, 2);
     assert.equal(e.state.watchStatus.unknownCount, 2);
     assert.match(e.state.watchStatus.ui.note.textContent, /2 titles/);
-    assert.equal(e.c.formatHeaderParts(7, 7, 10, true).meta, '5 items  time');
+    assert.equal(e.c.formatHeaderParts(7, 7, 10, true).meta, '2 items  time');
     assert.equal(e.state.totalCount, 7);
     assert.equal(e.state.cloneMap.size, 7);
     assert.deepEqual(e.items.map(item => ({ videoId: item.videoId, page: item.page })), original);
@@ -2837,7 +2848,8 @@ test('simultaneous manual refreshes share the current viewing scan', async () =>
 test('new viewing controls have translations for every supported Netflix UI locale', async () => {
     const e = await viewingEnvironment();
     const locales = vm.runInContext('Object.keys(UI_MESSAGES)', e.c);
-    const keys = ['watchedCaughtUp', 'refreshViewingStatus', 'checkingViewingStatus', 'unknownViewingStatus', 'caughtUpMessage'];
+    const keys = ['watchedCaughtUp', 'refreshViewingStatus', 'checkingViewingStatus', 'unknownViewingStatus', 'caughtUpMessage',
+        'filterFilms', 'filterSeries', 'filterAll', 'titleTypeFilter', 'noMatchingTitles', 'unknownTitleTypes'];
     for (const locale of locales) {
         e.c.getUiLocale = () => locale;
         for (const key of keys) {
@@ -3040,7 +3052,7 @@ test('credit-tolerant completion moves movies and fully caught-up series out of 
     assert.deepEqual(completedViewingIds(e), ['1', '4']);
     assert.deepEqual(mainViewingIds(e), ['2', '3', '5', '6', '7']);
     assert.equal(e.state.watchStatus.ui.details.open, false);
-    assert.equal(e.c.formatHeaderParts(7, 7, 10, true).meta, '5 items  time');
+    assert.equal(e.c.formatHeaderParts(7, 7, 10, true).meta, '2 items  time');
     assert.equal(e.requests.length, 3, 'completion threshold adds no requests');
     assert.equal(e.timers.size, 0);
 });
@@ -3056,4 +3068,202 @@ test('series completion checks each episode rather than averaging viewing percen
     fixtures.episodes.videos[401].bookmarkPosition = atom(90);
     await e.c.refreshViewingStatus(e.state);
     assert.deepEqual(completedViewingIds(e), ['1', '4']);
+});
+
+test('film filters default independently below the heading and inside watched details with accurate counts', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    const watch = e.state.watchStatus, ui = watch.ui;
+    assert.equal(watch.filters.main, 'movie');
+    assert.equal(watch.filters.watched, 'movie');
+    assert.equal(e.state.grid.firstElementChild, ui.mainFilter.root);
+    assert.equal(ui.watchedFilter.root.parentElement, ui.details);
+    assert.equal(ui.details.open, false);
+    assert.deepEqual(filteredViewingIds(e), ['2', '3']);
+    assert.deepEqual(filteredViewingIds(e, 'watched'), ['1']);
+    assert.equal(ui.mainFilter.buttons.get('movie').count.textContent, '2');
+    assert.equal(ui.mainFilter.buttons.get('series').count.textContent, '2');
+    assert.equal(ui.mainFilter.buttons.get('all').count.textContent, '5');
+    assert.equal(ui.watchedFilter.buttons.get('movie').count.textContent, '1');
+    assert.equal(ui.watchedFilter.buttons.get('series').count.textContent, '1');
+    assert.equal(ui.mainFilter.root.getAttribute('role'), 'group');
+    assert.equal(ui.mainFilter.buttons.get('movie').button.getAttribute('aria-pressed'), 'true');
+    assert.equal(ui.mainFilter.buttons.get('series').button.getAttribute('aria-pressed'), 'false');
+    assert.equal(e.c.formatHeaderParts(7, 7, 10, true).meta, '2 items  time');
+    clickViewingFilter(e, 'main', 'series');
+    assert.deepEqual(filteredViewingIds(e), ['5', '6']);
+    assert.deepEqual(filteredViewingIds(e, 'watched'), ['1']);
+    ui.details.open = true;
+    ui.details.listeners.get('toggle')();
+    clickViewingFilter(e, 'watched', 'series');
+    assert.deepEqual(filteredViewingIds(e, 'watched'), ['4']);
+    assert.equal(ui.watchedFilter.buttons.get('series').button.getAttribute('aria-pressed'), 'true');
+    assert.equal(e.state.items.length, 7);
+    assert.equal(e.state.cloneMap.size, 7);
+    assert.equal(e.requests.length, 3);
+    assert.equal(e.timers.size, 0);
+});
+
+test('All includes unknown title types without assigning them to films or series', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    assert.ok(!e.state.watchStatus.types.has('7'));
+    assert.match(e.state.watchStatus.ui.note.textContent, /Choose All/);
+    clickViewingFilter(e, 'main', 'all');
+    assert.deepEqual(filteredViewingIds(e), ['2', '3', '5', '6', '7']);
+    assert.equal(e.c.formatHeaderParts(7, 7, 10, true).meta, '5 items  time');
+    assert.ok(!e.state.watchStatus.ui.note.textContent.includes('Choose All'));
+    clickViewingFilter(e, 'main', 'movie');
+    assert.deepEqual(filteredViewingIds(e), ['2', '3']);
+    assert.equal(e.requests.length, 3);
+});
+
+test('unavailable metadata keeps every title reachable through All and displays an accurate empty filter state', async () => {
+    const e = await viewingEnvironment();
+    let attempts = 0;
+    e.c.fetch = async () => { attempts++; return { ok: false, status: 400 }; };
+    await e.start();
+    assert.deepEqual(filteredViewingIds(e), []);
+    assert.equal(e.state.watchStatus.ui.empty.hidden, false);
+    assert.equal(e.state.watchStatus.ui.empty.textContent, 'No titles match this filter.');
+    assert.equal(e.state.watchStatus.ui.mainFilter.buttons.get('all').count.textContent, '7');
+    clickViewingFilter(e, 'main', 'all');
+    assert.deepEqual(filteredViewingIds(e), ['1', '2', '3', '4', '5', '6', '7']);
+    assert.equal(e.state.watchStatus.ui.empty.hidden, true);
+    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_400');
+    assert.equal(attempts, 1);
+    assert.equal(e.timers.size, 0);
+});
+
+test('filter selections survive collapse and rebuild while stale controls cannot alter the new grid', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    clickViewingFilter(e, 'main', 'series');
+    const details = e.state.watchStatus.ui.details;
+    details.open = true;
+    details.listeners.get('toggle')();
+    clickViewingFilter(e, 'watched', 'series');
+    details.open = false;
+    details.listeners.get('toggle')();
+    details.open = true;
+    details.listeners.get('toggle')();
+    const oldUi = e.state.watchStatus.ui;
+    const order = e.items.map(item => e.state.cloneMap.get('v:' + item.videoId).getAttribute('data-tm-item-order'));
+    await e.c.buildGrid(e.section, e.scroller, e.items, e.layout, 7, 1);
+    assert.equal(e.state.watchStatus.filters.main, 'series');
+    assert.equal(e.state.watchStatus.filters.watched, 'series');
+    assert.equal(e.state.watchStatus.ui.details.open, true);
+    assert.deepEqual(filteredViewingIds(e), ['5', '6']);
+    assert.deepEqual(filteredViewingIds(e, 'watched'), ['4']);
+    oldUi.mainFilter.buttons.get('movie').button.listeners.get('click')();
+    assert.equal(e.state.watchStatus.filters.main, 'series');
+    assert.deepEqual(e.items.map(item => e.state.cloneMap.get('v:' + item.videoId).getAttribute('data-tm-item-order')), order);
+    assert.equal(e.requests.length, 3);
+});
+
+test('filtering cancels hover on hidden cards and rejects them until they become visible again', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    const clone = e.state.cloneMap.get('v:2');
+    clone.__tmHoverActivationGeneration = 1;
+    clone.__tmHoverActivationTimer = e.c.setTimeout(() => {}, 200);
+    e.c.pendingGridHoverClone = clone;
+    e.c.activeClone = clone;
+    e.c.activeVideoId = '2';
+    const token = e.c.hoverToken;
+    clickViewingFilter(e, 'main', 'movie');
+    assert.equal(e.c.hoverToken, token, 'clicking the selected filter does no interaction work');
+    clickViewingFilter(e, 'main', 'series');
+    assert.equal(e.c.pendingGridHoverClone, null);
+    assert.equal(e.c.activeClone, null);
+    assert.equal(e.timers.size, 0);
+    assert.equal(e.c.gridOwnsClone(clone, e.state.grid), false);
+    assert.equal(e.c.gridCloneFromPointerEvent({ target: clone.querySelector('card') }, e.state.grid), null);
+    assert.equal(e.c.gridHoverTargetActive(clone, clone.__tmHoverActivationGeneration), false);
+    clickViewingFilter(e, 'main', 'movie');
+    assert.equal(e.c.gridOwnsClone(clone, e.state.grid), true);
+    assert.equal(e.c.gridHoverTargetActive(clone, clone.__tmHoverActivationGeneration), true);
+    assert.equal(e.requests.length, 3);
+});
+
+test('type filtering is available while series episode requests are still loading', async () => {
+    const e = await viewingEnvironment();
+    const mockFetch = e.c.fetch;
+    let release;
+    e.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        if (paths[0][2] === 'seasonList') return new Promise(resolve => { release = () => resolve(mockFetch(url, options)); });
+        return mockFetch(url, options);
+    };
+    e.c.initializeWatchGroups(e.state, 1);
+    await e.flush();
+    assert.equal(typeof release, 'function');
+    assert.equal(e.state.watchStatus.loading, true);
+    assert.deepEqual(filteredViewingIds(e), ['1', '2', '3']);
+    clickViewingFilter(e, 'main', 'series');
+    assert.deepEqual(filteredViewingIds(e), ['4', '5', '6']);
+    release();
+    await e.state.watchStatus.promise;
+    assert.deepEqual(filteredViewingIds(e), ['5', '6']);
+    assert.equal(e.state.watchStatus.filters.main, 'series');
+    assert.equal(e.requests.length, 3);
+});
+
+test('filtered counts and card order stay correct through removal, Undo and unknown-type additions', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    e.c.getCarouselDomRuntime = () => ({ profile: { pageMode: 'indicator' } });
+    vm.runInContext(declaration('reindexLegacyItemsAfterDelta'), e.c);
+    assert.equal(e.c.applyLegacyRemoval('2'), true);
+    assert.deepEqual(filteredViewingIds(e), ['3']);
+    assert.equal(e.state.watchStatus.ui.mainFilter.buttons.get('movie').count.textContent, '1');
+    const entry = e.c.recentRemovedMyListItems.get('2');
+    assert.equal(e.c.applyLegacyAddition(entry.item, entry.index, 'undo'), true);
+    assert.deepEqual(filteredViewingIds(e), ['2', '3']);
+    const snapshot = e.state.cloneMap.get('v:1').cloneNode(true);
+    assert.equal(e.c.applyLegacyAddition({ videoId: '99', page: 0, href: '/browse?jbv=99', snapshot }, 0), true);
+    assert.deepEqual(filteredViewingIds(e), ['2', '3']);
+    assert.equal(e.state.watchStatus.ui.mainFilter.buttons.get('all').count.textContent, '6');
+    clickViewingFilter(e, 'main', 'all');
+    assert.deepEqual(filteredViewingIds(e), ['99', '2', '3', '5', '6', '7']);
+    assert.equal(e.requests.length, 3);
+});
+
+test('native hover replacements preserve the visibility of filtered sibling cards', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    vm.runInContext(declaration('makeLiveClone'), e.c);
+    e.c.netflixReactHover = { graftTreeToClone: () => ({ fiberAssignments: 0, propsAssignments: 0 }) };
+    const item = e.state.items.find(item => item.videoId === '5');
+    const old = e.state.cloneMap.get('v:5');
+    const { fresh } = e.c.makeLiveClone(e.template, item, old, item.page);
+    old.replaceWith(fresh);
+    e.state.cloneMap.set('v:5', fresh);
+    assert.equal(fresh.getAttribute('data-tm-type-hidden'), 'true');
+    assert.equal(e.c.gridOwnsClone(fresh, e.state.grid), false);
+    assert.deepEqual(filteredViewingIds(e), ['2', '3']);
+    clickViewingFilter(e, 'main', 'series');
+    assert.deepEqual(filteredViewingIds(e), ['5', '6']);
+    assert.equal(e.c.gridOwnsClone(fresh, e.state.grid), true);
+    assert.equal(e.requests.length, 3);
+});
+
+test('viewing refresh preserves type selections and updates counts when a series has new episodes', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    clickViewingFilter(e, 'main', 'series');
+    e.state.watchStatus.ui.details.open = true;
+    e.state.watchStatus.ui.details.listeners.get('toggle')();
+    clickViewingFilter(e, 'watched', 'series');
+    e.setFixtures(viewingFixtures(true));
+    await e.c.refreshViewingStatus(e.state);
+    assert.equal(e.state.watchStatus.filters.main, 'series');
+    assert.equal(e.state.watchStatus.filters.watched, 'series');
+    assert.deepEqual(filteredViewingIds(e), ['4', '5', '6']);
+    assert.deepEqual(filteredViewingIds(e, 'watched'), []);
+    assert.equal(e.state.watchStatus.ui.mainFilter.buttons.get('series').count.textContent, '3');
+    assert.equal(e.state.watchStatus.ui.watchedFilter.buttons.get('movie').count.textContent, '1');
+    assert.equal(e.state.watchStatus.ui.watchedEmpty.hidden, false);
+    assert.equal(e.state.watchStatus.ui.watchedEmpty.textContent, 'No titles match this filter.');
+    assert.equal(e.c.formatHeaderParts(7, 7, 10, true).meta, '3 items  time');
 });

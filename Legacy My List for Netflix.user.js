@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.1.3
+// @version      1.2.0
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -81,7 +81,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.1.3';
+    const SCRIPT_VERSION = '1.2.0';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -714,6 +714,44 @@
         keys.forEach((key, index) => { UI_MESSAGES[locale][key] = values[index]; });
     }
 
+    const TYPE_FILTER_UI_MESSAGES = {
+        "da": ["Film", "Serier", "Alle", "Filtrer efter titeltype", "Ingen titler matcher dette filter.", "Ukendt titeltype: {count}. V\u00e6lg Alle for at se dem."],
+        "de": ["Filme", "Serien", "Alle", "Nach Titeltyp filtern", "Keine Titel passen zu diesem Filter.", "Unbekannter Titeltyp: {count}. W\u00e4hle Alle, um diese Titel zu sehen."],
+        "en": ["Films", "Series", "All", "Filter by title type", "No titles match this filter.", "Type unavailable for {count} titles. Choose All to see them."],
+        "es": ["Pel\u00edculas", "Series", "Todo", "Filtrar por tipo de t\u00edtulo", "Ning\u00fan t\u00edtulo coincide con este filtro.", "Tipo desconocido: {count}. Selecciona Todo para ver esos t\u00edtulos."],
+        "fil": ["Mga pelikula", "Mga serye", "Lahat", "I-filter ayon sa uri", "Walang pamagat na tumutugma sa filter na ito.", "Hindi alam ang uri ng {count} pamagat. Piliin ang Lahat para makita ang mga ito."],
+        "fr": ["Films", "S\u00e9ries", "Tout", "Filtrer par type de titre", "Aucun titre ne correspond \u00e0 ce filtre.", "Type inconnu pour {count} titres. S\u00e9lectionnez Tout pour les voir."],
+        "hr": ["Filmovi", "Serije", "Sve", "Filtriraj prema vrsti naslova", "Nema naslova koji odgovaraju ovom filtru.", "Nepoznata vrsta za {count} naslova. Odaberi Sve za prikaz."],
+        "id": ["Film", "Serial", "Semua", "Filter menurut jenis judul", "Tidak ada judul yang cocok dengan filter ini.", "Jenis tidak diketahui untuk {count} judul. Pilih Semua untuk melihatnya."],
+        "it": ["Film", "Serie", "Tutti", "Filtra per tipo di titolo", "Nessun titolo corrisponde a questo filtro.", "Tipo sconosciuto per {count} titoli. Seleziona Tutti per vederli."],
+        "hu": ["Filmek", "Sorozatok", "\u00d6sszes", "Sz\u0171r\u00e9s t\u00edpus szerint", "Egyetlen c\u00edm sem felel meg ennek a sz\u0171r\u0151nek.", "Ismeretlen t\u00edpus: {count}. Megjelen\u00edt\u00e9s\u00fckh\u00f6z v\u00e1laszd az \u00d6sszes lehet\u0151s\u00e9get."],
+        "ms": ["Filem", "Siri", "Semua", "Tapis mengikut jenis tajuk", "Tiada tajuk sepadan dengan penapis ini.", "Jenis tidak diketahui untuk {count} tajuk. Pilih Semua untuk melihatnya."],
+        "nl": ["Films", "Series", "Alles", "Filteren op titeltype", "Geen titels passen bij dit filter.", "Onbekend type voor {count} titels. Kies Alles om ze te zien."],
+        "nb": ["Filmer", "Serier", "Alle", "Filtrer etter titteltype", "Ingen titler passer til dette filteret.", "Ukjent type for {count} titler. Velg Alle for \u00e5 se dem."],
+        "pl": ["Filmy", "Seriale", "Wszystko", "Filtruj wed\u0142ug typu", "\u017baden tytu\u0142 nie pasuje do tego filtra.", "Nieznany typ: {count}. Wybierz Wszystko, aby zobaczy\u0107 te tytu\u0142y."],
+        "pt": ["Filmes", "S\u00e9ries", "Tudo", "Filtrar por tipo de t\u00edtulo", "Nenhum t\u00edtulo corresponde a este filtro.", "Tipo desconhecido para {count} t\u00edtulos. Selecione Tudo para v\u00ea-los."],
+        "ro": ["Filme", "Seriale", "Toate", "Filtreaz\u0103 dup\u0103 tip", "Niciun titlu nu corespunde acestui filtru.", "Tip necunoscut pentru {count} titluri. Selecteaz\u0103 Toate pentru a le vedea."],
+        "fi": ["Elokuvat", "Sarjat", "Kaikki", "Suodata nimikkeen tyypin mukaan", "Yksik\u00e4\u00e4n nimike ei vastaa t\u00e4t\u00e4 suodatinta.", "Tuntematon tyyppi: {count}. N\u00e4et n\u00e4m\u00e4 nimikkeet valitsemalla Kaikki."],
+        "sv": ["Filmer", "Serier", "Alla", "Filtrera efter titeltyp", "Inga titlar matchar detta filter.", "Ok\u00e4nd typ f\u00f6r {count} titlar. V\u00e4lj Alla f\u00f6r att se dem."],
+        "vi": ["Phim", "Lo\u1ea1t phim", "T\u1ea5t c\u1ea3", "L\u1ecdc theo lo\u1ea1i n\u1ed9i dung", "Kh\u00f4ng c\u00f3 n\u1ed9i dung n\u00e0o ph\u00f9 h\u1ee3p v\u1edbi b\u1ed9 l\u1ecdc n\u00e0y.", "Kh\u00f4ng r\u00f5 lo\u1ea1i c\u1ee7a {count} n\u1ed9i dung. Ch\u1ecdn T\u1ea5t c\u1ea3 \u0111\u1ec3 xem."],
+        "tr": ["Filmler", "Diziler", "T\u00fcm\u00fc", "\u0130\u00e7erik t\u00fcr\u00fcne g\u00f6re filtrele", "Bu filtreye uygun i\u00e7erik yok.", "T\u00fcr\u00fc bilinmeyen i\u00e7erik: {count}. G\u00f6rmek i\u00e7in T\u00fcm\u00fc se\u00e7ene\u011fini se\u00e7in."],
+        "cs": ["Filmy", "Seri\u00e1ly", "V\u0161e", "Filtrovat podle typu", "Tomuto filtru neodpov\u00edd\u00e1 \u017e\u00e1dn\u00fd titul.", "Nezn\u00e1m\u00fd typ: {count}. Pro zobrazen\u00ed t\u011bchto titul\u016f vyberte V\u0161e."],
+        "el": ["\u03a4\u03b1\u03b9\u03bd\u03af\u03b5\u03c2", "\u03a3\u03b5\u03b9\u03c1\u03ad\u03c2", "\u038c\u03bb\u03b1", "\u03a6\u03b9\u03bb\u03c4\u03c1\u03ac\u03c1\u03b9\u03c3\u03bc\u03b1 \u03b1\u03bd\u03ac \u03c4\u03cd\u03c0\u03bf \u03c4\u03af\u03c4\u03bb\u03bf\u03c5", "\u039a\u03b1\u03bd\u03ad\u03bd\u03b1\u03c2 \u03c4\u03af\u03c4\u03bb\u03bf\u03c2 \u03b4\u03b5\u03bd \u03b1\u03bd\u03c4\u03b9\u03c3\u03c4\u03bf\u03b9\u03c7\u03b5\u03af \u03c3\u03b5 \u03b1\u03c5\u03c4\u03cc \u03c4\u03bf \u03c6\u03af\u03bb\u03c4\u03c1\u03bf.", "\u0386\u03b3\u03bd\u03c9\u03c3\u03c4\u03bf\u03c2 \u03c4\u03cd\u03c0\u03bf\u03c2 \u03b3\u03b9\u03b1 {count} \u03c4\u03af\u03c4\u03bb\u03bf\u03c5\u03c2. \u0395\u03c0\u03b9\u03bb\u03ad\u03be\u03c4\u03b5 \u038c\u03bb\u03b1 \u03b3\u03b9\u03b1 \u03bd\u03b1 \u03c4\u03bf\u03c5\u03c2 \u03b4\u03b5\u03af\u03c4\u03b5."],
+        "ru": ["\u0424\u0438\u043b\u044c\u043c\u044b", "\u0421\u0435\u0440\u0438\u0430\u043b\u044b", "\u0412\u0441\u0435", "\u0424\u0438\u043b\u044c\u0442\u0440 \u043f\u043e \u0442\u0438\u043f\u0443", "\u041d\u0435\u0442 \u043f\u0440\u043e\u0438\u0437\u0432\u0435\u0434\u0435\u043d\u0438\u0439, \u0441\u043e\u043e\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0445 \u044d\u0442\u043e\u043c\u0443 \u0444\u0438\u043b\u044c\u0442\u0440\u0443.", "\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0439 \u0442\u0438\u043f: {count}. \u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0412\u0441\u0435, \u0447\u0442\u043e\u0431\u044b \u0438\u0445 \u0443\u0432\u0438\u0434\u0435\u0442\u044c."],
+        "uk": ["\u0424\u0456\u043b\u044c\u043c\u0438", "\u0421\u0435\u0440\u0456\u0430\u043b\u0438", "\u0423\u0441\u0456", "\u0424\u0456\u043b\u044c\u0442\u0440 \u0437\u0430 \u0442\u0438\u043f\u043e\u043c", "\u041d\u0435\u043c\u0430\u0454 \u043d\u0430\u0439\u043c\u0435\u043d\u0443\u0432\u0430\u043d\u044c, \u0449\u043e \u0432\u0456\u0434\u043f\u043e\u0432\u0456\u0434\u0430\u044e\u0442\u044c \u0446\u044c\u043e\u043c\u0443 \u0444\u0456\u043b\u044c\u0442\u0440\u0443.", "\u041d\u0435\u0432\u0456\u0434\u043e\u043c\u0438\u0439 \u0442\u0438\u043f: {count}. \u0412\u0438\u0431\u0435\u0440\u0456\u0442\u044c \u0423\u0441\u0456, \u0449\u043e\u0431 \u0457\u0445 \u043f\u043e\u0431\u0430\u0447\u0438\u0442\u0438."],
+        "he": ["\u05e1\u05e8\u05d8\u05d9\u05dd", "\u05e1\u05d3\u05e8\u05d5\u05ea", "\u05d4\u05db\u05d5\u05dc", "\u05e1\u05d9\u05e0\u05d5\u05df \u05dc\u05e4\u05d9 \u05e1\u05d5\u05d2 \u05db\u05d5\u05ea\u05e8", "\u05d0\u05d9\u05df \u05db\u05d5\u05ea\u05e8\u05d9\u05dd \u05d4\u05ea\u05d5\u05d0\u05de\u05d9\u05dd \u05dc\u05de\u05e1\u05e0\u05df \u05d4\u05d6\u05d4.", "\u05e1\u05d5\u05d2 \u05dc\u05d0 \u05d9\u05d3\u05d5\u05e2 \u05e2\u05d1\u05d5\u05e8 {count} \u05db\u05d5\u05ea\u05e8\u05d9\u05dd. \u05d1\u05d7\u05e8\u05d5 \u05d4\u05db\u05d5\u05dc \u05db\u05d3\u05d9 \u05dc\u05e8\u05d0\u05d5\u05ea \u05d0\u05d5\u05ea\u05dd."],
+        "ar": ["\u0623\u0641\u0644\u0627\u0645", "\u0645\u0633\u0644\u0633\u0644\u0627\u062a", "\u0627\u0644\u0643\u0644", "\u062a\u0635\u0641\u064a\u0629 \u062d\u0633\u0628 \u0646\u0648\u0639 \u0627\u0644\u0639\u0646\u0648\u0627\u0646", "\u0644\u0627 \u062a\u0648\u062c\u062f \u0639\u0646\u0627\u0648\u064a\u0646 \u062a\u0637\u0627\u0628\u0642 \u0647\u0630\u0627 \u0627\u0644\u0641\u0644\u062a\u0631.", "\u0646\u0648\u0639 \u063a\u064a\u0631 \u0645\u0639\u0631\u0648\u0641 \u0644\u0640 {count} \u0639\u0646\u0648\u0627\u0646\u064b\u0627. \u0627\u062e\u062a\u0631 \u0627\u0644\u0643\u0644 \u0644\u0639\u0631\u0636\u0647\u0627."],
+        "hi": ["\u092b\u093c\u093f\u0932\u094d\u092e\u0947\u0902", "\u0938\u0940\u0930\u0940\u091c\u093c", "\u0938\u092d\u0940", "\u091f\u093e\u0907\u091f\u0932 \u0915\u0947 \u092a\u094d\u0930\u0915\u093e\u0930 \u0938\u0947 \u092b\u093c\u093f\u0932\u094d\u091f\u0930 \u0915\u0930\u0947\u0902", "\u0907\u0938 \u092b\u093c\u093f\u0932\u094d\u091f\u0930 \u0938\u0947 \u0915\u094b\u0908 \u091f\u093e\u0907\u091f\u0932 \u092e\u0947\u0932 \u0928\u0939\u0940\u0902 \u0916\u093e\u0924\u093e.", "{count} \u091f\u093e\u0907\u091f\u0932 \u0915\u093e \u092a\u094d\u0930\u0915\u093e\u0930 \u0909\u092a\u0932\u092c\u094d\u0927 \u0928\u0939\u0940\u0902 \u0939\u0948. \u0907\u0928\u094d\u0939\u0947\u0902 \u0926\u0947\u0916\u0928\u0947 \u0915\u0947 \u0932\u093f\u090f \u0938\u092d\u0940 \u091a\u0941\u0928\u0947\u0902."],
+        "th": ["\u0e20\u0e32\u0e1e\u0e22\u0e19\u0e15\u0e23\u0e4c", "\u0e0b\u0e35\u0e23\u0e35\u0e2a\u0e4c", "\u0e17\u0e31\u0e49\u0e07\u0e2b\u0e21\u0e14", "\u0e01\u0e23\u0e2d\u0e07\u0e15\u0e32\u0e21\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17\u0e40\u0e19\u0e37\u0e49\u0e2d\u0e2b\u0e32", "\u0e44\u0e21\u0e48\u0e21\u0e35\u0e40\u0e19\u0e37\u0e49\u0e2d\u0e2b\u0e32\u0e17\u0e35\u0e48\u0e15\u0e23\u0e07\u0e01\u0e31\u0e1a\u0e15\u0e31\u0e27\u0e01\u0e23\u0e2d\u0e07\u0e19\u0e35\u0e49", "\u0e44\u0e21\u0e48\u0e17\u0e23\u0e32\u0e1a\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17\u0e02\u0e2d\u0e07\u0e40\u0e19\u0e37\u0e49\u0e2d\u0e2b\u0e32 {count} \u0e40\u0e23\u0e37\u0e48\u0e2d\u0e07 \u0e40\u0e25\u0e37\u0e2d\u0e01\u0e17\u0e31\u0e49\u0e07\u0e2b\u0e21\u0e14\u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e14\u0e39"],
+        "zh": ["\u7535\u5f71", "\u5267\u96c6", "\u5168\u90e8", "\u6309\u4f5c\u54c1\u7c7b\u578b\u7b5b\u9009", "\u6ca1\u6709\u7b26\u5408\u6b64\u7b5b\u9009\u6761\u4ef6\u7684\u4f5c\u54c1\u3002", "{count} \u90e8\u4f5c\u54c1\u7684\u7c7b\u578b\u4e0d\u660e\u3002\u9009\u62e9\u5168\u90e8\u4ee5\u67e5\u770b\u3002"],
+        "ja": ["\u6620\u753b", "\u30b7\u30ea\u30fc\u30ba", "\u3059\u3079\u3066", "\u4f5c\u54c1\u306e\u7a2e\u985e\u3067\u7d5e\u308a\u8fbc\u3080", "\u3053\u306e\u6761\u4ef6\u306b\u5408\u3046\u4f5c\u54c1\u306f\u3042\u308a\u307e\u305b\u3093\u3002", "{count}\u4f5c\u54c1\u306e\u7a2e\u985e\u304c\u4e0d\u660e\u3067\u3059\u3002\u3059\u3079\u3066\u3092\u9078\u629e\u3059\u308b\u3068\u8868\u793a\u3067\u304d\u307e\u3059\u3002"],
+        "ko": ["\uc601\ud654", "\uc2dc\ub9ac\uc988", "\uc804\uccb4", "\uc791\ud488 \uc720\ud615\ubcc4 \ud544\ud130", "\uc774 \ud544\ud130\uc5d0 \ub9de\ub294 \uc791\ud488\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.", "\uc720\ud615\uc744 \uc54c \uc218 \uc5c6\ub294 \uc791\ud488\uc774 {count}\uac1c \uc788\uc2b5\ub2c8\ub2e4. \uc804\uccb4\ub97c \uc120\ud0dd\ud558\uba74 \ubcfc \uc218 \uc788\uc2b5\ub2c8\ub2e4."],
+    };
+    for (const [locale, values] of Object.entries(TYPE_FILTER_UI_MESSAGES)) {
+        const keys = ['filterFilms', 'filterSeries', 'filterAll', 'titleTypeFilter', 'noMatchingTitles', 'unknownTitleTypes'];
+        keys.forEach((key, index) => { UI_MESSAGES[locale][key] = values[index]; });
+    }
+
     const LOG_MESSAGES = {
         viewingStatusStarted: { en: 'Viewing status collection started', ja: '\u8996\u8074\u72b6\u6cc1\u306e\u53d6\u5f97\u958b\u59cb' },
         viewingStatusCompleted: { en: 'Viewing status collection completed', ja: '\u8996\u8074\u72b6\u6cc1\u306e\u53d6\u5f97\u5b8c\u4e86' },
@@ -953,8 +991,9 @@
 
     function formatHeaderParts(current, total, elapsedMs = null, finalized = false) {
         if (finalized && sourceState?.watchStatus && current === sourceState.items?.length && total === current) {
-            const completed = sourceState.watchStatus.completedCount || 0;
-            current = Math.max(0, current - completed);
+            const watch = sourceState.watchStatus;
+            current = Number.isFinite(watch.visibleCount) ? watch.visibleCount
+                : Math.max(0, current - (watch.completedCount || 0));
             total = current;
         }
         return {
@@ -2027,6 +2066,7 @@
             }
 
             #${GRID_ID} > [data-tm-watch-section],
+            #${GRID_ID} > [data-tm-type-filter],
             #${GRID_ID} > [data-tm-watch-controls],
             #${GRID_ID} > [data-tm-watch-empty] {
                 grid-column: 1 / -1;
@@ -2043,8 +2083,73 @@
                 margin-top: 16px;
             }
 
-            #${GRID_ID} [data-tm-watch-section]:not([open]) > [data-tm-watch-grid] {
+            #${GRID_ID} [data-tm-watch-section]:not([open]) > :not(summary),
+            #${GRID_ID} [data-tm-type-hidden="true"] {
                 display: none !important;
+            }
+
+            #${GRID_ID} [data-tm-type-filter] {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 6px;
+                padding: 5px;
+                border: 1px solid rgba(255,255,255,.12);
+                border-radius: 12px;
+                background: rgba(255,255,255,.035);
+                width: fit-content;
+                max-width: 100%;
+                box-sizing: border-box;
+                margin: 4px 0 18px;
+            }
+
+            #${GRID_ID} [data-tm-type-filter] > button {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+                min-height: 40px;
+                padding: 8px 16px;
+                border: 1px solid transparent;
+                border-radius: 8px;
+                background: transparent;
+                color: rgba(255,255,255,.7);
+                font: inherit;
+                font-size: .9em;
+                cursor: pointer;
+            }
+
+            #${GRID_ID} [data-tm-type-filter] > button:hover {
+                background: rgba(255,255,255,.08);
+                color: #fff;
+            }
+
+            #${GRID_ID} [data-tm-type-filter] > button[aria-pressed="true"] {
+                background: #e50914;
+                color: #fff;
+                font-weight: 600;
+            }
+
+            #${GRID_ID} [data-tm-type-filter] > button:focus-visible {
+                outline: 2px solid #fff;
+                outline-offset: 3px;
+            }
+
+            #${GRID_ID} [data-tm-type-count] {
+                min-width: 1.5em;
+                padding: 2px 6px;
+                border-radius: 5px;
+                background: rgba(255,255,255,.1);
+                font-size: .8em;
+                font-variant-numeric: tabular-nums;
+                text-align: center;
+            }
+
+            #${GRID_ID} [data-tm-watch-section] {
+                border: 1px solid rgba(255,255,255,.14);
+                border-radius: 12px;
+                padding: 12px 18px;
+                background: rgba(255,255,255,.025);
             }
 
             #${GRID_ID} [data-tm-watch-section] > summary {
@@ -2052,6 +2157,10 @@
                 padding: 8px 0;
                 font-size: 1.15em;
                 font-weight: 600;
+            }
+
+            #${GRID_ID} [data-tm-watch-section] > [data-tm-type-filter] {
+                margin-top: 14px;
             }
 
             #${GRID_ID} [data-tm-watch-controls] {
@@ -3057,6 +3166,8 @@
             for (const id of batch) {
                 const record = viewingVideoRecord(graph, id);
                 job.results.set(id, classifyViewingVideo(record));
+                if (record?.type === 'movie') job.types.set(id, 'movie');
+                else if (['show', 'series', 'tvshow', 'episode'].includes(record?.type)) job.types.set(id, 'series');
                 if (record && ['show', 'series', 'tvshow'].includes(record.type)) {
                     job.seriesStats.found++;
                     if (Number.isSafeInteger(record.seasonCount) && record.seasonCount > 0 &&
@@ -3069,6 +3180,10 @@
                 }
             }
         }
+        // Make type filtering available before the slower episode checks finish.
+        assertViewingJob(job);
+        job.watch.types = job.types;
+        syncWatchGroups(job.state);
         for (let offset = 0; offset < series.length; offset += 8) {
             // Finish a bounded group before loading more season lists. Large
             // lists must not spend the whole budget without checking episodes.
@@ -3129,12 +3244,52 @@
     }
 
     function gridOwnsClone(clone, grid) {
-        if (!grid || !clone) return false;
+        if (!grid || !clone || clone.getAttribute('data-tm-type-hidden') === 'true') return false;
         if (clone.parentElement === grid) return true;
         const parent = clone.parentElement;
         const details = parent?.parentElement;
         return parent?.getAttribute('data-tm-watch-grid') === 'true' &&
             details?.parentElement === grid && details.open === true;
+    }
+
+    function createWatchTypeFilter(state, group) {
+        const grid = state.grid;
+        const root = document.createElement('div');
+        root.setAttribute('data-tm-type-filter', group);
+        root.setAttribute('role', 'group');
+        root.setAttribute('aria-label', tUi(group === 'main' ? 'legacyMyList' : 'watchedCaughtUp') + ': ' + tUi('titleTypeFilter'));
+        const buttons = new Map();
+        for (const [type, key] of [['movie', 'filterFilms'], ['series', 'filterSeries'], ['all', 'filterAll']]) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.setAttribute('data-tm-filter-value', type);
+            const label = document.createElement('span');
+            label.textContent = tUi(key);
+            const count = document.createElement('span');
+            count.setAttribute('data-tm-type-count', 'true');
+            button.appendChild(label);
+            button.appendChild(count);
+            button.addEventListener('click', () => {
+                if (sourceState !== state || state.grid !== grid || state.watchStatus?.ui?.grid !== grid ||
+                    !grid.isConnected || state.watchStatus.filters[group] === type) return;
+                state.watchStatus.filters[group] = type;
+                syncWatchGroups(state);
+            });
+            root.appendChild(button);
+            buttons.set(type, { button, count, key });
+        }
+        return { root, buttons };
+    }
+
+    function syncWatchTypeFilter(control, selected, counts) {
+        for (const [type, { button, count, key }] of control.buttons) {
+            const pressed = String(type === selected);
+            if (button.getAttribute('aria-pressed') !== pressed) button.setAttribute('aria-pressed', pressed);
+            const value = formatUiNumber(counts[type]);
+            if (count.textContent !== value) count.textContent = value;
+            const label = tUi(key) + ': ' + formatItemCount(counts[type]);
+            if (button.getAttribute('aria-label') !== label) button.setAttribute('aria-label', label);
+        }
     }
 
     function ensureWatchGroupUi(state) {
@@ -3147,6 +3302,13 @@
         const watchedGrid = document.createElement('div');
         watchedGrid.setAttribute('data-tm-watch-grid', 'true');
         details.appendChild(summary);
+        const mainFilter = createWatchTypeFilter(state, 'main');
+        const watchedFilter = createWatchTypeFilter(state, 'watched');
+        const watchedEmpty = document.createElement('p');
+        watchedEmpty.setAttribute('data-tm-watch-empty', 'true');
+        watchedEmpty.textContent = tUi('noMatchingTitles');
+        details.appendChild(watchedFilter.root);
+        details.appendChild(watchedEmpty);
         details.appendChild(watchedGrid);
         const empty = document.createElement('p');
         empty.setAttribute('data-tm-watch-empty', 'true');
@@ -3172,7 +3334,8 @@
             activePage = null;
             invalidateGridReact();
         });
-        return watch.ui = { grid: state.grid, details, summary, watchedGrid, empty, controls, note, refresh };
+        return watch.ui = { grid: state.grid, details, summary, watchedGrid, empty, controls, note, refresh,
+            mainFilter, watchedFilter, watchedEmpty };
     }
 
     function syncWatchChildOrder(parent, children) {
@@ -3188,17 +3351,36 @@
         const watch = state.watchStatus;
         const ui = ensureWatchGroupUi(state);
         const remaining = [], completed = [];
+        const counts = {
+            main: { movie: 0, series: 0, all: 0 }, watched: { movie: 0, series: 0, all: 0 }
+        };
+        let visibleCount = 0, visibleCompleted = 0, visibilityChanged = false;
         let unknown = 0;
         for (const item of state.items || []) {
             const status = watch.results.get(String(item.videoId)) || 'unknown';
             const clone = state.cloneMap?.get(itemKey(item));
             if (!clone) continue;
+            const group = status === 'complete' ? 'watched' : 'main';
+            const type = watch.types.get(String(item.videoId));
+            counts[group].all++;
+            if (type === 'movie' || type === 'series') counts[group][type]++;
+            const hidden = watch.filters[group] !== 'all' && watch.filters[group] !== type;
+            if (hidden !== (clone.getAttribute('data-tm-type-hidden') === 'true')) {
+                if (hidden) clone.setAttribute('data-tm-type-hidden', 'true');
+                else clone.removeAttribute('data-tm-type-hidden');
+                visibilityChanged = true;
+            }
+            if (!hidden) {
+                if (group === 'main') visibleCount++;
+                else visibleCompleted++;
+            }
             (status === 'complete' ? completed : remaining).push(clone);
             if (status === 'unknown') unknown++;
         }
-        const moved = remaining.some((clone, index) => state.grid.children[index] !== clone) ||
+        const mainOrder = [ui.mainFilter.root, ...remaining, ui.empty, ui.controls, ui.details];
+        const moved = mainOrder.some((node, index) => state.grid.children[index] !== node) ||
             completed.some((clone, index) => ui.watchedGrid.children[index] !== clone);
-        if (moved) {
+        if (moved || visibilityChanged) {
             cancelPendingGridHover();
             hoverToken++;
             clearSourceAlignment();
@@ -3208,15 +3390,26 @@
             invalidateGridReact();
         }
         syncWatchChildOrder(ui.watchedGrid, completed);
-        syncWatchChildOrder(state.grid, [...remaining, ui.empty, ui.controls, ui.details]);
+        syncWatchChildOrder(state.grid, mainOrder);
         watch.completedCount = completed.length;
         watch.unknownCount = unknown;
-        ui.empty.hidden = remaining.length > 0 || completed.length === 0;
+        watch.visibleCount = visibleCount;
+        syncWatchTypeFilter(ui.mainFilter, watch.filters.main, counts.main);
+        syncWatchTypeFilter(ui.watchedFilter, watch.filters.watched, counts.watched);
+        ui.empty.hidden = visibleCount > 0;
+        const emptyText = watch.loading ? tUi('checkingViewingStatus')
+            : !remaining.length && completed.length ? tUi('caughtUpMessage') : tUi('noMatchingTitles');
+        if (ui.empty.textContent !== emptyText) ui.empty.textContent = emptyText;
+        ui.watchedEmpty.hidden = visibleCompleted > 0;
         ui.refresh.disabled = watch.loading;
         const label = tUi('watchedCaughtUp') + ' (' + formatUiNumber(completed.length) + ')';
         if (ui.summary.textContent !== label) ui.summary.textContent = label;
-        const note = watch.loading ? tUi('checkingViewingStatus')
+        let note = watch.loading ? tUi('checkingViewingStatus')
             : unknown ? tUi('unknownViewingStatus', { count: formatUiNumber(unknown) }) : '';
+        const unknownTypes = counts.main.all - counts.main.movie - counts.main.series;
+        if (unknownTypes && watch.filters.main !== 'all') {
+            note += (note ? ' ' : '') + tUi('unknownTitleTypes', { count: formatUiNumber(unknownTypes) });
+        }
         if (ui.note.textContent !== note) ui.note.textContent = note;
         state.status = updateStatus(formatHeaderParts(state.items.length, state.totalCount,
             state.initializationElapsedMs, true));
@@ -3224,7 +3417,8 @@
 
     function initializeWatchGroups(state, sessionToken) {
         state.watchStatus = {
-            sessionToken, results: new Map(), completedCount: 0, unknownCount: state.items.length,
+            sessionToken, results: new Map(), types: new Map(), filters: { main: 'movie', watched: 'movie' },
+            completedCount: 0, unknownCount: state.items.length, visibleCount: 0,
             loading: false, expanded: false, ui: null, promise: null, requests: 0, failure: null, profileGuid: null
         };
         syncWatchGroups(state);
@@ -3238,18 +3432,22 @@
         const context = viewingRequestContext();
         if (!context || !isRouteSessionActive(watch.sessionToken)) {
             watch.results = new Map();
+            watch.types = new Map();
             watch.failure = 'VIEWING_STATUS_CONTEXT';
             syncWatchGroups(state);
             log(tLog('viewingStatusUnavailable'), { reason: watch.failure });
             return;
         }
-        if (watch.profileGuid !== context.profileGuid) watch.results = new Map();
+        if (watch.profileGuid !== context.profileGuid) {
+            watch.results = new Map();
+            watch.types = new Map();
+        }
         watch.profileGuid = context.profileGuid;
         watch.loading = true;
         watch.failure = null;
         syncWatchGroups(state);
         const job = {
-            state, watch, context, sessionToken: watch.sessionToken, results: new Map(),
+            state, watch, context, sessionToken: watch.sessionToken, results: new Map(), types: new Map(),
             requests: 0, deadline: performance.now() + VIEWING_TIMEOUT_MS,
             seriesStats: { found: 0, eligible: 0, planned: 0, checked: 0, complete: 0, unknown: 0 }
         };
@@ -3266,6 +3464,7 @@
                     // A profile switch in the same grid invalidates old results.
                     if (sourceState === state && state.watchStatus === watch && isRouteSessionActive(job.sessionToken)) {
                         watch.results = new Map();
+                        watch.types = new Map();
                         watch.loading = false;
                         watch.failure = 'VIEWING_STATUS_PROFILE_CHANGED';
                         syncWatchGroups(state);
@@ -3279,9 +3478,11 @@
             if (sourceState !== state || state.watchStatus !== watch || !isRouteSessionActive(job.sessionToken)) return;
             if (netflixModelData('userInfo')?.userGuid !== context.profileGuid) {
                 job.results.clear();
+                job.types.clear();
                 watch.failure = 'VIEWING_STATUS_PROFILE_CHANGED';
             }
             watch.results = job.results;
+            watch.types = job.types;
             watch.requests = job.requests;
             watch.loading = false;
             syncWatchGroups(state);
@@ -3294,6 +3495,7 @@
             if (sourceState !== state || state.watchStatus !== watch) return;
             watch.loading = false;
             watch.results = new Map();
+            watch.types = new Map();
             watch.failure = 'VIEWING_STATUS_FAILED';
             syncWatchGroups(state);
         });
@@ -8645,6 +8847,8 @@
         fresh.setAttribute('data-tm-hover-ready', String(Boolean(stats?.fiberAssignments || stats?.propsAssignments)));
         fresh.setAttribute('data-tm-backed-page', String(actualPage));
         fresh.__tmHoverActivationGeneration = oldClone?.__tmHoverActivationGeneration;
+        if (oldClone?.getAttribute('data-tm-type-hidden') === 'true') fresh.setAttribute('data-tm-type-hidden', 'true');
+        else fresh.removeAttribute('data-tm-type-hidden');
         if (oldClone?.getAttribute('data-tm-preparing') === 'true' &&
             oldClone.getAttribute('data-tm-hover-token') === String(hoverToken)) {
             fresh.setAttribute('data-tm-preparing', 'true');
