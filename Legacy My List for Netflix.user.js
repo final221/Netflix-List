@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.0.13
+// @version      1.1.0
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -61,6 +61,12 @@
     const GRAPHQL_COLLECTION_MAX_PAGES = 8;
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
+    const VIEWING_TITLE_BATCH_SIZE = 50;
+    const VIEWING_EPISODE_BATCH_SIZE = 200;
+    const VIEWING_MAX_SEASONS = 40;
+    const VIEWING_MAX_EPISODES = 500;
+    const VIEWING_MAX_REQUESTS = 32;
+    const VIEWING_TIMEOUT_MS = 30000;
 
     const GRID_ID = 'tm-netflix-mylist-v15-grid';
     const STATUS_ID = 'tm-netflix-mylist-v15-status';
@@ -74,7 +80,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.0.13';
+    const SCRIPT_VERSION = '1.1.0';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -669,7 +675,48 @@
         },
     };
 
+    const VIEWING_UI_MESSAGES = {
+        'en': ["Watched / Caught up", "Refresh viewing status", "Checking viewing status...", "Viewing status unavailable for {count} titles. They remain in the main list.", "You are caught up with everything in your list."],
+        'de': ["Gesehen / Auf dem neuesten Stand", "Sehstatus aktualisieren", "Sehstatus wird gepr\u00fcft...", "Sehstatus f\u00fcr {count} Titel nicht verf\u00fcgbar. Sie bleiben in der Hauptliste.", "Du hast alle Titel in deiner Liste gesehen."],
+        'da': ["Set / Ajour", "Opdater visningsstatus", "Kontrollerer visningsstatus...", "Visningsstatus er ikke tilg\u00e6ngelig for {count} titler. De bliver p\u00e5 hovedlisten.", "Du har set alt p\u00e5 din liste."],
+        'es': ["Visto / Al d\u00eda", "Actualizar estado de visualizaci\u00f3n", "Comprobando el estado de visualizaci\u00f3n...", "Estado no disponible para {count} t\u00edtulos. Permanecen en la lista principal.", "Has visto todo lo que hay en tu lista."],
+        'fil': ["Napanood / Updated", "I-refresh ang status ng panonood", "Sinusuri ang status ng panonood...", "Hindi available ang status ng {count} pamagat. Mananatili sila sa pangunahing listahan.", "Napanood mo na ang lahat sa iyong listahan."],
+        'fr': ["Vu / \u00c0 jour", "Actualiser le statut de visionnage", "V\u00e9rification du statut de visionnage...", "Statut indisponible pour {count} titres. Ils restent dans la liste principale.", "Vous avez tout vu dans votre liste."],
+        'hr': ["Pogledano / Sve pogledano", "Osvje\u017ei status gledanja", "Provjera statusa gledanja...", "Status nije dostupan za {count} naslova. Ostaju na glavnom popisu.", "Pogledali ste sve na svom popisu."],
+        'id': ["Sudah ditonton / Sudah mengikuti semua episode", "Perbarui status tontonan", "Memeriksa status tontonan...", "Status tidak tersedia untuk {count} judul. Judul tetap ada di daftar utama.", "Kamu sudah menonton semua yang ada di daftar."],
+        'it': ["Visto / In pari", "Aggiorna lo stato di visione", "Verifica dello stato di visione...", "Stato non disponibile per {count} titoli. Rimangono nella lista principale.", "Hai visto tutto ci\u00f2 che \u00e8 nella tua lista."],
+        'hu': ["Megn\u00e9zve / Naprak\u00e9sz", "Megtekint\u00e9si \u00e1llapot friss\u00edt\u00e9se", "Megtekint\u00e9si \u00e1llapot ellen\u0151rz\u00e9se...", "{count} m\u0171sor \u00e1llapota nem \u00e9rhet\u0151 el. A f\u0151 list\u00e1ban maradnak.", "Mindent megn\u00e9zt\u00e9l a list\u00e1don."],
+        'ms': ["Sudah ditonton / Sudah mengikuti semua episod", "Kemas kini status tontonan", "Menyemak status tontonan...", "Status tidak tersedia untuk {count} tajuk. Tajuk kekal dalam senarai utama.", "Anda sudah menonton semua dalam senarai anda."],
+        'nl': ["Bekeken / Bij", "Kijkstatus vernieuwen", "Kijkstatus controleren...", "Kijkstatus niet beschikbaar voor {count} titels. Ze blijven in de hoofdlijst.", "Je hebt alles in je lijst bekeken."],
+        'nb': ["Sett / Ajour", "Oppdater visningsstatus", "Kontrollerer visningsstatus...", "Visningsstatus er utilgjengelig for {count} titler. De blir i hovedlisten.", "Du har sett alt p\u00e5 listen din."],
+        'pl': ["Obejrzane / Na bie\u017c\u0105co", "Od\u015bwie\u017c stan ogl\u0105dania", "Sprawdzanie stanu ogl\u0105dania...", "Stan {count} tytu\u0142\u00f3w jest niedost\u0119pny. Pozostaj\u0105 na g\u0142\u00f3wnej li\u015bcie.", "Wszystko na Twojej li\u015bcie jest obejrzane."],
+        'pt': ["Visto / Em dia", "Atualizar estado de visualiza\u00e7\u00e3o", "A verificar o estado de visualiza\u00e7\u00e3o...", "Estado indispon\u00edvel para {count} t\u00edtulos. Permanecem na lista principal.", "J\u00e1 viu tudo na sua lista."],
+        'ro': ["Vizionat / La zi", "Actualizeaz\u0103 starea vizion\u0103rii", "Se verific\u0103 starea vizion\u0103rii...", "Starea nu este disponibil\u0103 pentru {count} titluri. R\u0103m\u00e2n \u00een lista principal\u0103.", "Ai vizionat tot ce este \u00een lista ta."],
+        'fi': ["Katsottu / Ajan tasalla", "P\u00e4ivit\u00e4 katselutila", "Tarkistetaan katselutilaa...", "{count} nimikkeen katselutila ei ole saatavilla. Ne pysyv\u00e4t p\u00e4\u00e4listassa.", "Olet katsonut kaiken listaltasi."],
+        'sv': ["Sett / Ikapp", "Uppdatera visningsstatus", "Kontrollerar visningsstatus...", "Visningsstatus saknas f\u00f6r {count} titlar. De finns kvar i huvudlistan.", "Du har sett allt p\u00e5 din lista."],
+        'vi': ["\u0110\u00e3 xem / \u0110\u00e3 xem h\u1ebft c\u00e1c t\u1eadp hi\u1ec7n c\u00f3", "C\u1eadp nh\u1eadt tr\u1ea1ng th\u00e1i xem", "\u0110ang ki\u1ec3m tra tr\u1ea1ng th\u00e1i xem...", "Kh\u00f4ng c\u00f3 tr\u1ea1ng th\u00e1i c\u1ee7a {count} t\u1ef1a phim. Ch\u00fang v\u1eabn \u1edf danh s\u00e1ch ch\u00ednh.", "B\u1ea1n \u0111\u00e3 xem h\u1ebft m\u1ecdi n\u1ed9i dung trong danh s\u00e1ch."],
+        'tr': ["\u0130zlendi / G\u00fcncel b\u00f6l\u00fcmler izlendi", "\u0130zleme durumunu yenile", "\u0130zleme durumu kontrol ediliyor...", "{count} i\u00e7eri\u011fin durumu kullan\u0131lam\u0131yor. Ana listede kal\u0131rlar.", "Listenizdeki t\u00fcm i\u00e7erikleri izlediniz."],
+        'cs': ["Zhl\u00e9dnuto / V\u0161echny d\u00edly zhl\u00e9dnuty", "Aktualizovat stav sledov\u00e1n\u00ed", "Kontrola stavu sledov\u00e1n\u00ed...", "Stav {count} titul\u016f nen\u00ed dostupn\u00fd. Z\u016fst\u00e1vaj\u00ed v hlavn\u00edm seznamu.", "Zhl\u00e9dli jste v\u0161e ve sv\u00e9m seznamu."],
+        'el': ["\u03a0\u03c1\u03bf\u03b2\u03bb\u03ae\u03b8\u03b7\u03ba\u03b5 / \u038c\u03bb\u03b1 \u03c4\u03b1 \u03b4\u03b9\u03b1\u03b8\u03ad\u03c3\u03b9\u03bc\u03b1 \u03b5\u03c0\u03b5\u03b9\u03c3\u03cc\u03b4\u03b9\u03b1 \u03c0\u03c1\u03bf\u03b2\u03bb\u03ae\u03b8\u03b7\u03ba\u03b1\u03bd", "\u0391\u03bd\u03b1\u03bd\u03ad\u03c9\u03c3\u03b7 \u03ba\u03b1\u03c4\u03ac\u03c3\u03c4\u03b1\u03c3\u03b7\u03c2 \u03c0\u03c1\u03bf\u03b2\u03bf\u03bb\u03ae\u03c2", "\u0388\u03bb\u03b5\u03b3\u03c7\u03bf\u03c2 \u03ba\u03b1\u03c4\u03ac\u03c3\u03c4\u03b1\u03c3\u03b7\u03c2 \u03c0\u03c1\u03bf\u03b2\u03bf\u03bb\u03ae\u03c2...", "\u039c\u03b7 \u03b4\u03b9\u03b1\u03b8\u03ad\u03c3\u03b9\u03bc\u03b7 \u03ba\u03b1\u03c4\u03ac\u03c3\u03c4\u03b1\u03c3\u03b7 \u03b3\u03b9\u03b1 {count} \u03c4\u03af\u03c4\u03bb\u03bf\u03c5\u03c2. \u03a0\u03b1\u03c1\u03b1\u03bc\u03ad\u03bd\u03bf\u03c5\u03bd \u03c3\u03c4\u03b7\u03bd \u03ba\u03cd\u03c1\u03b9\u03b1 \u03bb\u03af\u03c3\u03c4\u03b1.", "\u0388\u03c7\u03b5\u03c4\u03b5 \u03b4\u03b5\u03b9 \u03c4\u03b1 \u03c0\u03ac\u03bd\u03c4\u03b1 \u03c3\u03c4\u03b7 \u03bb\u03af\u03c3\u03c4\u03b1 \u03c3\u03b1\u03c2."],
+        'ru': ["\u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u043d\u043e / \u0412\u0441\u0435 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u0441\u0435\u0440\u0438\u0438 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u043d\u044b", "\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u0442\u0430\u0442\u0443\u0441 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0430", "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0441\u0442\u0430\u0442\u0443\u0441\u0430 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0430...", "\u0421\u0442\u0430\u0442\u0443\u0441 {count} \u043d\u0430\u0438\u043c\u0435\u043d\u043e\u0432\u0430\u043d\u0438\u0439 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d. \u041e\u043d\u0438 \u043e\u0441\u0442\u0430\u044e\u0442\u0441\u044f \u0432 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u043c \u0441\u043f\u0438\u0441\u043a\u0435.", "\u0412\u044b \u043f\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u043b\u0438 \u0432\u0441\u0451 \u0432 \u0441\u0432\u043e\u0451\u043c \u0441\u043f\u0438\u0441\u043a\u0435."],
+        'uk': ["\u041f\u0435\u0440\u0435\u0433\u043b\u044f\u043d\u0443\u0442\u043e / \u0423\u0441\u0456 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0456 \u0441\u0435\u0440\u0456\u0457 \u043f\u0435\u0440\u0435\u0433\u043b\u044f\u043d\u0443\u0442\u043e", "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0441\u0442\u0430\u043d \u043f\u0435\u0440\u0435\u0433\u043b\u044f\u0434\u0443", "\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0441\u0442\u0430\u043d\u0443 \u043f\u0435\u0440\u0435\u0433\u043b\u044f\u0434\u0443...", "\u0421\u0442\u0430\u043d {count} \u043d\u0430\u0439\u043c\u0435\u043d\u0443\u0432\u0430\u043d\u044c \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439. \u0412\u043e\u043d\u0438 \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f \u0432 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u043c\u0443 \u0441\u043f\u0438\u0441\u043a\u0443.", "\u0412\u0438 \u043f\u0435\u0440\u0435\u0433\u043b\u044f\u043d\u0443\u043b\u0438 \u0432\u0441\u0435 \u0443 \u0441\u0432\u043e\u0454\u043c\u0443 \u0441\u043f\u0438\u0441\u043a\u0443."],
+        'he': ["\u05e0\u05e6\u05e4\u05d4 / \u05db\u05dc \u05d4\u05e4\u05e8\u05e7\u05d9\u05dd \u05d4\u05d6\u05de\u05d9\u05e0\u05d9\u05dd \u05e0\u05e6\u05e4\u05d5", "\u05e8\u05e2\u05e0\u05d5\u05df \u05de\u05e6\u05d1 \u05e6\u05e4\u05d9\u05d9\u05d4", "\u05d1\u05d3\u05d9\u05e7\u05ea \u05de\u05e6\u05d1 \u05e6\u05e4\u05d9\u05d9\u05d4...", "\u05de\u05e6\u05d1 \u05d4\u05e6\u05e4\u05d9\u05d9\u05d4 \u05d0\u05d9\u05e0\u05d5 \u05d6\u05de\u05d9\u05df \u05e2\u05d1\u05d5\u05e8 {count} \u05db\u05d5\u05ea\u05e8\u05d9\u05dd. \u05d4\u05dd \u05e0\u05e9\u05d0\u05e8\u05d9\u05dd \u05d1\u05e8\u05e9\u05d9\u05de\u05d4 \u05d4\u05e8\u05d0\u05e9\u05d9\u05ea.", "\u05e6\u05e4\u05d9\u05ea \u05d1\u05db\u05dc \u05de\u05d4 \u05e9\u05d1\u05e8\u05e9\u05d9\u05de\u05d4 \u05e9\u05dc\u05da."],
+        'ar': ["\u062a\u0645\u062a \u0627\u0644\u0645\u0634\u0627\u0647\u062f\u0629 / \u062a\u0645\u062a \u0645\u0634\u0627\u0647\u062f\u0629 \u0643\u0644 \u0627\u0644\u062d\u0644\u0642\u0627\u062a \u0627\u0644\u0645\u062a\u0627\u062d\u0629", "\u062a\u062d\u062f\u064a\u062b \u062d\u0627\u0644\u0629 \u0627\u0644\u0645\u0634\u0627\u0647\u062f\u0629", "\u062c\u0627\u0631\u064d \u0627\u0644\u062a\u062d\u0642\u0642 \u0645\u0646 \u062d\u0627\u0644\u0629 \u0627\u0644\u0645\u0634\u0627\u0647\u062f\u0629...", "\u062d\u0627\u0644\u0629 \u0627\u0644\u0645\u0634\u0627\u0647\u062f\u0629 \u063a\u064a\u0631 \u0645\u062a\u0627\u062d\u0629 \u0644\u0640 {count} \u0639\u0646\u0648\u0627\u0646\u064b\u0627. \u062a\u0628\u0642\u0649 \u0641\u064a \u0627\u0644\u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629.", "\u0634\u0627\u0647\u062f\u062a \u0643\u0644 \u0645\u0627 \u0641\u064a \u0642\u0627\u0626\u0645\u062a\u0643."],
+        'hi': ["\u0926\u0947\u0916 \u0932\u093f\u092f\u093e / \u0938\u092d\u0940 \u0909\u092a\u0932\u092c\u094d\u0927 \u090f\u092a\u093f\u0938\u094b\u0921 \u0926\u0947\u0916 \u0932\u093f\u090f", "\u0926\u0947\u0916\u0928\u0947 \u0915\u0940 \u0938\u094d\u0925\u093f\u0924\u093f \u0930\u0940\u092b\u093c\u094d\u0930\u0947\u0936 \u0915\u0930\u0947\u0902", "\u0926\u0947\u0916\u0928\u0947 \u0915\u0940 \u0938\u094d\u0925\u093f\u0924\u093f \u091c\u093e\u0901\u091a\u0940 \u091c\u093e \u0930\u0939\u0940 \u0939\u0948...", "{count} \u091f\u093e\u0907\u091f\u0932 \u0915\u0940 \u0938\u094d\u0925\u093f\u0924\u093f \u0909\u092a\u0932\u092c\u094d\u0927 \u0928\u0939\u0940\u0902 \u0939\u0948\u0964 \u0935\u0947 \u092e\u0941\u0916\u094d\u092f \u0938\u0942\u091a\u0940 \u092e\u0947\u0902 \u0930\u0939\u0947\u0902\u0917\u0947\u0964", "\u0906\u092a\u0928\u0947 \u0905\u092a\u0928\u0940 \u0938\u0942\u091a\u0940 \u092e\u0947\u0902 \u0938\u092c \u0915\u0941\u091b \u0926\u0947\u0916 \u0932\u093f\u092f\u093e \u0939\u0948\u0964"],
+        'th': ["\u0e14\u0e39\u0e41\u0e25\u0e49\u0e27 / \u0e14\u0e39\u0e04\u0e23\u0e1a\u0e17\u0e38\u0e01\u0e15\u0e2d\u0e19\u0e17\u0e35\u0e48\u0e21\u0e35\u0e41\u0e25\u0e49\u0e27", "\u0e23\u0e35\u0e40\u0e1f\u0e23\u0e0a\u0e2a\u0e16\u0e32\u0e19\u0e30\u0e01\u0e32\u0e23\u0e23\u0e31\u0e1a\u0e0a\u0e21", "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e15\u0e23\u0e27\u0e08\u0e2a\u0e2d\u0e1a\u0e2a\u0e16\u0e32\u0e19\u0e30\u0e01\u0e32\u0e23\u0e23\u0e31\u0e1a\u0e0a\u0e21...", "\u0e44\u0e21\u0e48\u0e21\u0e35\u0e2a\u0e16\u0e32\u0e19\u0e30\u0e01\u0e32\u0e23\u0e23\u0e31\u0e1a\u0e0a\u0e21\u0e2a\u0e33\u0e2b\u0e23\u0e31\u0e1a {count} \u0e40\u0e23\u0e37\u0e48\u0e2d\u0e07 \u0e08\u0e30\u0e41\u0e2a\u0e14\u0e07\u0e43\u0e19\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e2b\u0e25\u0e31\u0e01\u0e15\u0e48\u0e2d\u0e44\u0e1b", "\u0e04\u0e38\u0e13\u0e14\u0e39\u0e17\u0e38\u0e01\u0e40\u0e23\u0e37\u0e48\u0e2d\u0e07\u0e43\u0e19\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e04\u0e23\u0e1a\u0e41\u0e25\u0e49\u0e27"],
+        'zh': ["\u5df2\u89c2\u770b / \u5df2\u770b\u5b8c\u73b0\u6709\u5267\u96c6", "\u5237\u65b0\u89c2\u770b\u72b6\u6001", "\u6b63\u5728\u68c0\u67e5\u89c2\u770b\u72b6\u6001...", "{count} \u90e8\u4f5c\u54c1\u7684\u89c2\u770b\u72b6\u6001\u4e0d\u53ef\u7528\u3002\u5b83\u4eec\u5c06\u4fdd\u7559\u5728\u4e3b\u5217\u8868\u4e2d\u3002", "\u4f60\u5df2\u770b\u5b8c\u5217\u8868\u4e2d\u7684\u6240\u6709\u5185\u5bb9\u3002"],
+        'ja': ["\u8996\u8074\u6e08\u307f / \u914d\u4fe1\u4e2d\u306e\u5168\u8a71\u3092\u8996\u8074\u6e08\u307f", "\u8996\u8074\u72b6\u6cc1\u3092\u66f4\u65b0", "\u8996\u8074\u72b6\u6cc1\u3092\u78ba\u8a8d\u4e2d...", "{count}\u4f5c\u54c1\u306e\u8996\u8074\u72b6\u6cc1\u3092\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093\u3002\u30e1\u30a4\u30f3\u30ea\u30b9\u30c8\u306b\u8868\u793a\u3057\u307e\u3059\u3002", "\u30ea\u30b9\u30c8\u5185\u306e\u3059\u3079\u3066\u306e\u4f5c\u54c1\u3092\u8996\u8074\u6e08\u307f\u3067\u3059\u3002"],
+        'ko': ["\uc2dc\uccad \uc644\ub8cc / \uacf5\uac1c\ub41c \ubaa8\ub4e0 \ud68c\ucc28 \uc2dc\uccad \uc644\ub8cc", "\uc2dc\uccad \uc0c1\ud0dc \uc0c8\ub85c\uace0\uce68", "\uc2dc\uccad \uc0c1\ud0dc \ud655\uc778 \uc911...", "{count}\uac1c \uc791\ud488\uc758 \uc2dc\uccad \uc0c1\ud0dc\ub97c \ud655\uc778\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4. \uae30\ubcf8 \ubaa9\ub85d\uc5d0 \uacc4\uc18d \ud45c\uc2dc\ub429\ub2c8\ub2e4.", "\ubaa9\ub85d\uc758 \ubaa8\ub4e0 \uc791\ud488\uc744 \uc2dc\uccad\ud588\uc2b5\ub2c8\ub2e4."],
+    };
+    for (const [locale, values] of Object.entries(VIEWING_UI_MESSAGES)) {
+        const keys = ['watchedCaughtUp', 'refreshViewingStatus', 'checkingViewingStatus', 'unknownViewingStatus', 'caughtUpMessage'];
+        keys.forEach((key, index) => { UI_MESSAGES[locale][key] = values[index]; });
+    }
+
     const LOG_MESSAGES = {
+        viewingStatusStarted: { en: 'Viewing status collection started', ja: '\u8996\u8074\u72b6\u6cc1\u306e\u53d6\u5f97\u958b\u59cb' },
+        viewingStatusCompleted: { en: 'Viewing status collection completed', ja: '\u8996\u8074\u72b6\u6cc1\u306e\u53d6\u5f97\u5b8c\u4e86' },
+        viewingStatusUnavailable: { en: 'Viewing status unavailable; uncertain titles stay visible', ja: '\u8996\u8074\u72b6\u6cc1\u4e0d\u660e\u306e\u4f5c\u54c1\u306f\u8868\u793a\u3092\u7d99\u7d9a' },
         targetSessionSuspended: { en: 'Target session suspended', ja: '\u5bfe\u8c61\u30bb\u30c3\u30b7\u30e7\u30f3\u4e2d\u65ad' },
         targetSessionStarted: { en: 'Target session started', ja: '\u5bfe\u8c61\u30bb\u30c3\u30b7\u30e7\u30f3\u958b\u59cb' },
         routeChangeDetected: { en: 'Route change detected', ja: '\u30da\u30fc\u30b8\u9077\u79fb\u691c\u51fa' },
@@ -904,6 +951,11 @@
     }
 
     function formatHeaderParts(current, total, elapsedMs = null, finalized = false) {
+        if (finalized && sourceState?.watchStatus && current === sourceState.items?.length && total === current) {
+            const completed = sourceState.watchStatus.completedCount || 0;
+            current = Math.max(0, current - completed);
+            total = current;
+        }
         return {
             label: tUi('legacyMyList'),
             meta: `${formatItemCount(current, total, finalized)}  ${formatInitializationTime(elapsedMs)}`
@@ -1500,7 +1552,14 @@
             sourceSlots: track ? netflixDom.directSlots(track).length : 0,
             sourceCards: track ? netflixDom.filledSlots(track).length : 0,
             currentPageCards: scroller && track ? currentPageSlots(scroller, track).length : 0,
-            gridCards: grid ? grid.querySelectorAll(':scope > [data-virtual-slot]').length : 0,
+            gridCards: sourceState?.cloneMap?.size ?? 0,
+            viewingStatus: sourceState?.watchStatus ? {
+                completed: sourceState.watchStatus.completedCount,
+                unknown: sourceState.watchStatus.unknownCount,
+                loading: sourceState.watchStatus.loading,
+                requests: sourceState.watchStatus.requests,
+                failure: sourceState.watchStatus.failure
+            } : null,
             sourceScan: Boolean(scroller?.classList?.contains(SOURCE_SCAN_CLASS)),
             sourceParked: Boolean(scroller?.classList?.contains(SOURCE_PARKED_CLASS)),
             sourceGeometryProxy: Boolean(activeGeometryProxy),
@@ -1941,7 +2000,8 @@
                 z-index: 0;
             }
 
-            #${GRID_ID} > [data-virtual-slot] {
+            #${GRID_ID} > [data-virtual-slot],
+            #${GRID_ID} [data-tm-watch-grid] > [data-virtual-slot] {
                 min-width: 0 !important;
                 width: auto !important;
                 max-width: none !important;
@@ -1963,6 +2023,62 @@
                 width: 100%;
                 max-width: 100%;
                 height: auto;
+            }
+
+            #${GRID_ID} > [data-tm-watch-section],
+            #${GRID_ID} > [data-tm-watch-controls],
+            #${GRID_ID} > [data-tm-watch-empty] {
+                grid-column: 1 / -1;
+                min-width: 0;
+                margin: 12px 0;
+                color: rgba(255,255,255,.8);
+                font: inherit;
+            }
+
+            #${GRID_ID} [data-tm-watch-grid] {
+                display: grid;
+                grid-template-columns: repeat(var(--tm-cols), minmax(0, 1fr));
+                gap: var(--tm-gap);
+                margin-top: 16px;
+            }
+
+            #${GRID_ID} [data-tm-watch-section]:not([open]) > [data-tm-watch-grid] {
+                display: none !important;
+            }
+
+            #${GRID_ID} [data-tm-watch-section] > summary {
+                cursor: pointer;
+                padding: 8px 0;
+                font-size: 1.15em;
+                font-weight: 600;
+            }
+
+            #${GRID_ID} [data-tm-watch-controls] {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                font-size: .9em;
+            }
+
+            #${GRID_ID} [data-tm-watch-controls] > button {
+                border: 1px solid rgba(255,255,255,.4);
+                border-radius: 4px;
+                background: transparent;
+                color: inherit;
+                font: inherit;
+                padding: 6px 10px;
+                cursor: pointer;
+            }
+
+            #${GRID_ID} [data-tm-watch-controls] > button:disabled {
+                opacity: .6;
+                cursor: default;
+            }
+
+            #${GRID_ID} [data-tm-watch-empty][hidden] {
+                display: none !important;
             }
 
         `;
@@ -2717,6 +2833,429 @@
             } catch (_) {}
         }
         return null;
+    }
+
+    // Viewing status is read separately from native card markup. A shared card
+    // template or membership in Continue Watching cannot establish completion.
+    function unwrapViewingAtom(value) {
+        if (value?.$type === 'error') return undefined;
+        return value?.$type === 'atom' ? value.value : value;
+    }
+
+    function readViewingGraph(graph, path) {
+        let value = graph;
+        const resolve = input => {
+            let node = unwrapViewingAtom(input);
+            const visited = new Set();
+            while (node?.$type === 'ref') {
+                const reference = node.value;
+                if (!Array.isArray(reference) || reference.length > 12) return undefined;
+                const key = JSON.stringify(reference);
+                if (visited.has(key) || visited.size >= 12) return undefined;
+                visited.add(key);
+                node = readViewingGraphReference(graph, reference);
+                node = unwrapViewingAtom(node);
+            }
+            return node;
+        };
+        for (const key of path) {
+            value = resolve(value);
+            if (!value || typeof value !== 'object') return undefined;
+            value = value[key];
+        }
+        return resolve(value);
+    }
+
+    function readViewingGraphReference(graph, path) {
+        let value = graph;
+        for (const key of path) {
+            value = unwrapViewingAtom(value);
+            if (!value || typeof value !== 'object') return undefined;
+            value = value[key];
+        }
+        return value;
+    }
+
+    function viewingNumber(value) {
+        const unwrapped = unwrapViewingAtom(value);
+        return typeof unwrapped === 'number' && Number.isFinite(unwrapped) && unwrapped >= 0
+            ? unwrapped : null;
+    }
+
+    function viewingVideoRecord(graph, videoId, type = '') {
+        const video = readViewingGraph(graph, ['videos', String(videoId)]);
+        if (!video || typeof video !== 'object') return null;
+        const summary = unwrapViewingAtom(video.summary);
+        return {
+            videoId: String(videoId),
+            type: type || (typeof summary?.type === 'string' ? summary.type.toLowerCase() : ''),
+            watched: unwrapViewingAtom(video.watched),
+            bookmark: viewingNumber(video.bookmarkPosition),
+            runtime: viewingNumber(video.runtime),
+            creditsOffset: viewingNumber(video.creditsOffset),
+            seasonCount: viewingNumber(video.seasonCount),
+            episodeCount: viewingNumber(video.episodeCount)
+        };
+    }
+
+    function classifyViewingVideo(record) {
+        if (!record || !['movie', 'episode'].includes(record.type)) return 'unknown';
+        if (record.watched === true) return 'complete';
+        // An explicit negative flag wins over a guessed runtime threshold.
+        // Without a flag, a real credits boundary/end can establish completion.
+        if (record.watched !== false && record.runtime > 0 && record.bookmark !== null) {
+            const boundary = record.creditsOffset > 0 && record.creditsOffset <= record.runtime
+                ? record.creditsOffset : record.runtime;
+            if (record.bookmark >= boundary) return 'complete';
+        }
+        if (record.bookmark > 0) return 'in-progress';
+        if (record.watched === false && record.bookmark === 0) return 'not-started';
+        return 'unknown';
+    }
+
+    function viewingReferenceId(reference, kind) {
+        const value = unwrapViewingAtom(reference);
+        const path = Array.isArray(value) ? value : (value?.$type === 'ref' ? value.value : null);
+        return Array.isArray(path) && path.length === 2 && path[0] === kind && /^\d+$/.test(String(path[1]))
+            ? String(path[1]) : '';
+    }
+
+    function viewingSeasonPlan(graph, record) {
+        const count = record.seasonCount;
+        const expected = record.episodeCount;
+        if (!Number.isSafeInteger(count) || count < 1 || count > VIEWING_MAX_SEASONS ||
+            !Number.isSafeInteger(expected) || expected < 1 || expected > VIEWING_MAX_EPISODES) return null;
+        const list = readViewingGraph(graph, ['videos', record.videoId, 'seasonList']);
+        if (!list || typeof list !== 'object') return null;
+        const seasons = [];
+        const seen = new Set();
+        let total = 0;
+        for (let index = 0; index < count; index++) {
+            const id = viewingReferenceId(list[index], 'seasons');
+            const summary = id ? readViewingGraph(graph, ['seasons', id, 'summary']) : null;
+            const length = viewingNumber(summary?.length);
+            if (!id || seen.has(id) || !Number.isSafeInteger(length) || length > VIEWING_MAX_EPISODES) return null;
+            seen.add(id);
+            total += length;
+            if (total > expected) return null;
+            seasons.push({ id, count: length, episodes: new Map() });
+        }
+        return total === expected ? { videoId: record.videoId, expected, seasons } : null;
+    }
+
+    function classifyViewingSeries(plan) {
+        if (!plan) return 'unknown';
+        const ids = new Set();
+        const statuses = [];
+        for (const season of plan.seasons) {
+            for (let index = 0; index < season.count; index++) {
+                const episode = season.episodes.get(index);
+                if (!episode?.id || ids.has(episode.id) || episode.status === 'unknown') return 'unknown';
+                ids.add(episode.id);
+                statuses.push(episode.status);
+            }
+        }
+        if (statuses.length !== plan.expected || !statuses.length) return 'unknown';
+        if (statuses.every(status => status === 'complete')) return 'complete';
+        return statuses.every(status => status === 'not-started') ? 'not-started' : 'in-progress';
+    }
+
+    function viewingRequestContext() {
+        const user = netflixModelData('userInfo');
+        // guid is the account owner's profile; userGuid is the active profile.
+        const profileGuid = user?.userGuid;
+        const authURL = user?.authURL;
+        const services = netflixModelData('services');
+        const build = netflixModelData('serverDefs')?.BUILD_IDENTIFIER;
+        const base = services?.memberapi || (build ? '/api/shakti/' + encodeURIComponent(build) : '');
+        if (typeof profileGuid !== 'string' || !profileGuid || typeof authURL !== 'string' || !authURL || !base) return null;
+        try {
+            const url = new URL(String(base).replace(/\/$/, '') + '/pathEvaluator', location.origin);
+            if (url.origin !== location.origin || url.protocol !== 'https:') return null;
+            url.searchParams.set('falcor_server', '0.1.0');
+            url.searchParams.set('withSize', 'false');
+            url.searchParams.set('materialize', 'false');
+            url.searchParams.set('original_path', '/shakti/mre/pathEvaluator');
+            return { profileGuid, authURL, url: url.href };
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function assertViewingJob(job) {
+        assertRouteSession(job.sessionToken);
+        if (sourceState !== job.state || job.state.watchStatus !== job.watch ||
+            !job.state.grid?.isConnected || netflixModelData('userInfo')?.userGuid !== job.context.profileGuid) {
+            throw createRouteSessionCancelledError();
+        }
+    }
+
+    async function fetchViewingGraph(paths, job) {
+        assertViewingJob(job);
+        const remaining = job.deadline - performance.now();
+        if (job.requests >= VIEWING_MAX_REQUESTS || remaining <= 0) throw new Error('VIEWING_STATUS_BUDGET');
+        job.requests++;
+        const request = createRouteFetch(job.sessionToken);
+        clearTimeout(request.timeoutId);
+        request.timeoutId = setTimeout(() => request.controller.abort(), Math.min(8000, remaining));
+        try {
+            const body = new URLSearchParams();
+            for (const path of paths) body.append('path', JSON.stringify(path));
+            body.set('authURL', job.context.authURL);
+            const response = await fetch(job.context.url, {
+                method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+                headers: {
+                    'content-type': 'application/x-www-form-urlencoded',
+                    'x-netflix.nq.stack': 'prod',
+                    'x-netflix.request.client.user.guid': job.context.profileGuid
+                },
+                body: body.toString(), signal: request.controller.signal
+            });
+            assertViewingJob(job);
+            if (!response.ok) throw new Error('VIEWING_STATUS_HTTP_' + response.status);
+            const payload = await response.json();
+            assertViewingJob(job);
+            if (!payload?.jsonGraph || typeof payload.jsonGraph !== 'object' || payload.status === 'error') {
+                throw new Error('VIEWING_STATUS_RESPONSE');
+            }
+            return payload.jsonGraph;
+        } catch (error) {
+            assertViewingJob(job);
+            throw error;
+        } finally {
+            finishRouteFetch(request);
+        }
+    }
+
+    async function collectViewingStatuses(job) {
+        const fields = ['summary', 'watched', 'bookmarkPosition', 'runtime', 'creditsOffset', 'seasonCount', 'episodeCount'];
+        const ids = [...new Set(job.state.items.map(item => String(item.videoId)).filter(id => /^\d+$/.test(id)))];
+        const series = [];
+        for (let offset = 0; offset < ids.length; offset += VIEWING_TITLE_BATCH_SIZE) {
+            const batch = ids.slice(offset, offset + VIEWING_TITLE_BATCH_SIZE);
+            const graph = await fetchViewingGraph([['videos', batch, fields]], job);
+            for (const id of batch) {
+                const record = viewingVideoRecord(graph, id);
+                job.results.set(id, classifyViewingVideo(record));
+                if (record && ['show', 'series', 'tvshow'].includes(record.type) &&
+                    Number.isSafeInteger(record.seasonCount) && record.seasonCount > 0 &&
+                    record.seasonCount <= VIEWING_MAX_SEASONS &&
+                    Number.isSafeInteger(record.episodeCount) && record.episodeCount > 0 &&
+                    record.episodeCount <= VIEWING_MAX_EPISODES) series.push(record);
+            }
+        }
+        const plans = [];
+        for (let offset = 0; offset < series.length; offset += 8) {
+            const batch = series.slice(offset, offset + 8);
+            const paths = batch.map(record => ['videos', record.videoId, 'seasonList',
+                { from: 0, to: record.seasonCount - 1 }, 'summary']);
+            const graph = await fetchViewingGraph(paths, job);
+            for (const record of batch) {
+                const plan = viewingSeasonPlan(graph, record);
+                if (plan) plans.push(plan);
+            }
+        }
+        // Batch across shows/seasons, splitting long seasons at the same budget.
+        const segments = [];
+        for (const plan of plans) {
+            for (const season of plan.seasons) {
+                for (let from = 0; from < season.count; from += VIEWING_EPISODE_BATCH_SIZE) {
+                    segments.push({ season, from, to: Math.min(season.count - 1, from + VIEWING_EPISODE_BATCH_SIZE - 1) });
+                }
+            }
+        }
+        for (let offset = 0; offset < segments.length;) {
+            const batch = [];
+            let size = 0;
+            while (offset < segments.length) {
+                const segment = segments[offset];
+                const length = segment.to - segment.from + 1;
+                if (batch.length && size + length > VIEWING_EPISODE_BATCH_SIZE) break;
+                batch.push(segment);
+                size += length;
+                offset++;
+            }
+            const paths = batch.map(({ season, from, to }) => ['seasons', season.id, 'episodes',
+                { from, to }, ['summary', 'watched', 'bookmarkPosition', 'runtime', 'creditsOffset']]);
+            const graph = await fetchViewingGraph(paths, job);
+            for (const { season, from, to } of batch) {
+                const episodes = readViewingGraph(graph, ['seasons', season.id, 'episodes']);
+                for (let index = from; index <= to; index++) {
+                    const id = viewingReferenceId(episodes?.[index], 'videos');
+                    const record = id ? viewingVideoRecord(graph, id, 'episode') : null;
+                    season.episodes.set(index, { id, status: classifyViewingVideo(record) });
+                }
+            }
+        }
+        for (const plan of plans) job.results.set(plan.videoId, classifyViewingSeries(plan));
+    }
+
+    function gridOwnsClone(clone, grid) {
+        if (!grid || !clone) return false;
+        if (clone.parentElement === grid) return true;
+        const parent = clone.parentElement;
+        const details = parent?.parentElement;
+        return parent?.getAttribute('data-tm-watch-grid') === 'true' &&
+            details?.parentElement === grid && details.open === true;
+    }
+
+    function ensureWatchGroupUi(state) {
+        const watch = state.watchStatus;
+        if (watch.ui?.grid === state.grid) return watch.ui;
+        const details = document.createElement('details');
+        details.setAttribute('data-tm-watch-section', 'true');
+        details.open = watch.expanded;
+        const summary = document.createElement('summary');
+        const watchedGrid = document.createElement('div');
+        watchedGrid.setAttribute('data-tm-watch-grid', 'true');
+        details.appendChild(summary);
+        details.appendChild(watchedGrid);
+        const empty = document.createElement('p');
+        empty.setAttribute('data-tm-watch-empty', 'true');
+        empty.textContent = tUi('caughtUpMessage');
+        const controls = document.createElement('div');
+        controls.setAttribute('data-tm-watch-controls', 'true');
+        const note = document.createElement('span');
+        note.setAttribute('role', 'status');
+        const refresh = document.createElement('button');
+        refresh.type = 'button';
+        refresh.textContent = tUi('refreshViewingStatus');
+        refresh.addEventListener('click', () => refreshViewingStatus(state));
+        controls.appendChild(note);
+        controls.appendChild(refresh);
+        details.addEventListener('toggle', () => {
+            if (sourceState !== state || watch.ui?.details !== details) return;
+            watch.expanded = details.open;
+            cancelPendingGridHover();
+            hoverToken++;
+            clearSourceAlignment();
+            activeClone = null;
+            activeVideoId = null;
+            activePage = null;
+            invalidateGridReact();
+        });
+        return watch.ui = { grid: state.grid, details, summary, watchedGrid, empty, controls, note, refresh };
+    }
+
+    function syncWatchChildOrder(parent, children) {
+        let reference = parent.firstElementChild;
+        for (const child of children) {
+            if (child !== reference) parent.insertBefore(child, reference);
+            reference = child.nextElementSibling;
+        }
+    }
+
+    function syncWatchGroups(state) {
+        if (sourceState !== state || !state.grid?.isConnected || !state.watchStatus) return;
+        const watch = state.watchStatus;
+        const ui = ensureWatchGroupUi(state);
+        const remaining = [], completed = [];
+        let unknown = 0;
+        for (const item of state.items || []) {
+            const status = watch.results.get(String(item.videoId)) || 'unknown';
+            const clone = state.cloneMap?.get(itemKey(item));
+            if (!clone) continue;
+            (status === 'complete' ? completed : remaining).push(clone);
+            if (status === 'unknown') unknown++;
+        }
+        const moved = remaining.some((clone, index) => state.grid.children[index] !== clone) ||
+            completed.some((clone, index) => ui.watchedGrid.children[index] !== clone);
+        if (moved) {
+            cancelPendingGridHover();
+            hoverToken++;
+            clearSourceAlignment();
+            activeClone = null;
+            activeVideoId = null;
+            activePage = null;
+            invalidateGridReact();
+        }
+        syncWatchChildOrder(ui.watchedGrid, completed);
+        syncWatchChildOrder(state.grid, [...remaining, ui.empty, ui.controls, ui.details]);
+        watch.completedCount = completed.length;
+        watch.unknownCount = unknown;
+        ui.empty.hidden = remaining.length > 0 || completed.length === 0;
+        ui.refresh.disabled = watch.loading;
+        const label = tUi('watchedCaughtUp') + ' (' + formatUiNumber(completed.length) + ')';
+        if (ui.summary.textContent !== label) ui.summary.textContent = label;
+        const note = watch.loading ? tUi('checkingViewingStatus')
+            : unknown ? tUi('unknownViewingStatus', { count: formatUiNumber(unknown) }) : '';
+        if (ui.note.textContent !== note) ui.note.textContent = note;
+        state.status = updateStatus(formatHeaderParts(state.items.length, state.totalCount,
+            state.initializationElapsedMs, true));
+    }
+
+    function initializeWatchGroups(state, sessionToken) {
+        state.watchStatus = {
+            sessionToken, results: new Map(), completedCount: 0, unknownCount: state.items.length,
+            loading: false, expanded: false, ui: null, promise: null, requests: 0, failure: null, profileGuid: null
+        };
+        syncWatchGroups(state);
+        refreshViewingStatus(state);
+    }
+
+    async function refreshViewingStatus(state) {
+        if (sourceState !== state || !state.grid?.isConnected || !state.watchStatus) return;
+        const watch = state.watchStatus;
+        if (watch.loading) return watch.promise;
+        const context = viewingRequestContext();
+        if (!context || !isRouteSessionActive(watch.sessionToken)) {
+            watch.results = new Map();
+            watch.failure = 'VIEWING_STATUS_CONTEXT';
+            syncWatchGroups(state);
+            log(tLog('viewingStatusUnavailable'), { reason: watch.failure });
+            return;
+        }
+        if (watch.profileGuid !== context.profileGuid) watch.results = new Map();
+        watch.profileGuid = context.profileGuid;
+        watch.loading = true;
+        watch.failure = null;
+        syncWatchGroups(state);
+        const job = {
+            state, watch, context, sessionToken: watch.sessionToken, results: new Map(),
+            requests: 0, deadline: performance.now() + VIEWING_TIMEOUT_MS
+        };
+        log(tLog('viewingStatusStarted'), { titles: state.items.length });
+        watch.promise = (async () => {
+            try {
+                await collectViewingStatuses(job);
+                assertViewingJob(job);
+            } catch (error) {
+                if (isRouteSessionCancelledError(error)) {
+                    // A profile switch in the same grid invalidates old results.
+                    if (sourceState === state && state.watchStatus === watch && isRouteSessionActive(job.sessionToken)) {
+                        watch.results = new Map();
+                        watch.loading = false;
+                        watch.failure = 'VIEWING_STATUS_PROFILE_CHANGED';
+                        syncWatchGroups(state);
+                    }
+                    return;
+                }
+                watch.failure = /^VIEWING_STATUS_[A-Z0-9_]+$/.test(error?.message || '')
+                    ? error.message : 'VIEWING_STATUS_FAILED';
+                warn(tLog('viewingStatusUnavailable'), { reason: watch.failure, requests: job.requests });
+            }
+            if (sourceState !== state || state.watchStatus !== watch || !isRouteSessionActive(job.sessionToken)) return;
+            if (netflixModelData('userInfo')?.userGuid !== context.profileGuid) {
+                job.results.clear();
+                watch.failure = 'VIEWING_STATUS_PROFILE_CHANGED';
+            }
+            watch.results = job.results;
+            watch.requests = job.requests;
+            watch.loading = false;
+            syncWatchGroups(state);
+            log(tLog('viewingStatusCompleted'), {
+                completed: watch.completedCount, unknown: watch.unknownCount,
+                requests: watch.requests, failure: watch.failure
+            });
+        })().catch(() => {
+            // Optional grouping must never reject Netflix's grid initialization.
+            if (sourceState !== state || state.watchStatus !== watch) return;
+            watch.loading = false;
+            watch.results = new Map();
+            watch.failure = 'VIEWING_STATUS_FAILED';
+            syncWatchGroups(state);
+        });
+        return watch.promise;
     }
 
     function carouselArtworkVariables() {
@@ -3825,6 +4364,7 @@
             syncLegacyEmptyState(sourceState.section, { allowProvisional: true });
         }
         invalidateGridReact();
+        if (sourceState.watchStatus) syncWatchGroups(sourceState);
         const elapsed = sourceState.initializationElapsedMs;
         sourceState.status = updateStatus(formatHeaderParts(items.length, items.length, elapsed, true));
         if (sourceState.status && sourceState.layout) {
@@ -3886,7 +4426,7 @@
         normalizeClone(clone);
         copyItemAttributes(clone, item, index);
         associateGridHoverItem(item, clone);
-        const before = grid.children[index] || null;
+        const before = sourceState.watchStatus ? null : (grid.children[index] || null);
         grid.insertBefore(clone, before);
         items.splice(index, 0, item);
         sourceState.cloneMap ||= new Map();
@@ -3942,7 +4482,7 @@
         sourceState.items = [...remaining.slice(0, insertion), ...ordered, ...remaining.slice(insertion)];
 
         const grid = sourceState.grid;
-        if (grid) {
+        if (grid && !sourceState.watchStatus) {
             // Only move the visible native page worth of clones. The remaining clones
             // keep their relative order, so DOM work stays O(columns), not O(all items).
             for (let i = 0; i < ordered.length; i++) {
@@ -8529,7 +9069,7 @@
     function gridCloneFromPointerEvent(event, grid) {
         let node = event.target instanceof Element ? event.target : event.target?.parentElement;
         while (node && node !== grid) {
-            if (node.parentElement === grid && node.__tmMyListItem) return node;
+            if (node.__tmMyListItem && gridOwnsClone(node, grid)) return node;
             node = node.parentElement;
         }
         return null;
@@ -8541,7 +9081,7 @@
 
     function gridHoverTargetActive(clone, generation) {
         return !gridHoverSuppressed() && Boolean(sourceState?.grid?.isConnected) &&
-            Boolean(clone?.isConnected) && clone.parentElement === sourceState.grid &&
+            Boolean(clone?.isConnected) && gridOwnsClone(clone, sourceState.grid) &&
             generation === clone.__tmHoverActivationGeneration &&
             clone.matches(':hover');
     }
@@ -8574,7 +9114,7 @@
             clone.__tmHoverActivationTimer = null;
             if (pendingGridHoverClone === clone) pendingGridHoverClone = null;
             if (physicalMove && sourceState?.grid?.isConnected && clone.isConnected &&
-                clone.parentElement === sourceState.grid && generation === clone.__tmHoverActivationGeneration &&
+                gridOwnsClone(clone, sourceState.grid) && generation === clone.__tmHoverActivationGeneration &&
                 clone.matches(':hover') && performance.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) {
                 hoverNeedsPointerMove = false;
             }
@@ -8689,6 +9229,7 @@
         sourceState.grid = grid;
         sourceState.status = status;
         sourceState.layout = layout;
+        if (sourceState.watchStatus) syncWatchGroups(sourceState);
         // The displayed trees now own the markup. Release captured native trees
         // and the shared GraphQL template only after successful publication.
         items.forEach(releaseItemCardSnapshot);
@@ -8709,7 +9250,7 @@
             totalCount,
             geometry,
             layout: layoutSummary(layout),
-            gridCards: grid.querySelectorAll(':scope > [data-virtual-slot]').length
+            gridCards: cloneMap.size
         });
 
         return grid;
@@ -9963,6 +10504,8 @@
             resetOrderMismatchStateAfterInitialization();
             sourceState.initializationElapsedMs = performance.now() - initializationStarted;
             updateStatus(formatHeaderParts(items.length, totalCount, sourceState.initializationElapsedMs, true));
+
+            initializeWatchGroups(sourceState, sessionToken);
 
             log(tLog('initializationCompleted'), {
                 collected: items.length,
