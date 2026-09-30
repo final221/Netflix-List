@@ -2347,8 +2347,10 @@ test('HTTP failure cleanup aborts the unread response body and releases its cont
 
 const viewingFunctions = [
     'unwrapViewingAtom', 'readViewingGraph', 'readViewingGraphReference', 'viewingNumber', 'viewingCount', 'viewingVideoRecord',
-    'classifyViewingVideo', 'viewingReferenceId', 'viewingSeasonPlan', 'classifyViewingSeries',
+    'classifyViewingVideo', 'viewingFieldKind', 'recordViewingFieldKinds', 'viewingReferenceId', 'viewingSeasonPlan', 'classifyViewingSeries',
     'viewingRequestContext', 'assertViewingJob', 'fetchViewingGraph', 'collectViewingStatuses', 'collectViewingSeriesBatch',
+    'collectViewingEpisodePlans', 'finishViewingSeriesPlan', 'recheckViewingSeries',
+    'saveViewingSeriesDetails', 'collectViewingSeriesDiagnostics',
     'gridOwnsClone', 'createWatchTypeFilter', 'syncWatchTypeFilter', 'ensureWatchGroupUi', 'syncWatchChildOrder', 'syncWatchGroups',
     'initializeWatchGroups', 'refreshViewingStatus', 'createRouteFetch', 'finishRouteFetch',
     'abortObsoleteRouteFetches', 'gridCloneFromPointerEvent', 'gridHoverTargetActive', 'gridHoverSuppressed', 'cancelPendingGridHover',
@@ -2410,7 +2412,7 @@ async function viewingEnvironment(count = 7, existing = null) {
             const body = new URLSearchParams(options.body);
             const paths = body.getAll('path').map(value => JSON.parse(value));
             requests.push({ url, options, paths });
-            const graph = paths[0][0] === 'seasons' ? fixtures.episodes
+            const graph = paths[0][0] === 'seasons' || (Array.isArray(paths[0][2]) && !paths[0][2].includes('seasonCount')) ? fixtures.episodes
                 : paths[0][2] === 'seasonList' ? fixtures.seasons : fixtures.titles;
             return { ok: true, status: 200, json: async () => ({ jsonGraph: graph }) };
         }
@@ -2452,9 +2454,9 @@ function useCompleteSeriesResponses(e, episodeCounts = {}) {
         e.requests.push({ url, options, paths });
         const graph = { videos: {}, seasons: {} };
         if (Array.isArray(paths[0][2])) {
-            for (const id of paths[0][1]) graph.videos[id] = viewingVideo('show', true, 0, {
-                seasonCount: atom(1), episodeCount: atom(countFor(id))
-            });
+            for (const id of paths[0][1]) graph.videos[id] = paths[0][2].includes('seasonCount')
+                ? viewingVideo('show', true, 0, { seasonCount: atom(1), episodeCount: atom(countFor(id)) })
+                : viewingVideo('episode', true);
         } else if (paths[0][0] === 'videos') {
             for (const [, id] of paths) {
                 const seasonId = String(10000 + Number(id));
@@ -3460,7 +3462,8 @@ test('unfinished or unreadable early episodes save long-series requests for late
         await e.start();
         assert.deepEqual(completedViewingIds(e), ['2'], mode);
         assert.deepEqual(mainViewingIds(e), ['1']);
-        assert.equal(e.requests.length, 5, 'only the first range is fetched for the uncompletable series');
+        assert.equal(e.requests.length, mode === 'missing-fields' ? 6 : 5,
+            'unavailable fields get one direct follow-up; unfinished episodes and missing IDs do not');
         const ranges = e.requests.filter(request => request.paths[0][0] === 'seasons' && request.paths[0][1] === '10001');
         assert.equal(ranges.length, 1);
         const diagnostic = e.logs.find(entry => entry.details?.series)?.details.series;
@@ -3534,6 +3537,239 @@ test('route and profile cancellation stop an additional pass without changing a 
             assert.equal(e.state.watchStatus.types.size, 0);
             assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_PROFILE_CHANGED');
         }
+        assert.equal(signal.aborted, true);
+        assert.equal(e.c.routeFetchControllers.size, 0);
+        assert.equal(e.timers.size, 0);
+    }
+});
+
+function useSparseNestedEpisodes(e, predicate, direct = null) {
+    const mockFetch = e.c.fetch;
+    e.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        const followUp = paths[0][0] === 'videos' && Array.isArray(paths[0][2]) && !paths[0][2].includes('seasonCount');
+        const response = await mockFetch(url, options);
+        const json = response.json;
+        response.json = async () => {
+            const body = structuredClone(await json());
+            if (paths[0][0] === 'seasons') {
+                for (const [id, video] of Object.entries(body.jsonGraph.videos || {})) {
+                    if (predicate(id)) body.jsonGraph.videos[id] = { summary: video.summary, runtime: video.runtime };
+                }
+            } else if (followUp && direct) direct(body.jsonGraph, paths[0][1]);
+            return body;
+        };
+        return response;
+    };
+}
+
+test('referenced watched and progress fields are resolved without accepting cyclic or missing references', async () => {
+    const e = await viewingEnvironment();
+    const graph = { videos: { 400: { summary: reference('values', 'summary'), watched: reference('values', 'watched'),
+        bookmarkPosition: reference('values', 'bookmark'), runtime: reference('values', 'runtime') } },
+        values: { summary: atom({ type: 'episode' }), watched: atom(false), bookmark: atom(95), runtime: atom(100) } };
+    assert.equal(e.c.classifyViewingVideo(e.c.viewingVideoRecord(graph, '400')), 'complete');
+    graph.values.watched = { $type: 'ref', value: ['values', 'watched'] };
+    delete graph.values.bookmark;
+    assert.equal(e.c.classifyViewingVideo(e.c.viewingVideoRecord(graph, '400')), 'unknown');
+});
+
+test('direct episode lookups recover caught-up series from sparse nested responses', async () => {
+    const e = await viewingEnvironment();
+    useSparseNestedEpisodes(e, id => ['400', '401'].includes(id));
+    await e.start();
+    assert.deepEqual(completedViewingIds(e), ['1', '4']);
+    assert.deepEqual(mainViewingIds(e), ['2', '3', '5', '6', '7']);
+    assert.equal(e.requests.length, 4);
+    const direct = e.requests.at(-1).paths[0];
+    assert.deepEqual(direct[1], ['400', '401']);
+    const details = e.logs.find(entry => entry.details?.recheck)?.details;
+    assert.equal(details.recheck.candidates, 1);
+    assert.equal(details.recheck.requests, 1);
+    assert.equal(details.recheck.recoveredEpisodes, 2);
+    assert.equal(details.recheck.recoveredSeries, 1);
+    assert.equal(details.series.complete, 1);
+    assert.equal(details.series.unknown, 0);
+    assert.equal(details.recheck.initialUnknownFields.watched.missing, 2);
+    assert.equal(e.timers.size, 0);
+});
+
+test('direct responses can fill missing progress fields while known unfinished episodes stay visible', async () => {
+    const e = await viewingEnvironment();
+    e.fixtures().episodes.videos[400] = viewingVideo('episode', false, 90);
+    e.fixtures().episodes.videos[401] = viewingVideo('episode', false, 90);
+    useSparseNestedEpisodes(e, id => ['400', '401'].includes(id), graph => {
+        delete graph.videos[400].runtime;
+        delete graph.videos[401].runtime;
+    });
+    await e.start();
+    assert.ok(completedViewingIds(e).includes('4'), 'the nested runtime and direct bookmark together establish completion');
+    assert.ok(mainViewingIds(e).includes('5'), 'a known partly watched series never enters the repair queue');
+});
+
+test('an unusable direct response is attempted once and cannot turn unknown, negative or conflicting data into watched', async () => {
+    for (const mode of ['absent', 'negative', 'wrong-type']) {
+        const e = await viewingEnvironment();
+        useSparseNestedEpisodes(e, id => ['400', '401'].includes(id), graph => {
+            if (mode === 'absent') { delete graph.videos[400]; delete graph.videos[401]; }
+            else for (const id of ['400', '401']) graph.videos[id] = mode === 'negative'
+                ? viewingVideo('episode', false, -1) : viewingVideo('show', true);
+        });
+        await e.start();
+        assert.deepEqual(completedViewingIds(e), ['1'], mode);
+        assert.equal(e.requests.length, 4);
+        const recheck = e.logs.find(entry => entry.details?.recheck)?.details.recheck;
+        assert.equal(recheck.recoveredSeries, 0);
+        assert.equal(recheck.unknownEpisodes, 2);
+        if (mode === 'negative') assert.equal(recheck.remainingUnknownFields.bookmark['atom:negative-number'], 2);
+        await e.advance(120000);
+        assert.equal(e.requests.length, 4, 'failed rechecks never become an automatic retry loop');
+        assert.equal(e.timers.size, 0);
+    }
+});
+
+test('repair batches are limited to 200 unique IDs and start after all ordinary series have been checked', async () => {
+    const e = await viewingEnvironment(3);
+    useCompleteSeriesResponses(e, { 1: 120, 2: 120, 3: 1 });
+    useSparseNestedEpisodes(e, id => Number(id) < 10003000);
+    const mockFetch = e.c.fetch;
+    const baseCounts = [];
+    e.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        if (paths[0][0] === 'videos' && Array.isArray(paths[0][2]) && !paths[0][2].includes('seasonCount')) {
+            baseCounts.push(completedViewingIds(e).slice());
+        }
+        return mockFetch(url, options);
+    };
+    await e.start();
+    assert.deepEqual(completedViewingIds(e), ['1', '2', '3']);
+    assert.deepEqual(baseCounts[0], ['3'], 'the later known complete series is preserved before repair begins');
+    const repair = e.requests.filter(request => request.paths[0][0] === 'videos' && Array.isArray(request.paths[0][2]) &&
+        !request.paths[0][2].includes('seasonCount'));
+    assert.deepEqual(repair.map(request => request.paths[0][1].length), [200, 40]);
+    const ids = repair.flatMap(request => request.paths[0][1]);
+    assert.equal(new Set(ids).size, 240);
+    assert.equal(e.logs.find(entry => entry.details?.recheck)?.details.recheck.recoveredSeries, 2);
+});
+
+test('repaired long-series records resume unfetched ranges without reloading the first range or double-counting the series', async () => {
+    const e = await viewingEnvironment(2);
+    useCompleteSeriesResponses(e, { 1: 500, 2: 1 });
+    useSparseNestedEpisodes(e, id => id === '10001000');
+    await e.start();
+    assert.deepEqual(completedViewingIds(e), ['1', '2']);
+    const ranges = e.requests.filter(request => request.paths[0][0] === 'seasons' && request.paths[0][1] === '10001')
+        .map(request => request.paths[0][3]);
+    assert.deepEqual(ranges, [{ from: 0, to: 199 }, { from: 200, to: 399 }, { from: 400, to: 499 }]);
+    const details = e.logs.find(entry => entry.details?.recheck)?.details;
+    assert.equal(details.series.checked, 2);
+    assert.equal(details.series.complete, 2);
+    assert.equal(details.series.unknown, 0);
+    assert.equal(details.recheck.recoveredSeries, 1);
+    assert.equal(e.requests.length, 8);
+});
+
+test('repair budget exhaustion preserves the completed ordinary scan and refuses incomplete repaired coverage', async () => {
+    const e = await viewingEnvironment(2);
+    useCompleteSeriesResponses(e, { 1: 500, 2: 1 });
+    useSparseNestedEpisodes(e, id => id === '10001000');
+    e.c.VIEWING_MAX_REQUESTS = 7;
+    e.c.VIEWING_MAX_PASSES = 1;
+    await e.start();
+    assert.deepEqual(completedViewingIds(e), ['2']);
+    assert.equal(e.requests.length, 7);
+    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_BUDGET');
+    const report = e.c.collectViewingSeriesDiagnostics(e.state);
+    assert.equal(report[0].checkedEpisodes, 400);
+    assert.equal(report[0].expectedEpisodes, 500);
+    assert.equal(report[0].reason, 'episode-coverage-incomplete');
+    assert.equal(e.timers.size, 0);
+});
+
+test('a failed direct request retains known watched titles and never retries the endpoint', async () => {
+    const e = await viewingEnvironment();
+    useSparseNestedEpisodes(e, id => ['400', '401'].includes(id));
+    const mockFetch = e.c.fetch;
+    e.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        if (paths[0][0] === 'videos' && Array.isArray(paths[0][2]) && !paths[0][2].includes('seasonCount')) {
+            e.requests.push({ paths });
+            return { ok: false, status: 503 };
+        }
+        return mockFetch(url, options);
+    };
+    await e.start();
+    assert.deepEqual(completedViewingIds(e), ['1']);
+    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
+    assert.equal(e.requests.length, 4);
+    assert.equal(e.logs.find(entry => entry.details?.recheck)?.details.recheck.requests, 1);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('copy-only series diagnostics explain the named cases without exporting video IDs, raw payloads or credentials', async () => {
+    const e = await viewingEnvironment();
+    const titles = ['Weeds', 'Ozark', 'Chilling Adventures of Sabrina', 'You'];
+    titles.forEach((title, index) => { e.state.items[index + 3].ariaLabel = title; });
+    e.fixtures().titles.videos[7] = viewingVideo('show', true, 0, { seasonCount: atom(0) });
+    useSparseNestedEpisodes(e, id => ['400', '401'].includes(id), graph => {
+        delete graph.videos[400]; delete graph.videos[401];
+    });
+    await e.start();
+    const report = e.c.collectViewingSeriesDiagnostics(e.state);
+    assert.deepEqual(report.map(row => row.title), titles);
+    assert.equal(report[0].reason, 'unavailable-episode-progress');
+    assert.equal(report[0].unknownEpisodes, 2);
+    assert.equal(report[0].unknownFields.watched.missing, 2);
+    assert.equal(report[1].reason, 'unfinished-episodes');
+    assert.equal(report[1].unfinishedEpisodes, 1);
+    for (const row of report) assert.ok(!Object.hasOwn(row, 'videoId'));
+    Object.assign(e.c, { collectRuntimeSnapshot: () => ({}), formatLogValue: value => JSON.stringify(value),
+        formatSystemTimestamp: () => 'now', investigationLog: [], retainedInvestigationLog: () => [],
+        SCRIPT_VERSION: '1.2.2', getHtmlLanguage: () => 'en', getNetflixLanguage: () => 'en', getLogLocale: () => 'en',
+        navigator: { userAgent: 'test', language: 'en' }, window: { innerWidth: 1920, innerHeight: 1080, devicePixelRatio: 1 } });
+    vm.runInContext(declaration('buildInvestigationLogText'), e.c);
+    const text = e.c.buildInvestigationLogText();
+    assert.match(text, /seriesViewing: .*Weeds/);
+    assert.ok(!text.includes('test-auth-token'));
+    assert.ok(!text.includes('active-profile'));
+    assert.ok(!text.includes('jsonGraph'));
+});
+
+test('profile and route changes cancel direct episode reads and discard profile-specific diagnostic summaries', async () => {
+    for (const mode of ['profile', 'route']) {
+        const e = await viewingEnvironment();
+        useSparseNestedEpisodes(e, id => ['400', '401'].includes(id));
+        const mockFetch = e.c.fetch;
+        let release, signal;
+        e.c.fetch = async (url, options) => {
+            const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+            if (paths[0][0] === 'videos' && Array.isArray(paths[0][2]) && !paths[0][2].includes('seasonCount')) {
+                signal = options.signal;
+                return { ok: true, json: () => new Promise((resolve, reject) => {
+                    release = () => resolve({ jsonGraph: e.fixtures().episodes });
+                    signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+                }) };
+            }
+            return mockFetch(url, options);
+        };
+        e.c.initializeWatchGroups(e.state, 1);
+        for (let attempt = 0; attempt < 10 && !release; attempt++) await e.flush();
+        assert.equal(typeof release, 'function');
+        assert.deepEqual(completedViewingIds(e), ['1']);
+        const promise = e.state.watchStatus.promise;
+        if (mode === 'profile') { e.models.userInfo.userGuid = 'different-profile'; release(); }
+        else {
+            e.c.sourceState = { watchStatus: { newer: true } };
+            e.c.isRouteSessionActive = token => token === 2;
+            e.c.abortObsoleteRouteFetches();
+        }
+        await promise;
+        if (mode === 'profile') {
+            assert.equal(e.state.watchStatus.seriesDetails.size, 0);
+            assert.equal(e.state.watchStatus.types.size, 0);
+            assert.equal(completedViewingIds(e).length, 0);
+        } else assert.equal(e.c.sourceState.watchStatus.newer, true);
         assert.equal(signal.aborted, true);
         assert.equal(e.c.routeFetchControllers.size, 0);
         assert.equal(e.timers.size, 0);

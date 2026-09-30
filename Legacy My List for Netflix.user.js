@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.2.1
+// @version      1.2.2
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -82,7 +82,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.2.1';
+    const SCRIPT_VERSION = '1.2.2';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -1652,6 +1652,7 @@
             `devicePixelRatio: ${window.devicePixelRatio}`,
             `entries: ${investigationLog.length}`,
             `snapshot: ${formatLogValue(snapshot)}`,
+            `seriesViewing: ${formatLogValue(collectViewingSeriesDiagnostics(sourceState))}`,
             '---',
             ...retainedInvestigationLog()
         ].join('\n') + '\n';
@@ -3005,17 +3006,43 @@
     function viewingVideoRecord(graph, videoId, type = '') {
         const video = readViewingGraph(graph, ['videos', String(videoId)]);
         if (!video || typeof video !== 'object') return null;
-        const summary = unwrapViewingAtom(video.summary);
+        const field = key => video[key]?.$type === 'ref'
+            ? readViewingGraph(graph, ['videos', String(videoId), key]) : unwrapViewingAtom(video[key]);
+        const summary = field('summary');
         return {
             videoId: String(videoId),
             type: type || (typeof summary?.type === 'string' ? summary.type.toLowerCase() : ''),
-            watched: unwrapViewingAtom(video.watched),
-            bookmark: viewingNumber(video.bookmarkPosition),
-            runtime: viewingNumber(video.runtime),
-            creditsOffset: viewingNumber(video.creditsOffset),
-            seasonCount: viewingCount(video.seasonCount),
-            episodeCount: viewingCount(video.episodeCount)
+            watched: field('watched'),
+            bookmark: viewingNumber(field('bookmarkPosition')),
+            runtime: viewingNumber(field('runtime')),
+            creditsOffset: viewingNumber(field('creditsOffset')),
+            seasonCount: viewingCount(field('seasonCount')),
+            episodeCount: viewingCount(field('episodeCount'))
         };
+    }
+
+    function viewingFieldKind(value, depth = 0) {
+        if (value === undefined) return 'missing';
+        if (value === null) return 'null';
+        if (typeof value === 'boolean') return value ? 'true' : 'false';
+        if (typeof value === 'number') return !Number.isFinite(value) ? 'invalid-number'
+            : value < 0 ? 'negative-number' : value === 0 ? 'zero' : 'positive-number';
+        if (typeof value === 'string') return 'string';
+        if (value?.$type === 'error') return 'error';
+        if (value?.$type === 'ref') return 'reference';
+        if (value?.$type === 'atom' && depth < 2) return 'atom:' + viewingFieldKind(value.value, depth + 1);
+        return 'object';
+    }
+
+    function recordViewingFieldKinds(graph, id, counts) {
+        const video = readViewingGraph(graph, ['videos', String(id)]);
+        const kinds = {};
+        for (const [key, field] of [['watched', 'watched'], ['bookmark', 'bookmarkPosition'], ['runtime', 'runtime']]) {
+            const kind = viewingFieldKind(video?.[field]);
+            kinds[key] = kind;
+            counts[key][kind] = (counts[key][kind] || 0) + 1;
+        }
+        return kinds;
     }
 
     function classifyViewingVideo(record) {
@@ -3225,10 +3252,14 @@
             await collectViewingSeriesBatch(batch, job);
             assertViewingJob(job);
             job.watch.results = job.results;
+            job.watch.seriesDetails = job.seriesDetails;
             job.watch.requests = job.requests;
             job.watch.passes = job.passes;
             syncWatchGroups(job.state);
         }
+        // Preserve the complete ordinary scan before spending its remaining
+        // budget on incomplete nested responses. Already verified titles win.
+        await recheckViewingSeries(job);
     }
 
     async function collectViewingSeriesBatch(records, job) {
@@ -3242,12 +3273,26 @@
         const plans = records.map(record => viewingSeasonPlan(graph, record)).filter(Boolean);
         job.seriesStats.planned += plans.length;
         job.seriesStats.unplanned += records.length - plans.length;
+        const plannedIds = new Set(plans.map(plan => plan.videoId));
+        for (const record of records) {
+            if (!plannedIds.has(record.videoId)) job.seriesDetails.set(record.videoId, { reason: 'season-metadata-incomplete-or-inconsistent' });
+        }
+        await collectViewingEpisodePlans(plans, job);
+    }
+
+    async function collectViewingEpisodePlans(plans, job) {
         const segments = [];
         for (const plan of plans) {
             for (const season of plan.seasons) {
                 for (let from = 0; from < season.count; from += VIEWING_EPISODE_BATCH_SIZE) {
+                    const to = Math.min(season.count - 1, from + VIEWING_EPISODE_BATCH_SIZE - 1);
+                    let covered = true;
+                    for (let index = from; index <= to; index++) {
+                        if (!season.episodes.has(index)) { covered = false; break; }
+                    }
+                    if (covered) continue;
                     segments.push({ plan, season, from,
-                        to: Math.min(season.count - 1, from + VIEWING_EPISODE_BATCH_SIZE - 1) });
+                        to });
                 }
             }
         }
@@ -3274,10 +3319,13 @@
                     const id = viewingReferenceId(episodes?.[index], 'videos');
                     const record = id ? viewingVideoRecord(graph, id, 'episode') : null;
                     const status = classifyViewingVideo(record);
-                    season.episodes.set(index, { id, status });
+                    season.episodes.set(index, { id, status, ...(status === 'unknown' ? { record } : {}) });
                     job.seriesStats.episodesChecked++;
                     if (!id) job.seriesStats.missingEpisodeRefs++;
-                    if (status === 'unknown') job.seriesStats.episodesUnknown++;
+                    if (status === 'unknown') {
+                        job.seriesStats.episodesUnknown++;
+                        season.episodes.get(index).kinds = recordViewingFieldKinds(graph, id, job.recheckStats.initialUnknownFields);
+                    }
                     else if (status !== 'complete') job.seriesStats.episodesIncomplete++;
                 }
             }
@@ -3292,14 +3340,136 @@
                 if (full || observed.some(episode => !episode.id || episode.status !== 'complete')) {
                     const status = full ? classifyViewingSeries(plan)
                         : observed.some(episode => !episode.id || episode.status === 'unknown') ? 'unknown' : 'in-progress';
-                    plan.finished = true;
-                    job.results.set(plan.videoId, status);
-                    job.seriesStats.checked++;
-                    if (status === 'complete') job.seriesStats.complete++;
-                    if (status === 'unknown') job.seriesStats.unknown++;
-                    if (status === 'in-progress' || status === 'not-started') job.seriesStats.incomplete++;
+                    finishViewingSeriesPlan(plan, status, job);
+                } else saveViewingSeriesDetails(plan, job);
+            }
+        }
+    }
+
+    function finishViewingSeriesPlan(plan, status, job) {
+        const bucket = value => value === 'complete' ? 'complete' : value === 'unknown' ? 'unknown' : 'incomplete';
+        if (plan.status === undefined) job.seriesStats.checked++;
+        else job.seriesStats[bucket(plan.status)]--;
+        job.seriesStats[bucket(status)]++;
+        plan.status = status;
+        plan.finished = true;
+        job.results.set(plan.videoId, status);
+        saveViewingSeriesDetails(plan, job);
+        if (status === 'unknown') {
+            const observed = plan.seasons.flatMap(season => [...season.episodes.values()]);
+            if (observed.every(episode => episode.id && ['complete', 'unknown'].includes(episode.status)) &&
+                new Set(observed.map(episode => episode.id)).size === observed.length) {
+                if (!job.unresolvedSeries.has(plan)) job.recheckStats.candidates++;
+                job.unresolvedSeries.add(plan);
+            }
+        }
+    }
+
+    function saveViewingSeriesDetails(plan, job) {
+        const observed = plan.seasons.flatMap(season => [...season.episodes.values()]);
+        const complete = observed.filter(episode => episode.status === 'complete').length;
+        const unfinished = observed.filter(episode => ['not-started', 'in-progress'].includes(episode.status)).length;
+        const unknown = observed.filter(episode => episode.status === 'unknown').length;
+        const missing = observed.filter(episode => !episode.id).length;
+        const duplicates = observed.length - new Set(observed.filter(episode => episode.id).map(episode => episode.id)).size - missing;
+        const fields = { watched: {}, bookmark: {}, runtime: {} };
+        for (const episode of observed) {
+            if (episode.status !== 'unknown' || !episode.kinds) continue;
+            for (const [key, kind] of Object.entries(episode.kinds)) fields[key][kind] = (fields[key][kind] || 0) + 1;
+        }
+        const reason = plan.status === 'complete' ? 'verified-complete' : unfinished ? 'unfinished-episodes'
+            : missing || duplicates ? 'invalid-episode-references' : unknown ? 'unavailable-episode-progress' : 'episode-coverage-incomplete';
+        job.seriesDetails.set(plan.videoId, { reason, seasons: plan.seasons.length, expectedEpisodes: plan.expected,
+            checkedEpisodes: observed.length, completeEpisodes: complete, unfinishedEpisodes: unfinished,
+            unknownEpisodes: unknown, missingEpisodeRefs: missing, duplicateEpisodeRefs: duplicates,
+            ...(unknown ? { unknownFields: fields } : {}) });
+    }
+
+    function collectViewingSeriesDiagnostics(state) {
+        const watch = state?.watchStatus;
+        if (!watch) return [];
+        // Only Copy Logs expands these compact per-series summaries. Ordinary
+        // runtime snapshots, scroll and hover never build title-level reports.
+        return (state.items || []).filter(item => watch.types.get(String(item.videoId)) === 'series').map(item => {
+            const id = String(item.videoId);
+            return { title: item.ariaLabel || '(untitled)', status: watch.results.get(id) || 'unknown',
+                ...(watch.seriesDetails.get(id) || { reason: watch.loading ? 'checking' : 'series-metadata-unavailable-or-unprocessed' }) };
+        });
+    }
+
+    async function recheckViewingSeries(job) {
+        const attempted = new Set();
+        for (;;) {
+            assertViewingJob(job);
+            const targets = new Map();
+            for (const plan of job.unresolvedSeries) {
+                if (plan.status !== 'unknown' || plan.recheckBlocked) continue;
+                for (const season of plan.seasons) {
+                    for (const episode of season.episodes.values()) {
+                        if (episode.status !== 'unknown' || attempted.has(episode.id)) continue;
+                        if (!targets.has(episode.id)) {
+                            if (targets.size >= VIEWING_EPISODE_BATCH_SIZE) continue;
+                            targets.set(episode.id, []);
+                        }
+                        targets.get(episode.id).push({ plan, episode });
+                    }
                 }
             }
+            if (!targets.size) return;
+            // The reference supplied the episode ID. Ask the same read-only
+            // video path directly, rather than guessing from a resume label.
+            const beforeRequests = job.requests;
+            let graph;
+            try {
+                graph = await fetchViewingGraph([['videos', [...targets.keys()],
+                    ['summary', 'watched', 'bookmarkPosition', 'runtime', 'creditsOffset']]], job);
+            } finally {
+                job.recheckStats.requests += job.requests - beforeRequests;
+            }
+            const affected = new Set();
+            for (const [id, entries] of targets) {
+                attempted.add(id);
+                job.recheckStats.episodes++;
+                const fetched = viewingVideoRecord(graph, id);
+                const direct = fetched && (!fetched.type || fetched.type === 'episode') ? { ...fetched, type: 'episode' } : null;
+                for (const { plan, episode } of entries) {
+                    affected.add(plan);
+                    const previous = episode.record;
+                    const record = direct ? {
+                        ...direct,
+                        watched: typeof direct.watched === 'boolean' ? direct.watched : previous?.watched,
+                        bookmark: direct.bookmark ?? previous?.bookmark ?? null,
+                        runtime: direct.runtime > 0 ? direct.runtime : previous?.runtime ?? null,
+                        creditsOffset: direct.creditsOffset ?? previous?.creditsOffset ?? null
+                    } : previous;
+                    episode.status = classifyViewingVideo(record);
+                    if (episode.status === 'unknown') {
+                        job.recheckStats.unknownEpisodes++;
+                        episode.kinds = recordViewingFieldKinds(graph, id, job.recheckStats.remainingUnknownFields);
+                    } else job.recheckStats.recoveredEpisodes++;
+                    if (episode.status !== 'complete') plan.recheckBlocked = true;
+                    if (episode.status === 'unknown') episode.record = record;
+                    else { delete episode.record; delete episode.kinds; }
+                }
+            }
+            for (const plan of affected) {
+                const observed = plan.seasons.flatMap(season => [...season.episodes.values()]);
+                const full = plan.seasons.every(season => season.episodes.size === season.count);
+                if (full) finishViewingSeriesPlan(plan, classifyViewingSeries(plan), job);
+                else if (observed.every(episode => episode.id && episode.status === 'complete')) {
+                    // Continue unfetched seasons/ranges only after the blocking
+                    // records have been resolved, preserving earlier coverage.
+                    plan.finished = false;
+                    await collectViewingEpisodePlans([plan], job);
+                }
+                saveViewingSeriesDetails(plan, job);
+                if (plan.status === 'complete') job.recheckStats.recoveredSeries++;
+            }
+            assertViewingJob(job);
+            job.watch.results = job.results;
+            job.watch.seriesDetails = job.seriesDetails;
+            job.watch.requests = job.requests;
+            syncWatchGroups(job.state);
         }
     }
 
@@ -3477,7 +3647,7 @@
 
     function initializeWatchGroups(state, sessionToken) {
         state.watchStatus = {
-            sessionToken, results: new Map(), types: new Map(), filters: { main: 'movie', watched: 'movie' },
+            sessionToken, results: new Map(), types: new Map(), seriesDetails: new Map(), filters: { main: 'movie', watched: 'movie' },
             completedCount: 0, unknownCount: state.items.length, visibleCount: 0,
             loading: false, expanded: false, ui: null, promise: null, requests: 0, passes: 0, failure: null, profileGuid: null
         };
@@ -3493,6 +3663,7 @@
         if (!context || !isRouteSessionActive(watch.sessionToken)) {
             watch.results = new Map();
             watch.types = new Map();
+            watch.seriesDetails = new Map();
             watch.failure = 'VIEWING_STATUS_CONTEXT';
             syncWatchGroups(state);
             log(tLog('viewingStatusUnavailable'), { reason: watch.failure });
@@ -3501,14 +3672,19 @@
         if (watch.profileGuid !== context.profileGuid) {
             watch.results = new Map();
             watch.types = new Map();
+            watch.seriesDetails = new Map();
         }
         watch.profileGuid = context.profileGuid;
         watch.loading = true;
         watch.failure = null;
         syncWatchGroups(state);
         const job = {
-            state, watch, context, sessionToken: watch.sessionToken, results: new Map(), types: new Map(),
+            state, watch, context, sessionToken: watch.sessionToken, results: new Map(), types: new Map(), seriesDetails: new Map(),
             requests: 0, passRequests: 0, passes: 1, deadline: performance.now() + VIEWING_TIMEOUT_MS * VIEWING_MAX_PASSES,
+            unresolvedSeries: new Set(),
+            recheckStats: { candidates: 0, requests: 0, episodes: 0, recoveredEpisodes: 0, recoveredSeries: 0, unknownEpisodes: 0,
+                initialUnknownFields: { watched: {}, bookmark: {}, runtime: {} },
+                remainingUnknownFields: { watched: {}, bookmark: {}, runtime: {} } },
             seriesStats: { found: 0, eligible: 0, planned: 0, checked: 0, complete: 0, unknown: 0,
                 incomplete: 0, unplanned: 0, episodesChecked: 0, episodesIncomplete: 0, episodesUnknown: 0, missingEpisodeRefs: 0 }
         };
@@ -3527,6 +3703,7 @@
                     if (sourceState === state && state.watchStatus === watch && isRouteSessionActive(job.sessionToken)) {
                         watch.results = new Map();
                         watch.types = new Map();
+                        watch.seriesDetails = new Map();
                         watch.loading = false;
                         watch.failure = 'VIEWING_STATUS_PROFILE_CHANGED';
                         syncWatchGroups(state);
@@ -3541,10 +3718,12 @@
             if (netflixModelData('userInfo')?.userGuid !== context.profileGuid) {
                 job.results.clear();
                 job.types.clear();
+                job.seriesDetails.clear();
                 watch.failure = 'VIEWING_STATUS_PROFILE_CHANGED';
             }
             watch.results = job.results;
             watch.types = job.types;
+            watch.seriesDetails = job.seriesDetails;
             watch.requests = job.requests;
             watch.passes = job.passes;
             watch.loading = false;
@@ -3552,7 +3731,8 @@
             log(tLog('viewingStatusCompleted'), {
                 completed: watch.completedCount, unknown: watch.unknownCount,
                 requests: watch.requests, passes: watch.passes, failure: watch.failure,
-                series: { ...job.seriesStats, pending: job.seriesStats.eligible - job.seriesStats.checked - job.seriesStats.unplanned }
+                series: { ...job.seriesStats, pending: job.seriesStats.eligible - job.seriesStats.checked - job.seriesStats.unplanned },
+                recheck: job.recheckStats
             });
         })().catch(() => {
             // Optional grouping must never reject Netflix's grid initialization.
@@ -3560,6 +3740,7 @@
             watch.loading = false;
             watch.results = new Map();
             watch.types = new Map();
+            watch.seriesDetails = new Map();
             watch.failure = 'VIEWING_STATUS_FAILED';
             syncWatchGroups(state);
         });
