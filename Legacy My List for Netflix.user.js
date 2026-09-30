@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.0.8
+// @version      1.0.9
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -51,6 +51,7 @@
     const HOVER_SOURCE_INTERVAL_MS = 10;
     const HOVER_ACTIVATION_DELAY_MS = 120;
     const HOVER_SCROLL_QUIET_MS = 180;
+    const HOVER_RETRY_DELAY_MS = 180;
     const CANCELLED_MOVE_POLL_MS = 80;
     const ORDER_MISMATCH_POSITION_THRESHOLD = 10;
     const LOGICAL_COLLECTION_TIMEOUT_MS = 120000;
@@ -71,7 +72,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.0.8';
+    const SCRIPT_VERSION = '1.0.9';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     const FAST_MOVE_CLASS = 'tm-netflix-mylist-v22-fast-move';
@@ -7769,11 +7770,15 @@
     }
 
     function replayHoverOnNativeSource(sourceSlot, triggerEvent) {
-        if (!sourceSlot?.isConnected) return;
+        if (!sourceSlot?.isConnected) return false;
         const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard) || sourceSlot;
         const rect = card.getBoundingClientRect();
-        const x = Number.isFinite(triggerEvent?.clientX) ? triggerEvent.clientX : rect.left + rect.width / 2;
-        const y = Number.isFinite(triggerEvent?.clientY) ? triggerEvent.clientY : rect.top + rect.height / 2;
+        const inside = (x, y) => Number.isFinite(x) && Number.isFinite(y) &&
+            x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+        const currentPointer = lastPointerX !== -1 && lastPointerY !== -1 && inside(lastPointerX, lastPointerY);
+        const originalPointer = inside(triggerEvent?.clientX, triggerEvent?.clientY);
+        const x = currentPointer ? lastPointerX : originalPointer ? triggerEvent.clientX : rect.left + rect.width / 2;
+        const y = currentPointer ? lastPointerY : originalPointer ? triggerEvent.clientY : rect.top + rect.height / 2;
 
         const common = {
             bubbles: true,
@@ -7781,8 +7786,10 @@
             composed: true,
             clientX: x,
             clientY: y,
-            screenX: Number.isFinite(triggerEvent?.screenX) ? triggerEvent.screenX : x,
-            screenY: Number.isFinite(triggerEvent?.screenY) ? triggerEvent.screenY : y,
+            screenX: Number.isFinite(triggerEvent?.screenX) && Number.isFinite(triggerEvent?.clientX)
+                ? triggerEvent.screenX + x - triggerEvent.clientX : x,
+            screenY: Number.isFinite(triggerEvent?.screenY) && Number.isFinite(triggerEvent?.clientY)
+                ? triggerEvent.screenY + y - triggerEvent.clientY : y,
             relatedTarget: null
         };
 
@@ -7792,39 +7799,64 @@
         } catch (_) {}
         card.dispatchEvent(new MouseEvent('mouseover', common));
         card.dispatchEvent(new MouseEvent('mousemove', common));
+        return true;
     }
 
-    function scheduleNativeHoverReplay(sourceSlot, item, clone, triggerEvent, actualPage, reason) {
-        requestAnimationFrame(() => {
-            if (gridHoverSuppressed()) return;
-            if (!sourceSlot?.isConnected || !clone?.isConnected) return;
-            if (activeClone !== clone || activeVideoId !== item.videoId) return;
+    function releaseFailedGridHover(clone, token) {
+        if (!clone || token !== hoverToken || activeClone !== clone) return;
+        clearSourceAlignment();
+        activeVideoId = null;
+        activeClone = null;
+        activePage = null;
+    }
 
-            const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-            const sourceVideoId = videoIdFromHref(card?.href || card?.getAttribute?.('href') || '');
-            if (!sourceVideoId || sourceVideoId !== item.videoId) {
-                warn(tLog('nativeHoverReplayCancelled'), {
-                    reason: 'source-video-id-mismatch',
-                    targetVideoId: item.videoId,
-                    sourceVideoId,
+    function scheduleNativeHoverReplay(sourceSlot, item, clone, triggerEvent, actualPage, reason,
+        token = hoverToken, sessionToken = routeSessionToken) {
+        const generation = clone?.__tmHoverActivationGeneration;
+        return new Promise(resolve => requestAnimationFrame(() => {
+            const finish = success => {
+                if (!success) releaseFailedGridHover(clone, token);
+                resolve(success);
+            };
+            try {
+                if (hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) ||
+                    !gridHoverTargetActive(clone, generation) ||
+                    activeClone !== clone || activeVideoId !== item.videoId) return finish(false);
+                if (!sourceSlot?.isConnected) return finish(false);
+
+                const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
+                const sourceVideoId = videoIdFromHref(card?.href || card?.getAttribute?.('href') || '');
+                // Native visibility/page reads need original source geometry, not
+                // the grid rectangles installed for Netflix's popup placement.
+                clearSourceAlignment();
+                let failureReason = '';
+                if (!sourceVideoId || sourceVideoId !== item.videoId) failureReason = 'source-video-id-mismatch';
+                else if (findActiveSourceSlot(item) !== sourceSlot) failureReason = 'source-no-longer-active';
+                else if (!alignSourceSlotToClone(sourceSlot, clone)) failureReason = 'source-alignment-failed';
+                if (failureReason) {
+                    warn(tLog('nativeHoverReplayCancelled'), {
+                        reason: failureReason,
+                        targetVideoId: item.videoId,
+                        sourceVideoId,
+                        source: slotDescriptor(sourceSlot)
+                    });
+                    return finish(false);
+                }
+
+                const replayed = replayHoverOnNativeSource(sourceSlot, triggerEvent);
+                if (replayed) log(tLog('nativeHoverReplayedFromLiveSource'), {
+                    item: itemSummary(item),
+                    actualPage,
+                    reason,
+                    triggerEvent: triggerEvent?.type || '',
                     source: slotDescriptor(sourceSlot)
                 });
-                clearSourceAlignment();
-                activeVideoId = null;
-                activeClone = null;
-                activePage = null;
-                return;
+                finish(Boolean(replayed));
+            } catch (error) {
+                warn(tLog('nativeHoverReplayCancelled'), { reason: 'replay-failed', item: itemSummary(item), error });
+                finish(false);
             }
-
-            log(tLog('nativeHoverReplayedFromLiveSource'), {
-                item: itemSummary(item),
-                actualPage,
-                reason,
-                triggerEvent: triggerEvent?.type || '',
-                source: slotDescriptor(sourceSlot)
-            });
-            replayHoverOnNativeSource(sourceSlot, triggerEvent);
-        });
+        }));
     }
 
     function makeLiveClone(sourceSlot, item, oldClone) {
@@ -7835,8 +7867,14 @@
 
         const order = oldClone?.getAttribute('data-tm-item-order');
         copyItemAttributes(fresh, item, order === null || order === undefined ? null : Number(order));
-        fresh.setAttribute('data-tm-hover-ready', 'true');
+        fresh.setAttribute('data-tm-hover-ready', String(Boolean(stats?.fiberAssignments || stats?.propsAssignments)));
         fresh.setAttribute('data-tm-backed-page', String(selectedPage(sourceState.section)));
+        fresh.__tmHoverActivationGeneration = oldClone?.__tmHoverActivationGeneration;
+        if (oldClone?.getAttribute('data-tm-preparing') === 'true' &&
+            oldClone.getAttribute('data-tm-hover-token') === String(hoverToken)) {
+            fresh.setAttribute('data-tm-preparing', 'true');
+            fresh.setAttribute('data-tm-hover-token', String(hoverToken));
+        }
         ensureGridHoverBehavior(sourceState.grid);
         associateGridHoverItem(item, fresh);
         return { fresh, stats };
@@ -8130,18 +8168,21 @@
                 source: slotDescriptor(targetSourceSlot),
                 cloneRect: rectSummary(freshTarget.getBoundingClientRect())
             });
-            if (!aligned) return freshTarget;
+            if (!aligned) return null;
             activeVideoId = targetItem.videoId;
             activeClone = freshTarget;
 
-            scheduleNativeHoverReplay(
+            const replayed = await scheduleNativeHoverReplay(
                 targetSourceSlot,
                 targetItem,
                 freshTarget,
                 triggerEvent,
                 actualPage,
-                'prepared-page'
+                'prepared-page',
+                token,
+                sessionToken
             );
+            if (!replayed) return null;
         }
 
         log(tLog('nativePagePreparationCompleted'), {
@@ -8193,69 +8234,79 @@
             }
         }
 
-        const selected = selectedPage(sourceState.section);
-        const backedPage = Number(clone.getAttribute('data-tm-backed-page'));
-        if (clone.getAttribute('data-tm-hover-ready') === 'true' &&
-            Number.isFinite(backedPage) && selected === backedPage) {
-            const sourceSlot = findActiveSourceSlot(item);
-            if (sourceSlot && alignSourceSlotToClone(sourceSlot, clone)) {
-                activePage = selected;
-                activeVideoId = item.videoId;
-                activeClone = clone;
-                log(tLog('hoverReusedImmediately'), {
-                    seq,
-                    item: itemSummary(item),
-                    selectedPage: selected,
-                    backedPage,
-                    source: slotDescriptor(sourceSlot),
-                    elapsedMs: Math.round(performance.now() - started)
-                });
-                scheduleNativeHoverReplay(sourceSlot, item, clone, triggerEvent, selected, 'immediate-reuse');
-                return;
-            }
-        }
-
         const token = ++hoverToken;
         const sessionToken = routeSessionToken;
-        assertRouteSession(sessionToken);
         clone.setAttribute('data-tm-hover-token', String(token));
         clone.setAttribute('data-tm-preparing', 'true');
-        log(tLog('hoverRequestedNativePagePreparation'), {
-            seq,
-            item: itemSummary(item),
-            selectedPage: selected,
-            targetPage: item.page,
-            backedPage: Number.isFinite(backedPage) ? backedPage : null,
-            hoverReady: clone.getAttribute('data-tm-hover-ready') === 'true',
-            token,
-            triggerEvent: triggerEvent?.type || ''
-        });
-
+        let fresh = null;
         try {
-            let fresh = await prepareMountedPage(item.page, item, triggerEvent, token, sessionToken);
-            if (!fresh &&
-                token === hoverToken &&
-                clone.isConnected &&
-                clone.matches(':hover')) {
-                // A Hawkins page can finish its virtual-card hydration immediately
-                // after the first preparation attempt returns. Retry once while the
-                // pointer is still on the same clone so the initial hover does not
-                // require a second user hover.
-                await sleep(180);
-                if (token === hoverToken && clone.isConnected && clone.matches(':hover')) {
+            assertRouteSession(sessionToken);
+            // One recovery attempt for this intent, including failed ready-source
+            // replay. Follow the current card after preparation replaces its DOM.
+            for (let attempt = 0; attempt < 2; attempt++) {
+                if (attempt) await sleep(HOVER_RETRY_DELAY_MS);
+                const current = attempt ? findGridClone(item) : clone;
+                if (hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) ||
+                    orderMismatchDialogOpen || orderMismatchReinitializing ||
+                    !gridHoverTargetActive(current, generation) ||
+                    current.getAttribute('data-tm-hover-token') !== String(token)) break;
+
+                const selected = selectedPage(sourceState.section);
+                const backedPage = Number(current.getAttribute('data-tm-backed-page'));
+                if (attempt) {
                     log('Retrying native page preparation after transient hydration', {
                         seq,
                         item: itemSummary(item),
                         token,
-                        selectedPage: selectedPage(sourceState.section)
+                        selectedPage: selected
+                    });
+                }
+
+                let reused = false;
+                if (!attempt && current.getAttribute('data-tm-hover-ready') === 'true' &&
+                    Number.isFinite(backedPage) && selected === backedPage) {
+                    const sourceSlot = findActiveSourceSlot(item);
+                    if (sourceSlot && alignSourceSlotToClone(sourceSlot, current)) {
+                        reused = true;
+                        activePage = selected;
+                        activeVideoId = item.videoId;
+                        activeClone = current;
+                        log(tLog('hoverReusedImmediately'), {
+                            seq,
+                            item: itemSummary(item),
+                            selectedPage: selected,
+                            backedPage,
+                            source: slotDescriptor(sourceSlot),
+                            elapsedMs: Math.round(performance.now() - started)
+                        });
+                        const replayed = await scheduleNativeHoverReplay(
+                            sourceSlot, item, current, triggerEvent, selected, 'immediate-reuse', token, sessionToken
+                        );
+                        fresh = replayed ? current : null;
+                    }
+                }
+                if (!reused) {
+                    log(tLog('hoverRequestedNativePagePreparation'), {
+                        seq,
+                        item: itemSummary(item),
+                        selectedPage: selected,
+                        targetPage: item.page,
+                        backedPage: Number.isFinite(backedPage) ? backedPage : null,
+                        hoverReady: current.getAttribute('data-tm-hover-ready') === 'true',
+                        token,
+                        triggerEvent: triggerEvent?.type || ''
                     });
                     fresh = await prepareMountedPage(item.page, item, triggerEvent, token, sessionToken);
                 }
+                if (fresh || hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) ||
+                    orderMismatchDialogOpen || orderMismatchReinitializing) break;
             }
+            if (hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken)) return;
             log(tLog('hoverNativePagePreparationResult'), {
                 seq,
                 item: itemSummary(item),
                 success: Boolean(fresh),
+                replayDispatched: Boolean(fresh),
                 selectedPage: selectedPage(sourceState.section),
                 activeVideoId,
                 elapsedMs: Math.round(performance.now() - started)
@@ -8265,6 +8316,7 @@
                 warn(tLog('liveClonePreparationFailed'), { seq, item: itemSummary(item), error });
             }
         } finally {
+            if (!fresh) releaseFailedGridHover(activeClone, token);
             const current = findGridClone(item);
             if (current?.isConnected && current.getAttribute('data-tm-hover-token') === String(token)) {
                 current.removeAttribute('data-tm-preparing');
@@ -8292,7 +8344,8 @@
 
     function gridHoverTargetActive(clone, generation) {
         return !gridHoverSuppressed() && Boolean(sourceState?.grid?.isConnected) &&
-            Boolean(clone?.isConnected) && generation === clone.__tmHoverActivationGeneration &&
+            Boolean(clone?.isConnected) && clone.parentElement === sourceState.grid &&
+            generation === clone.__tmHoverActivationGeneration &&
             clone.matches(':hover');
     }
 
@@ -8305,16 +8358,17 @@
         clone.__tmHoverActivationTimer = null;
     }
 
-    function handleGridClonePointerOver(event, clone, item) {
+    function handleGridClonePointerOver(event, clone, item, physicalMove = false) {
         if (orderMismatchDialogOpen || orderMismatchReinitializing) return;
         if (event.relatedTarget && clone.contains(event.relatedTarget)) return;
-        if (!sourceState?.section || gridHoverSuppressed()) return;
+        if (!sourceState?.section || (gridHoverSuppressed() && !physicalMove)) return;
         if (pendingGridHoverClone === clone || activeClone === clone) return;
         if (clone.getAttribute('data-tm-preparing') === 'true' &&
             clone.getAttribute('data-tm-hover-token') === String(hoverToken)) return;
 
         // All preparation, including ready-source reuse, goes through the dwell.
-        // Keep only the latest target and do not read native layout on entry.
+        // Physical intent received just after a scroll survives the quiet period.
+        // Boundary events alone still cannot prepare a stationary scroll target.
         cancelPendingGridHover();
         const generation = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
         clone.__tmHoverActivationGeneration = generation;
@@ -8322,9 +8376,14 @@
         clone.__tmHoverActivationTimer = setTimeout(() => {
             clone.__tmHoverActivationTimer = null;
             if (pendingGridHoverClone === clone) pendingGridHoverClone = null;
+            if (physicalMove && sourceState?.grid?.isConnected && clone.isConnected &&
+                clone.parentElement === sourceState.grid && generation === clone.__tmHoverActivationGeneration &&
+                clone.matches(':hover') && performance.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) {
+                hoverNeedsPointerMove = false;
+            }
             if (!gridHoverTargetActive(clone, generation)) return;
             activateClone(item, clone, event, generation);
-        }, HOVER_ACTIVATION_DELAY_MS);
+        }, Math.max(HOVER_ACTIVATION_DELAY_MS, HOVER_SCROLL_QUIET_MS - (performance.now() - lastTargetScrollAt)));
     }
 
     function handleGridClonePointerLeave(clone, item) {
@@ -8952,17 +9011,18 @@
     }
 
     function handleTargetPointerMove(event) {
+        // Synthetic native replay must not overwrite the latest physical position.
+        if (!event.isTrusted) return;
         const moved = event.clientX !== lastPointerX || event.clientY !== lastPointerY;
         lastPointerX = event.clientX;
         lastPointerY = event.clientY;
-        // Native hover replay emits synthetic moves. Only physical movement can
-        // restore hover intent after scrolling, and scrolling never auto-replays it.
-        if (!moved || !event.isTrusted || performance.now() - lastTargetScrollAt < HOVER_SCROLL_QUIET_MS) return;
-        hoverNeedsPointerMove = false;
+        if (!moved) return;
         const grid = sourceState?.grid;
         if (!grid?.isConnected) return;
         const clone = gridCloneFromPointerEvent(event, grid);
-        if (clone) handleGridClonePointerOver(event, clone, clone.__tmMyListItem);
+        if (performance.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) hoverNeedsPointerMove = false;
+        if (clone) handleGridClonePointerOver(event, clone, clone.__tmMyListItem, true);
+        else cancelPendingGridHover();
     }
 
     function handleTargetScroll() {

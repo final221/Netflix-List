@@ -24,11 +24,19 @@ class Element {
         this.parentElement = parent;
         this.isConnected = true;
         this.hovered = true;
+        this.children = [];
         this.attributes = new Map();
     }
     getAttribute(key) { return this.attributes.get(key) ?? null; }
     setAttribute(key, value) { this.attributes.set(key, String(value)); }
     removeAttribute(key) { this.attributes.delete(key); }
+    getBoundingClientRect() { return { left: 0, top: 0, right: 100, bottom: 60, width: 100, height: 60 }; }
+    replaceWith(fresh) {
+        fresh.parentElement = this.parentElement;
+        fresh.hovered = this.hovered;
+        this.isConnected = false;
+        this.parentElement = null;
+    }
     matches(selector) { return selector === ':hover' && this.hovered; }
     contains(node) {
         for (let current = node; current; current = current.parentElement) {
@@ -57,11 +65,11 @@ function environment(names, overrides = {}) {
         clearTimeout(key) { timers.delete(key); },
         requestAnimationFrame(callback) { const key = ++id; frames.set(key, callback); return key; },
         cancelAnimationFrame(key) { frames.delete(key); },
-        HOVER_ACTIVATION_DELAY_MS: 120, HOVER_SCROLL_QUIET_MS: 180, CANCELLED_MOVE_POLL_MS: 80,
+        HOVER_ACTIVATION_DELAY_MS: 120, HOVER_SCROLL_QUIET_MS: 180, HOVER_RETRY_DELAY_MS: 180, CANCELLED_MOVE_POLL_MS: 80,
         HOVER_SOURCE_TIMEOUT_MS: 500, HOVER_SOURCE_INTERVAL_MS: 10, PAGE_STABLE_TIMEOUT_MS: 2000,
         hoverToken: 1, hoverSequence: 0, pendingGridHoverClone: null,
         lastTargetScrollAt: -Infinity, hoverNeedsPointerMove: false, lastPointerX: -1, lastPointerY: -1,
-        activeClone: null, activeVideoId: null, activePage: null,
+        activeClone: null, activeVideoId: null, activePage: null, activeSourceSlot: null, activeGeometryProxy: null,
         orderMismatchDialogOpen: false, orderMismatchReinitializing: false, responsiveRefreshPromise: null,
         routeSessionToken: 1, targetSessionActive: true,
         isTargetPage: () => true, isRouteSessionActive: token => token === 1,
@@ -93,7 +101,7 @@ function environment(names, overrides = {}) {
 
 const hoverFunctions = [
     'hoverPreparationCancelled', 'gridCloneFromPointerEvent', 'gridHoverSuppressed',
-    'gridHoverTargetActive', 'cancelPendingGridHover', 'handleGridClonePointerOver',
+    'gridHoverTargetActive', 'releaseFailedGridHover', 'cancelPendingGridHover', 'handleGridClonePointerOver',
     'handleGridClonePointerLeave', 'handleTargetPointerMove', 'handleTargetScroll'
 ];
 function hoverEnvironment(extraNames = [], overrides = {}) {
@@ -105,6 +113,7 @@ function hoverEnvironment(extraNames = [], overrides = {}) {
     let invalidations = 0;
     const e = environment([...hoverFunctions, ...extraNames], {
         sourceState: { section, grid },
+        findGridClone: () => clone,
         activateClone: (...args) => activations.push(args),
         selectedPage: () => { throw new Error('Native page read before hover intent'); },
         clearSourceAlignment: () => {}, invalidateGridReact: () => invalidations++,
@@ -114,6 +123,67 @@ function hoverEnvironment(extraNames = [], overrides = {}) {
 }
 function pointer(clone, overrides = {}) {
     return { type: 'pointerover', target: clone, relatedTarget: null, clientX: 20, clientY: 30, isTrusted: true, ...overrides };
+}
+
+function preparedHoverEnvironment(options = {}) {
+    const calls = { preparations: 0, alignments: 0, grafts: 0, dialogs: 0 };
+    const logs = [], warnings = [], events = [];
+    const sourceSlot = new Element('source');
+    const card = new Element('native-card', sourceSlot);
+    card.href = '/watch/123';
+    card.dispatchEvent = event => { events.push(event); return true; };
+    sourceSlot.querySelector = () => card;
+    sourceSlot.cloneNode = () => new Element('fresh');
+    class NativeEvent {
+        constructor(type, properties) { this.type = type; Object.assign(this, properties); }
+    }
+    let current = null;
+    const e = hoverEnvironment([
+        'activateClone', 'prepareMountedPage', 'makeLiveClone', 'associateGridHoverItem',
+        'scheduleNativeHoverReplay', 'replayHoverOnNativeSource', 'sleep'
+    ], {
+        NETFLIX_DOM_SELECTORS: { standardCard: 'card' }, PointerEvent: NativeEvent, MouseEvent: NativeEvent,
+        ORDER_MISMATCH_POSITION_THRESHOLD: 10, mutationSourceRecoveryPending: false,
+        selectedPage: () => 0, ensureLiveNativeBinding: () => {},
+        currentPageSlots: () => [sourceSlot], visibleSignature: () => '123',
+        resolveExpectedPageSourceItem: async () => {
+            calls.preparations++;
+            return { status: 'found', slot: sourceSlot, slots: [sourceSlot], page: 0 };
+        },
+        rejectLargeNativePositionDeviation: () => false,
+        getCarouselDomRuntime: () => ({ profile: { pageMode: 'indicator' } }),
+        itemKey: item => item?.videoId || '',
+        findItemForSourceSlot: () => e.clone.__tmMyListItem,
+        findActiveSourceSlot: () => sourceSlot.isConnected ? sourceSlot : null,
+        findGridClone: () => current, setGridClone: (_, fresh) => { current = fresh; },
+        alignSourceSlotToClone: () => {
+            calls.alignments++;
+            return sourceSlot.isConnected && (options.align ? options.align(calls.alignments) : true);
+        },
+        netflixReactHover: {
+            graftTreeToClone() {
+                calls.grafts++;
+                return options.graftStats || { fiberAssignments: 1, propsAssignments: 1 };
+            }
+        },
+        normalizeClone: () => {}, copyItemAttributes: () => {}, ensureGridHoverBehavior: () => {},
+        videoIdFromHref: href => /\/watch\/(\d+)/.exec(href)?.[1] || '',
+        slotDescriptor: () => ({}), rectSummary: () => ({}),
+        showOrderMismatchDialog: () => { calls.dialogs++; e.c.orderMismatchDialogOpen = true; },
+        log: (name, details) => logs.push({ name, details }),
+        warn: (name, details) => warnings.push({ name, details })
+    });
+    current = e.clone;
+    e.clone.__tmHoverActivationGeneration = 1;
+    e.c.sourceState.scroller = new Element('scroller');
+    e.c.sourceState.track = new Element('track', e.c.sourceState.scroller);
+    e.c.sourceState.layout = { columns: 6 };
+    e.c.sourceState.items = [e.clone.__tmMyListItem];
+    sourceSlot.parentElement = e.c.sourceState.track;
+    return {
+        ...e, calls, logs, warnings, events, sourceSlot, card, current: () => current,
+        start: () => e.c.activateClone(e.clone.__tmMyListItem, e.clone, pointer(e.clone), 1)
+    };
 }
 
 test('ready and fresh cards both require hover intent without reading native state on entry', async () => {
@@ -134,7 +204,7 @@ test('intentional hover still reuses an already-mounted native card after the dw
     const e = hoverEnvironment(['activateClone'], {
         selectedPage: () => 0, findActiveSourceSlot: () => sourceSlot,
         alignSourceSlotToClone: () => { alignments++; return true; },
-        slotDescriptor: () => ({}), scheduleNativeHoverReplay: () => replays++
+        slotDescriptor: () => ({}), scheduleNativeHoverReplay: () => { replays++; return true; }
     });
     e.clone.setAttribute('data-tm-hover-ready', 'true');
     e.clone.setAttribute('data-tm-backed-page', '0');
@@ -238,10 +308,290 @@ test('a scheduled native replay is suppressed if scrolling starts before its fra
     const e = hoverEnvironment(['scheduleNativeHoverReplay']);
     e.c.activeClone = e.clone;
     e.c.activeVideoId = '123';
-    e.c.scheduleNativeHoverReplay(new Element(), e.clone.__tmMyListItem, e.clone, pointer(e.clone), 0, 'test');
+    const replay = e.c.scheduleNativeHoverReplay(new Element(), e.clone.__tmMyListItem, e.clone, pointer(e.clone), 0, 'test');
     e.c.handleTargetScroll();
     await e.frame();
+    assert.equal(await replay, false);
     // No source query is implemented: stale replay must return before using it.
+});
+
+test('physical intent inside the scroll quiet period resumes without another pointer move', async () => {
+    const e = hoverEnvironment();
+    e.c.handleTargetScroll();
+    await e.advance(100);
+    e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+    e.c.handleTargetPointerMove(pointer(e.clone, { type: 'pointermove' }));
+    assert.equal(e.c.hoverNeedsPointerMove, true);
+    assert.equal(e.timers.size, 1);
+    await e.advance(119);
+    assert.equal(e.activations.length, 0);
+    await e.advance(1);
+    assert.equal(e.activations.length, 1);
+    assert.equal(e.c.hoverNeedsPointerMove, false);
+    await e.advance(1000);
+    assert.equal(e.activations.length, 1);
+});
+
+test('stationary boundary events and synthetic moves never queue post-scroll intent', async () => {
+    const e = hoverEnvironment();
+    e.c.handleTargetScroll();
+    await e.advance(50);
+    e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+    e.c.handleTargetPointerMove(pointer(e.clone, { type: 'pointermove', isTrusted: false }));
+    await e.advance(1000);
+    assert.equal(e.activations.length, 0);
+    assert.equal(e.timers.size, 0);
+    assert.equal(e.c.lastPointerX, -1);
+    assert.equal(e.c.hoverNeedsPointerMove, true);
+});
+
+test('leaving, scrolling again, moving outside the grid, and resizing cancel deferred intent', async () => {
+    for (const action of ['leave', 'scroll', 'outside', 'resize']) {
+        const e = hoverEnvironment(['handleTargetWindowResize']);
+        e.c.window = { innerWidth: 1200, innerHeight: 800, devicePixelRatio: 1 };
+        e.c.scheduleResponsiveRefresh = () => {};
+        e.c.handleTargetScroll();
+        await e.advance(50);
+        e.c.handleTargetPointerMove(pointer(e.clone, { type: 'pointermove' }));
+        if (action === 'leave') e.c.handleGridClonePointerLeave(e.clone, e.clone.__tmMyListItem);
+        if (action === 'scroll') e.c.handleTargetScroll();
+        if (action === 'outside') e.c.handleTargetPointerMove(pointer(new Element(), { type: 'pointermove', clientX: 200 }));
+        if (action === 'resize') e.c.handleTargetWindowResize();
+        await e.advance(1000);
+        assert.equal(e.activations.length, 0, action);
+        assert.equal(e.timers.size, 0, action);
+    }
+});
+
+test('only the latest physical target resumes after scrolling, and it must still be hovered', async () => {
+    const e = hoverEnvironment();
+    const next = new Element('next', e.grid);
+    next.__tmMyListItem = { videoId: '456', page: 0 };
+    e.c.handleTargetScroll();
+    await e.advance(20);
+    e.c.handleTargetPointerMove(pointer(e.clone, { type: 'pointermove' }));
+    e.c.handleTargetPointerMove(pointer(next, { type: 'pointermove', clientX: 30 }));
+    assert.equal(e.timers.size, 1);
+    next.hovered = false;
+    await e.advance(300);
+    assert.equal(e.activations.length, 0);
+    assert.equal(e.c.hoverNeedsPointerMove, true);
+});
+
+test('failed alignment follows the replacement card and retries once without another hover', async () => {
+    const e = preparedHoverEnvironment({ align: count => count > 1 });
+    const activation = e.start();
+    await e.flush();
+    const firstFresh = e.current();
+    assert.equal(e.clone.isConnected, false);
+    assert.equal(firstFresh.__tmHoverActivationGeneration, 1);
+    assert.equal(firstFresh.getAttribute('data-tm-hover-token'), '2');
+    assert.equal(firstFresh.getAttribute('data-tm-preparing'), 'true');
+    assert.equal(e.events.length, 0);
+    assert.equal(e.calls.preparations, 1);
+    await e.advance(180);
+    await e.frame();
+    await activation;
+    assert.equal(e.calls.preparations, 2);
+    assert.equal(e.calls.grafts, 2);
+    assert.equal(e.events.length, 4);
+    assert.equal(e.c.activeClone, e.current());
+    assert.equal(e.current().getAttribute('data-tm-preparing'), null);
+    assert.equal(e.logs.find(entry => entry.name === 'hoverNativePagePreparationResult').details.success, true);
+    assert.equal(e.warnings.length, 0);
+});
+
+test('permanent alignment failure is reported as failure and cannot create an automatic retry loop', async () => {
+    const e = preparedHoverEnvironment({ align: () => false });
+    const activation = e.start();
+    await e.flush();
+    await e.advance(180);
+    await activation;
+    assert.equal(e.calls.preparations, 2);
+    assert.equal(e.events.length, 0);
+    assert.equal(e.c.activeClone, null);
+    assert.equal(e.current().getAttribute('data-tm-hover-token'), null);
+    assert.equal(e.logs.find(entry => entry.name === 'hoverNativePagePreparationResult').details.success, false);
+    await e.advance(1000);
+    await e.frame();
+    assert.equal(e.calls.preparations, 2);
+    assert.equal(e.timers.size, 0);
+});
+
+test('leaving the replacement while replay is pending cancels it and its recovery', async () => {
+    const e = preparedHoverEnvironment();
+    const activation = e.start();
+    await e.flush();
+    const fresh = e.current();
+    assert.notEqual(fresh, e.clone);
+    const token = e.c.hoverToken;
+    e.c.handleGridClonePointerLeave(fresh, e.clone.__tmMyListItem);
+    fresh.hovered = false;
+    assert.equal(e.c.hoverToken, token + 1);
+    await e.frame();
+    await activation;
+    await e.advance(1000);
+    assert.equal(e.events.length, 0);
+    assert.equal(e.calls.preparations, 1);
+    assert.equal(e.timers.size, 0);
+    assert.equal(e.c.activeClone, null);
+});
+
+test('scroll, resize, route leave, and target loss stop recovery on the replacement card', async () => {
+    for (const action of ['scroll', 'resize', 'route', 'target']) {
+        const e = preparedHoverEnvironment({ align: () => false });
+        vm.runInContext(declaration('handleTargetWindowResize'), e.c);
+        e.c.window = { innerWidth: 1200, innerHeight: 800, devicePixelRatio: 1 };
+        e.c.scheduleResponsiveRefresh = () => {};
+        const activation = e.start();
+        await e.flush();
+        if (action === 'scroll') e.c.handleTargetScroll();
+        if (action === 'resize') e.c.handleTargetWindowResize();
+        if (action === 'route') e.c.isRouteSessionActive = () => false;
+        if (action === 'target') e.current().hovered = false;
+        await e.advance(180);
+        await activation;
+        assert.equal(e.calls.preparations, 1, action);
+        assert.equal(e.events.length, 0, action);
+        assert.equal(e.current().getAttribute('data-tm-preparing'), null, action);
+    }
+});
+
+test('a disconnected ready source clears active state and permits one recovery within the same hover', async () => {
+    const e = preparedHoverEnvironment();
+    e.clone.setAttribute('data-tm-hover-ready', 'true');
+    e.clone.setAttribute('data-tm-backed-page', '0');
+    const activation = e.start();
+    await e.flush();
+    assert.equal(e.c.activeClone, e.clone);
+    e.sourceSlot.isConnected = false;
+    await e.frame();
+    assert.equal(e.c.activeClone, null);
+    assert.equal(e.events.length, 0);
+    e.sourceSlot.isConnected = true;
+    await e.advance(180);
+    await e.frame();
+    await activation;
+    assert.equal(e.calls.preparations, 1);
+    assert.equal(e.events.length, 4);
+    assert.equal(e.c.activeClone, e.current());
+});
+
+test('replay revalidates source identity and visibility before dispatching', async () => {
+    for (const changed of ['identity', 'visibility']) {
+        const e = preparedHoverEnvironment();
+        const activation = e.start();
+        await e.flush();
+        if (changed === 'identity') e.card.href = '/watch/456';
+        if (changed === 'visibility') e.c.findActiveSourceSlot = () => new Element('different-source');
+        await e.frame();
+        assert.equal(e.c.activeClone, null, changed);
+        await e.advance(180);
+        await e.frame();
+        await activation;
+        assert.equal(e.calls.preparations, 2, changed);
+        assert.equal(e.events.length, 0, changed);
+        assert.equal(e.c.activeClone, null, changed);
+        assert.equal(e.timers.size, 0, changed);
+    }
+});
+
+test('old replay completion cannot release a newer activation even on the same clone', async () => {
+    const e = preparedHoverEnvironment();
+    e.c.activeClone = e.clone;
+    e.c.activeVideoId = '123';
+    const replay = e.c.scheduleNativeHoverReplay(e.sourceSlot, e.clone.__tmMyListItem, e.clone, pointer(e.clone), 0, 'test', 1, 1);
+    e.c.hoverToken = 2;
+    await e.frame();
+    assert.equal(await replay, false);
+    assert.equal(e.c.activeClone, e.clone);
+    assert.equal(e.c.activeVideoId, '123');
+    assert.equal(e.events.length, 0);
+});
+
+test('source revalidation uses original geometry and restores the grid proxy before native replay', async () => {
+    const e = preparedHoverEnvironment();
+    for (const name of ['pairDomTrees', 'makeClientRectList', 'restoreGeometryProxy', 'clearSourceAlignment', 'alignSourceSlotToClone']) {
+        vm.runInContext(declaration(name), e.c);
+    }
+    e.sourceSlot.getBoundingClientRect = () => ({ left: 1000, right: 1100, top: 0, bottom: 60, width: 100, height: 60 });
+    e.c.findActiveSourceSlot = () => e.sourceSlot.getBoundingClientRect().left === 1000 ? e.sourceSlot : null;
+    e.clone.setAttribute('data-tm-hover-ready', 'true');
+    e.clone.setAttribute('data-tm-backed-page', '0');
+    const activation = e.start();
+    await e.flush();
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 0);
+    await e.frame();
+    await activation;
+    assert.equal(e.events.length, 4);
+    assert.equal(e.calls.preparations, 0);
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 0);
+    assert.equal(e.c.activeGeometryProxy.clone, e.clone);
+    e.c.handleGridClonePointerLeave(e.clone, e.clone.__tmMyListItem);
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000);
+    assert.equal(e.c.activeGeometryProxy, null);
+});
+
+test('native event dispatch failure releases state and is bounded by the same recovery limit', async () => {
+    const e = preparedHoverEnvironment();
+    e.card.dispatchEvent = () => { throw new Error('Native dispatch failed'); };
+    const activation = e.start();
+    await e.flush();
+    await e.frame();
+    assert.equal(e.c.activeClone, null);
+    await e.advance(180);
+    await e.frame();
+    await activation;
+    assert.equal(e.calls.preparations, 2);
+    assert.equal(e.c.activeClone, null);
+    assert.equal(e.current().getAttribute('data-tm-preparing'), null);
+    assert.equal(e.warnings.filter(entry => entry.details?.reason === 'replay-failed').length, 2);
+});
+
+test('replay uses the latest physical coordinates, and synthetic motion cannot replace them', async () => {
+    const e = preparedHoverEnvironment();
+    e.c.handleTargetPointerMove(pointer(e.clone, { type: 'pointermove', clientX: 80, clientY: 40 }));
+    e.c.handleTargetPointerMove(pointer(e.clone, { type: 'pointermove', clientX: 25, clientY: 35, isTrusted: false }));
+    assert.equal(e.c.lastPointerX, 80);
+    assert.equal(e.c.lastPointerY, 40);
+    assert.equal(e.c.replayHoverOnNativeSource(e.sourceSlot, pointer(e.clone, { screenX: 500, screenY: 600 })), true);
+    assert.equal(e.events.length, 4);
+    for (const event of e.events) {
+        assert.equal(event.clientX, 80);
+        assert.equal(event.clientY, 40);
+        assert.equal(event.screenX, 560);
+        assert.equal(event.screenY, 610);
+    }
+    e.c.cancelPendingGridHover();
+});
+
+test('a graft without React assignments is not marked ready for later clone reuse', async () => {
+    const e = preparedHoverEnvironment({ graftStats: { fiberAssignments: 0, propsAssignments: 0 } });
+    const activation = e.start();
+    await e.flush();
+    assert.equal(e.current().getAttribute('data-tm-hover-ready'), 'false');
+    await e.frame();
+    await activation;
+    // Real-source replay can still work; absence of clone metadata does not
+    // invent a fallback or incorrectly mark the clone ready for reuse.
+    assert.equal(e.calls.preparations, 1);
+    assert.equal(e.events.length, 4);
+});
+
+test('an order-mismatch dialog stops preparation without an extra hover retry', async () => {
+    const e = preparedHoverEnvironment();
+    e.c.resolveExpectedPageSourceItem = async () => {
+        e.calls.preparations++;
+        return {
+            status: 'mismatch', visibleIds: ['456'],
+            positionMismatch: { item: e.clone.__tmMyListItem, deviation: { expectedIndex: 0, actualIndex: 20, delta: 20 } }
+        };
+    };
+    await e.start();
+    assert.equal(e.calls.dialogs, 1);
+    assert.equal(e.calls.preparations, 1);
+    assert.equal(e.events.length, 0);
+    assert.equal(e.timers.size, 0);
 });
 
 test('hover hydration stops before the next geometry read after cancellation', async () => {
