@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.0
+// @version      1.3.1
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -84,7 +84,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.0';
+    const SCRIPT_VERSION = '1.3.1';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -3775,7 +3775,7 @@
             const saved = saveManualViewingChoices(watch, changes);
             if (saved) watch.manualChoices = saved;
             syncWatchGroups(state);
-            if (!gridOwnsClone(clone, grid)) watch.ui.summary.focus?.();
+            if (!gridOwnsClone(clone, grid)) watch.ui.summary.focus?.({ preventScroll: true });
         }, true);
     }
 

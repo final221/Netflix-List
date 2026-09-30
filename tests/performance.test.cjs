@@ -4194,3 +4194,50 @@ test('late automatic baseline capture preserves a newer manual choice saved in a
     assert.ok(mainViewingIds(e).includes('5'));
     assert.equal(e.storage.get('test.viewingChoices.active-profile').choices[5].status, 'main');
 });
+
+test('marking titles into the collapsed watched section preserves the viewport while handing off focus', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    let viewport = { x: 40, y: 2400 };
+    let focused = 0;
+    e.state.watchStatus.ui.summary.focus = options => {
+        focused++;
+        if (!options?.preventScroll) viewport = { x: 0, y: 7600 };
+    };
+    const before = { ...viewport };
+    const requests = e.requests.length;
+    for (const id of ['2', '3']) {
+        clickManualViewing(e, id);
+        assert.ok(completedViewingIds(e).includes(id));
+        assert.deepEqual(viewport, before, 'a completed card must not pull the viewport down to the watched heading');
+        assert.equal(e.state.watchStatus.ui.details.open, false);
+    }
+    assert.equal(focused, 2, 'keyboard focus still leaves controls that became hidden');
+    assert.equal(e.storageCalls.writes, 2);
+    assert.equal(e.requests.length, requests);
+});
+
+test('reversing and resetting a correction preserve the viewport when the destination filter hides the card', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    clickManualViewing(e, '2');
+    e.state.watchStatus.ui.details.open = true;
+    clickViewingFilter(e, 'main', 'series');
+    let viewport = { x: 0, y: 6500 };
+    e.state.watchStatus.ui.summary.focus = options => {
+        if (!options?.preventScroll) viewport = { x: 0, y: 7900 };
+    };
+    clickManualViewing(e, '2');
+    assert.deepEqual(viewport, { x: 0, y: 6500 });
+    assert.ok(mainViewingIds(e).includes('2'));
+    assert.equal(e.state.cloneMap.get('v:2').getAttribute('data-tm-type-hidden'), 'true');
+    e.fixtures().titles.videos[2] = viewingVideo('movie', true);
+    await e.c.refreshViewingStatus(e.state);
+    clickViewingFilter(e, 'main', 'movie');
+    clickViewingFilter(e, 'watched', 'series');
+    viewport = { x: 0, y: 2200 };
+    clickManualViewing(e, '2', 'reset');
+    assert.deepEqual(viewport, { x: 0, y: 2200 });
+    assert.ok(completedViewingIds(e).includes('2'));
+    assert.equal(e.state.watchStatus.manualChoices.has('2'), false);
+});
