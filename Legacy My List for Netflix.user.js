@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.0.11
+// @version      1.0.12
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -74,7 +74,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.0.11';
+    const SCRIPT_VERSION = '1.0.12';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -2883,8 +2883,9 @@
         assertRouteSession(sessionToken);
         if (!Array.isArray(edges) || !templateSlot || !Number.isFinite(totalCount)) return null;
         // Netflix may recycle this live slot while we yield. Keep one detached
-        // template so every snapshot uses the same markup throughout this build.
+        // template shared by compact items until the complete grid is published.
         const template = templateSlot.cloneNode(true);
+        if (!template.querySelector(NETFLIX_DOM_SELECTORS.standardCard)) return null;
         const items = [];
         const seen = new Set();
         const complete = await runConstructionChunks(edges.length, index => {
@@ -2892,21 +2893,9 @@
             const node = edge?.node;
             const videoId = videoIdFromGraphqlNode(node);
             if (!videoId || seen.has(videoId)) return;
-            const snapshot = template.cloneNode(true);
-            const card = snapshot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-            if (!card) return false;
             const href = `${location.origin}/browse?jbv=${encodeURIComponent(videoId)}`;
             const title = firstGraphqlText(node?.displayString) || firstGraphqlText(node) || `Netflix ${videoId}`;
             const imageUrl = firstGraphqlImageUrl(node?.contextualArtwork) || firstGraphqlImageUrl(node);
-            card.setAttribute('href', href);
-            card.href = href;
-            card.setAttribute('aria-label', title);
-            const image = snapshot.querySelector('img');
-            if (imageUrl && image) {
-                image.src = imageUrl;
-                image.removeAttribute('srcset');
-                image.setAttribute('data-tm-graphql-image', 'true');
-            }
             const itemIndex = items.length;
             items.push({
                 href,
@@ -2914,7 +2903,8 @@
                 page: Math.floor(itemIndex / Math.max(1, columns)),
                 logicalIndex: itemIndex,
                 ariaLabel: title,
-                snapshot,
+                cardTemplate: template,
+                imageUrl,
                 graphql: true
             });
             seen.add(videoId);
@@ -3515,8 +3505,11 @@
         const track = live.track;
         if (!track) return null;
         for (const slot of netflixDom.directSlots(track)) {
-            const item = itemFromSlot(slot, live.selectedPage || 0);
-            if (item?.videoId === String(videoId)) return item;
+            const item = itemFromSlot(slot, live.selectedPage || 0, false);
+            if (item?.videoId === String(videoId)) {
+                item.snapshot = slot.cloneNode(true);
+                return item;
+            }
         }
         return null;
     }
@@ -3813,7 +3806,6 @@
         if (index < 0) return false;
 
         const [removed] = sourceState.items.splice(index, 1);
-        rememberUndoEntry(removed, index);
         const clone = sourceState.cloneMap?.get(key);
         if (activeVideoId === String(videoId) || activeClone === clone) {
             hoverToken++;
@@ -3824,6 +3816,10 @@
         }
         releaseGridReact(clone);
         clone?.remove();
+        // Reuse the removed tree for Undo instead of keeping another full tree
+        // for every item throughout its lifetime in the displayed grid.
+        if (clone) removed.snapshot = clone;
+        rememberUndoEntry(removed, index);
         sourceState.cloneMap?.delete(key);
         sourceState.itemMap?.delete(key);
         reindexLegacyItemsAfterDelta('mutation-reindex');
@@ -3843,7 +3839,7 @@
     }
 
     function applyLegacyAddition(item, preferredIndex = 0, reason = 'click-delta') {
-        if (!sourceState || !item?.videoId || !item.snapshot) return false;
+        if (!sourceState || !item?.videoId || !cardSourceForItem(item)) return false;
         const key = itemKey(item);
         if (sourceState.itemMap?.has(key) || sourceState.items?.some(existing => itemKey(existing) === key)) return false;
 
@@ -3852,19 +3848,19 @@
         if (!grid) return false;
         ensureGridHoverBehavior(grid);
         const index = Math.max(0, Math.min(items.length, Number.isFinite(preferredIndex) ? Math.floor(preferredIndex) : 0));
+        const clone = createItemClone(item);
         item.page = Math.floor(index / Math.max(1, sourceState.layout?.columns || 1));
-        items.splice(index, 0, item);
-
-        const clone = item.snapshot.cloneNode(true);
         normalizeClone(clone);
         copyItemAttributes(clone, item, index);
         associateGridHoverItem(item, clone);
         const before = grid.children[index] || null;
         grid.insertBefore(clone, before);
+        items.splice(index, 0, item);
         sourceState.cloneMap ||= new Map();
         sourceState.cloneMap.set(key, clone);
         sourceState.itemMap ||= new Map();
         sourceState.itemMap.set(key, item);
+        releaseItemCardSnapshot(item);
         recentRemovedMyListItems.delete(String(item.videoId));
         waitingForNativeEmpty = false;
         sourceState.empty = false;
@@ -3883,7 +3879,7 @@
     function visibleNativeItems(live) {
         if (!live?.scroller || !live?.track) return [];
         return currentPageSlots(live.scroller, live.track)
-            .map(slot => itemFromSlot(slot, live.selectedPage || 0))
+            .map(slot => itemFromSlot(slot, live.selectedPage || 0, false))
             .filter(item => item?.videoId);
     }
 
@@ -4153,7 +4149,7 @@
 
         const nativeItem = findNativeMyListItemByVideoId(videoId, live);
         const candidate = nativeItem || mutation.fallbackItem || findAnyStandardCardItemByVideoId(videoId);
-        if (!candidate?.snapshot) return false;
+        if (!cardSourceForItem(candidate)) return false;
 
         const preferredIndex = nativeItem
             ? preferredIndexForNativeItem(videoId, live)
@@ -4222,7 +4218,7 @@
             syncMode: 'event-driven',
             undo: Boolean(mutation.undo),
             preferredIndex: mutation.preferredIndex,
-            hasFallbackSnapshot: Boolean(fallbackItem?.snapshot)
+            hasFallbackSnapshot: Boolean(cardSourceForItem(fallbackItem))
         });
 
         // Capture runs before Netflix's handler; a microtask runs after the click
@@ -5514,21 +5510,63 @@
         }
     }
 
-    function itemFromSlot(slot, page) {
+    function itemFromSlot(slot, page, captureSnapshot = true) {
         const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
         if (!card) return null;
 
         const href = card.href || card.getAttribute('href') || '';
         if (!href) return null;
 
-        const snapshot = slot.cloneNode(true);
         return {
             href,
             videoId: videoIdFromHref(href),
             page,
             ariaLabel: card.getAttribute('aria-label') || '',
-            snapshot
+            snapshot: captureSnapshot ? slot.cloneNode(true) : null
         };
+    }
+
+    function cardSourceForItem(item) {
+        if (!item) return null;
+        if (item.snapshot) return item.snapshot;
+        const key = itemKey(item);
+        // A removed/recollected item with the same title id must not borrow a
+        // different item's tree. Published items use only their current clone.
+        if (sourceState?.itemMap?.get(key) === item) {
+            const clone = sourceState.cloneMap?.get(key);
+            if (clone) return clone;
+        }
+        return item.cardTemplate || null;
+    }
+
+    function createItemClone(item) {
+        const source = cardSourceForItem(item);
+        if (!source) throw new Error(`No card markup available for ${itemKey(item)}`);
+        const clone = source.cloneNode(true);
+        if (source === item.cardTemplate) {
+            const card = clone.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
+            card.setAttribute('href', item.href);
+            card.href = item.href;
+            card.setAttribute('aria-label', item.ariaLabel);
+            const image = clone.querySelector('img');
+            if (item.imageUrl && image) {
+                image.src = item.imageUrl;
+                image.removeAttribute('srcset');
+                image.setAttribute('data-tm-graphql-image', 'true');
+            }
+        }
+        // cloneNode copies attributes, but not grafted React properties or the
+        // activation state. Rebuild/Undo must prepare its own fresh live source.
+        for (const name of ['data-tm-hover-ready', 'data-tm-backed-page', 'data-tm-react-grafted',
+            'data-tm-preparing', 'data-tm-hover-token']) clone.removeAttribute(name);
+        return clone;
+    }
+
+    function releaseItemCardSnapshot(item) {
+        // Clear references without deleting properties from frequently read items.
+        if (item.snapshot) item.snapshot = null;
+        if (item.cardTemplate) item.cardTemplate = null;
+        if (item.imageUrl) item.imageUrl = '';
     }
 
     function itemKey(item) {
@@ -8582,7 +8620,7 @@
 
         await runConstructionChunks(items.length, index => {
             const item = items[index];
-            const clone = item.snapshot.cloneNode(true);
+            const clone = createItemClone(item);
             normalizeClone(clone);
             copyItemAttributes(clone, item, index);
             associateGridHoverItem(item, clone);
@@ -8618,6 +8656,9 @@
         sourceState.grid = grid;
         sourceState.status = status;
         sourceState.layout = layout;
+        // The displayed trees now own the markup. Release captured native trees
+        // and the shared GraphQL template only after successful publication.
+        items.forEach(releaseItemCardSnapshot);
 
         lastResponsiveSignature = responsiveSignature(layout);
         lastPageShape = responsivePageShape(layout);
