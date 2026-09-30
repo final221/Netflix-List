@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.1.0
+// @version      1.1.1
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -67,6 +67,7 @@
     const VIEWING_MAX_EPISODES = 500;
     const VIEWING_MAX_REQUESTS = 32;
     const VIEWING_TIMEOUT_MS = 30000;
+    const VIEWING_COMPLETION_RATIO = 0.95;
 
     const GRID_ID = 'tm-netflix-mylist-v15-grid';
     const STATUS_ID = 'tm-netflix-mylist-v15-status';
@@ -80,7 +81,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.1.0';
+    const SCRIPT_VERSION = '1.1.1';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -2901,11 +2902,12 @@
     function classifyViewingVideo(record) {
         if (!record || !['movie', 'episode'].includes(record.type)) return 'unknown';
         if (record.watched === true) return 'complete';
-        // An explicit negative flag wins over a guessed runtime threshold.
-        // Without a flag, a real credits boundary/end can establish completion.
-        if (record.watched !== false && record.runtime > 0 && record.bookmark !== null) {
-            const boundary = record.creditsOffset > 0 && record.creditsOffset <= record.runtime
+        // Stopping at the credits can leave Netflix's flag false. Accept enough
+        // playback independently of that flag, with a small allowance for credits.
+        if (record.runtime > 0 && record.bookmark !== null) {
+            const creditsBoundary = record.creditsOffset > 0 && record.creditsOffset <= record.runtime
                 ? record.creditsOffset : record.runtime;
+            const boundary = Math.min(creditsBoundary, record.runtime * VIEWING_COMPLETION_RATIO);
             if (record.bookmark >= boundary) return 'complete';
         }
         if (record.bookmark > 0) return 'in-progress';
