@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.0.9
+// @version      1.0.10
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -72,9 +72,11 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.0.9';
+    const SCRIPT_VERSION = '1.0.10';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
+    // Enable temporarily when detailed source-card traces are needed for diagnosis.
+    const VERBOSE_INTERACTION_LOGS = false;
     const FAST_MOVE_CLASS = 'tm-netflix-mylist-v22-fast-move';
     const ORIGINAL_HIDDEN_CLASS = 'tm-netflix-mylist-original-hidden';
     const ORIGINAL_VISIBILITY_ATTR = 'data-tm-original-mylist-visible';
@@ -961,6 +963,8 @@
     let pageMoveSequence = 0;
     let carouselMoveQueue = Promise.resolve();
     let carouselDomRuntime = new WeakMap();
+    let nativeReadScope = null;
+    const graftedGridClones = new Set();
     let hoverSequence = 0;
     let responsiveSequence = 0;
     let lastResponsiveReason = '';
@@ -991,6 +995,45 @@
     let cachedNativeEmptyMessage = '';
     let initializationBlockedSessionToken = null;
     const investigationLog = [];
+    let investigationLogStart = 0;
+
+    function createNativeReadScope() {
+        return { profiles: new WeakMap(), indicators: new WeakMap(), filled: new WeakMap(),
+            slots: new WeakMap(), rects: new WeakMap(), indices: new WeakMap() };
+    }
+
+    function withNativeReadScope(read) {
+        if (nativeReadScope) return read();
+        // Only synchronous reads belong here. Never retain state across a frame,
+        // await, or Netflix render; the next sample must discover fresh native data.
+        nativeReadScope = createNativeReadScope();
+        try { return read(); } finally { nativeReadScope = null; }
+    }
+
+    function invalidateNativeReadScope() {
+        if (nativeReadScope) nativeReadScope = createNativeReadScope();
+    }
+
+    function nativeRect(node) {
+        if (!nativeReadScope) return node.getBoundingClientRect();
+        if (!nativeReadScope.rects.has(node)) nativeReadScope.rects.set(node, node.getBoundingClientRect());
+        return nativeReadScope.rects.get(node);
+    }
+
+    function nativeFilledSlots(track) {
+        if (!nativeReadScope) return netflixDom.filledSlots(track);
+        if (!nativeReadScope.filled.has(track)) nativeReadScope.filled.set(track, netflixDom.filledSlots(track));
+        return nativeReadScope.filled.get(track);
+    }
+
+    function nativeIndicatorItems(section) {
+        if (!section) return [];
+        if (!nativeReadScope) return [...section.querySelectorAll('[data-uia="carousel-page-indicator-item"]')];
+        if (!nativeReadScope.indicators.has(section)) {
+            nativeReadScope.indicators.set(section, [...section.querySelectorAll('[data-uia="carousel-page-indicator-item"]')]);
+        }
+        return nativeReadScope.indicators.get(section);
+    }
 
     function isTargetPage() {
         return location.origin === 'https://www.netflix.com' && location.pathname === TARGET_PATH;
@@ -1043,6 +1086,7 @@
     function resetDetachedTargetState() {
         if (completedSection?.isConnected && document.getElementById(GRID_ID)) return;
 
+        invalidateGridReact();
         cancelPendingGridHover();
         completedSection = null;
         if (sourceState?.section && !sourceState.section.isConnected) {
@@ -1077,6 +1121,7 @@
     function cleanupTargetSessionDom() {
         restoreActiveCarouselStyles();
         clearSourceAlignment();
+        invalidateGridReact();
 
         const section = sourceState?.section;
         const scroller = sourceState?.scroller;
@@ -1274,12 +1319,21 @@
 
     function appendInvestigationLog(level, args) {
         const body = args.map(formatLogValue).join(' ');
-        investigationLog.push(
-            `[${formatSystemTimestamp()}] ${level.padEnd(5, ' ')} ${body}`
-        );
-        if (investigationLog.length > MAX_LOG_ENTRIES) {
-            investigationLog.splice(0, investigationLog.length - MAX_LOG_ENTRIES);
+        const entry = `[${formatSystemTimestamp()}] ${level.padEnd(5, ' ')} ${body}`;
+        if (investigationLog.length < MAX_LOG_ENTRIES) {
+            investigationLog.push(entry);
+        } else {
+            investigationLog[investigationLogStart] = entry;
+            investigationLogStart = (investigationLogStart + 1) % MAX_LOG_ENTRIES;
         }
+    }
+
+    function retainedInvestigationLog() {
+        return investigationLog.slice(investigationLogStart).concat(investigationLog.slice(0, investigationLogStart));
+    }
+
+    function trace(buildArgs) {
+        if (VERBOSE_INTERACTION_LOGS) log(...buildArgs());
     }
 
     function log(...args) {
@@ -1343,7 +1397,7 @@
             tabindex: card?.getAttribute?.('tabindex') || '',
             connected: Boolean(slot.isConnected),
             inlineTransform: slot.style?.getPropertyValue?.('transform') || '',
-            rect: rectSummary(slot.getBoundingClientRect?.())
+            rect: rectSummary(slot.getBoundingClientRect ? nativeRect(slot) : null)
         };
     }
 
@@ -1463,7 +1517,7 @@
             `entries: ${investigationLog.length}`,
             `snapshot: ${formatLogValue(snapshot)}`,
             '---',
-            ...investigationLog
+            ...retainedInvestigationLog()
         ].join('\n') + '\n';
     }
 
@@ -3217,6 +3271,7 @@
     }
 
     function readNativeMyListDomState() {
+        if (!nativeReadScope) return withNativeReadScope(() => readNativeMyListDomState());
         const section = findMyListSection();
         if (!section) {
             const graphqlCount = netflixGraphql.readMyListTotalCount();
@@ -3277,7 +3332,7 @@
             ? domExactCount
             : (Number.isFinite(graphqlCount) ? graphqlCount : null);
         const sourceSlots = netflixDom.directSlots(track).length;
-        const sourceCards = netflixDom.filledSlots(track).length;
+        const sourceCards = nativeFilledSlots(track).length;
 
         return {
             section,
@@ -3514,6 +3569,8 @@
         const grid = sourceState.grid || document.getElementById(GRID_ID);
         if (!status || !grid) return false;
 
+        clearSourceAlignment();
+        invalidateGridReact();
         const oldSynthetic = document.getElementById(SYNTHETIC_SECTION_ID);
         clearLegacyEmptyState({ restoreGrid: false });
         live.section.setAttribute(SECTION_ATTR, 'true');
@@ -3553,6 +3610,7 @@
             selectedPage: live.selectedPage,
             layout: layoutSummary(layout)
         });
+        invalidateNativeReadScope();
         return true;
     }
 
@@ -3562,6 +3620,8 @@
         const grid = sourceState.grid || document.getElementById(GRID_ID);
         if (!status || !grid) return false;
 
+        clearSourceAlignment();
+        invalidateGridReact();
         const oldSynthetic = document.getElementById(SYNTHETIC_SECTION_ID);
         live.section.setAttribute(SECTION_ATTR, 'true');
         markOriginalHeader(live.section);
@@ -3601,6 +3661,7 @@
             layout: layoutSummary(layout),
             originalVisible: viewOriginalMyList
         });
+        invalidateNativeReadScope();
         return true;
     }
 
@@ -3731,6 +3792,7 @@
             activeClone = null;
             activePage = null;
         }
+        releaseGridReact(clone);
         clone?.remove();
         sourceState.cloneMap?.delete(key);
         sourceState.itemMap?.delete(key);
@@ -4345,11 +4407,12 @@
     }
 
     function detectCarouselDomProfile(section) {
+        if (section && nativeReadScope?.profiles.has(section)) return nativeReadScope.profiles.get(section);
         const legacyLeft = section?.querySelector?.('[data-uia="carousel-left-button"]') || null;
         const legacyRight = section?.querySelector?.('[data-uia="carousel-right-button"]') || null;
         const hawkinsLeft = section?.querySelector?.('[data-uia="carousel-hawkins-left-button"]') || null;
         const hawkinsRight = section?.querySelector?.('[data-uia="carousel-hawkins-right-button"]') || null;
-        const indicatorItems = section ? [...section.querySelectorAll('[data-uia="carousel-page-indicator-item"]')] : [];
+        const indicatorItems = nativeIndicatorItems(section);
         const legacyControls = Boolean(legacyLeft || legacyRight);
         const hawkinsControls = Boolean(hawkinsLeft || hawkinsRight);
         const generation = legacyControls && hawkinsControls
@@ -4362,7 +4425,7 @@
         const navigationMode = legacyControls ? 'legacy' : (hawkinsControls ? 'hawkins' : 'none');
         const pageMode = legacyControls && indicatorItems.length > 0 ? 'indicator' :
             ((legacyControls || hawkinsControls) ? 'logical' : 'unknown');
-        return {
+        const profile = {
             generation,
             navigationMode,
             pageMode,
@@ -4376,6 +4439,8 @@
             },
             indicatorCount: indicatorItems.length
         };
+        if (section && nativeReadScope) nativeReadScope.profiles.set(section, profile);
+        return profile;
     }
 
     function getCarouselDomRuntime(section) {
@@ -4402,6 +4467,7 @@
 
     function resetCarouselDomRuntime(section) {
         if (!section) return null;
+        invalidateNativeReadScope();
         carouselDomRuntime.delete(section);
         return getCarouselDomRuntime(section);
     }
@@ -4482,10 +4548,11 @@
     }
 
     function selectedPage(section) {
+        if (!nativeReadScope) return withNativeReadScope(() => selectedPage(section));
         const runtime = getCarouselDomRuntime(section);
         const profile = runtime?.profile || detectCarouselDomProfile(section);
         if (profile.pageMode === 'indicator') {
-            const items = [...section.querySelectorAll('[data-uia="carousel-page-indicator-item"]')];
+            const items = nativeIndicatorItems(section);
             const index = items.findIndex(x => x.getAttribute('data-indicator-selected') === 'true');
             return index >= 0 ? index : 0;
         }
@@ -4522,7 +4589,7 @@
         const runtime = getCarouselDomRuntime(section);
         const profile = runtime?.profile || detectCarouselDomProfile(section);
         if (profile.pageMode === 'indicator') {
-            return section.querySelectorAll('[data-uia="carousel-page-indicator-item"]').length || 1;
+            return nativeIndicatorItems(section).length || 1;
         }
         if (profile.pageMode === 'logical' && runtime) {
             if (runtime.pageCountFinalized && Number.isFinite(runtime.knownPageCount)) {
@@ -4988,12 +5055,19 @@
     }
 
     function currentPageSlots(scroller, track) {
-        const all = netflixDom.filledSlots(track);
-        if (!all.length) return [];
+        if (!nativeReadScope) return withNativeReadScope(() => currentPageSlots(scroller, track));
+        let byTrack = nativeReadScope.slots.get(scroller);
+        if (!byTrack) nativeReadScope.slots.set(scroller, byTrack = new WeakMap());
+        if (byTrack.has(track)) return byTrack.get(track);
+        const all = nativeFilledSlots(track);
+        if (!all.length) {
+            byTrack.set(track, []);
+            return byTrack.get(track);
+        }
 
-        const sr = scroller.getBoundingClientRect();
+        const sr = nativeRect(scroller);
         const visible = all
-            .map(slot => ({ slot, rect: slot.getBoundingClientRect() }))
+            .map(slot => ({ slot, rect: nativeRect(slot) }))
             .filter(x => {
                 const cx = x.rect.left + x.rect.width / 2;
                 return x.rect.width > 1 && cx >= sr.left && cx <= sr.right;
@@ -5005,15 +5079,16 @@
             const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
             return card?.getAttribute('tabindex') === '0';
         });
+        let current = visible;
         if (active.length) {
             // During Hawkins virtual-window hydration Netflix can leave only
             // the first card tabbable while the remaining visible cards exist.
             // Prefer the complete geometric viewport window in that state.
-            if (visible.length > active.length) return visible;
-            return active.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+            if (visible.length <= active.length) current = active.sort((a, b) => nativeRect(a).left - nativeRect(b).left);
         }
 
-        return visible;
+        byTrack.set(track, current);
+        return current;
     }
 
     function visibleSignature(slots) {
@@ -5024,8 +5099,9 @@
     }
 
     function nativeCarouselReadiness(section, scroller, track) {
+        if (!nativeReadScope) return withNativeReadScope(() => nativeCarouselReadiness(section, scroller, track));
         const slots = netflixDom.directSlots(track);
-        const cards = netflixDom.filledSlots(track);
+        const cards = nativeFilledSlots(track);
         const currentSlots = currentPageSlots(scroller, track);
         const pages = pageCount(section);
         const formula = parseSlotLayoutFormula(track);
@@ -6320,7 +6396,11 @@
     }
 
     function netflixItemIndexFromSlot(slot) {
-        return netflixReactCarousel.readItemIndex(slot).value;
+        if (!nativeReadScope || !slot) return netflixReactCarousel.readItemIndex(slot).value;
+        if (!nativeReadScope.indices.has(slot)) {
+            nativeReadScope.indices.set(slot, netflixReactCarousel.readItemIndex(slot).value);
+        }
+        return nativeReadScope.indices.get(slot);
     }
 
     function normalizeNetflixLogicalIndex(itemIndex, totalCount) {
@@ -6358,8 +6438,13 @@
         if (!positions.length || positions.some(position => !Number.isSafeInteger(position.logicalIndex))) return null;
         const actual = [...new Set(positions.map(position => position.logicalIndex))].sort((a, b) => a - b);
         if (actual.length !== positions.length) return null;
-        const pages = Math.max(1, Math.ceil(totalCount / Math.max(1, columns)));
-        for (let page = 0; page < pages; page++) {
+        const width = Math.max(1, Math.floor(columns));
+        const pages = Math.max(1, Math.ceil(totalCount / width));
+        // A full window starts at a page boundary, except the overlapping last
+        // page. Still require exact membership; never accept partial hydration.
+        const candidates = [...new Set([Math.floor(actual[0] / width), pages - 1])].sort((a, b) => a - b);
+        for (const page of candidates) {
+            if (page < 0 || page >= pages) continue;
             const expected = expectedLogicalIndicesForPage(totalCount, columns, page);
             if (expected.length !== actual.length) continue;
             if (expected.every((value, index) => value === actual[index])) return page;
@@ -6368,6 +6453,7 @@
     }
 
     function nativeLogicalPageState(scroller, track, totalCount, columns) {
+        if (!nativeReadScope) return withNativeReadScope(() => nativeLogicalPageState(scroller, track, totalCount, columns));
         const slots = currentPageSlots(scroller, track);
         const positions = logicalSlotPositions(slots, totalCount);
         const page = logicalPageFromSlotPositions(positions, totalCount, columns);
@@ -7337,12 +7423,12 @@
             return itemKeyFromCard(card) === itemKey(item);
         }) || null;
         if (slot) {
-            log(tLog('hoverExpectedPageMatch'), {
+            trace(() => [tLog('hoverExpectedPageMatch'), {
                 item: itemSummary(item),
                 expectedPage,
                 selectedPage: selectedPage(section),
                 source: slotDescriptor(slot)
-            });
+            }]);
             return { status: 'found', slot, page: expectedPage, slots: pageSlots };
         }
 
@@ -7370,13 +7456,13 @@
             return itemKeyFromCard(card) === itemKey(item);
         }) || null;
         if (slot) {
-            log(tLog('hoverExpectedPageMatch'), {
+            trace(() => [tLog('hoverExpectedPageMatch'), {
                 item: itemSummary(item),
                 expectedPage,
                 selectedPage: selectedPage(section),
                 source: slotDescriptor(slot),
                 afterStabilityWait: true
-            });
+            }]);
             return { status: 'found', slot, page: expectedPage, slots: pageSlots };
         }
 
@@ -7517,12 +7603,12 @@
         if (token !== null && token !== hoverToken) return null;
         if (!slot) return null;
 
-        log('Hover stale logical page refreshed without full carousel scan', {
+        trace(() => ['Hover stale logical page refreshed without full carousel scan', {
             item: itemSummary(item),
             preferredPage,
             selectedPage: selectedPage(section),
             source: slotDescriptor(slot)
-        });
+        }]);
         return { slot, page: selectedPage(section), refreshed: true };
     }
 
@@ -7631,11 +7717,11 @@
                         });
                     }
                 }
-                log(tLog('hoverSourceFound'), {
+                trace(() => [tLog('hoverSourceFound'), {
                     item: itemSummary(item),
                     actualPage: actual,
                     source: slotDescriptor(slot)
-                });
+                }]);
                 return { slot, page: actual };
             }
         }
@@ -7662,7 +7748,10 @@
 
     function setGridClone(item, clone) {
         if (!sourceState?.cloneMap) return;
+        const previous = findGridClone(item);
+        if (previous && previous !== clone) releaseGridReact(previous);
         sourceState.cloneMap.set(itemKey(item), clone);
+        if (clone?.getAttribute('data-tm-react-grafted') === 'true') graftedGridClones.add(clone);
     }
 
     function findItemForSourceSlot(slot) {
@@ -7671,16 +7760,17 @@
         return sourceState.itemMap.get(itemKeyFromCard(card)) || null;
     }
 
+    function releaseGridReact(clone) {
+        if (!clone || !graftedGridClones.delete(clone)) return;
+        netflixReactHover.clearClone(clone);
+        clone.removeAttribute('data-tm-hover-ready');
+        clone.removeAttribute('data-tm-backed-page');
+        clone.removeAttribute('data-tm-react-grafted');
+    }
+
     function invalidateGridReact(except = null) {
-        const grid = document.getElementById(GRID_ID);
-        if (!grid) return;
-        for (const clone of grid.querySelectorAll(':scope > [data-virtual-slot]')) {
-            if (clone === except) continue;
-            if (clone.getAttribute('data-tm-hover-ready') === 'true') {
-                netflixReactHover.clearClone(clone);
-                clone.removeAttribute('data-tm-hover-ready');
-                clone.removeAttribute('data-tm-backed-page');
-            }
+        for (const clone of graftedGridClones) {
+            if (clone !== except || !clone.isConnected) releaseGridReact(clone);
         }
     }
 
@@ -7706,6 +7796,7 @@
     }
 
     function clearSourceAlignment(slot = activeSourceSlot) {
+        invalidateNativeReadScope();
         restoreGeometryProxy();
         if (slot?.hasAttribute?.('data-tm-source-aligned')) {
             // Clean up transforms left by legacy 2.1 when updating the script without a full page reload.
@@ -7829,10 +7920,11 @@
                 // Native visibility/page reads need original source geometry, not
                 // the grid rectangles installed for Netflix's popup placement.
                 clearSourceAlignment();
-                let failureReason = '';
-                if (!sourceVideoId || sourceVideoId !== item.videoId) failureReason = 'source-video-id-mismatch';
-                else if (findActiveSourceSlot(item) !== sourceSlot) failureReason = 'source-no-longer-active';
-                else if (!alignSourceSlotToClone(sourceSlot, clone)) failureReason = 'source-alignment-failed';
+                const failureReason = withNativeReadScope(() => {
+                    if (!sourceVideoId || sourceVideoId !== item.videoId) return 'source-video-id-mismatch';
+                    if (findActiveSourceSlot(item) !== sourceSlot) return 'source-no-longer-active';
+                    return alignSourceSlotToClone(sourceSlot, clone) ? '' : 'source-alignment-failed';
+                });
                 if (failureReason) {
                     warn(tLog('nativeHoverReplayCancelled'), {
                         reason: failureReason,
@@ -7844,13 +7936,13 @@
                 }
 
                 const replayed = replayHoverOnNativeSource(sourceSlot, triggerEvent);
-                if (replayed) log(tLog('nativeHoverReplayedFromLiveSource'), {
+                if (replayed) trace(() => [tLog('nativeHoverReplayedFromLiveSource'), {
                     item: itemSummary(item),
                     actualPage,
                     reason,
                     triggerEvent: triggerEvent?.type || '',
                     source: slotDescriptor(sourceSlot)
-                });
+                }]);
                 finish(Boolean(replayed));
             } catch (error) {
                 warn(tLog('nativeHoverReplayCancelled'), { reason: 'replay-failed', item: itemSummary(item), error });
@@ -7859,7 +7951,7 @@
         }));
     }
 
-    function makeLiveClone(sourceSlot, item, oldClone) {
+    function makeLiveClone(sourceSlot, item, oldClone, actualPage) {
         // Keep the legacy 1.2.0 order: clone the live source, graft React data, then insert into the DOM.
         const fresh = sourceSlot.cloneNode(true);
         const stats = netflixReactHover.graftTreeToClone(sourceSlot, fresh);
@@ -7868,7 +7960,7 @@
         const order = oldClone?.getAttribute('data-tm-item-order');
         copyItemAttributes(fresh, item, order === null || order === undefined ? null : Number(order));
         fresh.setAttribute('data-tm-hover-ready', String(Boolean(stats?.fiberAssignments || stats?.propsAssignments)));
-        fresh.setAttribute('data-tm-backed-page', String(selectedPage(sourceState.section)));
+        fresh.setAttribute('data-tm-backed-page', String(actualPage));
         fresh.__tmHoverActivationGeneration = oldClone?.__tmHoverActivationGeneration;
         if (oldClone?.getAttribute('data-tm-preparing') === 'true' &&
             oldClone.getAttribute('data-tm-hover-token') === String(hoverToken)) {
@@ -7893,12 +7985,11 @@
             });
             return null;
         }
-        const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
+        const beforeSignature = targetItem ? '' : visibleSignature(currentPageSlots(scroller, track));
         const started = performance.now();
 
         log(tLog('nativePagePreparationStarted'), {
             requestedPage: page,
-            selectedPage: selectedPage(section),
             targetItem: itemSummary(targetItem),
             triggerEvent: triggerEvent?.type || '',
             token,
@@ -8023,12 +8114,12 @@
                             liveTrack,
                             Math.max(1, sourceState?.layout?.columns || 1)
                         );
-                        log('Hover source recovered from stale logical page mapping', {
+                        trace(() => ['Hover source recovered from stale logical page mapping', {
                             targetItem: itemSummary(targetItem),
                             requestedPage: page,
                             actualPage,
                             source: slotDescriptor(targetSourceSlot)
-                        });
+                        }]);
                     } else {
                         const promptSuppression = orderMismatchPromptSuppressionState();
                         if (promptSuppression.suppress) {
@@ -8075,13 +8166,13 @@
             actualPage = selectedPage(section);
         }
 
-        log(tLog('nativePagePreparationPositionResolved'), {
+        trace(() => [tLog('nativePagePreparationPositionResolved'), {
             requestedPage: page,
             actualPage,
             selectedPage: selectedPage(section),
             currentSlots: (resolvedPageSlots || currentPageSlots(scroller, track)).length,
             targetSource: slotDescriptor(targetSourceSlot)
-        });
+        }]);
 
         invalidateGridReact();
         clearSourceAlignment();
@@ -8124,7 +8215,7 @@
             const oldClone = findGridClone(pageItem);
             if (!oldClone?.isConnected) continue;
 
-            const { fresh, stats } = makeLiveClone(sourceSlot, pageItem, oldClone);
+            const { fresh, stats } = makeLiveClone(sourceSlot, pageItem, oldClone, actualPage);
             refreshedCount++;
             fiberAssignments += stats?.fiberAssignments || 0;
             propsAssignments += stats?.propsAssignments || 0;
@@ -8161,13 +8252,13 @@
 
         if (targetItem && freshTarget && targetSourceSlot) {
             const aligned = alignSourceSlotToClone(targetSourceSlot, freshTarget);
-            log(tLog('hoverCoordinatesProxied'), {
+            trace(() => [tLog('hoverCoordinatesProxied'), {
                 item: itemSummary(targetItem),
                 actualPage,
                 aligned,
                 source: slotDescriptor(targetSourceSlot),
                 cloneRect: rectSummary(freshTarget.getBoundingClientRect())
-            });
+            }]);
             if (!aligned) return null;
             activeVideoId = targetItem.videoId;
             activeClone = freshTarget;
@@ -8251,8 +8342,18 @@
                     !gridHoverTargetActive(current, generation) ||
                     current.getAttribute('data-tm-hover-token') !== String(token)) break;
 
-                const selected = selectedPage(sourceState.section);
-                const backedPage = Number(current.getAttribute('data-tm-backed-page'));
+                clearSourceAlignment();
+                const { selected, backedPage, sourceSlot, aligned } = withNativeReadScope(() => {
+                    if (!attempt && current.getAttribute('data-tm-hover-ready') === 'true') {
+                        ensureLiveNativeBinding('hover-reuse');
+                    }
+                    const selected = selectedPage(sourceState.section);
+                    const backedPage = Number(current.getAttribute('data-tm-backed-page'));
+                    const sourceSlot = !attempt && current.getAttribute('data-tm-hover-ready') === 'true' &&
+                        Number.isFinite(backedPage) && selected === backedPage ? findActiveSourceSlot(item) : null;
+                    const aligned = sourceSlot ? alignSourceSlotToClone(sourceSlot, current) : false;
+                    return { selected, backedPage, sourceSlot, aligned };
+                });
                 if (attempt) {
                     log('Retrying native page preparation after transient hydration', {
                         seq,
@@ -8263,27 +8364,22 @@
                 }
 
                 let reused = false;
-                if (!attempt && current.getAttribute('data-tm-hover-ready') === 'true' &&
-                    Number.isFinite(backedPage) && selected === backedPage) {
-                    const sourceSlot = findActiveSourceSlot(item);
-                    if (sourceSlot && alignSourceSlotToClone(sourceSlot, current)) {
-                        reused = true;
-                        activePage = selected;
-                        activeVideoId = item.videoId;
-                        activeClone = current;
-                        log(tLog('hoverReusedImmediately'), {
-                            seq,
-                            item: itemSummary(item),
-                            selectedPage: selected,
-                            backedPage,
-                            source: slotDescriptor(sourceSlot),
-                            elapsedMs: Math.round(performance.now() - started)
-                        });
-                        const replayed = await scheduleNativeHoverReplay(
-                            sourceSlot, item, current, triggerEvent, selected, 'immediate-reuse', token, sessionToken
-                        );
-                        fresh = replayed ? current : null;
-                    }
+                if (!attempt && aligned) {
+                    reused = true;
+                    activePage = selected;
+                    activeVideoId = item.videoId;
+                    activeClone = current;
+                    log(tLog('hoverReusedImmediately'), {
+                        seq,
+                        item: itemSummary(item),
+                        selectedPage: selected,
+                        backedPage,
+                        elapsedMs: Math.round(performance.now() - started)
+                    });
+                    const replayed = await scheduleNativeHoverReplay(
+                        sourceSlot, item, current, triggerEvent, selected, 'immediate-reuse', token, sessionToken
+                    );
+                    fresh = replayed ? current : null;
                 }
                 if (!reused) {
                     log(tLog('hoverRequestedNativePagePreparation'), {
@@ -8307,7 +8403,7 @@
                 item: itemSummary(item),
                 success: Boolean(fresh),
                 replayDispatched: Boolean(fresh),
-                selectedPage: selectedPage(sourceState.section),
+                activePage,
                 activeVideoId,
                 elapsedMs: Math.round(performance.now() - started)
             });
@@ -8434,6 +8530,7 @@
 
     function buildGrid(section, scroller, items, layout, totalCount) {
         clearLegacyEmptyState({ restoreGrid: false });
+        invalidateGridReact();
         document.getElementById(GRID_ID)?.remove();
 
         const grid = document.createElement('div');
@@ -9408,6 +9505,7 @@
             }
             assertRouteSession(sessionToken);
             if (sourceWait.nativeSection) {
+                invalidateGridReact();
                 document.getElementById(GRID_ID)?.remove();
                 document.getElementById(STATUS_ID)?.remove();
                 if (section.id === SYNTHETIC_SECTION_ID) section.remove();
