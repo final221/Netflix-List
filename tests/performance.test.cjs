@@ -61,6 +61,7 @@ function environment(names, overrides = {}) {
     const c = vm.createContext({
         Element, Set, Map, Promise,
         nativeReadScope: null, VERBOSE_INTERACTION_LOGS: false,
+        BUILD_CHUNK_MAX_ITEMS: 24, BUILD_CHUNK_BUDGET_MS: 6,
         performance: { now: () => now },
         setTimeout(callback, delay) { const key = ++id; timers.set(key, { callback, due: now + delay }); return key; },
         clearTimeout(key) { timers.delete(key); },
@@ -1258,5 +1259,408 @@ test('circular diagnostics retain the newest entries in chronological copied-rep
     assert.match(retained[4999], / 10002$/);
     for (let index = 1; index < retained.length; index++) {
         assert.equal(Number(retained[index].split(' ').at(-1)), 5003 + index);
+    }
+});
+
+class ConstructionNode extends Element {
+    constructor(id = '', parent = null) {
+        super(id, parent);
+        this.isConnected = false;
+        this.style = { setProperty() {}, removeProperty() {}, getPropertyValue: () => '' };
+        this.classList = { add() {}, remove() {}, contains: () => true };
+        this.listeners = new Map();
+    }
+    setConnected(connected) {
+        this.isConnected = connected;
+        for (const child of this.children) child.setConnected(connected);
+    }
+    appendChild(child) { return this.insertBefore(child, null); }
+    insertBefore(child, before) {
+        child.remove();
+        const index = before ? this.children.indexOf(before) : this.children.length;
+        this.children.splice(index, 0, child);
+        child.parentElement = this;
+        child.setConnected(this.isConnected);
+        return child;
+    }
+    insertAdjacentElement(_, child) {
+        const index = this.parentElement.children.indexOf(this);
+        this.parentElement.insertBefore(child, this.parentElement.children[index + 1] || null);
+    }
+    remove() {
+        if (this.parentElement) {
+            const index = this.parentElement.children.indexOf(this);
+            if (index >= 0) this.parentElement.children.splice(index, 1);
+        }
+        this.parentElement = null;
+        this.setConnected(false);
+    }
+    querySelector(selector) {
+        return this.querySelectorAll('*').find(node => node.id === selector) || null;
+    }
+    querySelectorAll(selector) {
+        if (selector.startsWith(':scope')) return this.children;
+        const all = this.children.flatMap(child => [child, ...child.querySelectorAll('*')]);
+        return selector === '*' ? all : all.filter(node => node.id === selector);
+    }
+    addEventListener(type, callback) { this.listeners.set(type, callback); }
+    cloneNode() {
+        const clone = new ConstructionNode(this.id);
+        clone.attributes = new Map(this.attributes);
+        for (const key of ['href', 'src', 'markup']) clone[key] = this[key];
+        for (const child of this.children) clone.appendChild(child.cloneNode(true));
+        return clone;
+    }
+}
+
+function constructionEnvironment() {
+    const section = new ConstructionNode('section');
+    section.setConnected(true);
+    const scroller = section.appendChild(new ConstructionNode('scroller'));
+    const track = scroller.appendChild(new ConstructionNode('track'));
+    const status = section.appendChild(new ConstructionNode('status'));
+    const oldGrid = section.appendChild(new ConstructionNode('grid'));
+    const created = [], logs = [], warnings = [];
+    const template = new ConstructionNode('slot');
+    template.markup = 'original-template';
+    template.appendChild(new ConstructionNode('card'));
+    const image = template.appendChild(new ConstructionNode('img'));
+    image.setAttribute('srcset', 'native-srcset');
+    const layout = { columns: 6, rowGap: 10 };
+    const e = environment([
+        'sleep', 'runConstructionChunks', 'buildGraphqlMyListItems', 'assertRouteSession',
+        'createRouteSessionCancelledError', 'isRouteSessionCancelledError', 'initializationError',
+        'buildGrid', 'normalizeClone', 'copyItemAttributes', 'associateGridHoverItem', 'ensureGridHoverBehavior',
+        'itemKey', 'clearRunningSession', 'retryPendingMyListMutations', 'tryApplyMyListMutation',
+        'applyLegacyRemoval', 'applyLegacyAddition', 'disposeMyListMutation'
+    ], {
+        GRID_ID: 'grid', STATUS_ID: 'status', SYNTHETIC_SECTION_ID: 'synthetic', SECTION_ATTR: 'section',
+        NETFLIX_DOM_SELECTORS: { standardCard: 'card', carouselScroller: 'scroller' },
+        location: { origin: 'https://www.netflix.com', href: 'https://www.netflix.com/browse/my-list' },
+        document: {
+            getElementById: id => [section, ...section.querySelectorAll('*')].find(node => node.id === id) || null,
+            createElement: () => { const node = new ConstructionNode(); created.push(node); return node; }
+        },
+        sourceState: { section, scroller, track, grid: oldGrid, status, layout, items: [], cloneMap: new Map(), itemMap: new Map() },
+        pendingMyListMutations: new Map(), recentRemovedMyListItems: new Map(),
+        running: true, runningSessionToken: 1, responsiveRefreshing: false,
+        clearLegacyEmptyState() {}, invalidateGridReact() {}, releaseGridReact() {}, clearSourceAlignment() {},
+        applyGridGeometry: () => ({ left: 10, width: 600 }),
+        updateStatus: () => status, formatHeaderParts: () => 'header', syncStatusTypography() {},
+        responsiveSignature: () => 'geometry', responsivePageShape: () => 'pages',
+        resizeObserver: null, ResizeObserver: class { observe() {} }, viewOriginalMyList: true,
+        layoutSummary: value => value, scheduleResponsiveRefresh() {},
+        videoIdFromGraphqlNode: node => node?.id || '', firstGraphqlText: value => typeof value === 'string' ? value : '',
+        firstGraphqlImageUrl: value => typeof value === 'string' ? value : '',
+        refreshNativeSectionAfterDelta: () => ({}), readNativeMyListDomState: () => ({}),
+        findNativeMyListItemByVideoId: () => null, findAnyStandardCardItemByVideoId: () => null,
+        rememberUndoEntry() {}, reindexLegacyItemsAfterDelta() {},
+        log: (name, details) => logs.push({ name, details }), warn: (name, details) => warnings.push({ name, details })
+    });
+    function edges(count) {
+        return Array.from({ length: count }, (_, index) => ({ node: {
+            id: String(index + 1), displayString: `Title ${index + 1}`, contextualArtwork: `https://images.test/${index + 1}.jpg`
+        } }));
+    }
+    function items(count) {
+        return Array.from({ length: count }, (_, index) => ({
+            videoId: String(index + 1), href: `/watch/${index + 1}`, page: Math.floor(index / layout.columns),
+            snapshot: template.cloneNode(true)
+        }));
+    }
+    async function drain() {
+        await e.flush();
+        let yields = 0;
+        while (e.timers.size) {
+            assert.ok(++yields < 200, 'construction must finish in bounded chunks');
+            await e.advance(0);
+        }
+        await e.flush();
+        return yields;
+    }
+    return { ...e, section, scroller, track, status, oldGrid, layout, template, created, logs, warnings, edges, items, drain };
+}
+
+test('large construction uses task yields with bounded item batches; small builds avoid timers', async () => {
+    for (const count of [6, 24, 30, 150, 600]) {
+        const e = constructionEnvironment();
+        const built = [];
+        const completion = e.c.runConstructionChunks(count, index => { built.push(index); }, () => {});
+        assert.equal(built.length, Math.min(count, 24));
+        assert.equal(e.timers.size, count > 24 ? 1 : 0);
+        const yields = await e.drain();
+        assert.equal(await completion, true);
+        assert.deepEqual(built, Array.from({ length: count }, (_, index) => index));
+        assert.equal(yields, Math.ceil(count / 24) - 1);
+    }
+});
+
+test('construction also yields for expensive individual cards before the count cap', async () => {
+    const e = constructionEnvironment();
+    let elapsed = 0, built = 0;
+    e.c.performance = { now: () => elapsed };
+    const completion = e.c.runConstructionChunks(5, () => { built++; elapsed += 4; }, () => {});
+    assert.equal(built, 2);
+    assert.equal(e.timers.size, 1);
+    await e.advance(0);
+    assert.equal(built, 4);
+    await e.advance(0);
+    assert.equal(await completion, true);
+    assert.equal(built, 5);
+});
+
+test('chunked snapshots preserve exact order, labels, artwork, pages, and frozen template markup', async () => {
+    const e = constructionEnvironment();
+    const input = e.edges(150);
+    input.splice(10, 0, {}, input[0]);
+    const completion = e.c.buildGraphqlMyListItems(input, 150, 6, e.template, 1);
+    e.template.markup = 'recycled-live-template';
+    await e.drain();
+    const items = await completion;
+    assert.equal(items.length, 150);
+    items.forEach((item, index) => {
+        assert.equal(item.videoId, String(index + 1));
+        assert.equal(item.logicalIndex, index);
+        assert.equal(item.page, Math.floor(index / 6));
+        assert.equal(item.ariaLabel, `Title ${index + 1}`);
+        assert.equal(item.snapshot.markup, 'original-template');
+        assert.equal(item.snapshot.isConnected, false);
+        assert.equal(item.snapshot.querySelector('card').href, `https://www.netflix.com/browse?jbv=${index + 1}`);
+        assert.equal(item.snapshot.querySelector('img').src, `https://images.test/${index + 1}.jpg`);
+        assert.equal(item.snapshot.querySelector('img').getAttribute('srcset'), null);
+    });
+});
+
+test('invalid or incomplete snapshot inputs retain the native-scan fallback contract', async () => {
+    const e = constructionEnvironment();
+    assert.equal(await e.c.buildGraphqlMyListItems([], 1, 6, e.template, 1), null);
+    assert.equal(await e.c.buildGraphqlMyListItems(null, 1, 6, e.template, 1), null);
+    assert.equal(await e.c.buildGraphqlMyListItems(e.edges(2), 2, 6, new ConstructionNode('no-card'), 1), null);
+    assert.equal(e.timers.size, 0);
+});
+
+test('snapshot construction cancels after a yield without reading more edges', async () => {
+    const e = constructionEnvironment();
+    let reads = 0;
+    e.c.videoIdFromGraphqlNode = node => { reads++; return node.id; };
+    const completion = e.c.buildGraphqlMyListItems(e.edges(600), 600, 6, e.template, 1);
+    const rejection = assert.rejects(completion, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+    assert.equal(reads, 24);
+    e.c.isRouteSessionActive = () => false;
+    await e.drain();
+    await rejection;
+    assert.equal(reads, 24);
+    assert.equal(e.created.length, 0);
+});
+
+test('chunked grid publishes its complete tree and maps once while preserving card interactions', async () => {
+    const e = constructionEnvironment();
+    const items = e.items(150), state = e.c.sourceState;
+    const oldMap = state.cloneMap;
+    const completion = e.c.buildGrid(e.section, e.scroller, items, e.layout, 150, 1);
+    await e.flush();
+    assert.equal(e.created[0].children.length, 24);
+    assert.equal(e.created[0].isConnected, false);
+    assert.equal(e.oldGrid.isConnected, true);
+    assert.equal(state.cloneMap, oldMap);
+    assert.equal(state.cloneMap.size, 0);
+    await e.drain();
+    const grid = await completion;
+    assert.equal(grid.isConnected, true);
+    assert.equal(e.oldGrid.isConnected, false);
+    assert.equal(state.grid, grid);
+    assert.equal(state.cloneMap.size, 150);
+    assert.equal(state.itemMap.size, 150);
+    assert.equal(grid.children.length, 150);
+    assert.equal(e.logs.filter(entry => entry.name === 'legacyGridBuilt').length, 1);
+    assert.deepEqual([...grid.listeners.keys()], ['pointerover', 'pointerout']);
+    grid.children.forEach((clone, index) => {
+        assert.equal(clone.__tmMyListItem, items[index]);
+        assert.equal(clone.getAttribute('data-tm-item-order'), String(index));
+        assert.equal(clone.getAttribute('data-tm-item-page'), String(Math.floor(index / 6)));
+        assert.equal(clone.querySelector('card').tabIndex, 0);
+        assert.equal(clone.querySelector('img').loading, 'lazy');
+        assert.equal(clone.querySelector('img').decoding, 'async');
+    });
+});
+
+test('route cancellation, state replacement, and native-source replacement cannot publish a partial grid', async () => {
+    for (const change of ['route', 'state', 'section', 'track']) {
+        const e = constructionEnvironment();
+        const state = e.c.sourceState, oldMap = state.cloneMap;
+        const completion = e.c.buildGrid(e.section, e.scroller, e.items(600), e.layout, 600, 1);
+        const code = ['route', 'state'].includes(change) ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'GRID_BUILD_SOURCE_REPLACED';
+        const rejection = assert.rejects(completion, { code });
+        if (change === 'route') e.c.isRouteSessionActive = () => false;
+        if (change === 'state') e.c.sourceState = { cloneMap: new Map(), grid: new ConstructionNode('new-session') };
+        if (change === 'section') e.section.setConnected(false);
+        if (change === 'track') state.track = new ConstructionNode('replacement-track');
+        await e.drain();
+        await rejection;
+        assert.equal(e.created[0].children.length, 24);
+        assert.equal(e.created[0].isConnected, false);
+        assert.equal(state.cloneMap, oldMap);
+        assert.equal(e.logs.filter(entry => entry.name === 'legacyGridBuilt').length, 0);
+    }
+});
+
+test('an individual clone failure leaves the current frame and maps intact', async () => {
+    const e = constructionEnvironment();
+    const items = e.items(150);
+    items[25].snapshot.cloneNode = () => { throw new Error('Clone failed'); };
+    const oldMap = e.c.sourceState.cloneMap;
+    const completion = e.c.buildGrid(e.section, e.scroller, items, e.layout, 150, 1);
+    const rejection = assert.rejects(completion, /Clone failed/);
+    await e.drain();
+    await rejection;
+    assert.equal(e.oldGrid.isConnected, true);
+    assert.equal(e.c.sourceState.cloneMap, oldMap);
+    assert.equal(e.created[0].isConnected, false);
+});
+
+test('queued add/remove deltas apply after complete publication and stay deferred during a source retry', async () => {
+    const e = constructionEnvironment();
+    const added = { videoId: '999', page: 0, snapshot: e.template.cloneNode(true) };
+    const mutations = [
+        { videoId: '2', action: 'remove' },
+        { videoId: '999', action: 'add', preferredIndex: 0, fallbackItem: added }
+    ];
+    for (const mutation of mutations) {
+        e.c.pendingMyListMutations.set(mutation.videoId, mutation);
+        assert.equal(e.c.tryApplyMyListMutation(mutation), false);
+        assert.equal(mutation.deferredWhileBusy, true);
+    }
+    e.c.clearRunningSession(1, false);
+    assert.equal(e.c.pendingMyListMutations.size, 2);
+    assert.equal(mutations.every(mutation => mutation.deferredWhileBusy), true);
+    e.c.running = true;
+    e.c.runningSessionToken = 1;
+    const completion = e.c.buildGrid(e.section, e.scroller, e.items(150), e.layout, 150, 1);
+    await e.drain();
+    const grid = await completion;
+    e.c.clearRunningSession(1);
+    assert.equal(e.c.pendingMyListMutations.size, 0);
+    assert.equal(e.c.sourceState.items.length, 150);
+    assert.equal(e.c.sourceState.itemMap.has('v:2'), false);
+    assert.equal(e.c.sourceState.itemMap.has('v:999'), true);
+    assert.equal(grid.children[0].__tmMyListItem, added);
+    assert.equal(grid.children.length, 150);
+});
+
+function initializationEnvironment(count = 150) {
+    const e = constructionEnvironment();
+    const bootstrap = { graphqlEdges: e.edges(count), graphqlPageCount: 2 };
+    const runtime = { profile: { pageMode: 'logical' } };
+    const adapterStart = source.indexOf('    const netflixGraphql = Object.freeze({');
+    const adapterEnd = source.indexOf('\n    async function waitForMyListTotalCount(', adapterStart);
+    assert.ok(adapterStart >= 0 && adapterEnd > adapterStart);
+    vm.runInContext(source.slice(adapterStart, adapterEnd), e.c);
+    Object.assign(e.c, {
+        running: false, runningSessionToken: null, completedSection: null, initializationBlockedSessionToken: null,
+        targetSessionEntryKind: 'initial', waitingForNativeEmpty: false, missingSectionSince: 0,
+        TOTAL_COUNT_TIMEOUT_MS: 5000, NATIVE_READY_TIMEOUT_MS: 8000,
+        SOURCE_PARKED_CLASS: 'parked',
+        findMyListSection: () => e.section, cleanupOldArtifacts() {}, addStyle() {}, markOriginalHeader() {},
+        measureVisibleLayout: () => e.layout, measureNativeCarouselGap: () => 10,
+        placeLegacyFrame: () => ({ grid: e.oldGrid, status: e.status }), applyOriginalMyListVisibility() {},
+        waitForMyListTotalCount: async () => count,
+        findMyListGraphqlEntry: () => ({ value: { entities: { edges: [] } } }),
+        fetchFreshMyListBootstrapViaCarousel: async () => bootstrap,
+        logCarouselDomProfile() {}, resetCarouselDomRuntime: () => runtime, getCarouselDomRuntime: () => runtime,
+        waitForNativeCarouselReady: async () => ({ ready: true, empty: false }),
+        requireNativeReactCarouselTotalCount: () => ({ totalCount: count }),
+        currentPageSlots: () => [e.template],
+        netflixDom: { findTrack: () => e.track, filledSlots: () => [e.template], directSlots: () => [e.template] },
+        selectedPage: () => 0, pageCount: () => Math.ceil(count / 6), carouselDomProfileSummary: () => ({}),
+        navigator: { language: 'en' }, window: { innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1 },
+        getHtmlLanguage: () => 'en', getNetflixLanguage: () => 'en', getUiLocale: () => 'en', getLogLocale: () => 'en',
+        SCRIPT_VERSION: 'test', currentGridGeometry: () => ({ left: 10, width: 600 }), parkSource() {},
+        resetOrderMismatchStateAfterInitialization() {}, collectRuntimeSnapshot: () => ({}),
+        formatInitializationErrorMeta: error => error.code,
+        collectAllItems: () => { throw new Error('Complete GraphQL snapshots should skip native scan'); },
+        cleanupTargetSessionDom() { e.oldGrid.remove(); }, scheduleRun() {}
+    });
+    vm.runInContext(declaration('runScript'), e.c);
+    return e;
+}
+
+test('GraphQL adapter awaits snapshot chunks and initialization awaits grid publication before becoming idle', async () => {
+    const e = initializationEnvironment();
+    const completion = e.c.runScript(1);
+    await e.flush();
+    assert.equal(e.c.running, true, e.warnings.map(entry => entry.details.error?.message).join(', '));
+    assert.equal(e.timers.size, 1);
+    assert.equal(e.created.length, 0, 'snapshot chunks finish before grid construction starts');
+    const mutation = { videoId: '2', action: 'remove' };
+    e.c.pendingMyListMutations.set('2', mutation);
+    assert.equal(e.c.tryApplyMyListMutation(mutation), false);
+    await e.drain();
+    await completion;
+    assert.equal(e.c.running, false);
+    assert.equal(e.c.completedSection, e.section);
+    assert.equal(e.c.sourceState.grid.isConnected, true);
+    assert.equal(e.c.sourceState.items.length, 149, 'queued removal runs only after publication');
+    assert.equal(e.c.sourceState.itemMap.size, 149);
+    assert.equal(e.c.pendingMyListMutations.size, 0);
+    assert.equal(e.logs.filter(entry => entry.name === 'initializationCompleted').length, 1);
+    assert.equal(e.warnings.length, 0);
+});
+
+test('route leave during snapshot chunks exits initialization cleanly and preserves a newer session owner', async () => {
+    const e = initializationEnvironment();
+    const completion = e.c.runScript(1);
+    await e.flush();
+    assert.equal(e.timers.size, 1);
+    e.c.runningSessionToken = 2;
+    e.c.sourceState = { newerSession: true };
+    e.c.isRouteSessionActive = token => token === 2;
+    await e.drain();
+    await completion;
+    assert.equal(e.c.runningSessionToken, 2);
+    assert.equal(e.c.running, true);
+    assert.equal(e.c.sourceState.newerSession, true);
+    assert.equal(e.created.length, 0);
+    assert.equal(e.warnings.length, 0);
+});
+
+test('native-source replacement during grid construction restarts initialization with queued deltas intact', async () => {
+    const e = initializationEnvironment();
+    const completion = e.c.runScript(1);
+    await e.flush();
+    for (let attempts = 0; attempts < 20 && e.created.length === 0 && e.timers.size; attempts++) await e.advance(0);
+    assert.equal(e.created.length, 1, e.warnings.map(entry => entry.details.error?.message).join(', '));
+    assert.equal(e.created[0].children.length, 24);
+    const mutation = { videoId: '2', action: 'remove' };
+    e.c.pendingMyListMutations.set('2', mutation);
+    assert.equal(e.c.tryApplyMyListMutation(mutation), false);
+    e.track.setConnected(false);
+    let restarts = 0;
+    e.c.runScript = token => {
+        assert.equal(token, 1);
+        assert.equal(e.c.pendingMyListMutations.size, 1);
+        assert.equal(mutation.deferredWhileBusy, true);
+        assert.equal(e.c.running, false);
+        restarts++;
+    };
+    await e.drain();
+    await completion;
+    assert.equal(restarts, 1);
+    assert.equal(e.c.initializationBlockedSessionToken, null);
+    assert.equal(e.c.completedSection, null);
+    assert.equal(e.created[0].isConnected, false);
+    assert.equal(e.warnings.length, 0);
+});
+
+test('small builds revalidate cancellation before their awaited result can be published', async () => {
+    for (const kind of ['snapshot', 'grid']) {
+        const e = constructionEnvironment();
+        const completion = kind === 'snapshot'
+            ? e.c.buildGraphqlMyListItems(e.edges(6), 6, 6, e.template, 1)
+            : e.c.buildGrid(e.section, e.scroller, e.items(6), e.layout, 6, 1);
+        e.c.isRouteSessionActive = () => false;
+        await assert.rejects(completion, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+        assert.equal(e.timers.size, 0);
+        assert.equal(e.oldGrid.isConnected, true);
+        assert.equal(e.c.sourceState.cloneMap.size, 0);
     }
 });

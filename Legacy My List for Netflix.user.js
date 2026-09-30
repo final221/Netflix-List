@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.0.10
+// @version      1.0.11
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -59,6 +59,8 @@
     const FRESH_MY_LIST_FETCH_TIMEOUT_MS = 10000;
     const GRAPHQL_COLLECTION_PAGE_SIZE = 75;
     const GRAPHQL_COLLECTION_MAX_PAGES = 8;
+    const BUILD_CHUNK_MAX_ITEMS = 24;
+    const BUILD_CHUNK_BUDGET_MS = 6;
 
     const GRID_ID = 'tm-netflix-mylist-v15-grid';
     const STATUS_ID = 'tm-netflix-mylist-v15-status';
@@ -72,7 +74,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.0.10';
+    const SCRIPT_VERSION = '1.0.11';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -1062,11 +1064,11 @@
         return token !== null && token !== undefined && token !== hoverToken;
     }
 
-    function clearRunningSession(sessionToken) {
+    function clearRunningSession(sessionToken, retryMutations = true) {
         if (runningSessionToken !== sessionToken) return;
         running = false;
         runningSessionToken = null;
-        retryPendingMyListMutations('after-initialization');
+        if (retryMutations) retryPendingMyListMutations('after-initialization');
     }
 
     function registerActiveCarouselStyleCleanup(cleanup) {
@@ -2856,17 +2858,43 @@
         return '';
     }
 
-    function buildGraphqlMyListItems(edges, totalCount, columns, templateSlot) {
+    async function runConstructionChunks(count, buildItem, assertActive) {
+        assertActive();
+        let chunkStarted = performance.now();
+        let chunkItems = 0;
+        for (let index = 0; index < count; index++) {
+            if (buildItem(index) === false) return false;
+            chunkItems++;
+            if (index + 1 < count && (chunkItems >= BUILD_CHUNK_MAX_ITEMS ||
+                performance.now() - chunkStarted >= BUILD_CHUNK_BUDGET_MS)) {
+                // A timer yields to a new task, allowing input/rendering and route
+                // cleanup to run. Promise-only yielding would remain in microtasks.
+                await sleep(0);
+                assertActive();
+                chunkStarted = performance.now();
+                chunkItems = 0;
+            }
+        }
+        assertActive();
+        return true;
+    }
+
+    async function buildGraphqlMyListItems(edges, totalCount, columns, templateSlot, sessionToken = null) {
+        assertRouteSession(sessionToken);
         if (!Array.isArray(edges) || !templateSlot || !Number.isFinite(totalCount)) return null;
+        // Netflix may recycle this live slot while we yield. Keep one detached
+        // template so every snapshot uses the same markup throughout this build.
+        const template = templateSlot.cloneNode(true);
         const items = [];
         const seen = new Set();
-        for (const edge of edges) {
+        const complete = await runConstructionChunks(edges.length, index => {
+            const edge = edges[index];
             const node = edge?.node;
             const videoId = videoIdFromGraphqlNode(node);
-            if (!videoId || seen.has(videoId)) continue;
-            const snapshot = templateSlot.cloneNode(true);
+            if (!videoId || seen.has(videoId)) return;
+            const snapshot = template.cloneNode(true);
             const card = snapshot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-            if (!card) return null;
+            if (!card) return false;
             const href = `${location.origin}/browse?jbv=${encodeURIComponent(videoId)}`;
             const title = firstGraphqlText(node?.displayString) || firstGraphqlText(node) || `Netflix ${videoId}`;
             const imageUrl = firstGraphqlImageUrl(node?.contextualArtwork) || firstGraphqlImageUrl(node);
@@ -2879,19 +2907,20 @@
                 image.removeAttribute('srcset');
                 image.setAttribute('data-tm-graphql-image', 'true');
             }
-            const index = items.length;
+            const itemIndex = items.length;
             items.push({
                 href,
                 videoId,
-                page: Math.floor(index / Math.max(1, columns)),
-                logicalIndex: index,
+                page: Math.floor(itemIndex / Math.max(1, columns)),
+                logicalIndex: itemIndex,
                 ariaLabel: title,
                 snapshot,
                 graphql: true
             });
             seen.add(videoId);
-        }
-        return items.length === totalCount ? items : null;
+        }, () => assertRouteSession(sessionToken));
+        assertRouteSession(sessionToken);
+        return complete && items.length === totalCount ? items : null;
     }
 
     async function fetchFreshMyListBootstrapViaCarousel(sessionToken = null) {
@@ -3232,11 +3261,12 @@
                 : await fetchFreshMyListBootstrapViaCarousel(sessionToken);
             return {
                 bootstrap: freshBootstrap,
-                items: buildGraphqlMyListItems(
+                items: await buildGraphqlMyListItems(
                     freshBootstrap?.graphqlEdges,
                     totalCount,
                     columns,
-                    templateSlot
+                    templateSlot,
+                    sessionToken
                 )
             };
         }
@@ -8528,28 +8558,48 @@
         }, { capture: true, passive: true });
     }
 
-    function buildGrid(section, scroller, items, layout, totalCount) {
-        clearLegacyEmptyState({ restoreGrid: false });
-        invalidateGridReact();
-        document.getElementById(GRID_ID)?.remove();
-
+    async function buildGrid(section, scroller, items, layout, totalCount, sessionToken = routeSessionToken) {
+        const buildState = sourceState;
+        const track = buildState?.track;
+        const assertBuildActive = () => {
+            assertRouteSession(sessionToken);
+            if (sourceState !== buildState) throw createRouteSessionCancelledError();
+            if (!section.isConnected || !scroller.isConnected || !track?.isConnected ||
+                buildState.section !== section || buildState.scroller !== scroller || buildState.track !== track) {
+                throw initializationError('GRID_BUILD_SOURCE_REPLACED', 'grid-construction',
+                    'Native My List source changed during grid construction');
+            }
+        };
+        assertBuildActive();
         const grid = document.createElement('div');
         grid.id = GRID_ID;
         grid.setAttribute('data-tm-purpose', 'exact-items-and-live-react-hover');
         grid.removeAttribute('data-tm-empty');
         ensureGridHoverBehavior(grid);
 
-        sourceState.cloneMap = new Map();
-        sourceState.itemMap = new Map(items.map(item => [itemKey(item), item]));
+        const cloneMap = new Map();
+        const itemMap = new Map();
 
-        items.forEach((item, index) => {
+        await runConstructionChunks(items.length, index => {
+            const item = items[index];
             const clone = item.snapshot.cloneNode(true);
             normalizeClone(clone);
             copyItemAttributes(clone, item, index);
             associateGridHoverItem(item, clone);
             grid.appendChild(clone);
-            setGridClone(item, clone);
-        });
+            const key = itemKey(item);
+            cloneMap.set(key, clone);
+            itemMap.set(key, item);
+        }, assertBuildActive);
+        assertBuildActive();
+
+        // Publish the complete tree and maps together. A cancelled/failed build
+        // never removes the current frame or exposes a partial clone map.
+        clearLegacyEmptyState({ restoreGrid: false });
+        invalidateGridReact();
+        document.getElementById(GRID_ID)?.remove();
+        buildState.cloneMap = cloneMap;
+        buildState.itemMap = itemMap;
 
         const geometry = applyGridGeometry(section, grid, layout);
         const status = updateStatus(formatHeaderParts(items.length, totalCount, null));
@@ -9679,6 +9729,7 @@
                     templateSlot,
                     sessionToken
                 });
+                assertRouteSession(sessionToken);
                 freshMyListBootstrap = graphqlCollection.bootstrap;
                 graphqlItems = graphqlCollection.items;
                 if (graphqlItems) {
@@ -9701,7 +9752,10 @@
                     });
                 }
             } catch (error) {
-                if (isRouteSessionCancelledError(error)) throw error;
+                if (isRouteSessionCancelledError(error)) {
+                    clearRunningSession(sessionToken);
+                    return;
+                }
                 warn('GraphQL My List fast collection failed; falling back to native scan', {
                     code: error?.code || null,
                     stage: error?.stage || 'graphql-fast-collection',
@@ -9726,6 +9780,7 @@
             carouselDom: carouselDomProfileSummary(section)
         });
 
+        let retryGridBuild = false;
         try {
             const layout = measureVisibleLayout(section, scroller, track);
             layout.rowGap = measureNativeCarouselGap(section);
@@ -9815,7 +9870,8 @@
                 selectedPage: selectedPage(section),
                 parked: scroller.classList.contains(SOURCE_PARKED_CLASS)
             });
-            buildGrid(section, scroller, items, layout, totalCount);
+            await buildGrid(section, scroller, items, layout, totalCount, sessionToken);
+            assertRouteSession(sessionToken);
             sourceState.empty = false;
             applyOriginalMyListVisibility();
 
@@ -9846,6 +9902,12 @@
                     sessionToken,
                     url: location.href
                 });
+            } else if (error?.code === 'GRID_BUILD_SOURCE_REPLACED') {
+                log('Grid construction discarded after native source replacement', { sessionToken });
+                cleanupTargetSessionDom();
+                sourceState = null;
+                completedSection = null;
+                retryGridBuild = true;
             } else {
                 initializationBlockedSessionToken = sessionToken;
                 warn(tLog('initializationFailed'), {
@@ -9859,7 +9921,10 @@
                 updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
             }
         } finally {
-            clearRunningSession(sessionToken);
+            // Keep queued deltas deferred until the replacement source has a
+            // complete grid, rather than applying them to an incomplete frame.
+            clearRunningSession(sessionToken, !retryGridBuild);
+            if (retryGridBuild && isRouteSessionActive(sessionToken)) runScript(sessionToken);
         }
     }
 
