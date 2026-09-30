@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.2.0
+// @version      1.2.1
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -66,6 +66,7 @@
     const VIEWING_MAX_SEASONS = 40;
     const VIEWING_MAX_EPISODES = 500;
     const VIEWING_MAX_REQUESTS = 32;
+    const VIEWING_MAX_PASSES = 3;
     const VIEWING_TIMEOUT_MS = 30000;
     const VIEWING_COMPLETION_RATIO = 0.90;
 
@@ -81,7 +82,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.2.0';
+    const SCRIPT_VERSION = '1.2.1';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -1598,6 +1599,7 @@
                 unknown: sourceState.watchStatus.unknownCount,
                 loading: sourceState.watchStatus.loading,
                 requests: sourceState.watchStatus.requests,
+                passes: sourceState.watchStatus.passes,
                 failure: sourceState.watchStatus.failure
             } : null,
             sourceScan: Boolean(scroller?.classList?.contains(SOURCE_SCAN_CLASS)),
@@ -2992,6 +2994,14 @@
             ? unwrapped : null;
     }
 
+    function viewingCount(value) {
+        const unwrapped = unwrapViewingAtom(value);
+        // Missing counts can be recovered from covered lists; malformed counts
+        // must not become permission to ignore inconsistent metadata.
+        if (unwrapped == null) return null;
+        return Number.isSafeInteger(unwrapped) && unwrapped >= 0 ? unwrapped : NaN;
+    }
+
     function viewingVideoRecord(graph, videoId, type = '') {
         const video = readViewingGraph(graph, ['videos', String(videoId)]);
         if (!video || typeof video !== 'object') return null;
@@ -3003,8 +3013,8 @@
             bookmark: viewingNumber(video.bookmarkPosition),
             runtime: viewingNumber(video.runtime),
             creditsOffset: viewingNumber(video.creditsOffset),
-            seasonCount: viewingNumber(video.seasonCount),
-            episodeCount: viewingNumber(video.episodeCount)
+            seasonCount: viewingCount(video.seasonCount),
+            episodeCount: viewingCount(video.episodeCount)
         };
     }
 
@@ -3032,26 +3042,28 @@
     }
 
     function viewingSeasonPlan(graph, record) {
-        const count = record.seasonCount;
+        const count = record.seasonCount ?? viewingCount(readViewingGraph(graph, ['videos', record.videoId, 'seasonList', 'length']));
         const expected = record.episodeCount;
         if (!Number.isSafeInteger(count) || count < 1 || count > VIEWING_MAX_SEASONS ||
-            !Number.isSafeInteger(expected) || expected < 1 || expected > VIEWING_MAX_EPISODES) return null;
+            (expected !== null && (!Number.isSafeInteger(expected) || expected < 1 || expected > VIEWING_MAX_EPISODES))) return null;
         const list = readViewingGraph(graph, ['videos', record.videoId, 'seasonList']);
         if (!list || typeof list !== 'object') return null;
+        if (Object.keys(list).some(key => /^\d+$/.test(key) && Number(key) >= count)) return null;
         const seasons = [];
         const seen = new Set();
         let total = 0;
         for (let index = 0; index < count; index++) {
             const id = viewingReferenceId(list[index], 'seasons');
             const summary = id ? readViewingGraph(graph, ['seasons', id, 'summary']) : null;
-            const length = viewingNumber(summary?.length);
+            const length = viewingCount(summary?.length ?? readViewingGraph(graph, ['seasons', id, 'length']));
             if (!id || seen.has(id) || !Number.isSafeInteger(length) || length > VIEWING_MAX_EPISODES) return null;
             seen.add(id);
             total += length;
-            if (total > expected) return null;
+            if (total > VIEWING_MAX_EPISODES || (expected !== null && total > expected)) return null;
             seasons.push({ id, count: length, episodes: new Map() });
         }
-        return total === expected ? { videoId: record.videoId, expected, seasons } : null;
+        return total > 0 && (expected === null || total === expected)
+            ? { videoId: record.videoId, expected: total, seasons } : null;
     }
 
     function classifyViewingSeries(plan) {
@@ -3121,8 +3133,17 @@
 
     async function fetchViewingGraph(paths, job) {
         assertViewingJob(job);
-        const remaining = job.deadline - performance.now();
-        if (job.requests >= VIEWING_MAX_REQUESTS || remaining <= 0) throw new Error('VIEWING_STATUS_BUDGET');
+        const now = performance.now();
+        const remaining = job.deadline - now;
+        if (remaining <= 0) throw new Error('VIEWING_STATUS_BUDGET');
+        if (job.passRequests >= VIEWING_MAX_REQUESTS) {
+            if (job.passes >= VIEWING_MAX_PASSES) throw new Error('VIEWING_STATUS_BUDGET');
+            // Continue the same finite queue, including partial episode coverage.
+            // Do not restart title requests or retry failed HTTP responses.
+            job.passes++;
+            job.passRequests = 0;
+        }
+        job.passRequests++;
         job.requests++;
         const request = createRouteFetch(job.sessionToken);
         clearTimeout(request.timeoutId);
@@ -3150,6 +3171,7 @@
             return payload.jsonGraph;
         } catch (error) {
             assertViewingJob(job);
+            if (performance.now() >= job.deadline) throw new Error('VIEWING_STATUS_BUDGET');
             throw error;
         } finally {
             finishRouteFetch(request);
@@ -3170,10 +3192,10 @@
                 else if (['show', 'series', 'tvshow', 'episode'].includes(record?.type)) job.types.set(id, 'series');
                 if (record && ['show', 'series', 'tvshow'].includes(record.type)) {
                     job.seriesStats.found++;
-                    if (Number.isSafeInteger(record.seasonCount) && record.seasonCount > 0 &&
-                        record.seasonCount <= VIEWING_MAX_SEASONS &&
-                        Number.isSafeInteger(record.episodeCount) && record.episodeCount > 0 &&
-                        record.episodeCount <= VIEWING_MAX_EPISODES) {
+                    if ((record.seasonCount === null || (Number.isSafeInteger(record.seasonCount) &&
+                        record.seasonCount > 0 && record.seasonCount <= VIEWING_MAX_SEASONS)) &&
+                        (record.episodeCount === null || (Number.isSafeInteger(record.episodeCount) &&
+                        record.episodeCount > 0 && record.episodeCount <= VIEWING_MAX_EPISODES))) {
                         series.push(record);
                         job.seriesStats.eligible++;
                     }
@@ -3184,19 +3206,42 @@
         assertViewingJob(job);
         job.watch.types = job.types;
         syncWatchGroups(job.state);
-        for (let offset = 0; offset < series.length; offset += 8) {
-            // Finish a bounded group before loading more season lists. Large
-            // lists must not spend the whole budget without checking episodes.
-            await collectViewingSeriesBatch(series.slice(offset, offset + 8), job);
+        for (let offset = 0; offset < series.length;) {
+            const batch = [];
+            let episodes = 0, seasons = 0;
+            while (offset < series.length && batch.length < VIEWING_TITLE_BATCH_SIZE) {
+                const record = series[offset];
+                const episodeCost = record.episodeCount ?? VIEWING_MAX_EPISODES;
+                const seasonCost = record.seasonCount ?? VIEWING_MAX_SEASONS;
+                if (batch.length && (episodes + episodeCost > VIEWING_EPISODE_BATCH_SIZE ||
+                    seasons + seasonCost > VIEWING_EPISODE_BATCH_SIZE)) break;
+                batch.push(record);
+                episodes += episodeCost;
+                seasons += seasonCost;
+                offset++;
+            }
+            // Fill a bounded batch for short series; finish its episode work
+            // before requesting more season lists. Long series run alone.
+            await collectViewingSeriesBatch(batch, job);
+            assertViewingJob(job);
+            job.watch.results = job.results;
+            job.watch.requests = job.requests;
+            job.watch.passes = job.passes;
+            syncWatchGroups(job.state);
         }
     }
 
     async function collectViewingSeriesBatch(records, job) {
-        const paths = records.map(record => ['videos', record.videoId, 'seasonList',
-            { from: 0, to: record.seasonCount - 1 }, 'summary']);
+        const paths = records.flatMap(record => {
+            const paths = [['videos', record.videoId, 'seasonList',
+                { from: 0, to: (record.seasonCount ?? VIEWING_MAX_SEASONS) - 1 }, ['summary', 'length']]];
+            if (record.seasonCount === null) paths.push(['videos', record.videoId, 'seasonList', 'length']);
+            return paths;
+        });
         const graph = await fetchViewingGraph(paths, job);
         const plans = records.map(record => viewingSeasonPlan(graph, record)).filter(Boolean);
         job.seriesStats.planned += plans.length;
+        job.seriesStats.unplanned += records.length - plans.length;
         const segments = [];
         for (const plan of plans) {
             for (const season of plan.seasons) {
@@ -3212,12 +3257,14 @@
             let size = 0;
             while (offset < segments.length) {
                 const segment = segments[offset];
+                if (segment.plan.finished) { offset++; continue; }
                 const length = segment.to - segment.from + 1;
                 if (batch.length && size + length > VIEWING_EPISODE_BATCH_SIZE) break;
                 batch.push(segment);
                 size += length;
                 offset++;
             }
+            if (!batch.length) continue;
             const paths = batch.map(({ season, from, to }) => ['seasons', season.id, 'episodes',
                 { from, to }, ['summary', 'watched', 'bookmarkPosition', 'runtime', 'creditsOffset']]);
             const graph = await fetchViewingGraph(paths, job);
@@ -3226,18 +3273,31 @@
                 for (let index = from; index <= to; index++) {
                     const id = viewingReferenceId(episodes?.[index], 'videos');
                     const record = id ? viewingVideoRecord(graph, id, 'episode') : null;
-                    season.episodes.set(index, { id, status: classifyViewingVideo(record) });
+                    const status = classifyViewingVideo(record);
+                    season.episodes.set(index, { id, status });
+                    job.seriesStats.episodesChecked++;
+                    if (!id) job.seriesStats.missingEpisodeRefs++;
+                    if (status === 'unknown') job.seriesStats.episodesUnknown++;
+                    else if (status !== 'complete') job.seriesStats.episodesIncomplete++;
                 }
             }
             // Keep each fully checked result even if a later request fails or
             // reaches the scan budget. Unfinished coverage remains unknown.
             for (const plan of new Set(batch.map(segment => segment.plan))) {
-                if (plan.seasons.every(season => season.episodes.size === season.count)) {
-                    const status = classifyViewingSeries(plan);
+                if (plan.finished) continue;
+                const full = plan.seasons.every(season => season.episodes.size === season.count);
+                const observed = plan.seasons.flatMap(season => [...season.episodes.values()]);
+                // One unfinished/unreadable episode already prevents caught-up
+                // status. Save the remaining requests for other titles.
+                if (full || observed.some(episode => !episode.id || episode.status !== 'complete')) {
+                    const status = full ? classifyViewingSeries(plan)
+                        : observed.some(episode => !episode.id || episode.status === 'unknown') ? 'unknown' : 'in-progress';
+                    plan.finished = true;
                     job.results.set(plan.videoId, status);
                     job.seriesStats.checked++;
                     if (status === 'complete') job.seriesStats.complete++;
                     if (status === 'unknown') job.seriesStats.unknown++;
+                    if (status === 'in-progress' || status === 'not-started') job.seriesStats.incomplete++;
                 }
             }
         }
@@ -3419,7 +3479,7 @@
         state.watchStatus = {
             sessionToken, results: new Map(), types: new Map(), filters: { main: 'movie', watched: 'movie' },
             completedCount: 0, unknownCount: state.items.length, visibleCount: 0,
-            loading: false, expanded: false, ui: null, promise: null, requests: 0, failure: null, profileGuid: null
+            loading: false, expanded: false, ui: null, promise: null, requests: 0, passes: 0, failure: null, profileGuid: null
         };
         syncWatchGroups(state);
         refreshViewingStatus(state);
@@ -3448,12 +3508,14 @@
         syncWatchGroups(state);
         const job = {
             state, watch, context, sessionToken: watch.sessionToken, results: new Map(), types: new Map(),
-            requests: 0, deadline: performance.now() + VIEWING_TIMEOUT_MS,
-            seriesStats: { found: 0, eligible: 0, planned: 0, checked: 0, complete: 0, unknown: 0 }
+            requests: 0, passRequests: 0, passes: 1, deadline: performance.now() + VIEWING_TIMEOUT_MS * VIEWING_MAX_PASSES,
+            seriesStats: { found: 0, eligible: 0, planned: 0, checked: 0, complete: 0, unknown: 0,
+                incomplete: 0, unplanned: 0, episodesChecked: 0, episodesIncomplete: 0, episodesUnknown: 0, missingEpisodeRefs: 0 }
         };
         log(tLog('viewingStatusStarted'), {
             titles: state.items.length, endpointType: context.endpointType, endpointPath: context.endpointPath,
-            completionRatio: VIEWING_COMPLETION_RATIO
+            completionRatio: VIEWING_COMPLETION_RATIO, maxPasses: VIEWING_MAX_PASSES,
+            maxRequests: VIEWING_MAX_REQUESTS * VIEWING_MAX_PASSES
         });
         watch.promise = (async () => {
             try {
@@ -3484,11 +3546,13 @@
             watch.results = job.results;
             watch.types = job.types;
             watch.requests = job.requests;
+            watch.passes = job.passes;
             watch.loading = false;
             syncWatchGroups(state);
             log(tLog('viewingStatusCompleted'), {
                 completed: watch.completedCount, unknown: watch.unknownCount,
-                requests: watch.requests, failure: watch.failure, series: job.seriesStats
+                requests: watch.requests, passes: watch.passes, failure: watch.failure,
+                series: { ...job.seriesStats, pending: job.seriesStats.eligible - job.seriesStats.checked - job.seriesStats.unplanned }
             });
         })().catch(() => {
             // Optional grouping must never reject Netflix's grid initialization.
