@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.1.2
+// @version      1.1.3
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -67,7 +67,7 @@
     const VIEWING_MAX_EPISODES = 500;
     const VIEWING_MAX_REQUESTS = 32;
     const VIEWING_TIMEOUT_MS = 30000;
-    const VIEWING_COMPLETION_RATIO = 0.95;
+    const VIEWING_COMPLETION_RATIO = 0.90;
 
     const GRID_ID = 'tm-netflix-mylist-v15-grid';
     const STATUS_ID = 'tm-netflix-mylist-v15-status';
@@ -81,7 +81,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.1.2';
+    const SCRIPT_VERSION = '1.1.3';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -3057,33 +3057,41 @@
             for (const id of batch) {
                 const record = viewingVideoRecord(graph, id);
                 job.results.set(id, classifyViewingVideo(record));
-                if (record && ['show', 'series', 'tvshow'].includes(record.type) &&
-                    Number.isSafeInteger(record.seasonCount) && record.seasonCount > 0 &&
-                    record.seasonCount <= VIEWING_MAX_SEASONS &&
-                    Number.isSafeInteger(record.episodeCount) && record.episodeCount > 0 &&
-                    record.episodeCount <= VIEWING_MAX_EPISODES) series.push(record);
+                if (record && ['show', 'series', 'tvshow'].includes(record.type)) {
+                    job.seriesStats.found++;
+                    if (Number.isSafeInteger(record.seasonCount) && record.seasonCount > 0 &&
+                        record.seasonCount <= VIEWING_MAX_SEASONS &&
+                        Number.isSafeInteger(record.episodeCount) && record.episodeCount > 0 &&
+                        record.episodeCount <= VIEWING_MAX_EPISODES) {
+                        series.push(record);
+                        job.seriesStats.eligible++;
+                    }
+                }
             }
         }
-        const plans = [];
         for (let offset = 0; offset < series.length; offset += 8) {
-            const batch = series.slice(offset, offset + 8);
-            const paths = batch.map(record => ['videos', record.videoId, 'seasonList',
-                { from: 0, to: record.seasonCount - 1 }, 'summary']);
-            const graph = await fetchViewingGraph(paths, job);
-            for (const record of batch) {
-                const plan = viewingSeasonPlan(graph, record);
-                if (plan) plans.push(plan);
-            }
+            // Finish a bounded group before loading more season lists. Large
+            // lists must not spend the whole budget without checking episodes.
+            await collectViewingSeriesBatch(series.slice(offset, offset + 8), job);
         }
-        // Batch across shows/seasons, splitting long seasons at the same budget.
+    }
+
+    async function collectViewingSeriesBatch(records, job) {
+        const paths = records.map(record => ['videos', record.videoId, 'seasonList',
+            { from: 0, to: record.seasonCount - 1 }, 'summary']);
+        const graph = await fetchViewingGraph(paths, job);
+        const plans = records.map(record => viewingSeasonPlan(graph, record)).filter(Boolean);
+        job.seriesStats.planned += plans.length;
         const segments = [];
         for (const plan of plans) {
             for (const season of plan.seasons) {
                 for (let from = 0; from < season.count; from += VIEWING_EPISODE_BATCH_SIZE) {
-                    segments.push({ season, from, to: Math.min(season.count - 1, from + VIEWING_EPISODE_BATCH_SIZE - 1) });
+                    segments.push({ plan, season, from,
+                        to: Math.min(season.count - 1, from + VIEWING_EPISODE_BATCH_SIZE - 1) });
                 }
             }
         }
+        // Batch episodes across the current group, splitting long seasons.
         for (let offset = 0; offset < segments.length;) {
             const batch = [];
             let size = 0;
@@ -3106,8 +3114,18 @@
                     season.episodes.set(index, { id, status: classifyViewingVideo(record) });
                 }
             }
+            // Keep each fully checked result even if a later request fails or
+            // reaches the scan budget. Unfinished coverage remains unknown.
+            for (const plan of new Set(batch.map(segment => segment.plan))) {
+                if (plan.seasons.every(season => season.episodes.size === season.count)) {
+                    const status = classifyViewingSeries(plan);
+                    job.results.set(plan.videoId, status);
+                    job.seriesStats.checked++;
+                    if (status === 'complete') job.seriesStats.complete++;
+                    if (status === 'unknown') job.seriesStats.unknown++;
+                }
+            }
         }
-        for (const plan of plans) job.results.set(plan.videoId, classifyViewingSeries(plan));
     }
 
     function gridOwnsClone(clone, grid) {
@@ -3232,10 +3250,12 @@
         syncWatchGroups(state);
         const job = {
             state, watch, context, sessionToken: watch.sessionToken, results: new Map(),
-            requests: 0, deadline: performance.now() + VIEWING_TIMEOUT_MS
+            requests: 0, deadline: performance.now() + VIEWING_TIMEOUT_MS,
+            seriesStats: { found: 0, eligible: 0, planned: 0, checked: 0, complete: 0, unknown: 0 }
         };
         log(tLog('viewingStatusStarted'), {
-            titles: state.items.length, endpointType: context.endpointType, endpointPath: context.endpointPath
+            titles: state.items.length, endpointType: context.endpointType, endpointPath: context.endpointPath,
+            completionRatio: VIEWING_COMPLETION_RATIO
         });
         watch.promise = (async () => {
             try {
@@ -3267,7 +3287,7 @@
             syncWatchGroups(state);
             log(tLog('viewingStatusCompleted'), {
                 completed: watch.completedCount, unknown: watch.unknownCount,
-                requests: watch.requests, failure: watch.failure
+                requests: watch.requests, failure: watch.failure, series: job.seriesStats
             });
         })().catch(() => {
             // Optional grouping must never reject Netflix's grid initialization.

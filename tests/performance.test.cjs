@@ -2348,7 +2348,7 @@ test('HTTP failure cleanup aborts the unread response body and releases its cont
 const viewingFunctions = [
     'unwrapViewingAtom', 'readViewingGraph', 'readViewingGraphReference', 'viewingNumber', 'viewingVideoRecord',
     'classifyViewingVideo', 'viewingReferenceId', 'viewingSeasonPlan', 'classifyViewingSeries',
-    'viewingRequestContext', 'assertViewingJob', 'fetchViewingGraph', 'collectViewingStatuses',
+    'viewingRequestContext', 'assertViewingJob', 'fetchViewingGraph', 'collectViewingStatuses', 'collectViewingSeriesBatch',
     'gridOwnsClone', 'ensureWatchGroupUi', 'syncWatchChildOrder', 'syncWatchGroups',
     'initializeWatchGroups', 'refreshViewingStatus', 'createRouteFetch', 'finishRouteFetch',
     'abortObsoleteRouteFetches', 'gridCloneFromPointerEvent', 'gridHoverTargetActive', 'gridHoverSuppressed', 'cancelPendingGridHover',
@@ -2402,7 +2402,7 @@ async function viewingEnvironment(count = 7, existing = null) {
     Object.assign(e.c, {
         URLSearchParams, AbortController, FRESH_MY_LIST_FETCH_TIMEOUT_MS: 10000,
         VIEWING_TITLE_BATCH_SIZE: 50, VIEWING_EPISODE_BATCH_SIZE: 200, VIEWING_MAX_SEASONS: 40,
-        VIEWING_MAX_EPISODES: 500, VIEWING_MAX_REQUESTS: 32, VIEWING_TIMEOUT_MS: 30000, VIEWING_COMPLETION_RATIO: 0.95,
+        VIEWING_MAX_EPISODES: 500, VIEWING_MAX_REQUESTS: 32, VIEWING_TIMEOUT_MS: 30000, VIEWING_COMPLETION_RATIO: 0.90,
         routeFetchControllers: new Map(), netflixModelData: name => models[name],
         getUiLocale: () => 'en', formatUiNumber: value => String(value), formatInitializationTime: () => 'time',
         fetch: async (url, options) => {
@@ -2433,6 +2433,37 @@ function completedViewingIds(e) {
     return e.state.watchStatus.ui.watchedGrid.children.map(node => node.__tmMyListItem.videoId);
 }
 
+function useCompleteSeriesResponses(e, episodeCounts = {}) {
+    const countFor = id => episodeCounts[id] ?? 1;
+    e.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        e.requests.push({ url, options, paths });
+        const graph = { videos: {}, seasons: {} };
+        if (Array.isArray(paths[0][2])) {
+            for (const id of paths[0][1]) graph.videos[id] = viewingVideo('show', true, 0, {
+                seasonCount: atom(1), episodeCount: atom(countFor(id))
+            });
+        } else if (paths[0][0] === 'videos') {
+            for (const [, id] of paths) {
+                const seasonId = String(10000 + Number(id));
+                graph.videos[id] = { seasonList: { 0: reference('seasons', seasonId) } };
+                graph.seasons[seasonId] = { summary: atom({ length: countFor(id) }) };
+            }
+        } else {
+            for (const [, seasonId, , range] of paths) {
+                const episodes = {};
+                for (let index = range.from; index <= range.to; index++) {
+                    const episodeId = String(Number(seasonId) * 1000 + index);
+                    episodes[index] = reference('videos', episodeId);
+                    graph.videos[episodeId] = viewingVideo('episode', true);
+                }
+                graph.seasons[seasonId] = { episodes };
+            }
+        }
+        return { ok: true, status: 200, json: async () => ({ jsonGraph: graph }) };
+    };
+}
+
 test('viewing data resolves atoms/references safely and does not guess from missing or series flags', async () => {
     const e = await viewingEnvironment();
     const graph = { videos: { 1: viewingVideo('movie', true), 2: { $type: 'error', value: 'missing' } },
@@ -2445,8 +2476,8 @@ test('viewing data resolves atoms/references safely and does not guess from miss
     });
     assert.equal(classify({ watched: true }), 'complete');
     assert.equal(classify({ watched: false, bookmark: 100 }), 'complete');
-    assert.equal(classify({ bookmark: 95 }), 'complete');
-    assert.equal(classify({ bookmark: 94 }), 'in-progress');
+    assert.equal(classify({ bookmark: 90 }), 'complete');
+    assert.equal(classify({ bookmark: 89 }), 'in-progress');
     assert.equal(classify({ watched: false, bookmark: 0 }), 'not-started');
     assert.equal(classify({ watched: false }), 'unknown');
     assert.equal(classify({ type: 'show', watched: true }), 'unknown');
@@ -2690,6 +2721,58 @@ test('viewing request budget preserves confirmed movies and leaves unverified se
     assert.equal(e.c.routeFetchControllers.size, 0);
 });
 
+test('a large series list classifies completed groups before exhausting the scan budget', async () => {
+    const e = await viewingEnvironment(500);
+    useCompleteSeriesResponses(e);
+    await e.start();
+    assert.equal(e.requests.length, 32);
+    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_BUDGET');
+    assert.deepEqual(completedViewingIds(e), Array.from({ length: 88 }, (_, index) => String(index + 1)));
+    assert.equal(mainViewingIds(e).length, 412);
+    assert.equal(e.state.watchStatus.unknownCount, 412);
+    const diagnostic = e.logs.find(entry => entry.details?.series)?.details.series;
+    assert.deepEqual({ ...diagnostic }, { found: 500, eligible: 500, planned: 88, checked: 88, complete: 88, unknown: 0 });
+    assert.equal(e.state.totalCount, 500);
+    assert.equal(e.state.cloneMap.size, 500);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('completed series results survive a budget limit inside the current episode group', async () => {
+    const e = await viewingEnvironment(2);
+    useCompleteSeriesResponses(e, { 1: 200, 2: 1 });
+    e.c.VIEWING_MAX_REQUESTS = 3;
+    await e.start();
+    assert.equal(e.requests.length, 3);
+    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_BUDGET');
+    assert.deepEqual(completedViewingIds(e), ['1']);
+    assert.deepEqual(mainViewingIds(e), ['2']);
+    assert.equal(e.state.watchStatus.unknownCount, 1);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('a later series-group HTTP failure preserves fully verified series results', async () => {
+    const e = await viewingEnvironment(9);
+    useCompleteSeriesResponses(e);
+    const mockFetch = e.c.fetch;
+    e.c.fetch = async (url, options) => {
+        if (e.requests.length === 3) {
+            e.requests.push({ url, options });
+            return { ok: false, status: 503 };
+        }
+        return mockFetch(url, options);
+    };
+    await e.start();
+    assert.equal(e.requests.length, 4);
+    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
+    assert.deepEqual(completedViewingIds(e), ['1', '2', '3', '4', '5', '6', '7', '8']);
+    assert.deepEqual(mainViewingIds(e), ['9']);
+    assert.equal(e.state.watchStatus.unknownCount, 1);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.timers.size, 0);
+});
+
 test('route leave aborts viewing requests and stale completion cannot update a new grid', async () => {
     const e = await viewingEnvironment();
     let signal;
@@ -2814,20 +2897,21 @@ test('failed refresh reveals old completion results instead of hiding titles usi
     assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
 });
 
-test('completion accepts 95 percent or earlier credits even when Netflix still reports unwatched', async () => {
+test('completion accepts 90 percent or earlier credits even when Netflix still reports unwatched', async () => {
     const e = await viewingEnvironment();
     const classify = fields => e.c.classifyViewingVideo({
         type: 'movie', watched: false, bookmark: 0, runtime: 3600, creditsOffset: null, ...fields
     });
-    assert.equal(classify({ bookmark: 3240 }), 'in-progress', '90 percent still has material playback left');
-    assert.equal(classify({ bookmark: 3419 }), 'in-progress');
-    assert.equal(classify({ bookmark: 3420 }), 'complete', 'the 95 percent boundary is inclusive');
-    assert.equal(classify({ bookmark: 3421 }), 'complete');
-    assert.equal(classify({ bookmark: 3300, creditsOffset: 3300 }), 'complete', 'an earlier real credits boundary wins');
-    assert.equal(classify({ bookmark: 3299, creditsOffset: 3300 }), 'in-progress');
-    assert.equal(classify({ bookmark: 3420, creditsOffset: 3500 }), 'complete', 'later credits do not override 95 percent');
-    assert.equal(classify({ bookmark: 3420, creditsOffset: 4000 }), 'complete', 'invalid credits use the runtime threshold');
-    assert.equal(classify({ bookmark: 3420, creditsOffset: 0 }), 'complete');
+    assert.equal(classify({ bookmark: 3060 }), 'in-progress', '85 percent remains below the selected cutoff');
+    assert.equal(classify({ bookmark: 3239 }), 'in-progress');
+    assert.equal(classify({ bookmark: 3240 }), 'complete', 'the 90 percent boundary is inclusive');
+    assert.equal(classify({ bookmark: 3241 }), 'complete');
+    assert.equal(classify({ bookmark: 3420 }), 'complete', 'previously accepted 95 percent still qualifies');
+    assert.equal(classify({ bookmark: 3200, creditsOffset: 3200 }), 'complete', 'an earlier real credits boundary wins');
+    assert.equal(classify({ bookmark: 3199, creditsOffset: 3200 }), 'in-progress');
+    assert.equal(classify({ bookmark: 3240, creditsOffset: 3500 }), 'complete', 'later credits do not override 90 percent');
+    assert.equal(classify({ bookmark: 3240, creditsOffset: 4000 }), 'complete', 'invalid credits use the runtime threshold');
+    assert.equal(classify({ bookmark: 3240, creditsOffset: 0 }), 'complete');
     assert.equal(classify({ watched: true, bookmark: 0 }), 'complete', 'a confirmed Netflix completion remains sufficient');
     assert.equal(classify({ type: 'show', watched: true, bookmark: 3600 }), 'unknown', 'series need episode coverage');
 });
@@ -2948,10 +3032,10 @@ test('a rejected viewing request stops after one attempt and records its resolve
 test('credit-tolerant completion moves movies and fully caught-up series out of the main grid', async () => {
     const e = await viewingEnvironment();
     const fixtures = e.fixtures();
-    fixtures.titles.videos[1] = viewingVideo('movie', false, 95, { creditsOffset: atom(99) });
-    fixtures.titles.videos[2] = viewingVideo('movie', false, 90, { creditsOffset: atom(99) });
-    fixtures.episodes.videos[400] = viewingVideo('episode', false, 95, { creditsOffset: atom(99) });
-    fixtures.episodes.videos[401] = viewingVideo('episode', false, 90, { creditsOffset: atom(90) });
+    fixtures.titles.videos[1] = viewingVideo('movie', false, 90, { creditsOffset: atom(99) });
+    fixtures.titles.videos[2] = viewingVideo('movie', false, 85, { creditsOffset: atom(99) });
+    fixtures.episodes.videos[400] = viewingVideo('episode', false, 90, { creditsOffset: atom(99) });
+    fixtures.episodes.videos[401] = viewingVideo('episode', false, 85, { creditsOffset: atom(85) });
     await e.start();
     assert.deepEqual(completedViewingIds(e), ['1', '4']);
     assert.deepEqual(mainViewingIds(e), ['2', '3', '5', '6', '7']);
@@ -2965,11 +3049,11 @@ test('series completion checks each episode rather than averaging viewing percen
     const e = await viewingEnvironment();
     const fixtures = e.fixtures();
     fixtures.episodes.videos[400] = viewingVideo('episode', false, 100, { creditsOffset: atom(99) });
-    fixtures.episodes.videos[401] = viewingVideo('episode', false, 90, { creditsOffset: atom(99) });
+    fixtures.episodes.videos[401] = viewingVideo('episode', false, 80, { creditsOffset: atom(99) });
     await e.start();
-    assert.ok(mainViewingIds(e).includes('4'), '100 percent plus 90 percent is still not caught up');
+    assert.ok(mainViewingIds(e).includes('4'), '100 percent plus 80 percent is still not caught up');
     assert.deepEqual(completedViewingIds(e), ['1']);
-    fixtures.episodes.videos[401].bookmarkPosition = atom(95);
+    fixtures.episodes.videos[401].bookmarkPosition = atom(90);
     await e.c.refreshViewingStatus(e.state);
     assert.deepEqual(completedViewingIds(e), ['1', '4']);
 });
