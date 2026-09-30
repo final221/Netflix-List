@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.0.12
+// @version      1.0.13
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -74,7 +74,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.0.12';
+    const SCRIPT_VERSION = '1.0.13';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -973,6 +973,7 @@
     let lastObservedUrl = location.href;
     let routeChangeSequence = 0;
     let routeSessionToken = 0;
+    const routeFetchControllers = new Map();
     let targetSessionActive = false;
     let targetSessionEntryKind = 'initial';
     let targetSessionReason = 'route:initial';
@@ -1058,6 +1059,36 @@
     function assertRouteSession(sessionToken) {
         if (sessionToken === null || sessionToken === undefined) return;
         if (!isRouteSessionActive(sessionToken)) throw createRouteSessionCancelledError();
+    }
+
+    function createRouteFetch(sessionToken) {
+        assertRouteSession(sessionToken);
+        const controller = new AbortController();
+        if (sessionToken !== null && sessionToken !== undefined) {
+            let controllers = routeFetchControllers.get(sessionToken);
+            if (!controllers) routeFetchControllers.set(sessionToken, controllers = new Set());
+            controllers.add(controller);
+        }
+        const timeoutId = setTimeout(() => controller.abort(), FRESH_MY_LIST_FETCH_TIMEOUT_MS);
+        return { controller, timeoutId, sessionToken };
+    }
+
+    function finishRouteFetch(request) {
+        clearTimeout(request.timeoutId);
+        // An HTTP failure can leave its response body unread. Close it along
+        // with the request scope; completed/previously aborted requests are safe.
+        request.controller.abort();
+        const controllers = routeFetchControllers.get(request.sessionToken);
+        controllers?.delete(request.controller);
+        if (controllers?.size === 0) routeFetchControllers.delete(request.sessionToken);
+    }
+
+    function abortObsoleteRouteFetches() {
+        for (const [sessionToken, controllers] of routeFetchControllers) {
+            if (isRouteSessionActive(sessionToken)) continue;
+            routeFetchControllers.delete(sessionToken);
+            for (const controller of controllers) controller.abort();
+        }
     }
 
     function hoverPreparationCancelled(token) {
@@ -1156,6 +1187,7 @@
         const previousToken = routeSessionToken;
         routeSessionToken++;
         targetSessionActive = false;
+        abortObsoleteRouteFetches();
 
         if (scheduledRunTimer !== null) clearTimeout(scheduledRunTimer);
         scheduledRunTimer = null;
@@ -1213,6 +1245,7 @@
     function startTargetSession(reason = 'route-enter') {
         routeSessionToken++;
         targetSessionActive = true;
+        abortObsoleteRouteFetches();
         initializationBlockedSessionToken = null;
         targetSessionEntryKind = reason === 'route:initial' ? 'initial' : 'spa';
         targetSessionReason = reason;
@@ -2913,208 +2946,189 @@
         return complete && items.length === totalCount ? items : null;
     }
 
+    async function fetchMyListCarouselPage(request, cursor, signal, sessionToken) {
+        assertRouteSession(sessionToken);
+        const body = { ...request.body, variables: { ...request.body.variables, carouselAfterCursor: cursor } };
+        const response = await fetch('https://web.prod.cloud.netflix.com/graphql', {
+            method: 'POST', credentials: 'include', cache: 'no-store', redirect: 'follow',
+            headers: request.headers, body: JSON.stringify(body), signal
+        });
+        assertRouteSession(sessionToken);
+        if (!response.ok) {
+            throw initializationError('FRESH_MY_LIST_CAROUSEL_HTTP_ERROR', 'fresh-my-list-carousel',
+                'Netflix CarouselPage returned HTTP ' + response.status,
+                { status: response.status, statusText: response.statusText, responseUrl: response.url });
+        }
+        const text = await response.text();
+        assertRouteSession(sessionToken);
+        let payload;
+        try {
+            payload = JSON.parse(text);
+        } catch (error) {
+            throw initializationError('FRESH_MY_LIST_CAROUSEL_PARSE_ERROR', 'fresh-my-list-carousel',
+                'Netflix CarouselPage returned invalid JSON',
+                { responseUrl: response.url, responseBytes: text.length, errorMessage: error?.message || String(error) });
+        }
+        const node = payload?.data?.node;
+        const countValue = node?.entities?.totalCount;
+        const totalCount = Number(countValue);
+        const countPresent = typeof countValue === 'number' ||
+            (typeof countValue === 'string' && countValue.trim() !== '');
+        if (node?.__typename !== 'PinotCarouselSection' || !countPresent ||
+            !Number.isSafeInteger(totalCount) || totalCount < 0) {
+            throw initializationError('FRESH_MY_LIST_CAROUSEL_TOTAL_COUNT_UNAVAILABLE', 'fresh-my-list-carousel',
+                'Could not read the current Netflix My List totalCount from CarouselPage', {
+                    responseUrl: response.url, responseBytes: text.length, typename: node?.__typename || null,
+                    graphqlErrors: Array.isArray(payload?.errors) ? payload.errors.map(item => item?.message || String(item)) : []
+                });
+        }
+        return {
+            totalCount,
+            edges: Array.isArray(node?.entities?.edges) ? node.entities.edges : [],
+            hasNextPage: Boolean(node?.entities?.pageInfo?.hasNextPage),
+            endCursor: node?.entities?.pageInfo?.endCursor || null,
+            responseUrl: response.url,
+            responseBytes: text.length
+        };
+    }
+
+    function carouselFetchError(error, sessionToken) {
+        // Route aborts must never become a timeout warning or start a fallback.
+        assertRouteSession(sessionToken);
+        if (isRouteSessionCancelledError(error) || (error?.code && error?.stage)) return error;
+        const aborted = error?.name === 'AbortError';
+        return initializationError(
+            aborted ? 'FRESH_MY_LIST_CAROUSEL_TIMEOUT' : 'FRESH_MY_LIST_CAROUSEL_FAILED',
+            'fresh-my-list-carousel',
+            aborted
+                ? 'Netflix CarouselPage timed out after ' + FRESH_MY_LIST_FETCH_TIMEOUT_MS + ' ms'
+                : 'Netflix CarouselPage failed: ' + (error?.message || error),
+            {
+                timeoutMs: aborted ? FRESH_MY_LIST_FETCH_TIMEOUT_MS : null,
+                errorName: error?.name || null,
+                errorMessage: error?.message || String(error || '')
+            }
+        );
+    }
+
     async function fetchFreshMyListBootstrapViaCarousel(sessionToken = null) {
         assertRouteSession(sessionToken);
         const entry = findMyListGraphqlEntry();
         const rowId = entry?.value?._id;
         if (!rowId) {
-            throw initializationError(
-                'FRESH_MY_LIST_CAROUSEL_ID_UNAVAILABLE',
-                'fresh-my-list-carousel',
+            throw initializationError('FRESH_MY_LIST_CAROUSEL_ID_UNAVAILABLE', 'fresh-my-list-carousel',
                 'Could not identify the current Netflix My List carousel id',
-                { graphqlKey: entry?.key || null, detectionReason: entry?.reason || null }
-            );
+                { graphqlKey: entry?.key || null, detectionReason: entry?.reason || null });
         }
-
-        const variables = {
-            rowId,
-            ...carouselArtworkVariables(),
-            carouselPageSize: GRAPHQL_COLLECTION_PAGE_SIZE,
-            carouselAfterCursor: null,
-            eddEnabled: false,
-            fetchHighResCards: false
-        };
-        const body = {
-            operationName: 'CarouselPage',
-            variables,
-            extensions: {
-                persistedQuery: {
-                    id: 'a4ec8877-bccc-49bd-930b-34eaa1d3b7e0',
-                    version: 102
-                }
+        const request = {
+            body: {
+                operationName: 'CarouselPage',
+                variables: {
+                    rowId, ...carouselArtworkVariables(), carouselPageSize: GRAPHQL_COLLECTION_PAGE_SIZE,
+                    carouselAfterCursor: null, eddEnabled: false, fetchHighResCards: false
+                },
+                extensions: { persistedQuery: { id: 'a4ec8877-bccc-49bd-930b-34eaa1d3b7e0', version: 102 } }
+            },
+            headers: {
+                'content-type': 'application/json',
+                'x-netflix.context.ui-flavor': 'akira',
+                'x-netflix.context.operation-name': 'CarouselPage',
+                'X-Netflix.Request.Originating.Url': location.href
             }
         };
-        const headers = {
-            'content-type': 'application/json',
-            'x-netflix.context.ui-flavor': 'akira',
-            'x-netflix.context.operation-name': 'CarouselPage',
-            'X-Netflix.Request.Originating.Url': location.href
-        };
-        const serverDefs = netflixModelData('serverDefs');
-        const appVersion = serverDefs?.BUILD_IDENTIFIER;
-        if (appVersion) headers['x-netflix.context.app-version'] = String(appVersion);
-        const geo = netflixModelData('geo');
-        const locale = geo?.locale?.id || document.documentElement.lang;
-        if (locale) headers['x-netflix.context.locales'] = String(locale).toLowerCase();
+        const appVersion = netflixModelData('serverDefs')?.BUILD_IDENTIFIER;
+        if (appVersion) request.headers['x-netflix.context.app-version'] = String(appVersion);
+        const locale = netflixModelData('geo')?.locale?.id || document.documentElement.lang;
+        if (locale) request.headers['x-netflix.context.locales'] = String(locale).toLowerCase();
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), FRESH_MY_LIST_FETCH_TIMEOUT_MS);
+        const fetchState = createRouteFetch(sessionToken);
         const started = performance.now();
         try {
-            const response = await fetch('https://web.prod.cloud.netflix.com/graphql', {
-                method: 'POST',
-                credentials: 'include',
-                cache: 'no-store',
-                redirect: 'follow',
-                headers,
-                body: JSON.stringify(body),
-                signal: controller.signal
-            });
+            // Count and first-title bootstrap needs one page in every mode.
+            // Keep its continuation for logical collection after native readiness.
+            const page = await fetchMyListCarouselPage(request, null, fetchState.controller.signal, sessionToken);
             assertRouteSession(sessionToken);
-            if (!response.ok) {
-                throw initializationError(
-                    'FRESH_MY_LIST_CAROUSEL_HTTP_ERROR',
-                    'fresh-my-list-carousel',
-                    `Netflix CarouselPage returned HTTP ${response.status}`,
-                    { status: response.status, statusText: response.statusText, responseUrl: response.url }
-                );
-            }
-            const text = await response.text();
-            assertRouteSession(sessionToken);
-            let payload;
-            try {
-                payload = JSON.parse(text);
-            } catch (error) {
-                throw initializationError(
-                    'FRESH_MY_LIST_CAROUSEL_PARSE_ERROR',
-                    'fresh-my-list-carousel',
-                    'Netflix CarouselPage returned invalid JSON',
-                    { responseUrl: response.url, responseBytes: text.length, errorMessage: error?.message || String(error) }
-                );
-            }
-            let node = payload?.data?.node;
-            const totalCount = Number(node?.entities?.totalCount);
-            if (node?.__typename !== 'PinotCarouselSection' || !Number.isFinite(totalCount) || totalCount < 0) {
-                throw initializationError(
-                    'FRESH_MY_LIST_CAROUSEL_TOTAL_COUNT_UNAVAILABLE',
-                    'fresh-my-list-carousel',
-                    'Could not read the current Netflix My List totalCount from CarouselPage',
-                    {
-                        responseUrl: response.url,
-                        responseBytes: text.length,
-                        typename: node?.__typename || null,
-                        graphqlErrors: Array.isArray(payload?.errors) ? payload.errors.map(item => item?.message || String(item)) : []
-                    }
-                );
-            }
-            const edges = [...(node?.entities?.edges || [])];
-            let cursor = node?.entities?.pageInfo?.endCursor || null;
-            let graphqlPageCount = 1;
-            while (node?.entities?.pageInfo?.hasNextPage && cursor && graphqlPageCount < GRAPHQL_COLLECTION_MAX_PAGES) {
-                assertRouteSession(sessionToken);
-                const nextBody = {
-                    ...body,
-                    variables: { ...variables, carouselAfterCursor: cursor }
-                };
-                const nextResponse = await fetch('https://web.prod.cloud.netflix.com/graphql', {
-                    method: 'POST',
-                    credentials: 'include',
-                    cache: 'no-store',
-                    redirect: 'follow',
-                    headers,
-                    body: JSON.stringify(nextBody),
-                    signal: controller.signal
-                });
-                assertRouteSession(sessionToken);
-                if (!nextResponse.ok) {
-                    throw initializationError(
-                        'FRESH_MY_LIST_CAROUSEL_HTTP_ERROR',
-                        'fresh-my-list-carousel',
-                        `Netflix CarouselPage returned HTTP ${nextResponse.status}`,
-                        { status: nextResponse.status, statusText: nextResponse.statusText, responseUrl: nextResponse.url }
-                    );
-                }
-                const nextText = await nextResponse.text();
-                assertRouteSession(sessionToken);
-                let nextPayload;
-                try {
-                    nextPayload = JSON.parse(nextText);
-                } catch (error) {
-                    throw initializationError(
-                        'FRESH_MY_LIST_CAROUSEL_PARSE_ERROR',
-                        'fresh-my-list-carousel',
-                        'Netflix CarouselPage returned invalid JSON',
-                        { responseUrl: nextResponse.url, responseBytes: nextText.length, errorMessage: error?.message || String(error) }
-                    );
-                }
-                node = nextPayload?.data?.node;
-                const nextTotalCount = Number(node?.entities?.totalCount);
-                if (node?.__typename !== 'PinotCarouselSection' || nextTotalCount !== totalCount) {
-                    throw initializationError(
-                        'FRESH_MY_LIST_CAROUSEL_TOTAL_COUNT_UNAVAILABLE',
-                        'fresh-my-list-carousel',
-                        'Netflix CarouselPage returned inconsistent My List pagination data',
-                        { responseUrl: nextResponse.url, totalCount, nextTotalCount, typename: node?.__typename || null }
-                    );
-                }
-                edges.push(...(node?.entities?.edges || []));
-                cursor = node?.entities?.pageInfo?.endCursor || null;
-                graphqlPageCount++;
-            }
-            if (node?.entities?.pageInfo?.hasNextPage) {
-                throw initializationError(
-                    'FRESH_MY_LIST_CAROUSEL_PAGE_LIMIT',
-                    'fresh-my-list-carousel',
-                    'Netflix CarouselPage exceeded the configured GraphQL page limit',
-                    { totalCount, graphqlPageCount, maxPages: GRAPHQL_COLLECTION_MAX_PAGES, edgeCount: edges.length }
-                );
-            }
             const fresh = {
-                totalCount,
-                firstVideoId: firstVideoIdFromCarouselNode({ entities: { edges } }),
-                graphqlEdges: edges,
-                graphqlPageCount
+                totalCount: page.totalCount,
+                firstVideoId: firstVideoIdFromCarouselNode({ entities: { edges: page.edges } }),
+                graphqlEdges: page.edges,
+                graphqlPageCount: 1,
+                graphqlHasNextPage: page.hasNextPage,
+                graphqlEndCursor: page.endCursor,
+                graphqlRequest: request
             };
-            log('Fresh Netflix My List carousel fetched', {
-                totalCount: fresh.totalCount,
-                firstVideoId: fresh.firstVideoId || null,
-                graphqlKey: entry?.key || null,
-                responseUrl: response.url,
-                responseBytes: text.length,
-                elapsedMs: Math.round(performance.now() - started),
-                operationName: 'CarouselPage',
-                carouselPageSize: GRAPHQL_COLLECTION_PAGE_SIZE,
-                graphqlPageCount: fresh.graphqlPageCount,
-                graphqlEdgeCount: fresh.graphqlEdges.length
+            log('Fresh Netflix My List carousel bootstrap fetched', {
+                totalCount: fresh.totalCount, firstVideoId: fresh.firstVideoId || null,
+                graphqlKey: entry?.key || null, responseUrl: page.responseUrl,
+                responseBytes: page.responseBytes, elapsedMs: Math.round(performance.now() - started),
+                operationName: 'CarouselPage', carouselPageSize: GRAPHQL_COLLECTION_PAGE_SIZE,
+                graphqlPageCount: 1, graphqlEdgeCount: fresh.graphqlEdges.length,
+                hasNextPage: fresh.graphqlHasNextPage
             });
             return fresh;
         } catch (error) {
-            if (isRouteSessionCancelledError(error)) throw error;
-            if (error?.code && error?.stage) throw error;
-            const aborted = error?.name === 'AbortError';
-            throw initializationError(
-                aborted ? 'FRESH_MY_LIST_CAROUSEL_TIMEOUT' : 'FRESH_MY_LIST_CAROUSEL_FAILED',
-                'fresh-my-list-carousel',
-                aborted
-                    ? `Netflix CarouselPage timed out after ${FRESH_MY_LIST_FETCH_TIMEOUT_MS} ms`
-                    : `Netflix CarouselPage failed: ${error?.message || error}`,
-                {
-                    timeoutMs: aborted ? FRESH_MY_LIST_FETCH_TIMEOUT_MS : null,
-                    errorName: error?.name || null,
-                    errorMessage: error?.message || String(error || '')
-                }
-            );
+            throw carouselFetchError(error, sessionToken);
         } finally {
-            clearTimeout(timeoutId);
+            finishRouteFetch(fetchState);
+        }
+    }
+
+    async function collectFreshMyListCarouselItems(bootstrap, sessionToken = null) {
+        assertRouteSession(sessionToken);
+        if (!bootstrap?.graphqlHasNextPage) return bootstrap;
+        const fetchState = createRouteFetch(sessionToken);
+        const started = performance.now();
+        try {
+            const edges = [...bootstrap.graphqlEdges];
+            const seenCursors = new Set();
+            let cursor = bootstrap.graphqlEndCursor;
+            let hasNextPage = true;
+            let graphqlPageCount = bootstrap.graphqlPageCount;
+            while (hasNextPage) {
+                assertRouteSession(sessionToken);
+                if (graphqlPageCount >= GRAPHQL_COLLECTION_MAX_PAGES) {
+                    throw initializationError('FRESH_MY_LIST_CAROUSEL_PAGE_LIMIT', 'fresh-my-list-carousel',
+                        'Netflix CarouselPage exceeded the configured GraphQL page limit',
+                        { totalCount: bootstrap.totalCount, graphqlPageCount, maxPages: GRAPHQL_COLLECTION_MAX_PAGES, edgeCount: edges.length });
+                }
+                if (!cursor || seenCursors.has(cursor)) {
+                    throw initializationError('FRESH_MY_LIST_CAROUSEL_CURSOR_INVALID', 'fresh-my-list-carousel',
+                        'Netflix CarouselPage returned a missing or repeated pagination cursor',
+                        { graphqlPageCount, edgeCount: edges.length });
+                }
+                seenCursors.add(cursor);
+                const page = await fetchMyListCarouselPage(bootstrap.graphqlRequest, cursor, fetchState.controller.signal, sessionToken);
+                if (page.totalCount !== bootstrap.totalCount) {
+                    throw initializationError('FRESH_MY_LIST_CAROUSEL_TOTAL_COUNT_UNAVAILABLE', 'fresh-my-list-carousel',
+                        'Netflix CarouselPage returned inconsistent My List pagination data',
+                        { responseUrl: page.responseUrl, totalCount: bootstrap.totalCount, nextTotalCount: page.totalCount });
+                }
+                edges.push(...page.edges);
+                graphqlPageCount++;
+                hasNextPage = page.hasNextPage;
+                cursor = page.endCursor;
+            }
+            assertRouteSession(sessionToken);
+            log('Fresh Netflix My List logical collection fetched', {
+                totalCount: bootstrap.totalCount, graphqlPageCount, graphqlEdgeCount: edges.length,
+                elapsedMs: Math.round(performance.now() - started)
+            });
+            return {
+                ...bootstrap, graphqlEdges: edges, graphqlPageCount,
+                graphqlHasNextPage: false, graphqlEndCursor: cursor, graphqlRequest: null
+            };
+        } catch (error) {
+            throw carouselFetchError(error, sessionToken);
+        } finally {
+            finishRouteFetch(fetchState);
         }
     }
 
     async function fetchFreshMyListBootstrapViaPage(sessionToken = null) {
         assertRouteSession(sessionToken);
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), FRESH_MY_LIST_FETCH_TIMEOUT_MS);
         const requestUrl = new URL('/browse/my-list', location.origin);
         requestUrl.searchParams.set('_tm_legacy_mylist_refresh', `${Date.now()}-${sessionToken ?? 0}`);
+        const fetchState = createRouteFetch(sessionToken);
         const started = performance.now();
 
         try {
@@ -3126,7 +3140,7 @@
                 headers: {
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
                 },
-                signal: controller.signal
+                signal: fetchState.controller.signal
             });
             assertRouteSession(sessionToken);
             if (!response.ok) {
@@ -3161,6 +3175,7 @@
             });
             return fresh;
         } catch (error) {
+            assertRouteSession(sessionToken);
             if (isRouteSessionCancelledError(error)) throw error;
             if (error?.code && error?.stage) throw error;
             const aborted = error?.name === 'AbortError';
@@ -3177,15 +3192,18 @@
                 }
             );
         } finally {
-            clearTimeout(timeoutId);
+            finishRouteFetch(fetchState);
         }
     }
 
     async function fetchFreshMyListBootstrap(sessionToken = null) {
         assertRouteSession(sessionToken);
         try {
-            return await fetchFreshMyListBootstrapViaCarousel(sessionToken);
+            const fresh = await fetchFreshMyListBootstrapViaCarousel(sessionToken);
+            assertRouteSession(sessionToken);
+            return fresh;
         } catch (error) {
+            assertRouteSession(sessionToken);
             if (isRouteSessionCancelledError(error)) throw error;
             warn('Fresh Netflix My List carousel fetch failed; falling back to page bootstrap', {
                 code: error?.code || null,
@@ -3246,19 +3264,34 @@
         },
 
         async collectLogicalItems({ bootstrap, totalCount, columns, templateSlot, sessionToken = null }) {
-            const freshBootstrap = bootstrap?.graphqlEdges?.length
-                ? bootstrap
-                : await fetchFreshMyListBootstrapViaCarousel(sessionToken);
-            return {
-                bootstrap: freshBootstrap,
-                items: await buildGraphqlMyListItems(
+            let freshBootstrap = bootstrap;
+            try {
+                assertRouteSession(sessionToken);
+                if (!Array.isArray(freshBootstrap?.graphqlEdges)) {
+                    freshBootstrap = await fetchFreshMyListBootstrapViaCarousel(sessionToken);
+                }
+                assertRouteSession(sessionToken);
+                // The mounted count remains authoritative. A different fresh count
+                // must use the native scan, not publish a matching-length prefix.
+                if (freshBootstrap.totalCount !== totalCount) return { bootstrap: freshBootstrap, items: null };
+                freshBootstrap = await collectFreshMyListCarouselItems(freshBootstrap, sessionToken);
+                assertRouteSession(sessionToken);
+                const items = await buildGraphqlMyListItems(
                     freshBootstrap?.graphqlEdges,
                     totalCount,
                     columns,
                     templateSlot,
                     sessionToken
-                )
-            };
+                );
+                assertRouteSession(sessionToken);
+                return { bootstrap: freshBootstrap, items };
+            } catch (error) {
+                assertRouteSession(sessionToken);
+                if (isRouteSessionCancelledError(error)) throw error;
+                // Optional item collection cannot discard the valid first-page
+                // count/anchor or trigger the page-HTML bootstrap fallback.
+                return { bootstrap: freshBootstrap, items: null, error };
+            }
         }
     });
 
@@ -9558,6 +9591,7 @@
                     });
                 }
             }
+            assertRouteSession(sessionToken);
         } catch (error) {
             if (!isRouteSessionCancelledError(error)) {
                 initializationBlockedSessionToken = sessionToken;
@@ -9773,6 +9807,7 @@
                 assertRouteSession(sessionToken);
                 freshMyListBootstrap = graphqlCollection.bootstrap;
                 graphqlItems = graphqlCollection.items;
+                if (graphqlCollection.error) throw graphqlCollection.error;
                 if (graphqlItems) {
                     const runtime = getCarouselDomRuntime(section);
                     runtime.knownPageCount = Math.max(1, Math.ceil(earlyTotalCount / Math.max(1, graphqlLayout.columns)));
@@ -9787,6 +9822,7 @@
                 } else {
                     warn('GraphQL My List fast collection was incomplete; falling back to native scan', {
                         totalCount: earlyTotalCount,
+                        bootstrapTotalCount: freshMyListBootstrap?.totalCount,
                         graphqlEdgeCount: freshMyListBootstrap?.graphqlEdges?.length || 0,
                         graphqlPageCount: freshMyListBootstrap?.graphqlPageCount || null,
                         columns: graphqlLayout.columns

@@ -1336,7 +1336,7 @@ function constructionEnvironment() {
     image.setAttribute('srcset', 'native-srcset');
     const layout = { columns: 6, rowGap: 10 };
     const e = environment([
-        'sleep', 'runConstructionChunks', 'buildGraphqlMyListItems', 'assertRouteSession',
+        'sleep', 'runConstructionChunks', 'buildGraphqlMyListItems', 'collectFreshMyListCarouselItems', 'assertRouteSession',
         'createRouteSessionCancelledError', 'isRouteSessionCancelledError', 'initializationError',
         'buildGrid', 'normalizeClone', 'copyItemAttributes', 'associateGridHoverItem', 'ensureGridHoverBehavior',
         'itemKey', 'clearRunningSession', 'retryPendingMyListMutations', 'tryApplyMyListMutation',
@@ -1574,7 +1574,7 @@ test('queued add/remove deltas apply after complete publication and stay deferre
 
 function initializationEnvironment(count = 150) {
     const e = constructionEnvironment();
-    const bootstrap = { graphqlEdges: e.edges(count), graphqlPageCount: 2 };
+    const bootstrap = { totalCount: count, graphqlEdges: e.edges(count), graphqlPageCount: 2, graphqlHasNextPage: false };
     const runtime = { profile: { pageMode: 'logical' } };
     const adapterStart = source.indexOf('    const netflixGraphql = Object.freeze({');
     const adapterEnd = source.indexOf('\n    async function waitForMyListTotalCount(', adapterStart);
@@ -1606,7 +1606,7 @@ function initializationEnvironment(count = 150) {
         cleanupTargetSessionDom() { e.oldGrid.remove(); }, scheduleRun() {}
     });
     vm.runInContext(declaration('runScript'), e.c);
-    return e;
+    return { ...e, async flush() { await e.flush(); await e.flush(); } };
 }
 
 test('GraphQL adapter awaits snapshot chunks and initialization awaits grid publication before becoming idle', async () => {
@@ -1960,4 +1960,380 @@ test('failed addition leaves membership, maps, and retained fallback intact for 
     assert.equal(added.snapshot, null);
     assert.equal(e.c.sourceState.items.length, 2);
     assert.equal(retainedCardTrees(e.c.sourceState).size, 2);
+});
+
+function fetchDeferred() {
+    let resolve, reject;
+    const promise = new Promise((accept, fail) => { resolve = accept; reject = fail; });
+    return { promise, resolve, reject };
+}
+
+function abortableFetchResult(value, signal) {
+    return new Promise((resolve, reject) => {
+        const abort = () => reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+        if (signal.aborted) { abort(); return; }
+        signal.addEventListener('abort', abort, { once: true });
+        Promise.resolve(value).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+    });
+}
+
+function fetchEnvironment(count = 150) {
+    const e = initializationEnvironment(count);
+    e.c.netflixGraphql = vm.runInContext('netflixGraphql', e.c);
+    const requests = [], responses = [];
+    e.c.document.documentElement = { lang: 'en' };
+    Object.assign(e.c, {
+        AbortController, routeFetchControllers: new Map(),
+        FRESH_MY_LIST_FETCH_TIMEOUT_MS: 10000, GRAPHQL_COLLECTION_PAGE_SIZE: 75, GRAPHQL_COLLECTION_MAX_PAGES: 8,
+        findMyListGraphqlEntry: () => ({ key: 'MyList', value: { _id: 'row-id', entities: { totalCount: count } } }),
+        netflixModelData: () => null, carouselArtworkVariables: () => ({}),
+        tryMountedSinglePageFastBootstrap: async () => null,
+        measureEmptyLayout: () => e.layout,
+        beginSourceScan() {}, ensureFreshIndicatorPageZeroAnchor: async () => {},
+        fetch: async (url, options) => {
+            const request = { url, options, body: options.body ? JSON.parse(options.body) : null };
+            requests.push(request);
+            const next = responses.shift();
+            if (!next) throw new Error('Unexpected fetch: ' + url);
+            if (next.error) throw next.error;
+            if (next.waitFetch) await abortableFetchResult(next.waitFetch.promise, options.signal);
+            return {
+                ok: (next.status || 200) === 200, status: next.status || 200, statusText: 'test', url,
+                async text() {
+                    request.bodyRead = true;
+                    if (next.waitBody) await abortableFetchResult(next.waitBody.promise, options.signal);
+                    return next.raw ?? JSON.stringify(next.payload);
+                }
+            };
+        }
+    });
+    for (const name of ['isRouteSessionActive', 'createRouteFetch', 'finishRouteFetch', 'abortObsoleteRouteFetches',
+        'fetchMyListCarouselPage', 'carouselFetchError', 'fetchFreshMyListBootstrapViaCarousel',
+        'collectFreshMyListCarouselItems', 'fetchFreshMyListBootstrapViaPage', 'fetchFreshMyListBootstrap',
+        'firstVideoIdFromCarouselNode', 'extractFreshMyListBootstrap']) vm.runInContext(declaration(name), e.c);
+    function page(totalCount, ids, hasNextPage = false, endCursor = null) {
+        return { payload: { data: { node: {
+            __typename: 'PinotCarouselSection',
+            entities: { totalCount, edges: ids.map(id => ({ node: {
+                id: String(id), videoId: String(id), displayString: `Title ${id}`, contextualArtwork: `https://images.test/${id}.jpg`
+            } })), pageInfo: { hasNextPage, endCursor } }
+        } } } };
+    }
+    function collect(bootstrap, totalCount = count) {
+        return e.c.netflixGraphql.collectLogicalItems({ bootstrap, totalCount, columns: 6, templateSlot: e.template, sessionToken: e.c.routeSessionToken });
+    }
+    function routeLifecycle() {
+        Object.assign(e.c, {
+            scheduled: false, scheduledRunTimer: null, resizeObserver: null, responsiveRefreshTimer: null,
+            cleanupTargetSessionDom() {}, stopTargetEventListeners() {}, startTargetEventListeners() {},
+            resetDetachedTargetState() {}, clearPendingMyListMutations() { e.c.pendingMyListMutations.clear(); }
+        });
+        for (const name of ['suspendTargetSession', 'startTargetSession']) vm.runInContext(declaration(name), e.c);
+    }
+    return { ...e, requests, responses, page, collect, routeLifecycle };
+}
+
+test('SPA indicator and not-yet-mounted modes bootstrap one page without optional pagination', async () => {
+    for (const mounted of [true, false]) {
+        const e = fetchEnvironment(150);
+        e.c.targetSessionEntryKind = 'spa';
+        e.c.getCarouselDomRuntime = () => ({ profile: { pageMode: 'indicator' } });
+        if (!mounted) {
+            e.scroller.id = 'delayed-scroller';
+            e.c.waitForNativeSource = async () => ({ found: true, scroller: e.scroller, track: e.track });
+        }
+        let scans = 0, anchor = null;
+        e.c.collectAllItems = async () => { scans++; return e.items(150); };
+        e.c.ensureFreshIndicatorPageZeroAnchor = async (_, __, ___, firstVideoId) => { anchor = firstVideoId; };
+        e.responses.push(e.page(150, Array.from({ length: 75 }, (_, index) => index + 1), true, 'cursor-75'));
+        const completion = e.c.runScript(1);
+        await e.flush();
+        await e.drain();
+        await completion;
+        assert.equal(e.requests.length, 1, 'indicator mode never requests cursor-75');
+        assert.equal(e.requests[0].body.variables.carouselAfterCursor, null);
+        assert.equal(scans, 1);
+        assert.equal(anchor, '1');
+        assert.equal(e.c.sourceState.items.length, 150);
+        assert.equal(e.c.completedSection, e.section, e.warnings.map(entry => entry.details.error?.message).join(', '));
+        assert.equal(e.c.routeFetchControllers.size, 0);
+    }
+});
+
+test('logical collection resumes the bootstrap cursor once and preserves complete membership/order', async () => {
+    const e = fetchEnvironment(150);
+    e.responses.push(e.page(150, Array.from({ length: 75 }, (_, index) => index + 1), true, 'cursor-75'));
+    const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
+    assert.equal(e.requests.length, 1);
+    assert.equal(bootstrap.totalCount, 150);
+    assert.equal(bootstrap.firstVideoId, '1');
+    assert.equal(bootstrap.graphqlHasNextPage, true);
+    e.c.findMyListGraphqlEntry = () => ({ value: { _id: 'recycled-row' } });
+    e.responses.push(e.page(150, Array.from({ length: 75 }, (_, index) => index + 76)));
+    const completion = e.collect(bootstrap);
+    await e.flush();
+    await e.drain();
+    const result = await completion;
+    assert.equal(e.requests.length, 2);
+    assert.equal(e.requests[1].body.variables.carouselAfterCursor, 'cursor-75');
+    assert.equal(e.requests[1].body.variables.rowId, 'row-id', 'all pages belong to the original fresh row');
+    assert.equal(result.bootstrap.graphqlPageCount, 2);
+    assert.equal(result.bootstrap.graphqlHasNextPage, false);
+    assert.equal(result.bootstrap.graphqlRequest, null);
+    assert.equal(bootstrap.graphqlEdges.length, 75, 'pagination never mutates the retained first page');
+    assert.deepEqual(Array.from(result.items, item => item.videoId), Array.from({ length: 150 }, (_, index) => String(index + 1)));
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('optional pagination HTTP, parse, count, cursor, and page-limit failures preserve valid bootstrap', async () => {
+    for (const failure of ['http', 'parse', 'count', 'cursor', 'repeated-cursor', 'limit']) {
+        const e = fetchEnvironment(4);
+        e.responses.push(e.page(4, [1, 2], true, failure === 'cursor' ? null : 'next'));
+        const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
+        if (failure === 'http') e.responses.push({ status: 503 });
+        if (failure === 'parse') e.responses.push({ raw: '{bad json' });
+        if (failure === 'count') e.responses.push(e.page(5, [3, 4]));
+        if (failure === 'repeated-cursor') e.responses.push(e.page(4, [3], true, 'next'));
+        if (failure === 'limit') e.c.GRAPHQL_COLLECTION_MAX_PAGES = 1;
+        const result = await e.collect(bootstrap);
+        assert.equal(result.bootstrap, bootstrap);
+        assert.equal(result.bootstrap.totalCount, 4);
+        assert.equal(result.bootstrap.firstVideoId, '1');
+        assert.equal(result.bootstrap.graphqlEdges.length, 2);
+        assert.equal(result.items, null);
+        assert.ok(result.error?.code, failure);
+        assert.equal(e.requests.every(request => request.options.method === 'POST'), true, 'optional failure cannot fetch page HTML');
+        assert.ok(e.requests.length <= 2);
+        assert.equal(e.c.routeFetchControllers.size, 0);
+        assert.equal(e.timers.size, 0);
+    }
+});
+
+test('optional pagination timeout retains bootstrap while count-fetch timeout still uses fresh HTML fallback', async () => {
+    const e = fetchEnvironment(4);
+    e.responses.push(e.page(4, [1, 2], true, 'next'));
+    const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
+    e.responses.push({ ...e.page(4, [3, 4]), waitFetch: fetchDeferred() });
+    const completion = e.collect(bootstrap);
+    await e.flush();
+    await e.advance(10000);
+    const result = await completion;
+    assert.equal(result.bootstrap, bootstrap);
+    assert.equal(result.items, null);
+    assert.equal(result.error.code, 'FRESH_MY_LIST_CAROUSEL_TIMEOUT');
+    assert.equal(e.requests.length, 2);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+
+    const f = fetchEnvironment(4);
+    f.responses.push({ ...f.page(4, [1, 2]), waitFetch: fetchDeferred() }, {
+        raw: '"__typename":"PinotCarouselSection","entities":{"totalCount":4,"node":"standardBoxshot_Video:1"},"notificationMessageRegex":"UPDATE_PLAYLIST"'
+    });
+    const fallback = f.c.netflixGraphql.fetchBootstrap(1);
+    await f.advance(10000);
+    const fresh = await fallback;
+    assert.equal(fresh.totalCount, 4);
+    assert.equal(fresh.firstVideoId, '1');
+    assert.deepEqual(f.requests.map(request => request.options.method), ['POST', 'GET']);
+    assert.equal(f.warnings.length, 1);
+    assert.equal(f.warnings[0].details.code, 'FRESH_MY_LIST_CAROUSEL_TIMEOUT');
+    assert.equal(f.c.routeFetchControllers.size, 0);
+    assert.equal(f.timers.size, 0);
+});
+
+test('invalid first-page counts and responses use the HTML fallback rather than a false empty list', async () => {
+    for (const failure of [null, undefined, '', false, -1, 1.5, 'http', 'parse']) {
+        const e = fetchEnvironment(4);
+        const first = failure === 'http' ? { status: 500 }
+            : failure === 'parse' ? { raw: 'bad json' } : e.page(failure, [1]);
+        e.responses.push(first, {
+            raw: '"__typename":"PinotCarouselSection","entities":{"totalCount":4,"node":"standardBoxshot_Video:7"},"notificationMessageRegex":"UPDATE_PLAYLIST"'
+        });
+        const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
+        assert.equal(bootstrap.totalCount, 4);
+        assert.equal(bootstrap.firstVideoId, '7');
+        assert.deepEqual(e.requests.map(request => request.options.method), ['POST', 'GET']);
+        assert.equal(e.c.routeFetchControllers.size, 0);
+        assert.equal(e.timers.size, 0);
+    }
+});
+
+test('zero and complete single-page bootstraps avoid further fetches', async () => {
+    for (const count of [0, 6]) {
+        const e = fetchEnvironment(count);
+        e.responses.push(e.page(count, Array.from({ length: count }, (_, index) => index + 1)));
+        const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
+        const result = await e.collect(bootstrap);
+        assert.equal(bootstrap.totalCount, count);
+        assert.equal(bootstrap.firstVideoId, count ? '1' : '');
+        assert.equal(e.requests.length, 1);
+        assert.equal(result.items.length, count);
+        assert.equal(e.c.routeFetchControllers.size, 0);
+    }
+});
+
+test('logical collection rejects incomplete/duplicate membership and reconciled-count mismatches', async () => {
+    for (const scenario of ['missing', 'duplicate', 'reconciled']) {
+        const e = fetchEnvironment(4);
+        const ids = scenario === 'missing' ? [1, 2, 3] : scenario === 'duplicate' ? [1, 2, 3, 3] : [1, 2, 3, 4];
+        e.responses.push(e.page(scenario === 'reconciled' ? 5 : 4, ids, scenario === 'reconciled', 'next'));
+        const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
+        const result = await e.collect(bootstrap, 4);
+        assert.equal(result.items, null);
+        assert.equal(result.bootstrap, bootstrap);
+        assert.equal(e.requests.length, 1, 'a different mounted count must not paginate or accept a four-item prefix');
+    }
+});
+
+test('full initialization uses native collection after optional pagination failure without losing the fresh count', async () => {
+    const e = fetchEnvironment(30);
+    e.c.targetSessionEntryKind = 'spa';
+    e.responses.push(e.page(30, [1, 2], true, 'next'), { status: 503 });
+    let nativeCount = null;
+    e.c.collectAllItems = async (_, __, ___, totalCount) => { nativeCount = totalCount; return e.items(totalCount); };
+    const completion = e.c.runScript(1);
+    await e.flush();
+    await e.drain();
+    await completion;
+    assert.equal(nativeCount, 30);
+    assert.equal(e.c.sourceState.items.length, 30);
+    assert.equal(e.c.completedSection, e.section, e.warnings.map(entry => entry.details.error?.message).join(', '));
+    assert.equal(e.c.initializationBlockedSessionToken, null);
+    assert.equal(e.requests.length, 2);
+    assert.equal(e.requests.every(request => request.options.method === 'POST'), true);
+    assert.equal(e.warnings.some(entry => /fast collection failed/.test(entry.name)), true);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+});
+
+test('route suspension aborts GraphQL and HTML fetches, including their response bodies, without fallback warnings', async () => {
+    for (const kind of ['graphql', 'html']) {
+        for (const phase of ['headers', 'body']) {
+            const e = fetchEnvironment(4);
+            e.routeLifecycle();
+            if (kind === 'html') e.responses.push({ status: 503 });
+            const waiting = kind === 'html' ? { raw: 'HTML' } : e.page(4, [1, 2]);
+            waiting[phase === 'headers' ? 'waitFetch' : 'waitBody'] = fetchDeferred();
+            e.responses.push(waiting);
+            const completion = e.c.netflixGraphql.fetchBootstrap(1);
+            const rejection = assert.rejects(completion, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+            await e.flush();
+            const request = e.requests.at(-1);
+            assert.equal(request.options.method, kind === 'html' ? 'GET' : 'POST');
+            assert.equal(e.c.routeFetchControllers.get(1).size, 1);
+            const warnings = e.warnings.length;
+            e.c.suspendTargetSession('test-leave');
+            assert.equal(request.options.signal.aborted, true, 'abort occurs synchronously on route suspension');
+            await rejection;
+            assert.equal(e.warnings.length, warnings, 'route abort adds no timeout/fallback warning');
+            assert.equal(e.requests.length, kind === 'html' ? 2 : 1);
+            assert.equal(e.c.routeFetchControllers.size, 0);
+            assert.equal(e.timers.size, 0);
+        }
+    }
+});
+
+test('route change during optional pagination rejects instead of returning retained bootstrap', async () => {
+    const e = fetchEnvironment(4);
+    e.routeLifecycle();
+    e.responses.push(e.page(4, [1, 2], true, 'next'));
+    const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
+    e.responses.push({ ...e.page(4, [3, 4]), waitBody: fetchDeferred() });
+    const completion = e.collect(bootstrap);
+    const rejection = assert.rejects(completion, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+    await e.flush();
+    e.c.suspendTargetSession('test-leave');
+    await rejection;
+    assert.equal(e.requests[1].options.signal.aborted, true);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.warnings.length, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('a new route session aborts old requests and old cleanup cannot remove its active controller', async () => {
+    const e = fetchEnvironment(4);
+    e.routeLifecycle();
+    e.responses.push({ ...e.page(4, [1, 2]), waitFetch: fetchDeferred() });
+    const old = e.c.netflixGraphql.fetchBootstrap(1);
+    const rejection = assert.rejects(old, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+    e.c.startTargetSession('route:test');
+    const currentToken = e.c.routeSessionToken;
+    const release = fetchDeferred();
+    e.responses.push({ ...e.page(4, [3, 4]), waitFetch: release });
+    const current = e.c.netflixGraphql.fetchBootstrap(currentToken);
+    await rejection;
+    assert.equal(e.requests[0].options.signal.aborted, true);
+    assert.equal(e.requests[1].options.signal.aborted, false);
+    assert.equal(e.c.routeFetchControllers.get(currentToken).size, 1);
+    release.resolve();
+    const bootstrap = await current;
+    assert.equal(bootstrap.firstVideoId, '3');
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.timers.size, 0);
+    assert.equal(e.warnings.length, 0);
+});
+
+test('the eight-page limit remains bounded and failed pagination never publishes a partial list', async () => {
+    const e = fetchEnvironment(9);
+    e.responses.push(e.page(9, [1], true, 'cursor-1'));
+    for (let page = 2; page <= 8; page++) e.responses.push(e.page(9, [page], true, `cursor-${page}`));
+    const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
+    const result = await e.collect(bootstrap, 9);
+    assert.equal(e.requests.length, 8);
+    assert.equal(result.bootstrap, bootstrap);
+    assert.equal(result.items, null);
+    assert.equal(result.error.code, 'FRESH_MY_LIST_CAROUSEL_PAGE_LIMIT');
+    assert.equal(e.c.routeFetchControllers.size, 0);
+});
+
+test('logical SPA initialization waits for mode confirmation before continuing pagination and publishes the full grid', async () => {
+    const e = fetchEnvironment(150);
+    e.c.targetSessionEntryKind = 'spa';
+    const readiness = fetchDeferred();
+    e.c.waitForNativeCarouselReady = () => readiness.promise;
+    e.responses.push(
+        e.page(150, Array.from({ length: 75 }, (_, index) => index + 1), true, 'next'),
+        e.page(150, Array.from({ length: 75 }, (_, index) => index + 76))
+    );
+    const completion = e.c.runScript(1);
+    await e.flush();
+    assert.equal(e.requests.length, 1);
+    assert.equal(e.c.running, true);
+    assert.equal(e.created.length, 0);
+    readiness.resolve({ ready: true, empty: false });
+    await e.flush();
+    await e.drain();
+    await completion;
+    assert.equal(e.requests.length, 2);
+    assert.equal(e.c.sourceState.items.length, 150);
+    assert.equal(e.c.completedSection, e.section, e.warnings.map(entry => entry.details.error?.message).join(', '));
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.running, false);
+});
+
+test('a count result from an obsolete session cannot publish an empty grid or clear the new running owner', async () => {
+    const e = initializationEnvironment(0);
+    let finalized = 0;
+    e.c.finalizeEmptyLegacyList = () => finalized++;
+    e.c.waitForMyListTotalCount = async () => {
+        e.c.isRouteSessionActive = token => token === 2;
+        e.c.runningSessionToken = 2;
+        e.c.sourceState = { newerSession: true };
+        return 0;
+    };
+    await e.c.runScript(1);
+    assert.equal(finalized, 0);
+    assert.equal(e.c.sourceState.newerSession, true);
+    assert.equal(e.c.runningSessionToken, 2);
+    assert.equal(e.c.running, true);
+    assert.equal(e.warnings.length, 0);
+});
+
+test('HTTP failure cleanup aborts the unread response body and releases its controller and timeout', async () => {
+    const e = fetchEnvironment(4);
+    e.responses.push({ status: 503, waitBody: fetchDeferred() });
+    await assert.rejects(e.c.fetchFreshMyListBootstrapViaCarousel(1), { code: 'FRESH_MY_LIST_CAROUSEL_HTTP_ERROR' });
+    assert.equal(e.requests[0].bodyRead, undefined);
+    assert.equal(e.requests[0].options.signal.aborted, true);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.timers.size, 0);
 });
