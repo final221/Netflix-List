@@ -1345,7 +1345,7 @@ function constructionEnvironment() {
     const e = environment([
         'sleep', 'runConstructionChunks', 'buildGraphqlMyListItems', 'collectFreshMyListCarouselItems', 'assertRouteSession',
         'createRouteSessionCancelledError', 'isRouteSessionCancelledError', 'initializationError',
-        'buildGrid', 'normalizeClone', 'copyItemAttributes', 'associateGridHoverItem', 'ensureGridHoverBehavior',
+        'buildGrid', 'normalizeClone', 'ensureManualViewingControls', 'copyItemAttributes', 'associateGridHoverItem', 'ensureGridHoverBehavior',
         'itemKey', 'clearRunningSession', 'retryPendingMyListMutations', 'tryApplyMyListMutation',
         'applyLegacyRemoval', 'applyLegacyAddition', 'disposeMyListMutation',
         'cardSourceForItem', 'createItemClone', 'releaseItemCardSnapshot',
@@ -1660,7 +1660,7 @@ test('native-source replacement during grid construction restarts initialization
     const completion = e.c.runScript(1);
     await e.flush();
     for (let attempts = 0; attempts < 20 && e.created.length === 0 && e.timers.size; attempts++) await e.advance(0);
-    assert.equal(e.created.length, 1, e.warnings.map(entry => entry.details.error?.message).join(', '));
+    assert.equal(e.created.filter(node => node.id === 'grid').length, 1, e.warnings.map(entry => entry.details.error?.message).join(', '));
     assert.equal(e.created[0].children.length, 24);
     const mutation = { videoId: '2', action: 'remove' };
     e.c.pendingMyListMutations.set('2', mutation);
@@ -2351,6 +2351,10 @@ const viewingFunctions = [
     'viewingRequestContext', 'assertViewingJob', 'fetchViewingGraph', 'collectViewingStatuses', 'collectViewingSeriesBatch',
     'collectViewingEpisodePlans', 'finishViewingSeriesPlan', 'recheckViewingSeries',
     'saveViewingSeriesDetails', 'collectViewingSeriesDiagnostics',
+    'viewingLatestEpisode', 'viewingProgressSummary', 'viewingSeriesResult',
+    'validViewingCoverage', 'readManualViewingChoices', 'syncManualViewingProfile', 'saveManualViewingChoices', 'reconcileManualViewingCoverage',
+    'effectiveViewingStatus', 'ensureManualViewingControls', 'syncManualViewingCard', 'ensureManualViewingBehavior',
+    'handleGridClonePointerOver', 'handleGridClonePointerLeave',
     'gridOwnsClone', 'createWatchTypeFilter', 'syncWatchTypeFilter', 'ensureWatchGroupUi', 'syncWatchChildOrder', 'syncWatchGroups',
     'initializeWatchGroups', 'refreshViewingStatus', 'createRouteFetch', 'finishRouteFetch',
     'abortObsoleteRouteFetches', 'gridCloneFromPointerEvent', 'gridHoverTargetActive', 'gridHoverSuppressed', 'cancelPendingGridHover',
@@ -2386,7 +2390,7 @@ function viewingFixtures(extraEpisode = false) {
         } }
     };
 }
-async function viewingEnvironment(count = 7, existing = null) {
+async function viewingEnvironment(count = 7, existing = null, storage = new Map()) {
     const e = existing || constructionEnvironment();
     const items = e.items(count);
     if (!existing) {
@@ -2400,12 +2404,16 @@ async function viewingEnvironment(count = 7, existing = null) {
         serverDefs: { BUILD_IDENTIFIER: 'test-build' }
     };
     const requests = [];
+    const storageCalls = { reads: 0, writes: 0 };
     let fixtures = viewingFixtures();
     Object.assign(e.c, {
         URLSearchParams, AbortController, FRESH_MY_LIST_FETCH_TIMEOUT_MS: 10000,
         VIEWING_TITLE_BATCH_SIZE: 50, VIEWING_EPISODE_BATCH_SIZE: 200, VIEWING_MAX_SEASONS: 40,
         VIEWING_MAX_EPISODES: 500, VIEWING_MAX_REQUESTS: 32, VIEWING_MAX_PASSES: 3,
         VIEWING_TIMEOUT_MS: 30000, VIEWING_COMPLETION_RATIO: 0.90,
+        VIEWING_CHOICES_STORAGE_KEY: 'test.viewingChoices.',
+        GM_getValue: (key, fallback) => { storageCalls.reads++; return structuredClone(storage.get(key) ?? fallback); },
+        GM_setValue: (key, value) => { storageCalls.writes++; storage.set(key, structuredClone(value)); },
         routeFetchControllers: new Map(), netflixModelData: name => models[name],
         getUiLocale: () => 'en', formatUiNumber: value => String(value), formatInitializationTime: () => 'time',
         fetch: async (url, options) => {
@@ -2421,7 +2429,7 @@ async function viewingEnvironment(count = 7, existing = null) {
     const uiEnd = source.indexOf('    const LOG_MESSAGES = {', uiStart);
     vm.runInContext(source.slice(uiStart, uiEnd), e.c);
     for (const name of viewingFunctions) vm.runInContext(declaration(name), e.c);
-    return { ...e, models, requests, items, state: e.c.sourceState,
+    return { ...e, models, requests, storage, storageCalls, items, state: e.c.sourceState,
         fixtures: () => fixtures, setFixtures: value => { fixtures = value; },
         async start() {
             e.c.initializeWatchGroups(e.c.sourceState, 1);
@@ -2693,7 +2701,7 @@ test('viewing title requests batch large lists and grouping never schedules peri
     assert.equal(e.requests.length, 3);
 });
 
-test('long seasons are split into bounded episode requests and oversize series remain unknown', async () => {
+test('long seasons inspect their bounded latest range first and oversize series remain unknown', async () => {
     const e = await viewingEnvironment(2);
     e.c.fetch = async (url, options) => {
         const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
@@ -2721,7 +2729,7 @@ test('long seasons are split into bounded episode requests and oversize series r
     assert.deepEqual(completedViewingIds(e), ['1']);
     assert.deepEqual(mainViewingIds(e), ['2']);
     const ranges = e.requests.filter(request => request.paths[0][0] === 'seasons').map(request => request.paths[0][3]);
-    assert.deepEqual(ranges, [{ from: 0, to: 199 }, { from: 200, to: 399 }, { from: 400, to: 499 }]);
+    assert.deepEqual(ranges, [{ from: 400, to: 499 }]);
 });
 
 test('viewing request budget preserves confirmed movies and leaves unverified series visible', async () => {
@@ -2856,7 +2864,8 @@ test('new viewing controls have translations for every supported Netflix UI loca
     const e = await viewingEnvironment();
     const locales = vm.runInContext('Object.keys(UI_MESSAGES)', e.c);
     const keys = ['watchedCaughtUp', 'refreshViewingStatus', 'checkingViewingStatus', 'unknownViewingStatus', 'caughtUpMessage',
-        'filterFilms', 'filterSeries', 'filterAll', 'titleTypeFilter', 'noMatchingTitles', 'unknownTitleTypes'];
+        'filterFilms', 'filterSeries', 'filterAll', 'titleTypeFilter', 'noMatchingTitles', 'unknownTitleTypes',
+        'markWatched', 'markCaughtUp', 'moveBackToMyList', 'useAutomaticViewingStatus', 'viewingChoiceStorageFailed'];
     for (const locale of locales) {
         e.c.getUiLocale = () => locale;
         for (const key of keys) {
@@ -3369,17 +3378,17 @@ test('bounded additional passes continue the same queue without reloading title 
     assert.equal(e.timers.size, 0);
 });
 
-test('continuation preserves partial coverage of a long series across a pass boundary', async () => {
+test('a latest range can continue across a pass boundary without fetching older ranges', async () => {
     const e = await viewingEnvironment(1);
     useCompleteSeriesResponses(e, { 1: 500 });
-    e.c.VIEWING_MAX_REQUESTS = 3;
+    e.c.VIEWING_MAX_REQUESTS = 2;
     e.c.VIEWING_MAX_PASSES = 2;
     await e.start();
     assert.deepEqual(completedViewingIds(e), ['1']);
-    assert.equal(e.requests.length, 5);
+    assert.equal(e.requests.length, 3);
     assert.equal(e.state.watchStatus.passes, 2);
     const ranges = e.requests.filter(request => request.paths[0][0] === 'seasons').map(request => request.paths[0][3]);
-    assert.deepEqual(ranges, [{ from: 0, to: 199 }, { from: 200, to: 399 }, { from: 400, to: 499 }]);
+    assert.deepEqual(ranges, [{ from: 400, to: 499 }]);
 });
 
 test('the total continuation request cap is finite and leaves unprocessed series visible', async () => {
@@ -3440,7 +3449,7 @@ test('slow successful requests can use the total time allowance without aborting
     assert.equal(e.timers.size, 0);
 });
 
-test('unfinished or unreadable early episodes save long-series requests for later completed titles', async () => {
+test('an unfinished or unreadable latest episode saves older-range requests for later titles', async () => {
     for (const mode of ['unfinished', 'missing-fields', 'missing-ref']) {
         const e = await viewingEnvironment(2);
         useCompleteSeriesResponses(e, { 1: 500, 2: 1 });
@@ -3450,10 +3459,10 @@ test('unfinished or unreadable early episodes save long-series requests for late
             const json = response.json;
             response.json = async () => {
                 const body = await json();
-                if (body.jsonGraph.videos['10001000']) {
-                    if (mode === 'unfinished') body.jsonGraph.videos['10001000'] = viewingVideo('episode', false, 20);
-                    if (mode === 'missing-fields') body.jsonGraph.videos['10001000'] = { summary: atom({ type: 'episode' }) };
-                    if (mode === 'missing-ref') delete body.jsonGraph.seasons['10001'].episodes[0];
+                if (body.jsonGraph.videos['10001499']) {
+                    if (mode === 'unfinished') body.jsonGraph.videos['10001499'] = viewingVideo('episode', false, 20);
+                    if (mode === 'missing-fields') body.jsonGraph.videos['10001499'] = { summary: atom({ type: 'episode' }) };
+                    if (mode === 'missing-ref') delete body.jsonGraph.seasons['10001'].episodes[499];
                 }
                 return body;
             };
@@ -3467,7 +3476,7 @@ test('unfinished or unreadable early episodes save long-series requests for late
         const ranges = e.requests.filter(request => request.paths[0][0] === 'seasons' && request.paths[0][1] === '10001');
         assert.equal(ranges.length, 1);
         const diagnostic = e.logs.find(entry => entry.details?.series)?.details.series;
-        assert.equal(diagnostic.episodesChecked, 201);
+        assert.equal(diagnostic.episodesChecked, 101);
         assert.equal(mode === 'unfinished' ? diagnostic.incomplete : diagnostic.unknown, 1);
         assert.equal(e.timers.size, 0);
     }
@@ -3652,37 +3661,37 @@ test('repair batches are limited to 200 unique IDs and start after all ordinary 
     assert.equal(e.logs.find(entry => entry.details?.recheck)?.details.recheck.recoveredSeries, 2);
 });
 
-test('repaired long-series records resume unfetched ranges without reloading the first range or double-counting the series', async () => {
+test('a repaired latest episode qualifies a long series without fetching older ranges or double-counting it', async () => {
     const e = await viewingEnvironment(2);
     useCompleteSeriesResponses(e, { 1: 500, 2: 1 });
-    useSparseNestedEpisodes(e, id => id === '10001000');
+    useSparseNestedEpisodes(e, id => id === '10001499');
     await e.start();
     assert.deepEqual(completedViewingIds(e), ['1', '2']);
     const ranges = e.requests.filter(request => request.paths[0][0] === 'seasons' && request.paths[0][1] === '10001')
         .map(request => request.paths[0][3]);
-    assert.deepEqual(ranges, [{ from: 0, to: 199 }, { from: 200, to: 399 }, { from: 400, to: 499 }]);
+    assert.deepEqual(ranges, [{ from: 400, to: 499 }]);
     const details = e.logs.find(entry => entry.details?.recheck)?.details;
     assert.equal(details.series.checked, 2);
     assert.equal(details.series.complete, 2);
     assert.equal(details.series.unknown, 0);
     assert.equal(details.recheck.recoveredSeries, 1);
-    assert.equal(e.requests.length, 8);
+    assert.equal(e.requests.length, 6);
 });
 
-test('repair budget exhaustion preserves the completed ordinary scan and refuses incomplete repaired coverage', async () => {
+test('repair budget exhaustion preserves known series and leaves an unknown latest episode visible', async () => {
     const e = await viewingEnvironment(2);
     useCompleteSeriesResponses(e, { 1: 500, 2: 1 });
-    useSparseNestedEpisodes(e, id => id === '10001000');
-    e.c.VIEWING_MAX_REQUESTS = 7;
+    useSparseNestedEpisodes(e, id => id === '10001499');
+    e.c.VIEWING_MAX_REQUESTS = 5;
     e.c.VIEWING_MAX_PASSES = 1;
     await e.start();
     assert.deepEqual(completedViewingIds(e), ['2']);
-    assert.equal(e.requests.length, 7);
+    assert.equal(e.requests.length, 5);
     assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_BUDGET');
     const report = e.c.collectViewingSeriesDiagnostics(e.state);
-    assert.equal(report[0].checkedEpisodes, 400);
+    assert.equal(report[0].checkedEpisodes, 100);
     assert.equal(report[0].expectedEpisodes, 500);
-    assert.equal(report[0].reason, 'episode-coverage-incomplete');
+    assert.equal(report[0].reason, 'unavailable-episode-progress');
     assert.equal(e.timers.size, 0);
 });
 
@@ -3774,4 +3783,414 @@ test('profile and route changes cancel direct episode reads and discard profile-
         assert.equal(e.c.routeFetchControllers.size, 0);
         assert.equal(e.timers.size, 0);
     }
+});
+
+function clickManualViewing(e, id, action = 'toggle', grid = e.state.grid, button = null) {
+    const clone = e.state.cloneMap.get('v:' + id);
+    button ||= clone.__tmViewingControls[action === 'reset' ? 'reset' : 'toggle'];
+    const events = [];
+    grid.listeners.get('click')({ target: button, preventDefault: () => events.push('prevent'),
+        stopPropagation: () => events.push('stop'), stopImmediatePropagation: () => events.push('immediate') });
+    return events;
+}
+
+test('a completed latest episode outweighs reset older progress and the copy report identifies the inference', async () => {
+    const e = await viewingEnvironment();
+    e.fixtures().episodes.videos[400] = viewingVideo('episode', false, 20);
+    e.fixtures().episodes.videos[401] = viewingVideo('episode', false, 90);
+    await e.start();
+    assert.ok(completedViewingIds(e).includes('4'));
+    const row = e.c.collectViewingSeriesDiagnostics(e.state)[0];
+    assert.equal(row.reason, 'latest-episode-complete');
+    assert.equal(row.unfinishedEpisodes, 1);
+    assert.deepEqual({ ...row.latestEpisode }, { season: 1, episode: 2, status: 'complete', percent: 90,
+        thresholdPercent: 90, watched: false, creditsReached: false, reason: 'completion-threshold' });
+    assert.equal(e.requests.length, 3);
+});
+
+test('latest episode diagnostics distinguish below 90 percent, earlier credits, flags and absent progress', async () => {
+    for (const [record, expected, percent, reason] of [
+        [viewingVideo('episode', false, 89.8), false, 89.8, 'below-completion-threshold'],
+        [viewingVideo('episode', false, 85, { creditsOffset: atom(85) }), true, 85, 'credits-reached'],
+        [viewingVideo('episode', true, -1), true, null, 'watched-flag'],
+        [{ summary: atom({ type: 'episode' }), bookmarkPosition: atom(-1), runtime: atom(100) }, false, null, 'progress-unavailable']
+    ]) {
+        const e = await viewingEnvironment();
+        e.fixtures().episodes.videos[400] = viewingVideo('episode', false, 0);
+        e.fixtures().episodes.videos[401] = record;
+        await e.start();
+        const latest = e.c.collectViewingSeriesDiagnostics(e.state)[0].latestEpisode;
+        assert.equal(completedViewingIds(e).includes('4'), expected);
+        assert.equal(latest.percent, percent);
+        assert.equal(latest.reason, reason);
+        if (percent === null && !expected) assert.equal(latest.fields.bookmark, 'atom:negative-number');
+    }
+});
+
+test('an unknown finale receives a direct follow-up even when older episodes are unfinished', async () => {
+    const e = await viewingEnvironment();
+    e.fixtures().episodes.videos[400] = viewingVideo('episode', false, 20);
+    useSparseNestedEpisodes(e, id => id === '401');
+    await e.start();
+    assert.ok(completedViewingIds(e).includes('4'));
+    assert.deepEqual(e.requests.at(-1).paths[0][1], ['401']);
+    assert.equal(e.c.collectViewingSeriesDiagnostics(e.state)[0].latestEpisode.reason, 'watched-flag');
+});
+
+test('the latest nonempty season is checked before older unfinished seasons', async () => {
+    const e = await viewingEnvironment(1);
+    e.fixtures().titles.videos[1] = viewingVideo('show', true, 0, { seasonCount: atom(3), episodeCount: atom(202) });
+    e.fixtures().seasons = { videos: { 1: { seasonList: { 0: reference('seasons', '10'),
+        1: reference('seasons', '11'), 2: reference('seasons', '12') } } },
+        seasons: { 10: { summary: atom({ length: 200 }) }, 11: { summary: atom({ length: 2 }) }, 12: { summary: atom({ length: 0 }) } } };
+    e.fixtures().episodes = { seasons: { 11: { episodes: { 0: reference('videos', '110'), 1: reference('videos', '111') } } },
+        videos: { 110: viewingVideo('episode', false, 0), 111: viewingVideo('episode', false, 90) } };
+    await e.start();
+    assert.deepEqual(completedViewingIds(e), ['1']);
+    assert.equal(e.requests.length, 3);
+    assert.deepEqual(e.requests[2].paths.map(path => path[1]), ['11']);
+    const row = e.c.collectViewingSeriesDiagnostics(e.state)[0];
+    assert.equal(row.latestEpisode.season, 2);
+    assert.equal(row.checkedEpisodes, 2);
+    assert.equal(row.expectedEpisodes, 202);
+});
+
+test('malformed season plans, duplicate finale IDs and wrong video types cannot establish the latest hint', async () => {
+    for (const mode of ['count', 'duplicate', 'wrong-type']) {
+        const e = await viewingEnvironment();
+        if (mode === 'count') e.fixtures().titles.videos[4].episodeCount = atom(3);
+        if (mode === 'duplicate') e.fixtures().episodes.seasons[40].episodes[1] = reference('videos', '400');
+        if (mode === 'wrong-type') e.fixtures().episodes.videos[401] = viewingVideo('show', true);
+        await e.start();
+        assert.ok(!completedViewingIds(e).includes('4'), mode);
+        assert.ok(mainViewingIds(e).includes('4'), mode);
+    }
+});
+
+test('manual choices move cards immediately, update filters and counts, and perform no Netflix request', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    const requests = e.requests.length;
+    const itemOrder = e.state.items.map(item => item.videoId);
+    const mainBefore = e.state.watchStatus.visibleCount;
+    assert.deepEqual(clickManualViewing(e, '2'), ['prevent', 'stop', 'immediate']);
+    assert.deepEqual(completedViewingIds(e), ['1', '2', '4']);
+    assert.equal(e.state.watchStatus.completedCount, 3);
+    assert.equal(e.state.watchStatus.visibleCount, mainBefore - 1);
+    assert.deepEqual(filteredViewingIds(e, 'watched'), ['1', '2']);
+    assert.equal(e.state.watchStatus.filters.main, 'movie');
+    assert.equal(e.requests.length, requests);
+    assert.deepEqual(e.state.items.map(item => item.videoId), itemOrder);
+    assert.equal(e.state.totalCount, 7);
+    assert.equal(e.storageCalls.writes, 1);
+    assert.equal(e.state.cloneMap.get('v:2').__tmViewingControls.toggle.textContent, 'Move back to My List');
+});
+
+test('manual choices survive reloads and automatic refresh and can be reversed or cleared', async () => {
+    const first = await viewingEnvironment();
+    await first.start();
+    clickManualViewing(first, '2');
+    const next = await viewingEnvironment(7, null, first.storage);
+    await next.start();
+    assert.ok(completedViewingIds(next).includes('2'));
+    await next.c.refreshViewingStatus(next.state);
+    assert.ok(completedViewingIds(next).includes('2'));
+    next.state.watchStatus.ui.details.open = true;
+    clickManualViewing(next, '2');
+    assert.ok(mainViewingIds(next).includes('2'));
+    next.fixtures().titles.videos[2] = viewingVideo('movie', true);
+    await next.c.refreshViewingStatus(next.state);
+    assert.ok(mainViewingIds(next).includes('2'), 'an explicit main-list choice outweighs automatic completion');
+    clickManualViewing(next, '2', 'reset');
+    assert.ok(completedViewingIds(next).includes('2'));
+    assert.equal(next.state.watchStatus.manualChoices.has('2'), false);
+    assert.equal(next.state.cloneMap.get('v:2').__tmViewingControls.reset.hidden, true);
+});
+
+test('manual corrections remain available when optional viewing requests fail', async () => {
+    const e = await viewingEnvironment();
+    e.c.fetch = async () => ({ ok: false, status: 503 });
+    await e.start();
+    clickViewingFilter(e, 'main', 'all');
+    clickManualViewing(e, '2');
+    assert.ok(completedViewingIds(e).includes('2'));
+    await e.c.refreshViewingStatus(e.state);
+    assert.ok(completedViewingIds(e).includes('2'));
+    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
+});
+
+test('a manual series correction expires for an added episode and the change is persisted', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    clickViewingFilter(e, 'main', 'series');
+    clickManualViewing(e, '5');
+    assert.ok(completedViewingIds(e).includes('5'));
+    await e.c.refreshViewingStatus(e.state);
+    assert.ok(completedViewingIds(e).includes('5'));
+    e.fixtures().titles.videos[5].episodeCount = atom(3);
+    e.fixtures().seasons.seasons[50].summary = atom({ length: 3 });
+    e.fixtures().episodes.seasons[50].episodes[2] = reference('videos', '502');
+    e.fixtures().episodes.videos[502] = viewingVideo('episode', false, 0);
+    await e.c.refreshViewingStatus(e.state);
+    assert.ok(mainViewingIds(e).includes('5'));
+    assert.equal(e.state.watchStatus.manualChoices.has('5'), false);
+    assert.equal(Object.hasOwn(e.storage.get('test.viewingChoices.active-profile').choices, '5'), false);
+});
+
+test('manual series corrections detect a new season without relying on a larger total count', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    clickViewingFilter(e, 'main', 'series');
+    clickManualViewing(e, '5');
+    e.fixtures().titles.videos[5].seasonCount = atom(2);
+    e.fixtures().seasons.videos[5].seasonList[1] = reference('seasons', '51');
+    e.fixtures().seasons.seasons[50].summary = atom({ length: 1 });
+    e.fixtures().seasons.seasons[51] = { summary: atom({ length: 1 }) };
+    e.fixtures().episodes.seasons[51] = { episodes: { 0: reference('videos', '510') } };
+    e.fixtures().episodes.videos[510] = viewingVideo('episode', false, 0);
+    await e.c.refreshViewingStatus(e.state);
+    assert.ok(mainViewingIds(e).includes('5'));
+    assert.equal(e.state.watchStatus.manualChoices.has('5'), false);
+});
+
+test('unavailable or conflicting season metadata preserves a manual correction until reliable new coverage arrives', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    clickViewingFilter(e, 'main', 'series');
+    clickManualViewing(e, '5');
+    e.fixtures().titles.videos[5].episodeCount = atom(3);
+    await e.c.refreshViewingStatus(e.state);
+    assert.ok(completedViewingIds(e).includes('5'));
+    assert.deepEqual(structuredClone(e.state.watchStatus.manualChoices.get('5').coverage), [['50', 2]]);
+    assert.equal(e.storageCalls.writes, 1);
+});
+
+test('a correction made before season metadata arrives captures its first reliable baseline once', async () => {
+    const e = await viewingEnvironment();
+    const mockFetch = e.c.fetch;
+    let release;
+    e.c.fetch = async (url, options) => {
+        const response = await mockFetch(url, options);
+        const json = response.json;
+        if (e.requests.length === 2) response.json = () => new Promise(resolve => { release = async () => resolve(await json()); });
+        return response;
+    };
+    e.c.initializeWatchGroups(e.state, 1);
+    for (let attempt = 0; attempt < 10 && !release; attempt++) await e.flush();
+    clickViewingFilter(e, 'main', 'series');
+    clickManualViewing(e, '5');
+    assert.equal(e.state.watchStatus.manualChoices.get('5').coverage, null);
+    await release();
+    await e.state.watchStatus.promise;
+    assert.deepEqual(structuredClone(e.state.watchStatus.manualChoices.get('5').coverage), [['50', 2]]);
+    assert.equal(e.storageCalls.writes, 2);
+    for (let i = 0; i < 10; i++) e.c.syncWatchGroups(e.state);
+    assert.equal(e.storageCalls.writes, 2, 'stable synchronization performs no repeated writes');
+});
+
+test('profile switching isolates manual choices and stale controls cannot write to the new profile', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    clickManualViewing(e, '2');
+    e.models.userInfo.userGuid = 'second-profile';
+    clickManualViewing(e, '3');
+    assert.equal(e.storageCalls.writes, 1, 'the click on the previous profile is rejected');
+    assert.equal(e.state.watchStatus.manualChoices.size, 0);
+    await e.c.refreshViewingStatus(e.state);
+    assert.ok(mainViewingIds(e).includes('2'));
+    clickManualViewing(e, '3');
+    assert.ok(completedViewingIds(e).includes('3'));
+    e.models.userInfo.userGuid = 'active-profile';
+    await e.c.refreshViewingStatus(e.state);
+    assert.ok(completedViewingIds(e).includes('2'));
+    assert.ok(mainViewingIds(e).includes('3'));
+    assert.deepEqual(Object.keys(e.storage.get('test.viewingChoices.second-profile').choices), ['3']);
+});
+
+test('storage read/write failures surface without pretending a correction was remembered', async () => {
+    for (const mode of ['read', 'write']) {
+        const e = await viewingEnvironment();
+        if (mode === 'read') e.c.GM_getValue = () => { throw new Error('denied'); };
+        await e.start();
+        if (mode === 'write') e.c.GM_setValue = () => { throw new Error('denied'); };
+        clickManualViewing(e, '2');
+        assert.ok(mainViewingIds(e).includes('2'));
+        assert.equal(e.state.watchStatus.manualChoices.has('2'), false);
+        assert.equal(e.storage.size, 0);
+        assert.match(e.state.watchStatus.ui.note.textContent, /Could not save viewing choices/);
+        assert.equal(e.state.cloneMap.get('v:2').__tmViewingControls.toggle.disabled, true);
+    }
+});
+
+test('malformed persisted choices are ignored and missing profile identity never writes a correction', async () => {
+    const storage = new Map([['test.viewingChoices.active-profile', { version: 1, choices: {
+        2: { status: 'complete', type: 'movie', coverage: null },
+        3: { status: 'complete', type: 'movie', coverage: 'bad' },
+        5: { status: 'complete', type: 'series', coverage: [['50', -1]] },
+        garbage: { status: 'complete', type: 'movie', coverage: null }
+    } }]]);
+    const e = await viewingEnvironment(7, null, storage);
+    await e.start();
+    assert.deepEqual([...e.state.watchStatus.manualChoices.keys()], ['2']);
+    const writes = e.storageCalls.writes;
+    delete e.models.userInfo.userGuid;
+    e.c.syncWatchGroups(e.state);
+    clickManualViewing(e, '3');
+    assert.equal(e.storageCalls.writes, writes);
+    assert.equal(e.state.watchStatus.manualChoices.size, 0);
+});
+
+test('rebuilds and card replacements keep one working action row and reject obsolete controls', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    const oldGrid = e.state.grid;
+    const oldButton = e.state.cloneMap.get('v:2').__tmViewingControls.toggle;
+    await e.c.buildGrid(e.section, e.scroller, e.items, e.layout, 7, 1);
+    clickManualViewing(e, '2', 'toggle', oldGrid, oldButton);
+    assert.equal(e.storageCalls.writes, 0);
+    const clone = e.state.cloneMap.get('v:2');
+    assert.equal(clone.children.filter(child => child.getAttribute('data-tm-viewing-actions') === 'true').length, 1);
+    const replacement = clone.cloneNode(true);
+    e.c.normalizeClone(replacement);
+    replacement.__tmMyListItem = clone.__tmMyListItem;
+    clone.replaceWith(replacement);
+    e.state.cloneMap.set('v:2', replacement);
+    e.c.syncWatchGroups(e.state);
+    assert.equal(replacement.children.filter(child => child.getAttribute('data-tm-viewing-actions') === 'true').length, 1);
+    clickManualViewing(e, '2', 'toggle', e.state.grid, clone.__tmViewingControls.toggle);
+    assert.equal(e.storageCalls.writes, 0);
+    clickManualViewing(e, '2');
+    assert.ok(completedViewingIds(e).includes('2'));
+});
+
+test('viewing controls cancel pending popup preparation and ordinary artwork can regain hover intent', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    const clone = e.state.cloneMap.get('v:2');
+    const card = clone.querySelector('card');
+    const handler = e.state.grid.listeners.get('pointerover');
+    handler({ target: card, relatedTarget: null });
+    assert.equal(e.c.pendingGridHoverClone, clone);
+    const button = clone.__tmViewingControls.toggle;
+    handler({ target: button, relatedTarget: card });
+    assert.equal(e.c.pendingGridHoverClone, null);
+    assert.equal(e.c.gridCloneFromPointerEvent({ target: button }, e.state.grid), null);
+    assert.equal(e.c.gridHoverTargetActive(clone, clone.__tmHoverActivationGeneration), false);
+    handler({ target: card, relatedTarget: null });
+    assert.equal(clone.__tmViewingControlHovered, false);
+    assert.equal(e.c.pendingGridHoverClone, clone);
+    e.c.cancelPendingGridHover();
+    assert.equal(e.timers.size, 0);
+});
+
+test('manual grouping survives removal and Undo and detailed logs omit stored profile and season IDs', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    clickViewingFilter(e, 'main', 'series');
+    clickManualViewing(e, '5');
+    e.c.applyLegacyRemoval('5');
+    e.c.syncWatchGroups(e.state);
+    const entry = e.c.recentRemovedMyListItems.get('5');
+    assert.equal(e.c.applyLegacyAddition(entry.item, entry.index, 'undo'), true);
+    e.c.syncWatchGroups(e.state);
+    assert.ok(completedViewingIds(e).includes('5'));
+    const row = e.c.collectViewingSeriesDiagnostics(e.state).find(row => row.manualChoice === 'complete');
+    assert.equal(row.status, 'complete');
+    assert.equal(row.automaticStatus, 'in-progress');
+    const report = JSON.stringify(row);
+    assert.ok(!report.includes('active-profile'));
+    assert.ok(!report.includes('test-auth-token'));
+    assert.ok(!report.includes('coverage'));
+    assert.ok(!report.includes('videoId'));
+});
+
+test('saving from an older tab preserves unrelated corrections already saved by another tab', async () => {
+    const first = await viewingEnvironment();
+    const second = await viewingEnvironment(7, null, first.storage);
+    await first.start();
+    await second.start();
+    clickManualViewing(first, '2');
+    clickManualViewing(second, '3');
+    assert.deepEqual(Object.keys(first.storage.get('test.viewingChoices.active-profile').choices), ['2', '3']);
+    assert.ok(completedViewingIds(second).includes('2'));
+    clickViewingFilter(first, 'main', 'series');
+    clickManualViewing(first, '5');
+    assert.deepEqual(Object.keys(first.storage.get('test.viewingChoices.active-profile').choices), ['2', '3', '5']);
+});
+
+test('stable manual card synchronization performs no storage calls, allocations or attribute writes', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    clickManualViewing(e, '2');
+    const before = { ...e.storageCalls, created: e.created.length, requests: e.requests.length };
+    for (const clone of e.state.cloneMap.values()) {
+        for (const button of [clone.__tmViewingControls.toggle, clone.__tmViewingControls.reset]) {
+            button.setAttribute = () => { throw new Error('unchanged button attribute write'); };
+        }
+    }
+    for (let index = 0; index < 10; index++) e.c.syncWatchGroups(e.state);
+    assert.deepEqual({ ...e.storageCalls, created: e.created.length, requests: e.requests.length }, before);
+});
+
+test('new episodes are revealed in the current grid even if saving manual expiry fails', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    clickViewingFilter(e, 'main', 'series');
+    clickManualViewing(e, '5');
+    e.fixtures().titles.videos[5].episodeCount = atom(3);
+    e.fixtures().seasons.seasons[50].summary = atom({ length: 3 });
+    e.fixtures().episodes.seasons[50].episodes[2] = reference('videos', '502');
+    e.fixtures().episodes.videos[502] = viewingVideo('episode', false, 0);
+    let attempts = 0;
+    e.c.GM_setValue = () => { attempts++; throw new Error('storage failure'); };
+    await e.c.refreshViewingStatus(e.state);
+    assert.ok(mainViewingIds(e).includes('5'));
+    assert.equal(e.state.watchStatus.manualChoices.has('5'), false);
+    assert.equal(attempts, 1);
+    assert.equal(e.state.watchStatus.manualFailure, true);
+    for (let index = 0; index < 5; index++) e.c.syncWatchGroups(e.state);
+    assert.equal(attempts, 1, 'failed persistence does not create a repeated write loop');
+});
+
+test('native hover clone replacement publishes correctly labeled manual controls before another group sync', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    e.c.graftedGridClones = new Set();
+    e.c.netflixReactHover = { graftTreeToClone: () => ({ fiberAssignments: 0, propsAssignments: 0 }) };
+    for (const name of ['makeLiveClone', 'findGridClone', 'setGridClone']) vm.runInContext(declaration(name), e.c);
+    const item = e.state.items.find(item => item.videoId === '2');
+    const old = e.state.cloneMap.get('v:2');
+    const { fresh } = e.c.makeLiveClone(e.template, item, old, item.page);
+    old.replaceWith(fresh);
+    e.c.setGridClone(item, fresh);
+    assert.equal(fresh.__tmViewingControls.toggle.textContent, 'Mark watched');
+    clickManualViewing(e, '2');
+    assert.ok(completedViewingIds(e).includes('2'));
+    assert.equal(fresh.__tmViewingControls.toggle.textContent, 'Move back to My List');
+});
+
+test('late automatic baseline capture preserves a newer manual choice saved in another tab', async () => {
+    const e = await viewingEnvironment();
+    const mockFetch = e.c.fetch;
+    let release;
+    e.c.fetch = async (url, options) => {
+        const response = await mockFetch(url, options);
+        const json = response.json;
+        if (e.requests.length === 2) response.json = () => new Promise(resolve => { release = async () => resolve(await json()); });
+        return response;
+    };
+    e.c.initializeWatchGroups(e.state, 1);
+    for (let attempt = 0; attempt < 10 && !release; attempt++) await e.flush();
+    clickViewingFilter(e, 'main', 'series');
+    clickManualViewing(e, '5');
+    const next = await viewingEnvironment(7, null, e.storage);
+    await next.start();
+    next.state.watchStatus.ui.details.open = true;
+    clickViewingFilter(next, 'watched', 'series');
+    clickManualViewing(next, '5');
+    await release();
+    await e.state.watchStatus.promise;
+    assert.equal(e.state.watchStatus.manualChoices.get('5').status, 'main');
+    assert.ok(mainViewingIds(e).includes('5'));
+    assert.equal(e.storage.get('test.viewingChoices.active-profile').choices[5].status, 'main');
 });

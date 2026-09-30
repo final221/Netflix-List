@@ -34,6 +34,7 @@ what it should not contain
 - A request to discuss, assess, or suggest optional work is not approval to implement it. Explain tradeoffs and work only on the selected step; do not add speculative changes just to finish a plan.
 - For multi-step code reviews, the user prefers a clear ordered plan with progress reported as each step is completed.
 - On list entry, the user prefers Films selected by default in both the main grid and Watched / Caught up, with independent Films/Series selections for those sections.
+- For viewing groups, the user accepts a completed latest episode as a caught-up hint and wants reversible manual choices remembered separately for each Netflix profile. Manual choices take priority over automatic status; a series correction should cover the current episodes and expire when reliable metadata reveals added episodes.
 - The user authorizes the assistant to maintain the editable durable-context sections of this file when lasting repository knowledge or preferences change, following the protected instructions above. Routine maintenance of those sections does not require another permission request.
 
 ## Cross-cutting repository knowledge
