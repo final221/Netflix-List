@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.1.1
+// @version      1.1.2
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -81,7 +81,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.1.1';
+    const SCRIPT_VERSION = '1.1.2';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -2969,16 +2969,34 @@
         const authURL = user?.authURL;
         const services = netflixModelData('services');
         const build = netflixModelData('serverDefs')?.BUILD_IDENTIFIER;
-        const base = services?.memberapi || (build ? '/api/shakti/' + encodeURIComponent(build) : '');
-        if (typeof profileGuid !== 'string' || !profileGuid || typeof authURL !== 'string' || !authURL || !base) return null;
+        let base = services?.memberapi;
+        let endpointType = 'string';
+        if (base == null || base === '') {
+            base = typeof build === 'string' && build ? '/api/shakti/' + encodeURIComponent(build) : '';
+            endpointType = 'build';
+        } else if (typeof base === 'object') {
+            // Netflix also exposes memberapi as a URL descriptor. Stringifying
+            // that object sends requests to /[object Object]/pathEvaluator.
+            const { protocol, hostname, path } = base;
+            if (typeof protocol !== 'string' || !/^https:?$/i.test(protocol) ||
+                typeof hostname !== 'string' || !hostname ||
+                !Array.isArray(path) || !path.length ||
+                !path.every(part => typeof part === 'string' && part.length > 0)) return null;
+            base = protocol.replace(/:$/, '') + '://' + hostname + '/' + path.join('/').replace(/^\/+/, '');
+            endpointType = 'descriptor';
+        }
+        if (typeof profileGuid !== 'string' || !profileGuid || typeof authURL !== 'string' || !authURL ||
+            typeof base !== 'string' || !base) return null;
         try {
-            const url = new URL(String(base).replace(/\/$/, '') + '/pathEvaluator', location.origin);
-            if (url.origin !== location.origin || url.protocol !== 'https:') return null;
+            const url = new URL(base, location.origin);
+            if (url.origin !== location.origin || url.protocol !== 'https:' ||
+                url.username || url.password || url.search || url.hash || url.pathname === '/') return null;
+            url.pathname = url.pathname.replace(/\/+$/, '') + '/pathEvaluator';
             url.searchParams.set('falcor_server', '0.1.0');
             url.searchParams.set('withSize', 'false');
             url.searchParams.set('materialize', 'false');
             url.searchParams.set('original_path', '/shakti/mre/pathEvaluator');
-            return { profileGuid, authURL, url: url.href };
+            return { profileGuid, authURL, url: url.href, endpointType, endpointPath: url.pathname };
         } catch (_) {
             return null;
         }
@@ -3216,7 +3234,9 @@
             state, watch, context, sessionToken: watch.sessionToken, results: new Map(),
             requests: 0, deadline: performance.now() + VIEWING_TIMEOUT_MS
         };
-        log(tLog('viewingStatusStarted'), { titles: state.items.length });
+        log(tLog('viewingStatusStarted'), {
+            titles: state.items.length, endpointType: context.endpointType, endpointPath: context.endpointPath
+        });
         watch.promise = (async () => {
             try {
                 await collectViewingStatuses(job);

@@ -2394,7 +2394,8 @@ async function viewingEnvironment(count = 7, existing = null) {
     }
     const models = {
         userInfo: { guid: 'owner-profile', userGuid: 'active-profile', authURL: 'test-auth-token' },
-        services: { memberapi: '/api/shakti/test-build' }, serverDefs: { BUILD_IDENTIFIER: 'test-build' }
+        services: { memberapi: { protocol: 'https', hostname: 'www.netflix.com', path: ['/nq/website/memberapi/release'] } },
+        serverDefs: { BUILD_IDENTIFIER: 'test-build' }
     };
     const requests = [];
     let fixtures = viewingFixtures();
@@ -2853,6 +2854,95 @@ test('near-completion requires valid progress and runtime rather than treating m
     assert.equal(e.c.classifyViewingVideo(e.c.viewingVideoRecord({ videos: {
         1: viewingVideo('movie', false, 0)
     } }, '1')), 'not-started');
+});
+
+test('viewing requests resolve structured member API addresses before fetching', async () => {
+    for (const path of [['/nq/website/memberapi/release'], ['nq', 'website', 'memberapi', 'release']]) {
+        const e = await viewingEnvironment();
+        e.models.services.memberapi = { protocol: 'https', hostname: 'www.netflix.com', path };
+        const mockFetch = e.c.fetch;
+        e.c.fetch = async (url, options) => {
+            if (new URL(url).pathname !== '/nq/website/memberapi/release/pathEvaluator') {
+                return { ok: false, status: 400 };
+            }
+            return mockFetch(url, options);
+        };
+        await e.start();
+        assert.equal(e.state.watchStatus.failure, null);
+        assert.deepEqual(completedViewingIds(e), ['1', '4']);
+        assert.equal(e.requests.length, 3);
+        assert.equal(e.timers.size, 0);
+        assert.ok(!JSON.stringify([...e.logs, ...e.warnings]).includes('test-auth-token'));
+    }
+});
+
+test('viewing request addresses preserve string and build fallback support', async () => {
+    for (const mode of ['relative', 'absolute', 'colon-protocol', 'build']) {
+        const e = await viewingEnvironment();
+        let expected = '/api/shakti/test-build/pathEvaluator';
+        if (mode === 'relative') e.models.services.memberapi = '/api/shakti/test-build';
+        if (mode === 'absolute') e.models.services.memberapi = 'https://www.netflix.com/api/shakti/test-build/';
+        if (mode === 'colon-protocol') {
+            e.models.services.memberapi = { protocol: 'https:', hostname: 'www.netflix.com', path: ['/nq/website/memberapi/release'] };
+            expected = '/nq/website/memberapi/release/pathEvaluator';
+        }
+        if (mode === 'build') delete e.models.services.memberapi;
+        await e.start();
+        assert.equal(e.state.watchStatus.failure, null);
+        assert.ok(e.requests.every(request => new URL(request.url).pathname === expected));
+        assert.ok(e.logs.some(entry => entry.details?.endpointPath === expected));
+        assert.ok(!JSON.stringify([...e.logs, ...e.warnings]).includes('test-auth-token'));
+        assert.ok(!JSON.stringify([...e.logs, ...e.warnings]).includes('active-profile'));
+    }
+});
+
+test('malformed or unsafe structured viewing endpoints do not send requests', async () => {
+    for (const memberapi of [
+        {}, { protocol: 'https', hostname: 'www.netflix.com', path: '/nq/website/memberapi/release' },
+        { protocol: 'https', hostname: 'www.netflix.com', path: [] },
+        { protocol: 'https', hostname: 'www.netflix.com', path: [null] },
+        { protocol: 'https', hostname: 'example.test', path: ['/nq/website/memberapi/release'] },
+        { protocol: 'http', hostname: 'www.netflix.com', path: ['/nq/website/memberapi/release'] },
+        { protocol: '', hostname: 'www.netflix.com', path: ['/nq/website/memberapi/release'] },
+        { protocol: 'https', hostname: 'user:password@www.netflix.com', path: ['/nq/website/memberapi/release'] },
+        'https://www.netflix.com/api/shakti/build?authURL=hidden',
+        'https://www.netflix.com/api/shakti/build#hidden', true, 123
+    ]) {
+        const e = await viewingEnvironment();
+        e.models.services.memberapi = memberapi;
+        await e.start();
+        assert.equal(e.requests.length, 0);
+        assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_CONTEXT');
+        assert.equal(mainViewingIds(e).length, 7);
+        assert.equal(completedViewingIds(e).length, 0);
+        assert.equal(e.timers.size, 0);
+    }
+});
+
+test('a rejected viewing request stops after one attempt and records its resolved endpoint', async () => {
+    const e = await viewingEnvironment(500);
+    let attempts = 0;
+    e.c.fetch = async url => {
+        attempts++;
+        assert.equal(new URL(url).pathname, '/nq/website/memberapi/release/pathEvaluator');
+        return { ok: false, status: 400 };
+    };
+    await e.start();
+    assert.equal(attempts, 1);
+    assert.equal(e.state.watchStatus.requests, 1);
+    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_400');
+    assert.equal(e.state.watchStatus.unknownCount, 500);
+    assert.equal(mainViewingIds(e).length, 500);
+    assert.equal(completedViewingIds(e).length, 0);
+    const start = e.logs.find(entry => entry.details?.endpointType === 'descriptor');
+    assert.equal(start.details.endpointPath, '/nq/website/memberapi/release/pathEvaluator');
+    assert.ok(!JSON.stringify([...e.logs, ...e.warnings]).includes('test-auth-token'));
+    assert.ok(!JSON.stringify([...e.logs, ...e.warnings]).includes('active-profile'));
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.timers.size, 0);
+    e.c.syncWatchGroups(e.state);
+    await e.advance(60000);
+    assert.equal(attempts, 1, 'there is no repeated retry loop');
 });
 
 test('credit-tolerant completion moves movies and fully caught-up series out of the main grid', async () => {
