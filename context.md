@@ -36,6 +36,7 @@ what it should not contain
 - On list entry, the user prefers Films selected by default in both the main grid and Watched / Caught up, with independent Films/Series selections for those sections.
 - For viewing groups, the user accepts a completed latest episode as a caught-up hint and wants reversible manual choices remembered separately for each Netflix profile. Manual choices take priority over automatic status; a series correction should cover the current episodes and expire when reliable metadata reveals added episodes.
 - Marking or reversing a viewing choice should preserve the user's browsing position instead of scrolling to the destination section.
+- Known watched/caught-up titles should start in their section on list entry, and newly established viewing results should appear promptly.
 - The user authorizes the assistant to maintain the editable durable-context sections of this file when lasting repository knowledge or preferences change, following the protected instructions above. Routine maintenance of those sections does not require another permission request.
 
 ## Cross-cutting repository knowledge

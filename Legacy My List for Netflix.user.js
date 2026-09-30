@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.1
+// @version      1.3.2
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -84,7 +84,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.1';
+    const SCRIPT_VERSION = '1.3.2';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -97,6 +97,8 @@
     const LEGACY_EMPTY_STATE_ID = 'tm-netflix-mylist-v48-empty-state';
     const SETTINGS_STORAGE_KEY = 'legacyMyListForNetflix.settings.v3';
     const VIEWING_CHOICES_STORAGE_KEY = 'legacyMyListForNetflix.viewingChoices.v1.';
+    const VIEWING_CACHE_STORAGE_KEY = 'legacyMyListForNetflix.viewingCache.v1.';
+    const VIEWING_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
     /*
      * Localization rules:
      * 1. Keep these rules in the source so future changes inherit them.
@@ -3309,6 +3311,65 @@
         }
     }
 
+    function readViewingCache(state, profile) {
+        const cached = { results: new Map(), types: new Map() };
+        if (!profile || typeof GM_getValue !== 'function') return cached;
+        try {
+            const stored = GM_getValue(VIEWING_CACHE_STORAGE_KEY + encodeURIComponent(profile), null);
+            const age = Date.now() - stored?.savedAt;
+            if (stored?.version !== 1 || stored.completionRatio !== VIEWING_COMPLETION_RATIO ||
+                !Number.isFinite(stored.savedAt) || age < 0 || age > VIEWING_CACHE_MAX_AGE_MS ||
+                !stored.entries || typeof stored.entries !== 'object' || Array.isArray(stored.entries) ||
+                Object.keys(stored.entries).length > 5000) return cached;
+            for (const item of state.items || []) {
+                const id = String(item.videoId);
+                const entry = stored.entries[id];
+                if (!/^\d+$/.test(id) || !Array.isArray(entry) || entry.length !== 2 ||
+                    !['movie', 'series'].includes(entry[0]) ||
+                    !['complete', 'in-progress', 'not-started', 'unknown'].includes(entry[1])) continue;
+                cached.types.set(id, entry[0]);
+                cached.results.set(id, entry[1]);
+            }
+        } catch (_) { /* Optional startup reuse must not block the grid. */ }
+        return cached;
+    }
+
+    function clearCachedViewingStatus(watch) {
+        watch.cachedResults?.clear();
+        watch.cachedTypes?.clear();
+    }
+
+    function writeViewingCache(job) {
+        if (typeof GM_setValue !== 'function') return;
+        try {
+            assertViewingJob(job);
+            const entries = {};
+            for (const item of job.state.items || []) {
+                const id = String(item.videoId);
+                const type = job.types.get(id);
+                if (/^\d+$/.test(id) && ['movie', 'series'].includes(type)) {
+                    entries[id] = [type, job.results.get(id) || 'unknown'];
+                }
+            }
+            if (Object.keys(entries).length > 5000) return;
+            // Save only fresh scan data once, never extending unverified cache
+            // entries or persisting a manual choice as an automatic result.
+            GM_setValue(VIEWING_CACHE_STORAGE_KEY + encodeURIComponent(job.context.profileGuid),
+                { version: 1, completionRatio: VIEWING_COMPLETION_RATIO, savedAt: Date.now(), entries });
+        } catch (_) { /* A cache failure leaves fresh grouping and corrections usable. */ }
+    }
+
+    function publishViewingProgress(job) {
+        assertViewingJob(job);
+        job.watch.results = job.results;
+        job.watch.types = job.types;
+        job.watch.seriesDetails = job.seriesDetails;
+        job.watch.requests = job.requests;
+        job.watch.passes = job.passes;
+        job.watch.publications++;
+        syncWatchGroups(job.state);
+    }
+
     async function collectViewingStatuses(job) {
         const fields = ['summary', 'watched', 'bookmarkPosition', 'runtime', 'creditsOffset', 'seasonCount', 'episodeCount'];
         const ids = [...new Set(job.state.items.map(item => String(item.videoId)).filter(id => /^\d+$/.test(id)))];
@@ -3318,7 +3379,8 @@
             const graph = await fetchViewingGraph([['videos', batch, fields]], job);
             for (const id of batch) {
                 const record = viewingVideoRecord(graph, id);
-                job.results.set(id, classifyViewingVideo(record));
+                let pendingSeries = false;
+                job.watch.cachedTypes.delete(id);
                 if (record?.type === 'movie') job.types.set(id, 'movie');
                 else if (['show', 'series', 'tvshow', 'episode'].includes(record?.type)) job.types.set(id, 'series');
                 if (record && ['show', 'series', 'tvshow'].includes(record.type)) {
@@ -3329,37 +3391,31 @@
                         record.episodeCount > 0 && record.episodeCount <= VIEWING_MAX_EPISODES))) {
                         series.push(record);
                         job.seriesStats.eligible++;
+                        pendingSeries = true;
                     }
                 }
+                // A show-level flag cannot replace a cached finale result.
+                // Keep that provisional result only until its episode check.
+                if (!pendingSeries) job.results.set(id, classifyViewingVideo(record));
             }
+            publishViewingProgress(job);
         }
-        // Make type filtering available before the slower episode checks finish.
-        assertViewingJob(job);
-        job.watch.types = job.types;
-        syncWatchGroups(job.state);
         for (let offset = 0; offset < series.length;) {
             const batch = [];
             let episodes = 0, seasons = 0;
             while (offset < series.length && batch.length < VIEWING_TITLE_BATCH_SIZE) {
                 const record = series[offset];
-                const episodeCost = record.episodeCount ?? VIEWING_MAX_EPISODES;
                 const seasonCost = record.seasonCount ?? VIEWING_MAX_SEASONS;
-                if (batch.length && (episodes + episodeCost > VIEWING_EPISODE_BATCH_SIZE ||
+                if (batch.length && (episodes + 1 > VIEWING_EPISODE_BATCH_SIZE ||
                     seasons + seasonCost > VIEWING_EPISODE_BATCH_SIZE)) break;
                 batch.push(record);
-                episodes += episodeCost;
+                episodes++;
                 seasons += seasonCost;
                 offset++;
             }
-            // Fill a bounded batch for short series; finish its episode work
-            // before requesting more season lists. Long series run alone.
+            // Only the latest episode determines the selected caught-up rule.
+            // Bound season metadata and finale checks, not historical runtimes.
             await collectViewingSeriesBatch(batch, job);
-            assertViewingJob(job);
-            job.watch.results = job.results;
-            job.watch.seriesDetails = job.seriesDetails;
-            job.watch.requests = job.requests;
-            job.watch.passes = job.passes;
-            syncWatchGroups(job.state);
         }
         // Preserve the complete ordinary scan before spending its remaining
         // budget on incomplete nested responses. Already verified titles win.
@@ -3379,36 +3435,24 @@
         job.seriesStats.unplanned += records.length - plans.length;
         const plannedIds = new Set(plans.map(plan => plan.videoId));
         for (const record of records) {
-            if (!plannedIds.has(record.videoId)) job.seriesDetails.set(record.videoId, { reason: 'season-metadata-incomplete-or-inconsistent' });
+            if (!plannedIds.has(record.videoId)) {
+                job.results.set(record.videoId, 'unknown');
+                job.seriesDetails.set(record.videoId, { reason: 'season-metadata-incomplete-or-inconsistent' });
+            }
         }
         for (const plan of plans) job.watch.seriesCoverage.set(plan.videoId, plan.seasons.map(season => [season.id, season.count]));
         await collectViewingEpisodePlans(plans, job);
+        if (!plans.length) publishViewingProgress(job);
     }
 
     async function collectViewingEpisodePlans(plans, job) {
         const segments = [];
         for (const plan of plans) {
-            const firstSegment = segments.length;
-            for (const season of plan.seasons) {
-                for (let from = 0; from < season.count; from += VIEWING_EPISODE_BATCH_SIZE) {
-                    const to = Math.min(season.count - 1, from + VIEWING_EPISODE_BATCH_SIZE - 1);
-                    let covered = true;
-                    for (let index = from; index <= to; index++) {
-                        if (!season.episodes.has(index)) { covered = false; break; }
-                    }
-                    if (covered) continue;
-                    segments.push({ plan, season, from,
-                        to });
-                }
-            }
-            // Inspect the end of the latest nonempty season first. Long series
-            // can qualify without downloading hundreds of older episode records.
             const latest = viewingLatestEpisode(plan);
-            const latestSegment = segments.findIndex((segment, index) => index >= firstSegment &&
-                segment.season === latest?.season && segment.to === latest.index);
-            if (latestSegment >= 0) segments.splice(firstSegment, 0, segments.splice(latestSegment, 1)[0]);
+            if (latest && !latest.episode) segments.push({ plan, season: latest.season, from: latest.index, to: latest.index });
         }
-        // Batch episodes across the current group, splitting long seasons.
+        // Request one episode per series. Older progress cannot change the
+        // latest-episode inference, including when the finale is unavailable.
         for (let offset = 0; offset < segments.length;) {
             const batch = [];
             let size = 0;
@@ -3457,6 +3501,7 @@
                     finishViewingSeriesPlan(plan, status, job);
                 } else saveViewingSeriesDetails(plan, job);
             }
+            publishViewingProgress(job);
         }
     }
 
@@ -3512,11 +3557,12 @@
         if (!watch) return [];
         // Only Copy Logs expands these compact per-series summaries. Ordinary
         // runtime snapshots, scroll and hover never build title-level reports.
-        return (state.items || []).filter(item => (watch.types.get(String(item.videoId)) ||
-            watch.manualChoices.get(String(item.videoId))?.type) === 'series').map(item => {
+        return (state.items || []).filter(item => viewingTitleType(watch, String(item.videoId)) === 'series').map(item => {
             const id = String(item.videoId);
             return { title: item.ariaLabel || '(untitled)', status: effectiveViewingStatus(watch, id),
-                automaticStatus: watch.results.get(id) || 'unknown', manualChoice: watch.manualChoices.get(id)?.status || null,
+                automaticStatus: watch.results.get(id) || watch.cachedResults?.get(id) || 'unknown',
+                cachedStatus: !watch.results.has(id) && Boolean(watch.cachedResults?.has(id)),
+                manualChoice: watch.manualChoices.get(id)?.status || null,
                 ...(watch.seriesDetails.get(id) || { reason: watch.loading ? 'checking' : 'series-metadata-unavailable-or-unprocessed' }) };
         });
     }
@@ -3582,24 +3628,13 @@
                 }
             }
             for (const plan of affected) {
-                const observed = plan.seasons.flatMap(season => [...season.episodes.values()]);
                 const full = plan.seasons.every(season => season.episodes.size === season.count);
                 const result = viewingSeriesResult(plan);
                 if (result === 'complete' || full) finishViewingSeriesPlan(plan, result, job);
-                else if (observed.every(episode => episode.id && episode.status === 'complete')) {
-                    // Continue unfetched seasons/ranges only after the blocking
-                    // records have been resolved, preserving earlier coverage.
-                    plan.finished = false;
-                    await collectViewingEpisodePlans([plan], job);
-                }
                 saveViewingSeriesDetails(plan, job);
                 if (plan.status === 'complete') job.recheckStats.recoveredSeries++;
             }
-            assertViewingJob(job);
-            job.watch.results = job.results;
-            job.watch.seriesDetails = job.seriesDetails;
-            job.watch.requests = job.requests;
-            syncWatchGroups(job.state);
+            publishViewingProgress(job);
         }
     }
 
@@ -3633,6 +3668,7 @@
         const active = typeof profile === 'string' && profile ? profile : null;
         if (watch.manualProfileGuid === active) return;
         if (watch.manualProfileGuid !== undefined) {
+            clearCachedViewingStatus(watch);
             watch.results = new Map();
             watch.types = new Map();
             watch.seriesDetails = new Map();
@@ -3695,7 +3731,12 @@
 
     function effectiveViewingStatus(watch, id) {
         const manual = watch.manualChoices.get(id);
-        return manual ? manual.status === 'complete' ? 'complete' : 'in-progress' : watch.results.get(id) || 'unknown';
+        return manual ? manual.status === 'complete' ? 'complete' : 'in-progress'
+            : watch.results.get(id) || watch.cachedResults?.get(id) || 'unknown';
+    }
+
+    function viewingTitleType(watch, id) {
+        return watch.types.get(id) || watch.cachedTypes?.get(id) || watch.manualChoices.get(id)?.type;
     }
 
     function ensureManualViewingControls(clone) {
@@ -3725,7 +3766,7 @@
         const watch = state.watchStatus;
         const controls = ensureManualViewingControls(clone);
         const id = String(item.videoId);
-        const type = watch.types.get(id) || watch.manualChoices.get(id)?.type;
+        const type = viewingTitleType(watch, id);
         const label = status === 'complete' ? tUi('moveBackToMyList')
             : tUi(type === 'series' ? 'markCaughtUp' : 'markWatched');
         if (controls.toggle.textContent !== label) controls.toggle.textContent = label;
@@ -3769,7 +3810,7 @@
             if (button.getAttribute('data-tm-viewing-action') === 'reset') changes.set(id, null);
             else {
                 const status = effectiveViewingStatus(watch, id) === 'complete' ? 'main' : 'complete';
-                changes.set(id, { status, type: watch.types.get(id) || 'unknown',
+                changes.set(id, { status, type: viewingTitleType(watch, id) || 'unknown',
                     coverage: status === 'complete' ? watch.seriesCoverage.get(id) || null : null });
             }
             const saved = saveManualViewingChoices(watch, changes);
@@ -3900,7 +3941,7 @@
             const clone = state.cloneMap?.get(itemKey(item));
             if (!clone) continue;
             const group = status === 'complete' ? 'watched' : 'main';
-            const type = watch.types.get(String(item.videoId)) || watch.manualChoices.get(String(item.videoId))?.type;
+            const type = viewingTitleType(watch, String(item.videoId));
             syncManualViewingCard(state, clone, item, status);
             counts[group].all++;
             if (type === 'movie' || type === 'series') counts[group][type]++;
@@ -3957,11 +3998,15 @@
     }
 
     function initializeWatchGroups(state, sessionToken) {
+        const active = netflixModelData('userInfo')?.userGuid;
+        const profile = typeof active === 'string' && active ? active : null;
+        const cached = readViewingCache(state, profile);
         state.watchStatus = {
             sessionToken, results: new Map(), types: new Map(), seriesDetails: new Map(), filters: { main: 'movie', watched: 'movie' },
+            cachedResults: cached.results, cachedTypes: cached.types, cachedTitles: cached.types.size, publications: 0,
             seriesCoverage: new Map(), manualChoices: new Map(), manualProfileGuid: undefined, manualFailure: false,
             completedCount: 0, unknownCount: state.items.length, visibleCount: 0,
-            loading: false, expanded: false, ui: null, promise: null, requests: 0, passes: 0, failure: null, profileGuid: null
+            loading: false, expanded: false, ui: null, promise: null, requests: 0, passes: 0, failure: null, profileGuid: profile
         };
         syncWatchGroups(state);
         refreshViewingStatus(state);
@@ -3973,6 +4018,7 @@
         if (watch.loading) return watch.promise;
         const context = viewingRequestContext();
         if (!context || !isRouteSessionActive(watch.sessionToken)) {
+            clearCachedViewingStatus(watch);
             watch.results = new Map();
             watch.types = new Map();
             watch.seriesDetails = new Map();
@@ -3983,14 +4029,21 @@
             return;
         }
         if (watch.profileGuid !== context.profileGuid) {
+            clearCachedViewingStatus(watch);
             watch.results = new Map();
             watch.types = new Map();
             watch.seriesDetails = new Map();
+        } else {
+            // Keep the current grouping while refreshing unresolved series,
+            // using the same provisional fallback as a warm list entry.
+            for (const [id, status] of watch.results) watch.cachedResults.set(id, status);
+            for (const [id, type] of watch.types) watch.cachedTypes.set(id, type);
         }
         watch.profileGuid = context.profileGuid;
         watch.loading = true;
         watch.seriesCoverage = new Map();
         watch.failure = null;
+        watch.publications = 0;
         syncWatchGroups(state);
         const job = {
             state, watch, context, sessionToken: watch.sessionToken, results: new Map(), types: new Map(), seriesDetails: new Map(),
@@ -4005,7 +4058,7 @@
         log(tLog('viewingStatusStarted'), {
             titles: state.items.length, endpointType: context.endpointType, endpointPath: context.endpointPath,
             completionRatio: VIEWING_COMPLETION_RATIO, maxPasses: VIEWING_MAX_PASSES,
-            maxRequests: VIEWING_MAX_REQUESTS * VIEWING_MAX_PASSES
+            maxRequests: VIEWING_MAX_REQUESTS * VIEWING_MAX_PASSES, cachedTitles: watch.cachedTypes.size
         });
         watch.promise = (async () => {
             try {
@@ -4015,6 +4068,7 @@
                 if (isRouteSessionCancelledError(error)) {
                     // A profile switch in the same grid invalidates old results.
                     if (sourceState === state && state.watchStatus === watch && isRouteSessionActive(job.sessionToken)) {
+                        clearCachedViewingStatus(watch);
                         watch.results = new Map();
                         watch.types = new Map();
                         watch.seriesDetails = new Map();
@@ -4041,10 +4095,12 @@
             watch.requests = job.requests;
             watch.passes = job.passes;
             watch.loading = false;
+            clearCachedViewingStatus(watch);
             syncWatchGroups(state);
+            writeViewingCache(job);
             log(tLog('viewingStatusCompleted'), {
                 completed: watch.completedCount, unknown: watch.unknownCount,
-                requests: watch.requests, passes: watch.passes, failure: watch.failure,
+                requests: watch.requests, passes: watch.passes, failure: watch.failure, publications: watch.publications,
                 series: { ...job.seriesStats, pending: job.seriesStats.eligible - job.seriesStats.checked - job.seriesStats.unplanned },
                 recheck: job.recheckStats
             });
@@ -4052,6 +4108,7 @@
             // Optional grouping must never reject Netflix's grid initialization.
             if (sourceState !== state || state.watchStatus !== watch) return;
             watch.loading = false;
+            clearCachedViewingStatus(watch);
             watch.results = new Map();
             watch.types = new Map();
             watch.seriesDetails = new Map();

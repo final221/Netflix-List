@@ -2349,6 +2349,7 @@ const viewingFunctions = [
     'unwrapViewingAtom', 'readViewingGraph', 'readViewingGraphReference', 'viewingNumber', 'viewingCount', 'viewingVideoRecord',
     'classifyViewingVideo', 'viewingFieldKind', 'recordViewingFieldKinds', 'viewingReferenceId', 'viewingSeasonPlan', 'classifyViewingSeries',
     'viewingRequestContext', 'assertViewingJob', 'fetchViewingGraph', 'collectViewingStatuses', 'collectViewingSeriesBatch',
+    'readViewingCache', 'clearCachedViewingStatus', 'writeViewingCache', 'publishViewingProgress', 'viewingTitleType',
     'collectViewingEpisodePlans', 'finishViewingSeriesPlan', 'recheckViewingSeries',
     'saveViewingSeriesDetails', 'collectViewingSeriesDiagnostics',
     'viewingLatestEpisode', 'viewingProgressSummary', 'viewingSeriesResult',
@@ -2404,7 +2405,8 @@ async function viewingEnvironment(count = 7, existing = null, storage = new Map(
         serverDefs: { BUILD_IDENTIFIER: 'test-build' }
     };
     const requests = [];
-    const storageCalls = { reads: 0, writes: 0 };
+    const storageCalls = { reads: 0, writes: 0, cacheReads: 0, cacheWrites: 0 };
+    let cacheTime = Date.now();
     let fixtures = viewingFixtures();
     Object.assign(e.c, {
         URLSearchParams, AbortController, FRESH_MY_LIST_FETCH_TIMEOUT_MS: 10000,
@@ -2412,8 +2414,18 @@ async function viewingEnvironment(count = 7, existing = null, storage = new Map(
         VIEWING_MAX_EPISODES: 500, VIEWING_MAX_REQUESTS: 32, VIEWING_MAX_PASSES: 3,
         VIEWING_TIMEOUT_MS: 30000, VIEWING_COMPLETION_RATIO: 0.90,
         VIEWING_CHOICES_STORAGE_KEY: 'test.viewingChoices.',
-        GM_getValue: (key, fallback) => { storageCalls.reads++; return structuredClone(storage.get(key) ?? fallback); },
-        GM_setValue: (key, value) => { storageCalls.writes++; storage.set(key, structuredClone(value)); },
+        VIEWING_CACHE_STORAGE_KEY: 'test.viewingCache.', VIEWING_CACHE_MAX_AGE_MS: 6 * 60 * 60 * 1000,
+        Date: class extends Date { static now() { return cacheTime; } },
+        GM_getValue: (key, fallback) => {
+            if (key.startsWith('test.viewingCache.')) storageCalls.cacheReads++;
+            else storageCalls.reads++;
+            return structuredClone(storage.get(key) ?? fallback);
+        },
+        GM_setValue: (key, value) => {
+            if (key.startsWith('test.viewingCache.')) storageCalls.cacheWrites++;
+            else storageCalls.writes++;
+            storage.set(key, structuredClone(value));
+        },
         routeFetchControllers: new Map(), netflixModelData: name => models[name],
         getUiLocale: () => 'en', formatUiNumber: value => String(value), formatInitializationTime: () => 'time',
         fetch: async (url, options) => {
@@ -2431,6 +2443,7 @@ async function viewingEnvironment(count = 7, existing = null, storage = new Map(
     for (const name of viewingFunctions) vm.runInContext(declaration(name), e.c);
     return { ...e, models, requests, storage, storageCalls, items, state: e.c.sourceState,
         fixtures: () => fixtures, setFixtures: value => { fixtures = value; },
+        setCacheTime: value => { cacheTime = value; },
         async start() {
             e.c.initializeWatchGroups(e.c.sourceState, 1);
             await e.c.sourceState.watchStatus.promise;
@@ -2701,7 +2714,7 @@ test('viewing title requests batch large lists and grouping never schedules peri
     assert.equal(e.requests.length, 3);
 });
 
-test('long seasons inspect their bounded latest range first and oversize series remain unknown', async () => {
+test('long seasons request only their latest episode and oversize series remain unknown', async () => {
     const e = await viewingEnvironment(2);
     e.c.fetch = async (url, options) => {
         const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
@@ -2729,7 +2742,7 @@ test('long seasons inspect their bounded latest range first and oversize series 
     assert.deepEqual(completedViewingIds(e), ['1']);
     assert.deepEqual(mainViewingIds(e), ['2']);
     const ranges = e.requests.filter(request => request.paths[0][0] === 'seasons').map(request => request.paths[0][3]);
-    assert.deepEqual(ranges, [{ from: 400, to: 499 }]);
+    assert.deepEqual(ranges, [{ from: 499, to: 499 }]);
 });
 
 test('viewing request budget preserves confirmed movies and leaves unverified series visible', async () => {
@@ -2766,6 +2779,7 @@ test('a large short-series list is fully covered within the original single-pass
 test('completed series results survive a budget limit inside the current episode group', async () => {
     const e = await viewingEnvironment(2);
     useCompleteSeriesResponses(e, { 1: 200, 2: 1 });
+    e.c.VIEWING_EPISODE_BATCH_SIZE = 1;
     e.c.VIEWING_MAX_REQUESTS = 3;
     e.c.VIEWING_MAX_PASSES = 1;
     await e.start();
@@ -3074,7 +3088,7 @@ test('credit-tolerant completion moves movies and fully caught-up series out of 
     assert.equal(e.timers.size, 0);
 });
 
-test('series completion checks each episode rather than averaging viewing percentages', async () => {
+test('an unfinished latest episode cannot qualify by averaging its progress with older episodes', async () => {
     const e = await viewingEnvironment();
     const fixtures = e.fixtures();
     fixtures.episodes.videos[400] = viewingVideo('episode', false, 100, { creditsOffset: atom(99) });
@@ -3216,7 +3230,8 @@ test('type filtering is available while series episode requests are still loadin
     await e.flush();
     assert.equal(typeof release, 'function');
     assert.equal(e.state.watchStatus.loading, true);
-    assert.deepEqual(filteredViewingIds(e), ['1', '2', '3']);
+    assert.deepEqual(filteredViewingIds(e), ['2', '3']);
+    assert.deepEqual(completedViewingIds(e), ['1'], 'confirmed movies move before episode requests return');
     clickViewingFilter(e, 'main', 'series');
     assert.deepEqual(filteredViewingIds(e), ['4', '5', '6']);
     release();
@@ -3291,7 +3306,7 @@ test('missing series episode totals are recovered from fully covered season summ
     await e.start();
     assert.ok(completedViewingIds(e).includes('4'));
     assert.ok(!completedViewingIds(e).includes('5'), 'a partly watched series still stays in the main grid');
-    assert.equal(e.requests.length, 5, 'unknown-size series use their own bounded batch');
+    assert.equal(e.requests.length, 3, 'validated season metadata allows finale checks to share a batch');
 });
 
 test('small series batches fill the existing episode allowance without cutting off later series', async () => {
@@ -3327,7 +3342,7 @@ test('missing season and episode totals require an explicit complete season-list
     assert.equal(e.c.viewingSeasonPlan(graph, missingCounts), null);
 });
 
-test('a missing-count series is caught up only after every recovered season and episode is checked', async () => {
+test('a missing-count series requires validated season coverage and a usable completed latest episode', async () => {
     const e = await viewingEnvironment();
     const title = e.fixtures().titles.videos[4];
     delete title.seasonCount;
@@ -3341,9 +3356,9 @@ test('a missing-count series is caught up only after every recovered season and 
     e.fixtures().episodes.videos[401] = viewingVideo('episode', false, 20);
     await e.c.refreshViewingStatus(e.state);
     assert.ok(!completedViewingIds(e).includes('4'));
-    e.fixtures().episodes.seasons[40].episodes[1] = reference('videos', 400);
+    delete e.fixtures().episodes.seasons[40].episodes[1];
     await e.c.refreshViewingStatus(e.state);
-    assert.ok(!completedViewingIds(e).includes('4'), 'duplicate references cannot establish full coverage');
+    assert.ok(!completedViewingIds(e).includes('4'), 'a missing latest reference cannot establish completion');
 });
 
 test('count recovery never replaces invalid or contradictory totals supplied by Netflix', async () => {
@@ -3364,6 +3379,7 @@ test('count recovery never replaces invalid or contradictory totals supplied by 
 test('bounded additional passes continue the same queue without reloading title or episode data', async () => {
     const e = await viewingEnvironment(3);
     useCompleteSeriesResponses(e, { 1: 200, 2: 200, 3: 200 });
+    e.c.VIEWING_EPISODE_BATCH_SIZE = 1;
     e.c.VIEWING_MAX_REQUESTS = 3;
     e.c.VIEWING_MAX_PASSES = 3;
     await e.start();
@@ -3388,12 +3404,13 @@ test('a latest range can continue across a pass boundary without fetching older 
     assert.equal(e.requests.length, 3);
     assert.equal(e.state.watchStatus.passes, 2);
     const ranges = e.requests.filter(request => request.paths[0][0] === 'seasons').map(request => request.paths[0][3]);
-    assert.deepEqual(ranges, [{ from: 400, to: 499 }]);
+    assert.deepEqual(ranges, [{ from: 499, to: 499 }]);
 });
 
 test('the total continuation request cap is finite and leaves unprocessed series visible', async () => {
     const e = await viewingEnvironment(4);
     useCompleteSeriesResponses(e, { 1: 200, 2: 200, 3: 200, 4: 200 });
+    e.c.VIEWING_EPISODE_BATCH_SIZE = 1;
     e.c.VIEWING_MAX_REQUESTS = 3;
     e.c.VIEWING_MAX_PASSES = 2;
     await e.start();
@@ -3431,6 +3448,7 @@ test('the combined scan time cap bounds a scan even when few requests consume th
 test('slow successful requests can use the total time allowance without aborting at the old 30-second boundary', async () => {
     const e = await viewingEnvironment(3);
     useCompleteSeriesResponses(e, { 1: 200, 2: 200, 3: 200 });
+    e.c.VIEWING_EPISODE_BATCH_SIZE = 1;
     const mockFetch = e.c.fetch;
     e.c.fetch = async (url, options) => {
         const response = await mockFetch(url, options);
@@ -3471,12 +3489,12 @@ test('an unfinished or unreadable latest episode saves older-range requests for 
         await e.start();
         assert.deepEqual(completedViewingIds(e), ['2'], mode);
         assert.deepEqual(mainViewingIds(e), ['1']);
-        assert.equal(e.requests.length, mode === 'missing-fields' ? 6 : 5,
+        assert.equal(e.requests.length, mode === 'missing-fields' ? 4 : 3,
             'unavailable fields get one direct follow-up; unfinished episodes and missing IDs do not');
         const ranges = e.requests.filter(request => request.paths[0][0] === 'seasons' && request.paths[0][1] === '10001');
         assert.equal(ranges.length, 1);
         const diagnostic = e.logs.find(entry => entry.details?.series)?.details.series;
-        assert.equal(diagnostic.episodesChecked, 101);
+        assert.equal(diagnostic.episodesChecked, 2);
         assert.equal(mode === 'unfinished' ? diagnostic.incomplete : diagnostic.unknown, 1);
         assert.equal(e.timers.size, 0);
     }
@@ -3513,6 +3531,7 @@ test('route and profile cancellation stop an additional pass without changing a 
     for (const mode of ['route', 'profile']) {
         const e = await viewingEnvironment(3);
         useCompleteSeriesResponses(e, { 1: 200, 2: 200, 3: 200 });
+        e.c.VIEWING_EPISODE_BATCH_SIZE = 1;
         e.c.VIEWING_MAX_REQUESTS = 3;
         const mockFetch = e.c.fetch;
         let signal, release;
@@ -3591,15 +3610,15 @@ test('direct episode lookups recover caught-up series from sparse nested respons
     assert.deepEqual(mainViewingIds(e), ['2', '3', '5', '6', '7']);
     assert.equal(e.requests.length, 4);
     const direct = e.requests.at(-1).paths[0];
-    assert.deepEqual(direct[1], ['400', '401']);
+    assert.deepEqual(direct[1], ['401']);
     const details = e.logs.find(entry => entry.details?.recheck)?.details;
     assert.equal(details.recheck.candidates, 1);
     assert.equal(details.recheck.requests, 1);
-    assert.equal(details.recheck.recoveredEpisodes, 2);
+    assert.equal(details.recheck.recoveredEpisodes, 1);
     assert.equal(details.recheck.recoveredSeries, 1);
     assert.equal(details.series.complete, 1);
     assert.equal(details.series.unknown, 0);
-    assert.equal(details.recheck.initialUnknownFields.watched.missing, 2);
+    assert.equal(details.recheck.initialUnknownFields.watched.missing, 1);
     assert.equal(e.timers.size, 0);
 });
 
@@ -3629,8 +3648,8 @@ test('an unusable direct response is attempted once and cannot turn unknown, neg
         assert.equal(e.requests.length, 4);
         const recheck = e.logs.find(entry => entry.details?.recheck)?.details.recheck;
         assert.equal(recheck.recoveredSeries, 0);
-        assert.equal(recheck.unknownEpisodes, 2);
-        if (mode === 'negative') assert.equal(recheck.remainingUnknownFields.bookmark['atom:negative-number'], 2);
+        assert.equal(recheck.unknownEpisodes, 1);
+        if (mode === 'negative') assert.equal(recheck.remainingUnknownFields.bookmark['atom:negative-number'], 1);
         await e.advance(120000);
         assert.equal(e.requests.length, 4, 'failed rechecks never become an automatic retry loop');
         assert.equal(e.timers.size, 0);
@@ -3638,9 +3657,9 @@ test('an unusable direct response is attempted once and cannot turn unknown, neg
 });
 
 test('repair batches are limited to 200 unique IDs and start after all ordinary series have been checked', async () => {
-    const e = await viewingEnvironment(3);
-    useCompleteSeriesResponses(e, { 1: 120, 2: 120, 3: 1 });
-    useSparseNestedEpisodes(e, id => Number(id) < 10003000);
+    const e = await viewingEnvironment(250);
+    useCompleteSeriesResponses(e, Object.fromEntries(Array.from({ length: 250 }, (_, index) => [index + 1, 120])));
+    useSparseNestedEpisodes(e, id => Number(id) < 10250000);
     const mockFetch = e.c.fetch;
     const baseCounts = [];
     e.c.fetch = async (url, options) => {
@@ -3651,14 +3670,14 @@ test('repair batches are limited to 200 unique IDs and start after all ordinary 
         return mockFetch(url, options);
     };
     await e.start();
-    assert.deepEqual(completedViewingIds(e), ['1', '2', '3']);
-    assert.deepEqual(baseCounts[0], ['3'], 'the later known complete series is preserved before repair begins');
+    assert.deepEqual(completedViewingIds(e), Array.from({ length: 250 }, (_, index) => String(index + 1)));
+    assert.deepEqual(baseCounts[0], ['250'], 'the later known complete series is preserved before repair begins');
     const repair = e.requests.filter(request => request.paths[0][0] === 'videos' && Array.isArray(request.paths[0][2]) &&
         !request.paths[0][2].includes('seasonCount'));
-    assert.deepEqual(repair.map(request => request.paths[0][1].length), [200, 40]);
+    assert.deepEqual(repair.map(request => request.paths[0][1].length), [200, 49]);
     const ids = repair.flatMap(request => request.paths[0][1]);
-    assert.equal(new Set(ids).size, 240);
-    assert.equal(e.logs.find(entry => entry.details?.recheck)?.details.recheck.recoveredSeries, 2);
+    assert.equal(new Set(ids).size, 249);
+    assert.equal(e.logs.find(entry => entry.details?.recheck)?.details.recheck.recoveredSeries, 249);
 });
 
 test('a repaired latest episode qualifies a long series without fetching older ranges or double-counting it', async () => {
@@ -3669,27 +3688,27 @@ test('a repaired latest episode qualifies a long series without fetching older r
     assert.deepEqual(completedViewingIds(e), ['1', '2']);
     const ranges = e.requests.filter(request => request.paths[0][0] === 'seasons' && request.paths[0][1] === '10001')
         .map(request => request.paths[0][3]);
-    assert.deepEqual(ranges, [{ from: 400, to: 499 }]);
+    assert.deepEqual(ranges, [{ from: 499, to: 499 }]);
     const details = e.logs.find(entry => entry.details?.recheck)?.details;
     assert.equal(details.series.checked, 2);
     assert.equal(details.series.complete, 2);
     assert.equal(details.series.unknown, 0);
     assert.equal(details.recheck.recoveredSeries, 1);
-    assert.equal(e.requests.length, 6);
+    assert.equal(e.requests.length, 4);
 });
 
 test('repair budget exhaustion preserves known series and leaves an unknown latest episode visible', async () => {
     const e = await viewingEnvironment(2);
     useCompleteSeriesResponses(e, { 1: 500, 2: 1 });
     useSparseNestedEpisodes(e, id => id === '10001499');
-    e.c.VIEWING_MAX_REQUESTS = 5;
+    e.c.VIEWING_MAX_REQUESTS = 3;
     e.c.VIEWING_MAX_PASSES = 1;
     await e.start();
     assert.deepEqual(completedViewingIds(e), ['2']);
-    assert.equal(e.requests.length, 5);
+    assert.equal(e.requests.length, 3);
     assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_BUDGET');
     const report = e.c.collectViewingSeriesDiagnostics(e.state);
-    assert.equal(report[0].checkedEpisodes, 100);
+    assert.equal(report[0].checkedEpisodes, 1);
     assert.equal(report[0].expectedEpisodes, 500);
     assert.equal(report[0].reason, 'unavailable-episode-progress');
     assert.equal(e.timers.size, 0);
@@ -3728,8 +3747,8 @@ test('copy-only series diagnostics explain the named cases without exporting vid
     const report = e.c.collectViewingSeriesDiagnostics(e.state);
     assert.deepEqual(report.map(row => row.title), titles);
     assert.equal(report[0].reason, 'unavailable-episode-progress');
-    assert.equal(report[0].unknownEpisodes, 2);
-    assert.equal(report[0].unknownFields.watched.missing, 2);
+    assert.equal(report[0].unknownEpisodes, 1);
+    assert.equal(report[0].unknownFields.watched.missing, 1);
     assert.equal(report[1].reason, 'unfinished-episodes');
     assert.equal(report[1].unfinishedEpisodes, 1);
     for (const row of report) assert.ok(!Object.hasOwn(row, 'videoId'));
@@ -3802,7 +3821,8 @@ test('a completed latest episode outweighs reset older progress and the copy rep
     assert.ok(completedViewingIds(e).includes('4'));
     const row = e.c.collectViewingSeriesDiagnostics(e.state)[0];
     assert.equal(row.reason, 'latest-episode-complete');
-    assert.equal(row.unfinishedEpisodes, 1);
+    assert.equal(row.unfinishedEpisodes, 0, 'older episode progress is no longer fetched');
+    assert.equal(row.checkedEpisodes, 1);
     assert.deepEqual({ ...row.latestEpisode }, { season: 1, episode: 2, status: 'complete', percent: 90,
         thresholdPercent: 90, watched: false, creditsReached: false, reason: 'completion-threshold' });
     assert.equal(e.requests.length, 3);
@@ -3851,15 +3871,15 @@ test('the latest nonempty season is checked before older unfinished seasons', as
     assert.deepEqual(e.requests[2].paths.map(path => path[1]), ['11']);
     const row = e.c.collectViewingSeriesDiagnostics(e.state)[0];
     assert.equal(row.latestEpisode.season, 2);
-    assert.equal(row.checkedEpisodes, 2);
+    assert.equal(row.checkedEpisodes, 1);
     assert.equal(row.expectedEpisodes, 202);
 });
 
-test('malformed season plans, duplicate finale IDs and wrong video types cannot establish the latest hint', async () => {
-    for (const mode of ['count', 'duplicate', 'wrong-type']) {
+test('malformed season plans, invalid finale references and wrong video types cannot establish the latest hint', async () => {
+    for (const mode of ['count', 'wrong-ref', 'wrong-type']) {
         const e = await viewingEnvironment();
         if (mode === 'count') e.fixtures().titles.videos[4].episodeCount = atom(3);
-        if (mode === 'duplicate') e.fixtures().episodes.seasons[40].episodes[1] = reference('videos', '400');
+        if (mode === 'wrong-ref') e.fixtures().episodes.seasons[40].episodes[1] = reference('seasons', '400');
         if (mode === 'wrong-type') e.fixtures().episodes.videos[401] = viewingVideo('show', true);
         await e.start();
         assert.ok(!completedViewingIds(e).includes('4'), mode);
@@ -4016,7 +4036,7 @@ test('storage read/write failures surface without pretending a correction was re
         clickManualViewing(e, '2');
         assert.ok(mainViewingIds(e).includes('2'));
         assert.equal(e.state.watchStatus.manualChoices.has('2'), false);
-        assert.equal(e.storage.size, 0);
+        assert.equal([...e.storage.keys()].filter(key => key.startsWith('test.viewingChoices.')).length, 0);
         assert.match(e.state.watchStatus.ui.note.textContent, /Could not save viewing choices/);
         assert.equal(e.state.cloneMap.get('v:2').__tmViewingControls.toggle.disabled, true);
     }
@@ -4142,7 +4162,10 @@ test('new episodes are revealed in the current grid even if saving manual expiry
     e.fixtures().episodes.seasons[50].episodes[2] = reference('videos', '502');
     e.fixtures().episodes.videos[502] = viewingVideo('episode', false, 0);
     let attempts = 0;
-    e.c.GM_setValue = () => { attempts++; throw new Error('storage failure'); };
+    e.c.GM_setValue = key => {
+        if (key.startsWith('test.viewingChoices.')) attempts++;
+        throw new Error('storage failure');
+    };
     await e.c.refreshViewingStatus(e.state);
     assert.ok(mainViewingIds(e).includes('5'));
     assert.equal(e.state.watchStatus.manualChoices.has('5'), false);
@@ -4240,4 +4263,277 @@ test('reversing and resetting a correction preserve the viewport when the destin
     assert.deepEqual(viewport, { x: 0, y: 2200 });
     assert.ok(completedViewingIds(e).includes('2'));
     assert.equal(e.state.watchStatus.manualChoices.has('2'), false);
+});
+
+function holdViewingResponse(e, matches = () => true) {
+    const mockFetch = e.c.fetch;
+    let held = false;
+    const gate = { release: null };
+    e.c.fetch = async (url, options) => {
+        const response = await mockFetch(url, options);
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        if (!held && matches(paths)) {
+            held = true;
+            const json = response.json;
+            response.json = () => new Promise(resolve => { gate.release = async () => resolve(await json()); });
+        }
+        return response;
+    };
+    return gate;
+}
+
+test('confirmed movies publish after the first title batch while later title responses are pending', async () => {
+    const e = await viewingEnvironment(120);
+    e.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        e.requests.push({ paths });
+        return { ok: true, json: async () => ({ jsonGraph: {
+            videos: Object.fromEntries(paths[0][1].map(id => [id, viewingVideo('movie', true)]))
+        } }) };
+    };
+    const gate = holdViewingResponse(e, paths => paths[0][1][0] === '51');
+    e.c.initializeWatchGroups(e.state, 1);
+    for (let attempt = 0; attempt < 10 && !gate.release; attempt++) await e.flush();
+    assert.equal(typeof gate.release, 'function');
+    assert.equal(e.state.watchStatus.loading, true);
+    assert.equal(completedViewingIds(e).length, 50);
+    assert.equal(e.state.watchStatus.publications, 1);
+    assert.equal(e.state.watchStatus.requests, 1);
+    assert.equal(mainViewingIds(e).length, 70);
+    assert.equal(e.storageCalls.cacheWrites, 0, 'batch publication does not write storage');
+    await gate.release();
+    await e.state.watchStatus.promise;
+    assert.equal(completedViewingIds(e).length, 120);
+    assert.equal(e.requests.length, 3);
+    assert.equal(e.storageCalls.cacheWrites, 1);
+});
+
+test('500 long series use 500 finale records and 30 bounded requests instead of downloading older progress', async () => {
+    const e = await viewingEnvironment(500);
+    useCompleteSeriesResponses(e, Object.fromEntries(Array.from({ length: 500 }, (_, index) => [index + 1, 500])));
+    await e.start();
+    assert.equal(completedViewingIds(e).length, 500);
+    assert.equal(e.requests.length, 30);
+    const episodePaths = e.requests.filter(request => request.paths[0][0] === 'seasons').flatMap(request => request.paths);
+    assert.equal(episodePaths.length, 500);
+    assert.ok(episodePaths.every(path => path[3].from === 499 && path[3].to === 499));
+    assert.ok(e.requests.filter(request => request.paths[0][2] === 'seasonList').every(request => request.paths.length <= 50));
+    const details = e.logs.find(entry => entry.details?.series)?.details;
+    assert.equal(details.series.episodesChecked, 500);
+    assert.equal(details.series.pending, 0);
+    assert.equal(details.failure, null);
+    assert.equal(e.state.totalCount, 500);
+    assert.equal(e.state.cloneMap.size, 500);
+});
+
+test('a recent same-profile cache groups titles before the first response and remains read-only during browsing', async () => {
+    const first = await viewingEnvironment();
+    await first.start();
+    const next = await viewingEnvironment(7, null, first.storage);
+    const gate = holdViewingResponse(next);
+    next.c.initializeWatchGroups(next.state, 1);
+    assert.deepEqual(completedViewingIds(next), ['1', '4']);
+    assert.deepEqual(filteredViewingIds(next), ['2', '3']);
+    assert.equal(next.state.watchStatus.ui.details.open, false);
+    assert.equal(next.state.watchStatus.cachedTitles, 6);
+    const row = next.c.collectViewingSeriesDiagnostics(next.state)[0];
+    assert.equal(row.automaticStatus, 'complete');
+    assert.equal(row.cachedStatus, true);
+    for (let index = 0; index < 10; index++) next.c.syncWatchGroups(next.state);
+    assert.equal(next.storageCalls.cacheReads, 1);
+    assert.equal(next.storageCalls.cacheWrites, 0);
+    await next.flush();
+    await gate.release();
+    await next.state.watchStatus.promise;
+    assert.deepEqual(completedViewingIds(next), ['1', '4']);
+    assert.equal(next.state.watchStatus.cachedResults.size, 0);
+    assert.equal(next.c.collectViewingSeriesDiagnostics(next.state)[0].cachedStatus, false);
+    assert.equal(next.storageCalls.cacheWrites, 1);
+    assert.equal(next.requests.length, first.requests.length, 'startup reuse adds no requests and still revalidates');
+    const calls = { ...next.storageCalls };
+    for (let index = 0; index < 10; index++) next.c.syncWatchGroups(next.state);
+    await next.advance(60000);
+    assert.deepEqual(next.storageCalls, calls);
+    assert.equal(next.requests.length, 3);
+});
+
+test('fresh movies replace cache immediately and a newly unfinished finale returns a cached series to My List', async () => {
+    const first = await viewingEnvironment();
+    await first.start();
+    const next = await viewingEnvironment(7, null, first.storage);
+    next.setFixtures(viewingFixtures(true));
+    next.fixtures().titles.videos[1] = viewingVideo('movie', false);
+    const gate = holdViewingResponse(next, paths => paths[0][0] === 'seasons');
+    next.c.initializeWatchGroups(next.state, 1);
+    assert.deepEqual(completedViewingIds(next), ['1', '4']);
+    for (let attempt = 0; attempt < 10 && !gate.release; attempt++) await next.flush();
+    assert.equal(typeof gate.release, 'function');
+    assert.deepEqual(completedViewingIds(next), ['4'], 'show-level progress does not prematurely remove a cached finale result');
+    assert.equal(next.state.watchStatus.results.get('1'), 'not-started');
+    await gate.release();
+    await next.state.watchStatus.promise;
+    assert.deepEqual(completedViewingIds(next), []);
+    assert.ok(mainViewingIds(next).includes('4'));
+    assert.equal(next.c.collectViewingSeriesDiagnostics(next.state)[0].latestEpisode.episode, 3);
+    assert.equal(next.storage.get('test.viewingCache.active-profile').entries[4][1], 'in-progress');
+});
+
+test('manual main-list choices outweigh initial cached completion and never enter the automatic cache', async () => {
+    const first = await viewingEnvironment();
+    await first.start();
+    first.state.watchStatus.ui.details.open = true;
+    clickManualViewing(first, '1');
+    const next = await viewingEnvironment(7, null, first.storage);
+    const gate = holdViewingResponse(next);
+    next.c.initializeWatchGroups(next.state, 1);
+    assert.ok(mainViewingIds(next).includes('1'));
+    assert.deepEqual(completedViewingIds(next), ['4']);
+    await next.flush();
+    await gate.release();
+    await next.state.watchStatus.promise;
+    assert.ok(mainViewingIds(next).includes('1'));
+    assert.equal(next.storage.get('test.viewingCache.active-profile').entries[1][1], 'complete');
+    assert.equal(next.storage.get('test.viewingChoices.active-profile').choices[1].status, 'main');
+});
+
+test('a failed verification reveals cached automatic titles but retains explicit manual watched choices', async () => {
+    const first = await viewingEnvironment();
+    await first.start();
+    clickManualViewing(first, '2');
+    const next = await viewingEnvironment(7, null, first.storage);
+    next.c.fetch = async () => ({ ok: false, status: 503 });
+    next.c.initializeWatchGroups(next.state, 1);
+    assert.deepEqual(completedViewingIds(next), ['1', '2', '4']);
+    await next.state.watchStatus.promise;
+    assert.deepEqual(completedViewingIds(next), ['2']);
+    assert.equal(next.state.watchStatus.cachedResults.size, 0);
+    assert.equal(next.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
+    assert.deepEqual(Object.keys(next.storage.get('test.viewingCache.active-profile').entries), []);
+    assert.equal(next.storage.get('test.viewingChoices.active-profile').choices[2].status, 'complete');
+});
+
+test('startup cache validates age, schema, cutoff and membership without trusting malformed entries', async () => {
+    const e = await viewingEnvironment();
+    e.setCacheTime(100000000);
+    const valid = { version: 1, completionRatio: 0.9, savedAt: 100000000,
+        entries: { 1: ['movie', 'complete'], 4: ['series', 'complete'], 999: ['movie', 'complete'] } };
+    const key = 'test.viewingCache.active-profile';
+    e.storage.set(key, valid);
+    assert.deepEqual([...e.c.readViewingCache(e.state, 'active-profile').results.keys()], ['1', '4']);
+    for (const invalid of [
+        { ...valid, version: 2 }, { ...valid, completionRatio: 0.95 }, { ...valid, savedAt: 0 },
+        { ...valid, savedAt: 100000001 }, { ...valid, savedAt: NaN }, { ...valid, entries: [] },
+        { ...valid, entries: Object.fromEntries(Array.from({ length: 5001 }, (_, index) => [index, ['movie', 'complete']])) }
+    ]) {
+        e.storage.set(key, invalid);
+        assert.equal(e.c.readViewingCache(e.state, 'active-profile').results.size, 0);
+    }
+    e.storage.set(key, { ...valid, entries: { 1: ['movie', 'complete'], 2: ['movie', true],
+        3: ['movie', 'complete', 'extra'], 4: ['episode', 'complete'], 5: null } });
+    assert.deepEqual([...e.c.readViewingCache(e.state, 'active-profile').results.keys()], ['1']);
+});
+
+test('optional cache storage errors preserve fresh grouping and working manual corrections', async () => {
+    for (const mode of ['read', 'write']) {
+        const e = await viewingEnvironment();
+        const method = mode === 'read' ? 'GM_getValue' : 'GM_setValue';
+        const original = e.c[method];
+        e.c[method] = (key, value) => {
+            if (key.startsWith('test.viewingCache.')) throw new Error('cache denied');
+            return original(key, value);
+        };
+        await e.start();
+        assert.deepEqual(completedViewingIds(e), ['1', '4']);
+        assert.equal(e.state.watchStatus.failure, null);
+        assert.equal(e.state.watchStatus.manualFailure, false);
+        clickManualViewing(e, '2');
+        assert.ok(completedViewingIds(e).includes('2'));
+        assert.equal(e.storage.get('test.viewingChoices.active-profile').choices[2].status, 'complete');
+    }
+});
+
+test('cache reuse is isolated by the active profile and a cancelled response cannot publish or save it', async () => {
+    const first = await viewingEnvironment();
+    await first.start();
+    const other = await viewingEnvironment(7, null, first.storage);
+    other.models.userInfo.userGuid = 'other-profile';
+    const otherGate = holdViewingResponse(other);
+    other.c.initializeWatchGroups(other.state, 1);
+    assert.deepEqual(completedViewingIds(other), []);
+    assert.equal(other.state.watchStatus.cachedTitles, 0);
+    await other.flush();
+    await otherGate.release();
+    await other.state.watchStatus.promise;
+    assert.equal(other.storageCalls.cacheWrites, 1);
+    assert.ok(other.storage.has('test.viewingCache.other-profile'));
+    for (const mode of ['profile', 'route']) {
+        const next = await viewingEnvironment(7, null, first.storage);
+        const gate = holdViewingResponse(next);
+        next.c.initializeWatchGroups(next.state, 1);
+        assert.deepEqual(completedViewingIds(next), ['1', '4']);
+        await next.flush();
+        if (mode === 'profile') next.models.userInfo.userGuid = 'third-profile';
+        else {
+            next.c.sourceState = { grid: { isConnected: true }, watchStatus: { newer: true } };
+            next.c.isRouteSessionActive = token => token === 2;
+        }
+        await gate.release();
+        await next.state.watchStatus.promise;
+        assert.equal(next.storageCalls.cacheWrites, 0);
+        if (mode === 'profile') {
+            assert.deepEqual(completedViewingIds(next), []);
+            assert.equal(next.state.watchStatus.cachedResults.size, 0);
+            assert.equal(next.state.watchStatus.failure, 'VIEWING_STATUS_PROFILE_CHANGED');
+        } else assert.equal(next.c.sourceState.watchStatus.newer, true);
+        assert.equal(next.c.routeFetchControllers.size, 0);
+        assert.equal(next.timers.size, 0);
+    }
+});
+
+test('a later startup failure preserves fresh movie results and drops only unverified cached titles', async () => {
+    const first = await viewingEnvironment(60);
+    first.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        first.requests.push({ paths });
+        return { ok: true, json: async () => ({ jsonGraph: {
+            videos: Object.fromEntries(paths[0][1].map(id => [id, viewingVideo('movie', true)]))
+        } }) };
+    };
+    await first.start();
+    const next = await viewingEnvironment(60, null, first.storage);
+    next.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        next.requests.push({ paths });
+        return paths[0][1][0] === '51' ? { ok: false, status: 503 } : {
+            ok: true, json: async () => ({ jsonGraph: {
+                videos: Object.fromEntries(paths[0][1].map(id => [id, viewingVideo('movie', true)]))
+            } })
+        };
+    };
+    next.c.initializeWatchGroups(next.state, 1);
+    assert.equal(completedViewingIds(next).length, 60);
+    await next.state.watchStatus.promise;
+    assert.equal(completedViewingIds(next).length, 50);
+    assert.deepEqual(mainViewingIds(next), Array.from({ length: 10 }, (_, index) => String(index + 51)));
+    assert.equal(Object.keys(next.storage.get('test.viewingCache.active-profile').entries).length, 50);
+    assert.equal(next.storageCalls.cacheWrites, 1);
+    assert.equal(next.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
+});
+
+test('refresh keeps the current series grouping until its new finale result arrives without rereading storage', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    e.setFixtures(viewingFixtures(true));
+    const gate = holdViewingResponse(e, paths => paths[0][0] === 'seasons');
+    const promise = e.c.refreshViewingStatus(e.state);
+    for (let attempt = 0; attempt < 10 && !gate.release; attempt++) await e.flush();
+    assert.equal(typeof gate.release, 'function');
+    assert.deepEqual(completedViewingIds(e), ['1', '4']);
+    assert.equal(e.storageCalls.cacheReads, 1);
+    assert.equal(e.storageCalls.cacheWrites, 1);
+    await gate.release();
+    await promise;
+    assert.deepEqual(completedViewingIds(e), ['1']);
+    assert.equal(e.storageCalls.cacheWrites, 2);
+    assert.equal(e.state.watchStatus.cachedResults.size, 0);
 });
