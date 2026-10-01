@@ -4422,16 +4422,206 @@ test('copy-only series diagnostics explain the named cases without exporting vid
     assert.equal(report[1].reason, 'unfinished-episodes');
     assert.equal(report[1].unfinishedEpisodes, 1);
     for (const row of report) assert.ok(!Object.hasOwn(row, 'videoId'));
-    Object.assign(e.c, { collectRuntimeSnapshot: () => ({}), formatLogValue: value => JSON.stringify(value),
+    let thumbnailReads = 0;
+    Object.assign(e.c, { collectRuntimeSnapshot: () => ({}),
+        collectThumbnailDiagnostics: state => { assert.equal(state, e.state); thumbnailReads++; return { available: true }; },
+        formatLogValue: value => JSON.stringify(value),
         formatSystemTimestamp: () => 'now', investigationLog: [], retainedInvestigationLog: () => [],
         SCRIPT_VERSION: '1.2.2', getHtmlLanguage: () => 'en', getNetflixLanguage: () => 'en', getLogLocale: () => 'en',
         navigator: { userAgent: 'test', language: 'en' }, window: { innerWidth: 1920, innerHeight: 1080, devicePixelRatio: 1 } });
     vm.runInContext(declaration('buildInvestigationLogText'), e.c);
     const text = e.c.buildInvestigationLogText();
     assert.match(text, /seriesViewing: .*Weeds/);
+    assert.match(text, /thumbnailDiagnostics: \{"available":true\}/);
+    assert.equal(thumbnailReads, 1);
     assert.ok(!text.includes('test-auth-token'));
     assert.ok(!text.includes('active-profile'));
     assert.ok(!text.includes('jsonGraph'));
+});
+
+function thumbnailEnvironment() {
+    const e = constructionEnvironment();
+    e.c.window = { innerWidth: 1000, innerHeight: 600 };
+    e.c.getComputedStyle = () => ({ aspectRatio: 'auto', paddingTop: '0px', paddingBottom: '0px' });
+    e.c.sourceState.initializationStartedAt = 100;
+    e.c.performance.getEntriesByType = () => [];
+    vm.runInContext(source.match(/^    const THUMBNAIL_DIAGNOSTIC_LIMITS = Object\.freeze\(\{[^]*?^    \}\);/m)?.[0] || '', e.c);
+    for (const name of ['collectThumbnailDiagnostics', 'sampleThumbnailGeometry', 'collectThumbnailResourceTiming']) {
+        vm.runInContext(declaration(name), e.c);
+    }
+    const reads = { queries: 0, rects: 0, styles: 0 };
+    const computedStyle = e.c.getComputedStyle;
+    e.c.getComputedStyle = node => { reads.styles++; return computedStyle(node); };
+    function addImage(options = {}) {
+        const parent = options.parent || e.oldGrid;
+        const clone = parent.appendChild(new ConstructionNode('slot'));
+        const image = clone.appendChild(new ConstructionNode('img'));
+        const query = clone.querySelector.bind(clone);
+        clone.querySelector = selector => { reads.queries++; return query(selector); };
+        const url = options.url || `https://images.test/private-${e.c.sourceState.cloneMap.size}.jpg?signature=secret`;
+        Object.assign(image, { src: url, currentSrc: url, complete: true, naturalWidth: 200, naturalHeight: 100,
+            loading: 'lazy', decoding: 'async', ...options });
+        if (options.hidden) clone.setAttribute('data-tm-type-hidden', 'true');
+        const rect = options.rect || { left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 };
+        image.getBoundingClientRect = () => { reads.rects++; return rect; };
+        clone.getBoundingClientRect = () => { reads.rects++; return { ...rect, height: 130, bottom: rect.top + 130 }; };
+        // The measurement must not start requests, decode images, or change the DOM.
+        image.decode = () => { throw new Error('Image decode was induced'); };
+        for (const node of [image, clone]) {
+            node.setAttribute = node.removeAttribute = () => { throw new Error('Diagnostic DOM mutation'); };
+        }
+        e.c.sourceState.cloneMap.set(String(e.c.sourceState.cloneMap.size), clone);
+        return { clone, image, url };
+    }
+    return { ...e, reads, addImage, report: () => e.c.collectThumbnailDiagnostics(e.c.sourceState) };
+}
+
+test('copy-only thumbnail measurements separate pending, hidden and current geometry without exposing sources', () => {
+    const e = thumbnailEnvironment();
+    const ready = e.addImage();
+    const pending = e.addImage({ complete: false, naturalWidth: 0, naturalHeight: 0,
+        rect: { left: 0, top: 900, right: 200, bottom: 900, width: 200, height: 0 } });
+    pending.image.attributes.set('width', '200'); pending.image.attributes.set('height', '100');
+    e.addImage({ loading: 'eager', decoding: 'sync', hidden: true });
+    const details = e.oldGrid.appendChild(new ConstructionNode('details')); details.open = false;
+    const watched = details.appendChild(new ConstructionNode('watched'));
+    watched.setAttribute('data-tm-watch-grid', 'true');
+    e.addImage({ parent: watched });
+    e.addImage({ naturalWidth: 0, naturalHeight: 0 });
+    e.addImage({ src: '', currentSrc: '', complete: true, naturalWidth: 0, naturalHeight: 0 });
+    e.c.performance.getEntriesByType = type => {
+        assert.equal(type, 'resource');
+        return [
+            { name: ready.url, initiatorType: 'img', startTime: 20, duration: 500, transferSize: 12345 },
+            { name: ready.url, initiatorType: 'img', startTime: 110, duration: 12, transferSize: 240, deliveryType: '' },
+            { name: pending.url, initiatorType: 'img', startTime: 120, duration: 8, transferSize: 0, deliveryType: 'cache' },
+            { name: 'https://unrelated.test/auth-token', initiatorType: 'img', startTime: 130, duration: 900 },
+            { name: ready.url, initiatorType: 'fetch', startTime: 140, duration: 99 }
+        ];
+    };
+    const report = e.report();
+    assert.equal(report.available, true);
+    assert.equal(report.images, 6);
+    assert.deepEqual({ ...report.pixels }, { ready: 3, pending: 1, completeWithoutPixels: 1, noSource: 1 });
+    assert.deepEqual({ ...report.visibility }, { renderEligible: 4, filterHidden: 1, collapsedWatched: 1, otherHidden: 0 });
+    assert.equal(report.loading.lazy, 5); assert.equal(report.loading.eager, 1);
+    assert.equal(report.decoding.async, 5); assert.equal(report.decoding.sync, 1);
+    assert.equal(report.dimensionAttributes.paired, 1);
+    assert.equal(report.geometry.sampleCount, 4);
+    assert.equal(report.geometry.zeroArea.pending, 1);
+    assert.equal(report.geometry.pendingWithImageBox, 0);
+    assert.equal(report.geometry.pendingWithParentBox, 1);
+    assert.equal(report.resourceTiming.matchedEntries, 2);
+    assert.equal(report.resourceTiming.entriesBeforeInitializationSkipped, 1);
+    assert.equal(report.resourceTiming.uniqueSourceMatches, 2);
+    assert.equal(report.resourceTiming.fetchDurationMs.total, 20);
+    assert.equal(report.resourceTiming.zeroTransferSizeEntries, 1);
+    assert.equal(report.resourceTiming.cacheDelivery, 1);
+    assert.equal(report.resourceTiming.positionAtRequestKnown, false);
+    assert.equal(report.resourceTiming.imageDecodeMeasured, false);
+    assert.equal(report.resourceTiming.layoutShiftsMeasured, false);
+    const text = JSON.stringify(report);
+    for (const secret of ['https:', 'private-', 'signature', 'secret', 'auth-token']) assert.ok(!text.includes(secret));
+    assert.equal(e.reads.rects, 8);
+    assert.equal(e.timers.size + e.frames.size, 0);
+});
+
+test('thumbnail copy work is bounded and discloses incomplete sampling and resource history', () => {
+    const e = thumbnailEnvironment();
+    for (let index = 0; index < 605; index++) e.addImage({ complete: false, naturalWidth: 0, naturalHeight: 0 });
+    const entries = Array.from({ length: 2100 }, () => ({ name: 'unrelated', initiatorType: 'img', startTime: 110 }));
+    e.c.performance.getEntriesByType = () => entries;
+    const report = e.report();
+    assert.equal(report.mappedCards, 605);
+    assert.equal(report.cardsExamined, 600);
+    assert.equal(report.truncated, true);
+    assert.equal(e.reads.queries, 600);
+    assert.equal(report.geometry.eligibleImages, 600);
+    assert.equal(report.geometry.sampleCount, 24);
+    assert.equal(e.reads.rects, 48);
+    assert.equal(e.reads.styles, 48);
+    assert.equal(report.resourceTiming.bufferedEntries, 2100);
+    assert.equal(report.resourceTiming.examinedEntries, 2000);
+    assert.equal(report.resourceTiming.truncated, true);
+    assert.equal(report.resourceTiming.sourcesWithoutEntry, 600);
+    assert.equal(e.timers.size + e.frames.size, 0);
+});
+
+test('thumbnail diagnostics handle unavailable APIs and obsolete ownership without failing Copy Logs', () => {
+    const e = thumbnailEnvironment();
+    e.addImage();
+    e.c.performance.getEntriesByType = undefined;
+    e.c.getComputedStyle = undefined;
+    let report = e.report();
+    assert.equal(report.resourceTiming.available, false);
+    assert.equal(report.resourceTiming.reason, 'unsupported');
+    assert.equal(report.geometry.sampleCount, 1);
+    assert.equal(report.geometry.styleAvailable, false);
+    e.c.performance.getEntriesByType = () => { throw new Error('private-image-url'); };
+    report = e.report();
+    assert.equal(report.resourceTiming.reason, 'read-failed');
+    assert.ok(!JSON.stringify(report).includes('private-image-url'));
+    const queries = e.reads.queries;
+    assert.equal(e.c.collectThumbnailDiagnostics({ grid: e.oldGrid, cloneMap: new Map() }).available, false);
+    e.c.isRouteSessionActive = () => false;
+    assert.equal(e.report().available, false);
+    assert.equal(e.reads.queries, queries);
+    e.c.isRouteSessionActive = () => true;
+    e.oldGrid.setConnected(false);
+    assert.equal(e.report().available, false);
+    assert.equal(e.reads.queries, queries);
+});
+
+test('thumbnail geometry accounts for visual viewport offsets and native dimension hints without changing layout', () => {
+    const e = thumbnailEnvironment();
+    e.c.window.visualViewport = { offsetLeft: 100, offsetTop: 50, width: 500, height: 300 };
+    const images = [
+        { left: 150, top: 100, right: 350, bottom: 200, width: 200, height: 100 },
+        { left: 150, top: 400, right: 350, bottom: 500, width: 200, height: 100 },
+        { left: 150, top: -100, right: 350, bottom: 0, width: 200, height: 100 },
+        { left: 700, top: 100, right: 900, bottom: 200, width: 200, height: 100 }
+    ].map(rect => e.addImage({ rect, complete: false, naturalWidth: 0, naturalHeight: 0 }));
+    e.c.getComputedStyle = node => ({ aspectRatio: node.id === 'img' ? 'auto 2 / 1' : '2 / 1',
+        paddingTop: '0px', paddingBottom: node.id === 'img' ? '0px' : '25px' });
+    const report = e.report();
+    for (const position of ['inViewport', 'belowViewport', 'aboveViewport', 'outsideViewport']) {
+        assert.equal(report.geometry[position].pending, 1);
+    }
+    assert.equal(report.geometry.pendingWithImageBox, 4);
+    assert.equal(report.geometry.imageAspectRatioHint, 4);
+    assert.equal(report.geometry.parentAspectRatioHint, 4);
+    assert.equal(report.geometry.parentBlockPadding, 4);
+    for (const { image } of images) {
+        assert.equal(image.loading, 'lazy'); assert.equal(image.decoding, 'async');
+        assert.equal(image.naturalHeight, 0);
+    }
+    images[0].image.getBoundingClientRect = () => { throw new Error('private-layout-information'); };
+    const failed = e.report();
+    assert.equal(failed.available, true);
+    assert.equal(failed.geometry.available, false);
+    assert.equal(failed.geometry.reason, 'read-failed');
+    assert.ok(!JSON.stringify(failed).includes('private-layout-information'));
+});
+
+test('thumbnail inventory rejects retained stale trees and handles malformed or unresolved image URLs', () => {
+    const e = thumbnailEnvironment();
+    e.addImage({ url: 'http://%' });
+    const srcset = e.addImage({ src: '', currentSrc: '', complete: false, naturalWidth: 0, naturalHeight: 0 });
+    srcset.image.attributes.set('srcset', 'https://images.test/secret 1x');
+    const missing = e.addImage(); missing.image.remove();
+    const stale = e.addImage(); stale.clone.remove();
+    const foreign = e.addImage(); e.section.appendChild(foreign.clone);
+    const report = e.report();
+    assert.equal(report.available, true);
+    assert.equal(report.images, 2);
+    assert.equal(report.cardsWithoutImage, 1);
+    assert.equal(report.detachedCards, 2);
+    assert.equal(report.sourceSelection.invalidUrl, 1);
+    assert.equal(report.sourceSelection.unresolved, 1);
+    assert.equal(report.pixels.pending, 1, 'a srcset-only lazy image has a source even before currentSrc is selected');
+    assert.equal(report.resourceTiming.sourcesConsidered, 0);
+    assert.equal(report.geometry.sampleCount, 2);
+    assert.equal(e.reads.queries, 3);
 });
 
 test('profile and route changes cancel direct episode reads and discard profile-specific diagnostic summaries', async () => {
