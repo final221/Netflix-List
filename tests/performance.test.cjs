@@ -2352,7 +2352,8 @@ test('HTTP failure cleanup aborts the unread response body and releases its cont
 const viewingFunctions = [
     'unwrapViewingAtom', 'readViewingGraph', 'readViewingGraphReference', 'viewingNumber', 'viewingCount', 'viewingVideoRecord',
     'classifyViewingVideo', 'viewingFieldKind', 'recordViewingFieldKinds', 'viewingReferenceId', 'viewingSeasonPlan', 'classifyViewingSeries',
-    'viewingRequestContext', 'assertViewingJob', 'fetchViewingGraph', 'collectViewingStatuses', 'collectViewingSeriesBatch',
+    'viewingRequestContext', 'assertViewingJob', 'fetchViewingGraph', 'runViewingBatches', 'collectViewingStatuses', 'collectViewingSeriesBatch',
+    'createViewingNetworkDiagnostics', 'collectViewingNetworkDiagnostics',
     'readViewingCache', 'clearCachedViewingStatus', 'writeViewingCache', 'publishViewingProgress', 'viewingTitleType',
     'collectViewingEpisodePlans', 'finishViewingSeriesPlan', 'recheckViewingSeries',
     'saveViewingSeriesDetails', 'collectViewingSeriesDiagnostics',
@@ -2415,7 +2416,7 @@ async function viewingEnvironment(count = 7, existing = null, storage = new Map(
     Object.assign(e.c, {
         URLSearchParams, AbortController, FRESH_MY_LIST_FETCH_TIMEOUT_MS: 10000,
         VIEWING_TITLE_BATCH_SIZE: 50, VIEWING_EPISODE_BATCH_SIZE: 200, VIEWING_MAX_SEASONS: 40,
-        VIEWING_MAX_EPISODES: 500, VIEWING_MAX_REQUESTS: 32, VIEWING_MAX_PASSES: 3,
+        VIEWING_MAX_EPISODES: 500, VIEWING_MAX_REQUESTS: 32, VIEWING_MAX_PASSES: 3, VIEWING_REQUEST_CONCURRENCY: 2,
         VIEWING_TIMEOUT_MS: 30000, VIEWING_COMPLETION_RATIO: 0.90,
         VIEWING_CHOICES_STORAGE_KEY: 'test.viewingChoices.',
         VIEWING_CACHE_STORAGE_KEY: 'test.viewingCache.', VIEWING_CACHE_MAX_AGE_MS: 6 * 60 * 60 * 1000,
@@ -2502,6 +2503,247 @@ function useCompleteSeriesResponses(e, episodeCounts = {}) {
         return { ok: true, status: 200, json: async () => ({ jsonGraph: graph }) };
     };
 }
+
+function delayViewingBodies(e) {
+    const mockFetch = e.c.fetch;
+    const pending = [];
+    e.c.fetch = async (url, options) => {
+        const response = await mockFetch(url, options);
+        if (!response.ok) return response;
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        const gate = fetchDeferred();
+        const entry = { paths, signal: options.signal, released: false,
+            release() { entry.released = true; gate.resolve(); } };
+        pending.push(entry);
+        const json = response.json;
+        response.json = async () => {
+            await abortableFetchResult(gate.promise, options.signal);
+            return json();
+        };
+        return response;
+    };
+    return pending;
+}
+
+function useCompleteMovieResponses(e) {
+    e.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        e.requests.push({ paths, options });
+        return { ok: true, status: 200, json: async () => ({ jsonGraph: {
+            videos: Object.fromEntries(paths[0][1].map(id => [id, viewingVideo('movie', true)]))
+        } }) };
+    };
+}
+
+test('viewing overlap publishes a later title batch promptly and preserves native order', async () => {
+    const e = await viewingEnvironment(150);
+    useCompleteMovieResponses(e);
+    const pending = delayViewingBodies(e);
+    e.c.initializeWatchGroups(e.state, 1);
+    await e.flush();
+    assert.equal(pending.length, 2, 'two independent title reads start together');
+    pending[1].release();
+    await e.flush();
+    assert.equal(e.state.watchStatus.loading, true);
+    assert.deepEqual(completedViewingIds(e), Array.from({ length: 50 }, (_, index) => String(index + 51)));
+    assert.equal(pending.length, 2, 'the next bounded wave waits for both owners');
+    pending[0].release();
+    for (let attempt = 0; attempt < 10 && pending.length < 3; attempt++) await e.flush();
+    assert.equal(pending.length, 3);
+    pending[2].release();
+    await e.state.watchStatus.promise;
+    assert.deepEqual(completedViewingIds(e), Array.from({ length: 150 }, (_, index) => String(index + 1)));
+    assert.equal(e.storageCalls.cacheWrites, 1);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('viewing overlap shortens modeled network wait without increasing requests', async () => {
+    const runs = [];
+    for (const concurrency of [1, 2]) {
+        const e = await viewingEnvironment(100);
+        e.c.VIEWING_REQUEST_CONCURRENCY = concurrency;
+        useCompleteMovieResponses(e);
+        const pending = delayViewingBodies(e);
+        e.c.initializeWatchGroups(e.state, 1);
+        for (let wave = 0; wave < 2; wave++) {
+            await e.flush();
+            const active = pending.filter(entry => !entry.released);
+            if (!active.length) break;
+            await e.advance(100);
+            active.forEach(entry => entry.release());
+            for (let attempt = 0; attempt < 10; attempt++) await e.flush();
+        }
+        await e.state.watchStatus.promise;
+        assert.equal(e.requests.length, 2);
+        const network = e.logs.find(entry => entry.details?.series).details.network;
+        assert.equal(network.peakInFlight, concurrency);
+        assert.equal(network.inFlight, 0);
+        assert.equal(network.succeeded, 2);
+        assert.equal(network.failed, 0);
+        assert.equal(network.totalRequestMs, 200);
+        assert.equal(network.maxRequestMs, 100);
+        assert.equal(network.meanRequestMs, 100);
+        assert.equal(network.overlapMs, concurrency === 2 ? 100 : 0);
+        const copy = e.c.collectViewingNetworkDiagnostics(e.state.watchStatus.network);
+        copy.succeeded = -1;
+        await e.advance(60000);
+        assert.equal(e.c.collectViewingNetworkDiagnostics(e.state.watchStatus.network).elapsedMs, network.elapsedMs);
+        assert.equal(e.c.collectViewingNetworkDiagnostics(e.state.watchStatus.network).succeeded, 2);
+        runs.push(network.elapsedMs);
+    }
+    assert.deepEqual(runs, [200, 100], 'fake-clock overlap is evidence of scheduling, not Netflix latency');
+});
+
+test('viewing overlap keeps series dependencies ordered and drains valid partial results after HTTP failure', async () => {
+    const e = await viewingEnvironment(100);
+    useCompleteSeriesResponses(e);
+    const pending = delayViewingBodies(e);
+    e.c.initializeWatchGroups(e.state, 1);
+    await e.flush();
+    assert.equal(pending.length, 2);
+    pending[1].release();
+    pending[0].release();
+    for (let attempt = 0; attempt < 10 && pending.length < 4; attempt++) await e.flush();
+    assert.deepEqual(pending.slice(2).map(entry => entry.paths[0][1]), ['1', '51'],
+        'series order follows native IDs rather than title-response arrival');
+    assert.ok(pending.slice(2).every(entry => entry.paths[0][2] === 'seasonList'));
+    pending[2].release();
+    for (let attempt = 0; attempt < 10 && pending.length < 5; attempt++) await e.flush();
+    assert.equal(pending[4].paths[0][0], 'seasons');
+    const mockFetch = e.c.fetch;
+    e.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        if (paths[0][0] !== 'seasons' || paths[0][1] !== '10051') return mockFetch(url, options);
+        e.requests.push({ paths, options });
+        return { ok: false, status: 429 };
+    };
+    pending[3].release();
+    for (let attempt = 0; attempt < 10 && !e.warnings.length; attempt++) await e.flush();
+    assert.equal(e.state.watchStatus.loading, true, 'failure cannot finalize before the valid in-flight finale drains');
+    pending[4].release();
+    await e.state.watchStatus.promise;
+    assert.deepEqual(completedViewingIds(e), Array.from({ length: 50 }, (_, index) => String(index + 1)));
+    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_429');
+    const network = e.logs.find(entry => entry.details?.series).details.network;
+    assert.equal(network.rateLimited, 1);
+    assert.equal(network.failed, 1);
+    assert.equal(network.succeeded, 5);
+    assert.equal(network.peakInFlight, 2);
+    assert.equal(e.requests.length, 6);
+    assert.equal(e.storageCalls.cacheWrites, 1);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('viewing overlap aborts both owned reads after route or profile cancellation', async () => {
+    for (const reason of ['route', 'profile']) {
+        const e = await viewingEnvironment(100);
+        useCompleteMovieResponses(e);
+        const pending = delayViewingBodies(e);
+        e.c.initializeWatchGroups(e.state, 1);
+        await e.flush();
+        assert.equal(pending.length, 2);
+        const unrelated = new AbortController();
+        if (reason === 'route') {
+            e.c.isRouteSessionActive = () => false;
+            e.c.abortObsoleteRouteFetches();
+        } else {
+            e.c.routeFetchControllers.get(1).add(unrelated);
+            e.models.userInfo.userGuid = 'other-profile';
+            pending[0].release();
+        }
+        await e.state.watchStatus.promise;
+        assert.ok(pending.every(entry => entry.signal.aborted));
+        if (reason === 'profile') {
+            assert.equal(unrelated.signal.aborted, false, 'a viewing-job cancellation leaves unrelated route requests owned');
+            const controllers = e.c.routeFetchControllers.get(1);
+            controllers.delete(unrelated);
+            if (!controllers.size) e.c.routeFetchControllers.delete(1);
+        }
+        assert.equal(e.storageCalls.cacheWrites, 0);
+        assert.equal(completedViewingIds(e).length, 0);
+        assert.equal(e.c.routeFetchControllers.size, 0);
+        assert.equal(e.timers.size, 0);
+        assert.equal(e.warnings.length, 0);
+        if (reason === 'profile') assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_PROFILE_CHANGED');
+    }
+});
+
+test('viewing overlap stops allocating after a failed wave and shares the finite request cap', async () => {
+    for (const fail of [false, true]) {
+        const e = await viewingEnvironment(200);
+        useCompleteMovieResponses(e);
+        e.c.VIEWING_MAX_REQUESTS = 3;
+        e.c.VIEWING_MAX_PASSES = 1;
+        if (fail) {
+            const mockFetch = e.c.fetch;
+            e.c.fetch = async (url, options) => {
+                const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+                if (paths[0][1][0] !== '51') return mockFetch(url, options);
+                e.requests.push({ paths, options });
+                return { ok: false, status: 503 };
+            };
+        }
+        await e.start();
+        assert.equal(e.requests.length, fail ? 2 : 3);
+        assert.equal(completedViewingIds(e).length, fail ? 50 : 150);
+        assert.equal(e.state.watchStatus.failure, fail ? 'VIEWING_STATUS_HTTP_503' : 'VIEWING_STATUS_BUDGET');
+        assert.equal(e.c.routeFetchControllers.size, 0);
+        assert.equal(e.timers.size, 0);
+    }
+});
+
+test('viewing overlap does not start a peer finale after a known metadata failure', async () => {
+    const e = await viewingEnvironment(100);
+    useCompleteSeriesResponses(e);
+    const mockFetch = e.c.fetch;
+    e.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        if (paths[0][2] !== 'seasonList' || paths[0][1] !== '1') return mockFetch(url, options);
+        e.requests.push({ paths, options });
+        return { ok: false, status: 503 };
+    };
+    const pending = delayViewingBodies(e);
+    e.c.initializeWatchGroups(e.state, 1);
+    await e.flush();
+    pending[0].release();
+    pending[1].release();
+    for (let attempt = 0; attempt < 10 && pending.length < 3; attempt++) await e.flush();
+    assert.equal(pending[2].paths[0][1], '51');
+    await e.flush();
+    pending[2].release();
+    await e.state.watchStatus.promise;
+    assert.equal(e.requests.length, 4);
+    assert.ok(e.requests.every(request => request.paths[0][0] !== 'seasons'));
+    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
+    assert.equal(completedViewingIds(e).length, 0);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('viewing overlap honors request timeouts and the combined deadline without leaked owners or retries', async () => {
+    for (const deadline of [false, true]) {
+        const e = await viewingEnvironment(150);
+        useCompleteMovieResponses(e);
+        if (deadline) { e.c.VIEWING_TIMEOUT_MS = 5; e.c.VIEWING_MAX_PASSES = 1; }
+        const pending = delayViewingBodies(e);
+        e.c.initializeWatchGroups(e.state, 1);
+        await e.flush();
+        assert.equal(pending.length, 2);
+        await e.advance(deadline ? 5 : 8000);
+        await e.state.watchStatus.promise;
+        assert.equal(e.requests.length, 2);
+        assert.equal(e.state.watchStatus.failure, deadline ? 'VIEWING_STATUS_BUDGET' : 'VIEWING_STATUS_FAILED');
+        assert.equal(e.state.watchStatus.network.aborted, 2);
+        assert.equal(e.state.watchStatus.network.failed, 2);
+        assert.equal(e.state.watchStatus.network.inFlight, 0);
+        assert.equal(e.c.routeFetchControllers.size, 0);
+        assert.equal(e.timers.size, 0);
+        await e.advance(120000);
+        assert.equal(e.requests.length, 2);
+    }
+});
 
 test('viewing data resolves atoms/references safely and does not guess from missing or series flags', async () => {
     const e = await viewingEnvironment();
@@ -2801,14 +3043,15 @@ test('a later series-group HTTP failure preserves fully verified series results'
     useCompleteSeriesResponses(e);
     const mockFetch = e.c.fetch;
     e.c.fetch = async (url, options) => {
-        if (e.requests.length === 4) {
-            e.requests.push({ url, options });
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        if (paths[0][0] === 'seasons' && paths[0][1] === '10051') {
+            e.requests.push({ url, options, paths });
             return { ok: false, status: 503 };
         }
         return mockFetch(url, options);
     };
     await e.start();
-    assert.equal(e.requests.length, 5);
+    assert.equal(e.requests.length, 6);
     assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
     assert.deepEqual(completedViewingIds(e), Array.from({ length: 50 }, (_, index) => String(index + 1)));
     assert.deepEqual(mainViewingIds(e), ['51']);
@@ -3050,17 +3293,20 @@ test('malformed or unsafe structured viewing endpoints do not send requests', as
     }
 });
 
-test('a rejected viewing request stops after one attempt and records its resolved endpoint', async () => {
+test('rejected viewing batches are attempted once and stop subsequent requests with endpoint diagnostics', async () => {
     const e = await viewingEnvironment(500);
     let attempts = 0;
-    e.c.fetch = async url => {
+    const batches = [];
+    e.c.fetch = async (url, options) => {
         attempts++;
+        batches.push(new URLSearchParams(options.body).getAll('path')[0]);
         assert.equal(new URL(url).pathname, '/nq/website/memberapi/release/pathEvaluator');
         return { ok: false, status: 400 };
     };
     await e.start();
-    assert.equal(attempts, 1);
-    assert.equal(e.state.watchStatus.requests, 1);
+    assert.equal(attempts, 2, 'only the initially allocated wave is attempted');
+    assert.equal(new Set(batches).size, 2, 'neither failed batch is retried');
+    assert.equal(e.state.watchStatus.requests, 2);
     assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_400');
     assert.equal(e.state.watchStatus.unknownCount, 500);
     assert.equal(mainViewingIds(e).length, 500);
@@ -3073,7 +3319,7 @@ test('a rejected viewing request stops after one attempt and records its resolve
     assert.equal(e.timers.size, 0);
     e.c.syncWatchGroups(e.state);
     await e.advance(60000);
-    assert.equal(attempts, 1, 'there is no repeated retry loop');
+    assert.equal(attempts, 2, 'there is no repeated retry loop');
 });
 
 test('credit-tolerant completion moves movies and fully caught-up series out of the main grid', async () => {
@@ -3231,7 +3477,7 @@ test('type filtering is available while series episode requests are still loadin
         return mockFetch(url, options);
     };
     e.c.initializeWatchGroups(e.state, 1);
-    await e.flush();
+    for (let attempt = 0; attempt < 10 && !release; attempt++) await e.flush();
     assert.equal(typeof release, 'function');
     assert.equal(e.state.watchStatus.loading, true);
     assert.deepEqual(filteredViewingIds(e), ['2', '3']);
@@ -3453,21 +3699,23 @@ test('slow successful requests can use the total time allowance without aborting
     const e = await viewingEnvironment(3);
     useCompleteSeriesResponses(e, { 1: 200, 2: 200, 3: 200 });
     e.c.VIEWING_EPISODE_BATCH_SIZE = 1;
-    const mockFetch = e.c.fetch;
-    e.c.fetch = async (url, options) => {
-        const response = await mockFetch(url, options);
-        const json = response.json;
-        response.json = async () => {
-            await e.advance(7000);
-            if (options.signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
-            return json();
-        };
-        return response;
-    };
-    await e.start();
+    const pending = delayViewingBodies(e);
+    e.c.initializeWatchGroups(e.state, 1);
+    for (let wave = 0; wave < 7 && e.state.watchStatus.loading; wave++) {
+        for (let attempt = 0; attempt < 10; attempt++) await e.flush();
+        const active = pending.filter(entry => !entry.released);
+        if (!active.length) break;
+        // Parallel reads experience the same elapsed interval; advancing the
+        // shared clock once per response would incorrectly double their wait.
+        await e.advance(7000);
+        active.forEach(entry => entry.release());
+    }
+    await e.state.watchStatus.promise;
     assert.deepEqual(completedViewingIds(e), ['1', '2', '3']);
     assert.equal(e.requests.length, 7);
     assert.equal(e.state.watchStatus.failure, null);
+    assert.equal(e.state.watchStatus.network.totalRequestMs, 49000);
+    assert.equal(e.c.collectViewingNetworkDiagnostics(e.state.watchStatus.network).elapsedMs, 35000);
     assert.equal(e.timers.size, 0);
 });
 
@@ -3509,12 +3757,15 @@ test('verified groups appear before a later request completes while filters rema
     useCompleteSeriesResponses(e);
     const mockFetch = e.c.fetch;
     let release;
-    e.c.fetch = async (...args) => {
-        if (e.requests.length === 4) return new Promise(resolve => { release = () => resolve(mockFetch(...args)); });
-        return mockFetch(...args);
+    e.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        if (paths[0][0] === 'seasons' && paths[0][1] === '10051') {
+            return new Promise(resolve => { release = () => resolve(mockFetch(url, options)); });
+        }
+        return mockFetch(url, options);
     };
     e.c.initializeWatchGroups(e.state, 1);
-    for (let attempt = 0; attempt < 10 && !release; attempt++) await e.flush();
+    for (let attempt = 0; attempt < 10 && (!release || completedViewingIds(e).length !== 50); attempt++) await e.flush();
     assert.equal(typeof release, 'function');
     assert.equal(e.state.watchStatus.loading, true);
     assert.equal(completedViewingIds(e).length, 50);
@@ -3540,7 +3791,8 @@ test('route and profile cancellation stop an additional pass without changing a 
         const mockFetch = e.c.fetch;
         let signal, release;
         e.c.fetch = async (url, options) => {
-            if (e.requests.length === 3) {
+            const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+            if (paths[0][0] === 'seasons' && paths[0][1] === '10002') {
                 signal = options.signal;
                 return { ok: true, json: () => new Promise((resolve, reject) => {
                     release = () => resolve({ jsonGraph: {} });
@@ -3550,7 +3802,7 @@ test('route and profile cancellation stop an additional pass without changing a 
             return mockFetch(url, options);
         };
         e.c.initializeWatchGroups(e.state, 1);
-        for (let attempt = 0; attempt < 10 && !release; attempt++) await e.flush();
+        for (let attempt = 0; attempt < 10 && (!release || !completedViewingIds(e).includes('1')); attempt++) await e.flush();
         assert.equal(typeof release, 'function');
         assert.deepEqual(completedViewingIds(e), ['1']);
         const promise = e.state.watchStatus.promise;
@@ -4302,7 +4554,7 @@ test('confirmed movies publish after the first title batch while later title res
     assert.equal(e.state.watchStatus.loading, true);
     assert.equal(completedViewingIds(e).length, 50);
     assert.equal(e.state.watchStatus.publications, 1);
-    assert.equal(e.state.watchStatus.requests, 1);
+    assert.equal(e.state.watchStatus.requests, 2, 'the pending independent peer has already reserved its request');
     assert.equal(mainViewingIds(e).length, 70);
     assert.equal(e.storageCalls.cacheWrites, 0, 'batch publication does not write storage');
     await gate.release();

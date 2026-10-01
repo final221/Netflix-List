@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.3
+// @version      1.3.4
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -69,6 +69,8 @@
     const VIEWING_MAX_EPISODES = 500;
     const VIEWING_MAX_REQUESTS = 32;
     const VIEWING_MAX_PASSES = 3;
+    // Controlled overlap experiment; compare completion timing and failures in Copy Logs.
+    const VIEWING_REQUEST_CONCURRENCY = 2;
     const VIEWING_TIMEOUT_MS = 30000;
     const VIEWING_COMPLETION_RATIO = 0.90;
 
@@ -84,7 +86,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.3';
+    const SCRIPT_VERSION = '1.3.4';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -1670,7 +1672,8 @@
                 loading: sourceState.watchStatus.loading,
                 requests: sourceState.watchStatus.requests,
                 passes: sourceState.watchStatus.passes,
-                failure: sourceState.watchStatus.failure
+                failure: sourceState.watchStatus.failure,
+                network: collectViewingNetworkDiagnostics(sourceState.watchStatus.network)
             } : null,
             sourceScan: Boolean(scroller?.classList?.contains(SOURCE_SCAN_CLASS)),
             sourceParked: Boolean(scroller?.classList?.contains(SOURCE_PARKED_CLASS)),
@@ -3296,8 +3299,29 @@
         }
     }
 
+    function createViewingNetworkDiagnostics() {
+        const now = performance.now();
+        return { startedAt: now, lastChangeAt: now, finishedAt: null, concurrencyLimit: VIEWING_REQUEST_CONCURRENCY,
+            inFlight: 0, peakInFlight: 0, succeeded: 0, failed: 0, rateLimited: 0, aborted: 0,
+            totalRequestMs: 0, maxRequestMs: 0, overlapMs: 0 };
+    }
+
+    function collectViewingNetworkDiagnostics(network) {
+        if (!network) return null;
+        const now = network.finishedAt ?? performance.now();
+        const requests = network.succeeded + network.failed;
+        return { concurrencyLimit: network.concurrencyLimit, started: requests + network.inFlight,
+            inFlight: network.inFlight, peakInFlight: network.peakInFlight,
+            elapsedMs: Math.round(now - network.startedAt), succeeded: network.succeeded, failed: network.failed,
+            rateLimited: network.rateLimited, aborted: network.aborted,
+            totalRequestMs: Math.round(network.totalRequestMs), maxRequestMs: Math.round(network.maxRequestMs),
+            meanRequestMs: requests ? Math.round(network.totalRequestMs / requests) : 0,
+            overlapMs: Math.round(network.overlapMs + (network.inFlight > 1 ? now - network.lastChangeAt : 0)) };
+    }
+
     async function fetchViewingGraph(paths, job) {
         assertViewingJob(job);
+        if (job.collectionFailure) throw job.collectionFailure;
         const now = performance.now();
         const remaining = job.deadline - now;
         if (remaining <= 0) throw new Error('VIEWING_STATUS_BUDGET');
@@ -3311,6 +3335,14 @@
         job.passRequests++;
         job.requests++;
         const request = createRouteFetch(job.sessionToken);
+        const controllers = job.controllers ||= new Set();
+        controllers.add(request.controller);
+        const network = job.network ||= createViewingNetworkDiagnostics();
+        if (network.inFlight > 1) network.overlapMs += now - network.lastChangeAt;
+        network.lastChangeAt = now;
+        network.inFlight++;
+        network.peakInFlight = Math.max(network.peakInFlight, network.inFlight);
+        let succeeded = false;
         clearTimeout(request.timeoutId);
         request.timeoutId = setTimeout(() => request.controller.abort(), Math.min(8000, remaining));
         try {
@@ -3327,19 +3359,62 @@
                 body: body.toString(), signal: request.controller.signal
             });
             assertViewingJob(job);
-            if (!response.ok) throw new Error('VIEWING_STATUS_HTTP_' + response.status);
+            if (!response.ok) {
+                if (response.status === 429) network.rateLimited++;
+                throw new Error('VIEWING_STATUS_HTTP_' + response.status);
+            }
             const payload = await response.json();
             assertViewingJob(job);
             if (!payload?.jsonGraph || typeof payload.jsonGraph !== 'object' || payload.status === 'error') {
                 throw new Error('VIEWING_STATUS_RESPONSE');
             }
+            succeeded = true;
             return payload.jsonGraph;
         } catch (error) {
+            if (error?.name === 'AbortError') network.aborted++;
             assertViewingJob(job);
             if (performance.now() >= job.deadline) throw new Error('VIEWING_STATUS_BUDGET');
             throw error;
         } finally {
+            const finishedAt = performance.now();
+            const elapsed = finishedAt - now;
+            if (network.inFlight > 1) network.overlapMs += finishedAt - network.lastChangeAt;
+            network.lastChangeAt = finishedAt;
+            network.inFlight--;
+            network.totalRequestMs += elapsed;
+            network.maxRequestMs = Math.max(network.maxRequestMs, elapsed);
+            if (succeeded) network.succeeded++;
+            else network.failed++;
+            controllers.delete(request.controller);
             finishRouteFetch(request);
+        }
+    }
+
+    async function runViewingBatches(batches, job, collectBatch, requestsPerBatch = 1) {
+        for (let offset = 0; offset < batches.length;) {
+            assertViewingJob(job);
+            if (job.collectionFailure) throw job.collectionFailure;
+            const remaining = VIEWING_MAX_REQUESTS * VIEWING_MAX_PASSES - job.requests;
+            if (remaining <= 0) throw new Error('VIEWING_STATUS_BUDGET');
+            // Near the cap, leave enough quota to finish a series chain rather
+            // than spending its last two requests on two metadata-only chains.
+            const width = Math.min(VIEWING_REQUEST_CONCURRENCY, Math.max(1, Math.floor(remaining / requestsPerBatch)));
+            const wave = batches.slice(offset, offset + width);
+            offset += wave.length;
+            await Promise.allSettled(wave.map(async batch => {
+                try {
+                    await collectBatch(batch);
+                } catch (error) {
+                    job.collectionFailure ||= error;
+                    if (isRouteSessionCancelledError(error)) {
+                        for (const controller of job.controllers || []) controller.abort();
+                    }
+                    throw error;
+                }
+            }));
+            // Drain allocated reads before finalizing partial results. A valid
+            // peer may still publish, but a known failure stops new requests.
+            if (job.collectionFailure) throw job.collectionFailure;
         }
     }
 
@@ -3405,9 +3480,12 @@
     async function collectViewingStatuses(job) {
         const fields = ['summary', 'watched', 'bookmarkPosition', 'runtime', 'creditsOffset', 'seasonCount', 'episodeCount'];
         const ids = [...new Set(job.state.items.map(item => String(item.videoId)).filter(id => /^\d+$/.test(id)))];
-        const series = [];
+        const seriesById = new Map();
+        const titleBatches = [];
         for (let offset = 0; offset < ids.length; offset += VIEWING_TITLE_BATCH_SIZE) {
-            const batch = ids.slice(offset, offset + VIEWING_TITLE_BATCH_SIZE);
+            titleBatches.push(ids.slice(offset, offset + VIEWING_TITLE_BATCH_SIZE));
+        }
+        await runViewingBatches(titleBatches, job, async batch => {
             const graph = await fetchViewingGraph([['videos', batch, fields]], job);
             for (const id of batch) {
                 const record = viewingVideoRecord(graph, id);
@@ -3421,7 +3499,7 @@
                         record.seasonCount > 0 && record.seasonCount <= VIEWING_MAX_SEASONS)) &&
                         (record.episodeCount === null || (Number.isSafeInteger(record.episodeCount) &&
                         record.episodeCount > 0 && record.episodeCount <= VIEWING_MAX_EPISODES))) {
-                        series.push(record);
+                        seriesById.set(id, record);
                         job.seriesStats.eligible++;
                         pendingSeries = true;
                     }
@@ -3434,7 +3512,10 @@
                 }
             }
             publishViewingProgress(job, batch);
-        }
+        });
+        // Response arrival cannot change native order or budget priority.
+        const series = ids.map(id => seriesById.get(id)).filter(Boolean);
+        const seriesBatches = [];
         for (let offset = 0; offset < series.length;) {
             const batch = [];
             let episodes = 0, seasons = 0;
@@ -3450,8 +3531,9 @@
             }
             // Only the latest episode determines the selected caught-up rule.
             // Bound season metadata and finale checks, not historical runtimes.
-            await collectViewingSeriesBatch(batch, job);
+            seriesBatches.push(batch);
         }
+        await runViewingBatches(seriesBatches, job, batch => collectViewingSeriesBatch(batch, job), 2);
         // Preserve the complete ordinary scan before spending its remaining
         // budget on incomplete nested responses. Already verified titles win.
         await recheckViewingSeries(job);
@@ -4160,7 +4242,8 @@
             cachedResults: cached.results, cachedTypes: cached.types, cachedTitles: cached.types.size, publications: 0,
             seriesCoverage: new Map(), manualChoices: new Map(), manualProfileGuid: undefined, manualFailure: false,
             completedCount: 0, unknownCount: state.items.length, visibleCount: 0,
-            loading: false, expanded: false, ui: null, promise: null, requests: 0, passes: 0, failure: null, profileGuid: profile
+            loading: false, expanded: false, ui: null, promise: null, requests: 0, passes: 0, failure: null, profileGuid: profile,
+            network: null
         };
         syncWatchGroups(state);
         refreshViewingStatus(state);
@@ -4202,17 +4285,19 @@
         const job = {
             state, watch, context, sessionToken: watch.sessionToken, results: new Map(), types: new Map(), seriesDetails: new Map(),
             requests: 0, passRequests: 0, passes: 1, deadline: performance.now() + VIEWING_TIMEOUT_MS * VIEWING_MAX_PASSES,
-            unresolvedSeries: new Set(),
+            unresolvedSeries: new Set(), controllers: new Set(), collectionFailure: null, network: createViewingNetworkDiagnostics(),
             recheckStats: { candidates: 0, requests: 0, episodes: 0, recoveredEpisodes: 0, recoveredSeries: 0, unknownEpisodes: 0,
                 initialUnknownFields: { watched: {}, bookmark: {}, runtime: {} },
                 remainingUnknownFields: { watched: {}, bookmark: {}, runtime: {} } },
             seriesStats: { found: 0, eligible: 0, planned: 0, checked: 0, complete: 0, unknown: 0,
                 incomplete: 0, unplanned: 0, episodesChecked: 0, episodesIncomplete: 0, episodesUnknown: 0, missingEpisodeRefs: 0 }
         };
+        watch.network = job.network;
         log(tLog('viewingStatusStarted'), {
             titles: state.items.length, endpointType: context.endpointType, endpointPath: context.endpointPath,
             completionRatio: VIEWING_COMPLETION_RATIO, maxPasses: VIEWING_MAX_PASSES,
-            maxRequests: VIEWING_MAX_REQUESTS * VIEWING_MAX_PASSES, cachedTitles: watch.cachedTypes.size
+            maxRequests: VIEWING_MAX_REQUESTS * VIEWING_MAX_PASSES, cachedTitles: watch.cachedTypes.size,
+            concurrencyLimit: VIEWING_REQUEST_CONCURRENCY
         });
         watch.promise = (async () => {
             try {
@@ -4220,6 +4305,9 @@
                 assertViewingJob(job);
             } catch (error) {
                 if (isRouteSessionCancelledError(error)) {
+                    job.network.finishedAt = performance.now();
+                    log(tLog('viewingStatusUnavailable'), { reason: 'VIEWING_STATUS_CANCELLED', requests: job.requests,
+                        network: collectViewingNetworkDiagnostics(job.network) });
                     // A profile switch in the same grid invalidates old results.
                     if (sourceState === state && state.watchStatus === watch && isRouteSessionActive(job.sessionToken)) {
                         clearCachedViewingStatus(watch);
@@ -4234,8 +4322,10 @@
                 }
                 watch.failure = /^VIEWING_STATUS_[A-Z0-9_]+$/.test(error?.message || '')
                     ? error.message : 'VIEWING_STATUS_FAILED';
-                warn(tLog('viewingStatusUnavailable'), { reason: watch.failure, requests: job.requests });
+                warn(tLog('viewingStatusUnavailable'), { reason: watch.failure, requests: job.requests,
+                    network: collectViewingNetworkDiagnostics(job.network) });
             }
+            job.network.finishedAt = performance.now();
             if (sourceState !== state || state.watchStatus !== watch || !isRouteSessionActive(job.sessionToken)) return;
             if (netflixModelData('userInfo')?.userGuid !== context.profileGuid) {
                 job.results.clear();
@@ -4258,6 +4348,7 @@
                 requests: watch.requests, passes: watch.passes, failure: watch.failure, publications: watch.publications,
                 series: { ...job.seriesStats, pending: job.seriesStats.eligible - job.seriesStats.checked - job.seriesStats.unplanned },
                 recheck: job.recheckStats,
+                network: collectViewingNetworkDiagnostics(job.network),
                 work: collectPerformanceDiagnostics()
             });
         })().catch(() => {
