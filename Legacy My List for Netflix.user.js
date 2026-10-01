@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.2
+// @version      1.3.3
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -84,7 +84,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.2';
+    const SCRIPT_VERSION = '1.3.3';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -810,6 +810,10 @@
         copyLogsRequested: { en: 'CopyLogs requested', ja: 'CopyLogs\u8981\u6c42' },
         copyLogsCompleted: { en: 'CopyLogs completed', ja: 'CopyLogs\u5b8c\u4e86' },
         copyLogsFailed: { en: 'CopyLogs failed', ja: 'CopyLogs\u5931\u6557' },
+        viewingChoiceApplied: { en: 'Manual viewing choice applied', ja: '\u624b\u52d5\u306e\u8996\u8074\u72b6\u614b\u3092\u9069\u7528' },
+        nativeInitializationRecovered: { en: 'Retrying initialization with a verified native-source replacement', ja: '\u7d14\u6b63\u30bd\u30fc\u30b9\u306e\u7f6e\u63db\u3092\u78ba\u8a8d\u3057\u521d\u671f\u5316\u3092\u518d\u8a66\u884c' },
+        nativeInitializationRecoveryExhausted: { en: 'Native initialization replacement recovery exhausted', ja: '\u7d14\u6b63\u30bd\u30fc\u30b9\u7f6e\u63db\u306e\u521d\u671f\u5316\u518d\u8a66\u884c\u4e0a\u9650' },
+        sourceAlignmentRestoreFailed: { en: 'Native source geometry restoration failed', ja: '\u7d14\u6b63\u30bd\u30fc\u30b9\u5ea7\u6a19\u306e\u5fa9\u5143\u306b\u5931\u6557' },
         emptyLegacyListFinalized: { en: 'Empty legacy list finalized', ja: '\u65e7\u30de\u30a4\u30ea\u30b9\u30c8 0\u4ef6\u3092\u78ba\u5b9a' },
         totalCountDetected: { en: 'totalCount detected', ja: 'totalCount\u53d6\u5f97' },
         legacyFrameMovedToEmptyAnchor: { en: 'Legacy frame moved to empty anchor', ja: '\u65e7\u30de\u30a4\u30ea\u30b9\u30c8\u3092\u7a7a\u30a2\u30f3\u30ab\u30fc\u3078\u79fb\u52d5' },
@@ -1133,8 +1137,24 @@
     let cachedNativeEmptyContent = null;
     let cachedNativeEmptyMessage = '';
     let initializationBlockedSessionToken = null;
+    let nativeInitializationFailure = null;
+    let performanceDiagnostics = createPerformanceDiagnostics();
     const investigationLog = [];
     let investigationLogStart = 0;
+
+    function createPerformanceDiagnostics() {
+        return {
+            viewingGroups: { syncs: 0, fullSyncs: 0, cardsConsidered: 0, controlsUpdated: 0, categoryMoves: 0,
+                hoverPreserved: 0, hoverCancelled: 0, lastReason: '' },
+            hoverPreparation: { calls: 0, slotsConsidered: 0, clonesRebuilt: 0, neighborsSkipped: 0 },
+            resize: { events: 0, checks: 0, unchanged: 0, refreshes: 0, hoverPreserved: 0, hoverCancelled: 0 },
+            nativeRecovery: { attempts: 0, completed: 0, exhausted: 0, alignmentRestores: 0, alignmentRestoreFailures: 0 }
+        };
+    }
+
+    function collectPerformanceDiagnostics() {
+        return Object.fromEntries(Object.entries(performanceDiagnostics).map(([key, counters]) => [key, { ...counters }]));
+    }
 
     function createNativeReadScope() {
         return { profiles: new WeakMap(), indicators: new WeakMap(), filled: new WeakMap(),
@@ -1255,6 +1275,9 @@
     function resetDetachedTargetState() {
         if (completedSection?.isConnected && document.getElementById(GRID_ID)) return;
 
+        clearSourceAlignment();
+        restoreActiveCarouselStyles();
+        hoverToken++;
         invalidateGridReact();
         cancelPendingGridHover();
         completedSection = null;
@@ -1364,6 +1387,7 @@
         cachedNativeEmptyContent = null;
         cachedNativeEmptyMessage = '';
         initializationBlockedSessionToken = null;
+        nativeInitializationFailure = null;
         orderMismatchDismissed = false;
         orderMismatchDialogOpen = false;
         orderMismatchReinitializing = false;
@@ -1383,6 +1407,8 @@
         targetSessionActive = true;
         abortObsoleteRouteFetches();
         initializationBlockedSessionToken = null;
+        nativeInitializationFailure = null;
+        performanceDiagnostics = createPerformanceDiagnostics();
         targetSessionEntryKind = reason === 'route:initial' ? 'initial' : 'spa';
         targetSessionReason = reason;
         const sessionToken = routeSessionToken;
@@ -1637,6 +1663,7 @@
             sourceCards: track ? netflixDom.filledSlots(track).length : 0,
             currentPageCards: scroller && track ? currentPageSlots(scroller, track).length : 0,
             gridCards: sourceState?.cloneMap?.size ?? 0,
+            performanceWork: collectPerformanceDiagnostics(),
             viewingStatus: sourceState?.watchStatus ? {
                 completed: sourceState.watchStatus.completedCount,
                 unknown: sourceState.watchStatus.unknownCount,
@@ -1674,6 +1701,7 @@
             responsiveSignature: lastResponsiveSignature,
             responsivePageShape: lastPageShape,
             responsiveReason: lastResponsiveReason,
+            resizeViewportSignature: sourceState?.resizeViewportSignature || '',
             pointer: { x: lastPointerX, y: lastPointerY }
         };
     }
@@ -2608,8 +2636,8 @@
     }
 
     function measureVisibleLayout(section, scroller, track) {
-        const sectionRect = section.getBoundingClientRect();
-        const scrollerRect = scroller.getBoundingClientRect();
+        const sectionRect = nativeRect(section);
+        const scrollerRect = nativeRect(scroller);
         const formula = parseSlotLayoutFormula(track);
 
         if (formula) {
@@ -2650,7 +2678,7 @@
         });
         const sample = activeSlots.length ? activeSlots : netflixDom.filledSlots(track);
         const rects = sample
-            .map(slot => slot.getBoundingClientRect())
+            .map(slot => nativeRect(slot))
             .filter(rect => rect.width > 1)
             .sort((a, b) => a.left - b.left);
 
@@ -2940,12 +2968,16 @@
             cloneMap: new Map(),
             itemMap: new Map(),
             empty: true,
+            resizeViewportSignature: responsiveViewportSignature(),
             initializationStartedAt: initializationStarted,
             initializationElapsedMs: elapsedMs
         };
         waitingForNativeEmpty = false;
         syncLegacyEmptyState(section, { allowProvisional: true });
         completedSection = section;
+        if (performanceDiagnostics.nativeRecovery.attempts > performanceDiagnostics.nativeRecovery.completed) {
+            performanceDiagnostics.nativeRecovery.completed++;
+        }
         resetOrderMismatchStateAfterInitialization();
         applyOriginalMyListVisibility();
         resizeObserver?.disconnect();
@@ -3359,7 +3391,7 @@
         } catch (_) { /* A cache failure leaves fresh grouping and corrections usable. */ }
     }
 
-    function publishViewingProgress(job) {
+    function publishViewingProgress(job, changedIds) {
         assertViewingJob(job);
         job.watch.results = job.results;
         job.watch.types = job.types;
@@ -3367,7 +3399,7 @@
         job.watch.requests = job.requests;
         job.watch.passes = job.passes;
         job.watch.publications++;
-        syncWatchGroups(job.state);
+        syncWatchGroups(job.state, changedIds, 'scan-batch');
     }
 
     async function collectViewingStatuses(job) {
@@ -3396,9 +3428,12 @@
                 }
                 // A show-level flag cannot replace a cached finale result.
                 // Keep that provisional result only until its episode check.
-                if (!pendingSeries) job.results.set(id, classifyViewingVideo(record));
+                if (!pendingSeries) {
+                    job.watch.cachedResults.delete(id);
+                    job.results.set(id, classifyViewingVideo(record));
+                }
             }
-            publishViewingProgress(job);
+            publishViewingProgress(job, batch);
         }
         for (let offset = 0; offset < series.length;) {
             const batch = [];
@@ -3436,13 +3471,16 @@
         const plannedIds = new Set(plans.map(plan => plan.videoId));
         for (const record of records) {
             if (!plannedIds.has(record.videoId)) {
+                job.watch.cachedResults.delete(record.videoId);
                 job.results.set(record.videoId, 'unknown');
                 job.seriesDetails.set(record.videoId, { reason: 'season-metadata-incomplete-or-inconsistent' });
             }
         }
         for (const plan of plans) job.watch.seriesCoverage.set(plan.videoId, plan.seasons.map(season => [season.id, season.count]));
+        // Coverage can expire a manual correction even before the finale arrives.
+        const metadataChanges = records.filter(record => !plannedIds.has(record.videoId) || job.watch.manualChoices.has(record.videoId));
+        if (metadataChanges.length) publishViewingProgress(job, metadataChanges.map(record => record.videoId));
         await collectViewingEpisodePlans(plans, job);
-        if (!plans.length) publishViewingProgress(job);
     }
 
     async function collectViewingEpisodePlans(plans, job) {
@@ -3501,7 +3539,7 @@
                     finishViewingSeriesPlan(plan, status, job);
                 } else saveViewingSeriesDetails(plan, job);
             }
-            publishViewingProgress(job);
+            publishViewingProgress(job, batch.map(segment => segment.plan.videoId));
         }
     }
 
@@ -3512,6 +3550,7 @@
         job.seriesStats[bucket(status)]++;
         plan.status = status;
         plan.finished = true;
+        job.watch.cachedResults.delete(plan.videoId);
         job.results.set(plan.videoId, status);
         saveViewingSeriesDetails(plan, job);
         if (status === 'unknown') {
@@ -3634,7 +3673,7 @@
                 saveViewingSeriesDetails(plan, job);
                 if (plan.status === 'complete') job.recheckStats.recoveredSeries++;
             }
-            publishViewingProgress(job);
+            publishViewingProgress(job, [...affected].map(plan => plan.videoId));
         }
     }
 
@@ -3666,7 +3705,7 @@
     function syncManualViewingProfile(watch) {
         const profile = netflixModelData('userInfo')?.userGuid;
         const active = typeof profile === 'string' && profile ? profile : null;
-        if (watch.manualProfileGuid === active) return;
+        if (watch.manualProfileGuid === active) return false;
         if (watch.manualProfileGuid !== undefined) {
             clearCachedViewingStatus(watch);
             watch.results = new Map();
@@ -3677,9 +3716,10 @@
         watch.manualProfileGuid = active;
         watch.manualChoices = new Map();
         watch.manualFailure = false;
-        if (!active) return;
+        if (!active) return true;
         try { watch.manualChoices = readManualViewingChoices(active); }
         catch (_) { watch.manualFailure = true; }
+        return true;
     }
 
     function saveManualViewingChoices(watch, changes, conditional = false) {
@@ -3703,9 +3743,20 @@
         } catch (_) { watch.manualFailure = true; return null; }
     }
 
-    function reconcileManualViewingCoverage(watch) {
+    function changedManualViewingIds(previous, next) {
+        const changed = new Set();
+        for (const id of new Set([...previous.keys(), ...next.keys()])) {
+            if (JSON.stringify(previous.get(id)) !== JSON.stringify(next.get(id))) changed.add(id);
+        }
+        return changed;
+    }
+
+    function reconcileManualViewingCoverage(watch, ids = null) {
         const changes = new Map();
-        for (const [id, choice] of watch.manualChoices) {
+        const candidates = ids === null ? watch.manualChoices.keys() : ids;
+        for (const id of candidates) {
+            const choice = watch.manualChoices.get(id);
+            if (!choice) continue;
             if (choice.status !== 'complete') continue;
             const coverage = watch.seriesCoverage.get(id);
             if (!coverage) continue;
@@ -3719,6 +3770,7 @@
             }
         }
         if (changes.size) {
+            const previous = watch.manualChoices;
             const saved = saveManualViewingChoices(watch, changes, true);
             if (saved) watch.manualChoices = saved;
             else for (const [id, choice] of changes) {
@@ -3726,7 +3778,9 @@
                 if (choice) watch.manualChoices.set(id, choice);
                 else watch.manualChoices.delete(id);
             }
+            return saved ? changedManualViewingIds(previous, saved) : new Set(changes.keys());
         }
+        return new Set();
     }
 
     function effectiveViewingStatus(watch, id) {
@@ -3814,8 +3868,16 @@
                     coverage: status === 'complete' ? watch.seriesCoverage.get(id) || null : null });
             }
             const saved = saveManualViewingChoices(watch, changes);
+            const changed = saved ? changedManualViewingIds(watch.manualChoices, saved) : new Set();
             if (saved) watch.manualChoices = saved;
-            syncWatchGroups(state);
+            const beforeWork = { ...performanceDiagnostics.viewingGroups };
+            syncWatchGroups(state, changed, 'manual-choice');
+            log(tLog('viewingChoiceApplied'), {
+                saved: Boolean(saved), action: button.getAttribute('data-tm-viewing-action'),
+                changedTitles: changed.size, completed: watch.completedCount,
+                work: Object.fromEntries(Object.entries(performanceDiagnostics.viewingGroups)
+                    .filter(([, value]) => typeof value === 'number').map(([key, value]) => [key, value - beforeWork[key]]))
+            });
             if (!gridOwnsClone(clone, grid)) watch.ui.summary.focus?.({ preventScroll: true });
         }, true);
     }
@@ -3850,7 +3912,7 @@
                 if (sourceState !== state || state.grid !== grid || state.watchStatus?.ui?.grid !== grid ||
                     !grid.isConnected || state.watchStatus.filters[group] === type) return;
                 state.watchStatus.filters[group] = type;
-                syncWatchGroups(state);
+                syncWatchGroups(state, [], 'type-filter');
             });
             root.appendChild(button);
             buttons.set(type, { button, count, key });
@@ -3924,44 +3986,158 @@
         }
     }
 
-    function syncWatchGroups(state) {
+    function syncWatchGroups(state, changedIds = null, reason = 'reconcile') {
         if (sourceState !== state || !state.grid?.isConnected || !state.watchStatus) return;
         const watch = state.watchStatus;
-        syncManualViewingProfile(watch);
-        reconcileManualViewingCoverage(watch);
+        const profileChanged = syncManualViewingProfile(watch);
         const ui = ensureWatchGroupUi(state);
-        const remaining = [], completed = [];
-        const counts = {
-            main: { movie: 0, series: 0, all: 0 }, watched: { movie: 0, series: 0, all: 0 }
+        const previousIndex = watch.groupIndex?.grid === state.grid ? watch.groupIndex : null;
+        const full = changedIds === null || profileChanged || !previousIndex;
+        const ids = full ? null : new Set([...changedIds].map(String));
+        for (const id of reconcileManualViewingCoverage(watch, ids)) ids?.add(id);
+        const index = full ? {
+            grid: state.grid, entries: new Map(), order: [], unknown: 0,
+            counts: { main: { movie: 0, series: 0, all: 0 }, watched: { movie: 0, series: 0, all: 0 } }
+        } : previousIndex;
+        const disabled = !watch.manualProfileGuid || watch.manualFailure;
+        const locale = getUiLocale();
+        let candidates = state.items || [];
+        if (!full) {
+            const selected = new Map();
+            for (const id of ids) {
+                const entry = previousIndex.entries.get(id);
+                if (entry) selected.set(id, entry.item);
+            }
+            if (previousIndex.disabled !== disabled || previousIndex.locale !== locale ||
+                previousIndex.filters.main !== watch.filters.main || previousIndex.filters.watched !== watch.filters.watched) {
+                for (const entry of previousIndex.entries.values()) {
+                    if (previousIndex.disabled !== disabled || previousIndex.locale !== locale ||
+                        previousIndex.filters[entry.group] !== watch.filters[entry.group]) selected.set(entry.id, entry.item);
+                }
+            }
+            candidates = [...selected.values()];
+        }
+        const updates = [];
+        const work = performanceDiagnostics.viewingGroups;
+        work.syncs++;
+        work.lastReason = reason;
+        if (full) work.fullSyncs++;
+        const countEntry = (entry, delta) => {
+            index.counts[entry.group].all += delta;
+            if (entry.type === 'movie' || entry.type === 'series') index.counts[entry.group][entry.type] += delta;
+            if (entry.status === 'unknown') index.unknown += delta;
         };
-        let visibleCount = 0, visibleCompleted = 0, visibilityChanged = false;
-        let unknown = 0;
-        for (const item of state.items || []) {
-            const status = effectiveViewingStatus(watch, String(item.videoId));
+        for (const item of candidates) {
+            const id = String(item.videoId);
+            const previous = previousIndex?.entries.get(id);
+            const status = !full && !ids.has(id) ? previous.status : effectiveViewingStatus(watch, id);
+            const type = !full && !ids.has(id) ? previous.type : viewingTitleType(watch, id);
             const clone = state.cloneMap?.get(itemKey(item));
             if (!clone) continue;
+            work.cardsConsidered++;
             const group = status === 'complete' ? 'watched' : 'main';
-            const type = viewingTitleType(watch, String(item.videoId));
-            syncManualViewingCard(state, clone, item, status);
-            counts[group].all++;
-            if (type === 'movie' || type === 'series') counts[group][type]++;
             const hidden = watch.filters[group] !== 'all' && watch.filters[group] !== type;
-            if (hidden !== (clone.getAttribute('data-tm-type-hidden') === 'true')) {
-                if (hidden) clone.setAttribute('data-tm-type-hidden', 'true');
-                else clone.removeAttribute('data-tm-type-hidden');
-                visibilityChanged = true;
-            }
-            if (!hidden) {
-                if (group === 'main') visibleCount++;
-                else visibleCompleted++;
-            }
-            (status === 'complete' ? completed : remaining).push(clone);
-            if (status === 'unknown') unknown++;
+            const manual = watch.manualChoices.has(id);
+            if (!full && previous.clone === clone && previous.status === status && previous.type === type &&
+                previous.group === group && previous.hidden === hidden && previous.disabled === disabled &&
+                previous.locale === locale && previous.title === item.ariaLabel && previous.manual === manual &&
+                clone.parentElement === (group === 'main' ? state.grid : ui.watchedGrid)) continue;
+            const entry = { id, item, clone, status, type, group, hidden, disabled, locale,
+                title: item.ariaLabel, manual, order: full ? index.order.length : previous.order };
+            const controlsChanged = !previous || previous.clone !== clone || previous.group !== group ||
+                previous.type !== type || previous.disabled !== disabled || previous.locale !== locale ||
+                previous.title !== entry.title || previous.manual !== entry.manual;
+            const visibilityChanged = hidden !== (clone.getAttribute('data-tm-type-hidden') === 'true');
+            const moved = Boolean(previous && previous.group !== group) ||
+                clone.parentElement !== (group === 'main' ? state.grid : ui.watchedGrid);
+            if (!full) countEntry(previous, -1);
+            countEntry(entry, 1);
+            index.entries.set(id, entry);
+            if (full) index.order.push(id);
+            updates.push({ entry, controlsChanged, visibilityChanged, moved });
         }
-        const mainOrder = [ui.mainFilter.root, ...remaining, ui.empty, ui.controls, ui.details];
-        const moved = mainOrder.some((node, index) => state.grid.children[index] !== node) ||
-            completed.some((clone, index) => ui.watchedGrid.children[index] !== clone);
-        if (moved || visibilityChanged) {
+
+        const counts = index.counts;
+        const visibleCount = counts.main[watch.filters.main];
+        const visibleCompleted = counts.watched[watch.filters.watched];
+        const uiSignature = JSON.stringify([counts, index.unknown, watch.filters, watch.loading, watch.manualFailure,
+            locale, state.items.length, state.totalCount, state.initializationElapsedMs]);
+        const uiChanged = uiSignature !== previousIndex?.uiSignature;
+        const targets = [...new Set([activeClone, pendingGridHoverClone].filter(Boolean))];
+        const beforeRects = new Map();
+        if (uiChanged || full || updates.some(update => update.moved || update.visibilityChanged || update.controlsChanged)) {
+            for (const clone of targets) beforeRects.set(clone, clone.getBoundingClientRect());
+        }
+        for (const { entry, controlsChanged, visibilityChanged, moved } of updates) {
+            if (controlsChanged) {
+                syncManualViewingCard(state, entry.clone, entry.item, entry.status);
+                work.controlsUpdated++;
+            }
+            if (visibilityChanged) {
+                if (entry.hidden) entry.clone.setAttribute('data-tm-type-hidden', 'true');
+                else entry.clone.removeAttribute('data-tm-type-hidden');
+            }
+            if (moved || visibilityChanged) releaseGridReact(entry.clone);
+            if (moved && !full) {
+                const parent = entry.group === 'main' ? state.grid : ui.watchedGrid;
+                let reference = entry.group === 'main' ? ui.empty : null;
+                for (let offset = entry.order + 1; offset < index.order.length; offset++) {
+                    const next = index.entries.get(index.order[offset]);
+                    if (next.group === entry.group && next.clone.parentElement === parent) {
+                        reference = next.clone;
+                        break;
+                    }
+                }
+                parent.insertBefore(entry.clone, reference);
+                work.categoryMoves++;
+            }
+        }
+        if (full) {
+            const remaining = [], completed = [];
+            for (const entry of index.entries.values()) (entry.group === 'watched' ? completed : remaining).push(entry.clone);
+            const mainOrder = [ui.mainFilter.root, ...remaining, ui.empty, ui.controls, ui.details];
+            work.categoryMoves += updates.filter(update => update.moved).length;
+            syncWatchChildOrder(ui.watchedGrid, completed);
+            syncWatchChildOrder(state.grid, mainOrder);
+        }
+        watch.completedCount = counts.watched.all;
+        watch.unknownCount = index.unknown;
+        watch.visibleCount = visibleCount;
+        if (uiChanged) {
+            syncWatchTypeFilter(ui.mainFilter, watch.filters.main, counts.main);
+            syncWatchTypeFilter(ui.watchedFilter, watch.filters.watched, counts.watched);
+            ui.empty.hidden = visibleCount > 0;
+            const emptyText = watch.loading ? tUi('checkingViewingStatus')
+                : !counts.main.all && counts.watched.all ? tUi('caughtUpMessage') : tUi('noMatchingTitles');
+            if (ui.empty.textContent !== emptyText) ui.empty.textContent = emptyText;
+            ui.watchedEmpty.hidden = visibleCompleted > 0;
+            ui.refresh.disabled = watch.loading;
+            const label = tUi('watchedCaughtUp') + ' (' + formatUiNumber(counts.watched.all) + ')';
+            if (ui.summary.textContent !== label) ui.summary.textContent = label;
+            let note = watch.loading ? tUi('checkingViewingStatus')
+                : index.unknown ? tUi('unknownViewingStatus', { count: formatUiNumber(index.unknown) }) : '';
+            const unknownTypes = counts.main.all - counts.main.movie - counts.main.series;
+            if (unknownTypes && watch.filters.main !== 'all') {
+                note += (note ? ' ' : '') + tUi('unknownTitleTypes', { count: formatUiNumber(unknownTypes) });
+            }
+            if (watch.manualFailure) note += (note ? ' ' : '') + tUi('viewingChoiceStorageFailed');
+            if (ui.note.textContent !== note) ui.note.textContent = note;
+            state.status = updateStatus(formatHeaderParts(state.items.length, state.totalCount,
+                state.initializationElapsedMs, true));
+        }
+        index.filters = { ...watch.filters };
+        index.disabled = disabled;
+        index.locale = locale;
+        index.uiSignature = uiSignature;
+        watch.groupIndex = index;
+        const hoverChanged = targets.some(clone => {
+            if (!clone.isConnected || !gridOwnsClone(clone, state.grid)) return true;
+            const before = beforeRects.get(clone);
+            if (!before) return false;
+            const after = clone.getBoundingClientRect();
+            return ['left', 'top', 'width', 'height'].some(key => Math.abs(before[key] - after[key]) > 0.5);
+        }) || Boolean(activeSourceSlot && !activeSourceSlot.isConnected);
+        if (hoverChanged) {
             cancelPendingGridHover();
             hoverToken++;
             clearSourceAlignment();
@@ -3969,32 +4145,10 @@
             activeVideoId = null;
             activePage = null;
             invalidateGridReact();
+            work.hoverCancelled++;
+        } else if (targets.length) {
+            work.hoverPreserved++;
         }
-        syncWatchChildOrder(ui.watchedGrid, completed);
-        syncWatchChildOrder(state.grid, mainOrder);
-        watch.completedCount = completed.length;
-        watch.unknownCount = unknown;
-        watch.visibleCount = visibleCount;
-        syncWatchTypeFilter(ui.mainFilter, watch.filters.main, counts.main);
-        syncWatchTypeFilter(ui.watchedFilter, watch.filters.watched, counts.watched);
-        ui.empty.hidden = visibleCount > 0;
-        const emptyText = watch.loading ? tUi('checkingViewingStatus')
-            : !remaining.length && completed.length ? tUi('caughtUpMessage') : tUi('noMatchingTitles');
-        if (ui.empty.textContent !== emptyText) ui.empty.textContent = emptyText;
-        ui.watchedEmpty.hidden = visibleCompleted > 0;
-        ui.refresh.disabled = watch.loading;
-        const label = tUi('watchedCaughtUp') + ' (' + formatUiNumber(completed.length) + ')';
-        if (ui.summary.textContent !== label) ui.summary.textContent = label;
-        let note = watch.loading ? tUi('checkingViewingStatus')
-            : unknown ? tUi('unknownViewingStatus', { count: formatUiNumber(unknown) }) : '';
-        const unknownTypes = counts.main.all - counts.main.movie - counts.main.series;
-        if (unknownTypes && watch.filters.main !== 'all') {
-            note += (note ? ' ' : '') + tUi('unknownTitleTypes', { count: formatUiNumber(unknownTypes) });
-        }
-        if (watch.manualFailure) note += (note ? ' ' : '') + tUi('viewingChoiceStorageFailed');
-        if (ui.note.textContent !== note) ui.note.textContent = note;
-        state.status = updateStatus(formatHeaderParts(state.items.length, state.totalCount,
-            state.initializationElapsedMs, true));
     }
 
     function initializeWatchGroups(state, sessionToken) {
@@ -4044,7 +4198,7 @@
         watch.seriesCoverage = new Map();
         watch.failure = null;
         watch.publications = 0;
-        syncWatchGroups(state);
+        syncWatchGroups(state, [], 'scan-start');
         const job = {
             state, watch, context, sessionToken: watch.sessionToken, results: new Map(), types: new Map(), seriesDetails: new Map(),
             requests: 0, passRequests: 0, passes: 1, deadline: performance.now() + VIEWING_TIMEOUT_MS * VIEWING_MAX_PASSES,
@@ -4095,14 +4249,16 @@
             watch.requests = job.requests;
             watch.passes = job.passes;
             watch.loading = false;
+            const unresolvedCachedIds = new Set([...watch.cachedResults.keys(), ...watch.cachedTypes.keys()]);
             clearCachedViewingStatus(watch);
-            syncWatchGroups(state);
+            syncWatchGroups(state, unresolvedCachedIds, 'scan-complete');
             writeViewingCache(job);
             log(tLog('viewingStatusCompleted'), {
                 completed: watch.completedCount, unknown: watch.unknownCount,
                 requests: watch.requests, passes: watch.passes, failure: watch.failure, publications: watch.publications,
                 series: { ...job.seriesStats, pending: job.seriesStats.eligible - job.seriesStats.checked - job.seriesStats.unplanned },
-                recheck: job.recheckStats
+                recheck: job.recheckStats,
+                work: collectPerformanceDiagnostics()
             });
         })().catch(() => {
             // Optional grouping must never reject Netflix's grid initialization.
@@ -5551,7 +5707,8 @@
     function tryApplyMyListMutation(mutation, reason = 'event') {
         if (!mutation || pendingMyListMutations.get(mutation.videoId) !== mutation) return false;
         if (!sourceState || !isTargetPage()) return false;
-        if (running || responsiveRefreshing) {
+        if (running || responsiveRefreshing || (nativeInitializationFailure?.sessionToken === routeSessionToken &&
+            initializationBlockedSessionToken === routeSessionToken)) {
             mutation.deferredWhileBusy = true;
             return false;
         }
@@ -8667,7 +8824,7 @@
     }
 
     function currentGridGeometry(section, layout) {
-        const sectionRect = section.getBoundingClientRect();
+        const sectionRect = nativeRect(section);
         const left = Math.max(0, layout.gridLeft);
         const viewportRight = Math.min(window.innerWidth, sectionRect.right);
         const available = Math.max(layout.cardWidth, viewportRight - sectionRect.left - left);
@@ -8688,6 +8845,7 @@
         for (const [property, value] of Object.entries(properties)) {
             if (grid.style.getPropertyValue(property) !== value) grid.style.setProperty(property, value);
         }
+        grid.__tmAppliedGeometry = geometry;
         return geometry;
     }
 
@@ -9254,8 +9412,11 @@
         const previous = findGridClone(item);
         if (previous && previous !== clone) releaseGridReact(previous);
         sourceState.cloneMap.set(itemKey(item), clone);
-        if (sourceState.watchStatus) syncManualViewingCard(sourceState, clone, item,
-            effectiveViewingStatus(sourceState.watchStatus, String(item.videoId)));
+        if (sourceState.watchStatus) {
+            syncManualViewingCard(sourceState, clone, item, effectiveViewingStatus(sourceState.watchStatus, String(item.videoId)));
+            const entry = sourceState.watchStatus.groupIndex?.entries.get(String(item.videoId));
+            if (entry) entry.clone = clone;
+        }
         if (clone?.getAttribute('data-tm-react-grafted') === 'true') graftedGridClones.add(clone);
     }
 
@@ -9282,6 +9443,7 @@
     function restoreGeometryProxy() {
         const proxy = activeGeometryProxy;
         if (!proxy) return;
+        let failures = 0;
 
         for (const entry of proxy.entries) {
             for (const method of ['getBoundingClientRect', 'getClientRects']) {
@@ -9290,14 +9452,19 @@
                     if (descriptor) {
                         Object.defineProperty(entry.source, method, descriptor);
                     } else {
-                        delete entry.source[method];
+                        if (!delete entry.source[method]) failures++;
                     }
-                } catch (_) {}
+                } catch (_) { failures++; }
             }
         }
 
         proxy.sourceSlot.removeAttribute('data-tm-source-proxied');
         activeGeometryProxy = null;
+        performanceDiagnostics.nativeRecovery.alignmentRestores++;
+        if (failures) {
+            performanceDiagnostics.nativeRecovery.alignmentRestoreFailures += failures;
+            warn(tLog('sourceAlignmentRestoreFailed'), { methods: failures, nodes: proxy.entries.length });
+        }
     }
 
     function clearSourceAlignment(slot = activeSourceSlot) {
@@ -9482,6 +9649,7 @@
     async function prepareMountedPage(page, targetItem = null, triggerEvent = null, token = null, sessionToken = null) {
         assertRouteSession(sessionToken);
         if (hoverPreparationCancelled(token)) return null;
+        performanceDiagnostics.hoverPreparation.calls++;
         ensureLiveNativeBinding('hover-prepare-start');
         const { section, scroller, track } = sourceState || {};
         if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
@@ -9704,9 +9872,11 @@
         let refreshedCount = 0;
         let fiberAssignments = 0;
         let propsAssignments = 0;
+        let neighborsSkipped = 0;
 
         for (let slotIndex = 0; slotIndex < slots.length; slotIndex++) {
             const sourceSlot = slots[slotIndex];
+            performanceDiagnostics.hoverPreparation.slotsConsidered++;
 
             // A wrapped Hawkins tail can temporarily append page-0 cards after
             // totalCount-1 (for example 32,33,34,35,36,0). Those slots are ring
@@ -9717,13 +9887,24 @@
             const pageItem = findItemForSourceSlot(sourceSlot);
             if (!pageItem) continue;
 
-            if (!staleSourceRecovery && pageItem.page !== actualPage) pageItem.page = actualPage;
+            if (!staleSourceRecovery && pageItem.page !== actualPage) {
+                pageItem.page = actualPage;
+                const mappedClone = findGridClone(pageItem);
+                if (mappedClone?.isConnected) mappedClone.setAttribute('data-tm-item-page', String(actualPage));
+            }
+
+            if (targetItem && itemKey(pageItem) !== itemKey(targetItem)) {
+                neighborsSkipped++;
+                performanceDiagnostics.hoverPreparation.neighborsSkipped++;
+                continue;
+            }
 
             const oldClone = findGridClone(pageItem);
             if (!oldClone?.isConnected) continue;
 
             const { fresh, stats } = makeLiveClone(sourceSlot, pageItem, oldClone, actualPage);
             refreshedCount++;
+            performanceDiagnostics.hoverPreparation.clonesRebuilt++;
             fiberAssignments += stats?.fiberAssignments || 0;
             propsAssignments += stats?.propsAssignments || 0;
             fresh.setAttribute('data-tm-item-page', String(pageItem.page));
@@ -9740,6 +9921,9 @@
         log(tLog('nativePageClonesUpdated'), {
             actualPage,
             refreshedCount,
+            preparationScope: targetItem ? 'target-card' : 'mounted-page',
+            slotsConsidered: slots.length,
+            neighborsSkipped,
             fiberAssignments,
             propsAssignments,
             targetItem: itemSummary(targetItem),
@@ -10146,6 +10330,31 @@
         ].join('|');
     }
 
+    function responsiveViewportSignature() {
+        const viewport = typeof window === 'undefined' ? {} : window;
+        const visual = viewport.visualViewport;
+        return [viewport.innerWidth, viewport.innerHeight, viewport.devicePixelRatio,
+            visual?.width, visual?.height, visual?.scale, visual?.offsetLeft, visual?.offsetTop].join('|');
+    }
+
+    function responsiveLayoutMatches(previous, next) {
+        if (!previous) return false;
+        return ['columns', 'cardWidth', 'gridWidth', 'gridLeft', 'sidePadding', 'sidePaddingLeft',
+            'sidePaddingRight', 'scrollerWidth', 'scrollerHeight', 'gap', 'rowGap']
+            .every(key => Math.abs((previous[key] || 0) - (next[key] || 0)) <= 0.5);
+    }
+
+    function cancelResizeHover() {
+        cancelPendingGridHover();
+        hoverToken++;
+        clearSourceAlignment();
+        activeVideoId = null;
+        activeClone = null;
+        activePage = null;
+        invalidateGridReact();
+        performanceDiagnostics.resize.hoverCancelled++;
+    }
+
     function responsivePageShape(layout) {
         if (!sourceState) return '';
         return `${Math.max(1, layout.columns)}|${pageCount(sourceState.section)}`;
@@ -10172,7 +10381,8 @@
 
     async function waitResponsiveLayoutSettled(timeout = 1200, sessionToken = null) {
         assertRouteSession(sessionToken);
-        const { section, scroller, track } = sourceState;
+        const state = sourceState;
+        const { section, scroller, track } = state;
         const start = performance.now();
         let previous = '';
         let stable = 0;
@@ -10181,6 +10391,10 @@
         while (performance.now() - start < timeout) {
             await sleep(80);
             assertRouteSession(sessionToken);
+            if (sourceState !== state || state.section !== section || state.scroller !== scroller || state.track !== track ||
+                !section.isConnected || !scroller.isConnected || !track.isConnected || !state.grid?.isConnected) {
+                throw createRouteSessionCancelledError();
+            }
             latest = measureVisibleLayout(section, scroller, track);
             latest.rowGap = sourceState?.layout?.rowGap || measureNativeCarouselGap(section);
             const sig = responsiveSignature(latest);
@@ -10440,13 +10654,22 @@
 
     async function refreshResponsiveLayout(sessionToken = routeSessionToken) {
         if (!isRouteSessionActive(sessionToken) || !sourceState?.grid?.isConnected || responsiveRefreshing) return;
+        const state = sourceState;
+        const { section, scroller, track } = state;
         responsiveRefreshing = true;
         let deferredLogicalRemap = false;
         const seq = ++responsiveSequence;
         const reason = lastResponsiveReason || 'unspecified';
         activeResponsiveReason = reason;
         const started = performance.now();
-        const grid = sourceState.grid;
+        const grid = state.grid;
+        const assertOwner = () => {
+            assertRouteSession(sessionToken);
+            if (sourceState !== state || state.section !== section || state.scroller !== scroller || state.track !== track ||
+                !section.isConnected || !scroller.isConnected || !track.isConnected || state.grid !== grid || !grid.isConnected) {
+                throw createRouteSessionCancelledError();
+            }
+        };
         log(tLog('responsiveRefreshStarted'), {
             seq,
             reason,
@@ -10455,15 +10678,12 @@
             pages: pageCount(sourceState.section)
         });
         grid.setAttribute('data-tm-responsive-refreshing', 'true');
-        hoverToken++;
-        invalidateGridReact();
-        clearSourceAlignment();
-        activeVideoId = null;
-        activeClone = null;
-        activePage = null;
+        performanceDiagnostics.resize.refreshes++;
+        cancelResizeHover();
 
         try {
             const liveLayout = await waitResponsiveLayoutSettled(1200, sessionToken);
+            assertOwner();
             const signature = responsiveSignature(liveLayout);
             const pageShape = responsivePageShape(liveLayout);
 
@@ -10484,6 +10704,7 @@
             });
             if (pageShapeChanged || logicalMappingStale) {
                 const changed = await remapItemsByOrder(liveLayout, sessionToken);
+                assertOwner();
                 deferredLogicalRemap = changed === null;
                 if (deferredLogicalRemap) {
                     log('Responsive logical page remap deferred', {
@@ -10535,7 +10756,7 @@
             updateResponsiveStatus(sourceState.layout, tUi('relayoutFailed'));
         } finally {
             grid.removeAttribute('data-tm-responsive-refreshing');
-            if (isRouteSessionActive(sessionToken)) {
+            if (isRouteSessionActive(sessionToken) && responsiveSequence === seq) {
                 responsiveRefreshing = false;
                 activeResponsiveReason = '';
                 retryPendingMyListMutations('after-responsive-refresh');
@@ -10548,8 +10769,6 @@
                 }
             }
 
-            if (!isRouteSessionActive(sessionToken)) activeResponsiveReason = '';
-
             // Resize may fast-reanchor the hidden/native carousel to rebuild the logical
             // indicator, but it never starts MiniModal hover preparation by itself.
         }
@@ -10558,36 +10777,52 @@
     function scheduleResponsiveRefresh(delay = 140, reason = 'unknown') {
         const sessionToken = routeSessionToken;
         if (!isRouteSessionActive(sessionToken) || !sourceState?.grid?.isConnected) return;
-        if (sourceState.empty && (!sourceState.scroller || !sourceState.track)) {
-            const layout = measureEmptyLayout(sourceState.section);
-            layout.rowGap = measureNativeCarouselGap(sourceState.section);
-            sourceState.layout = layout;
-            const geometry = applyGridGeometry(sourceState.section, sourceState.grid, layout);
-            sourceState.status.style.marginLeft = `${geometry.left}px`;
-            sourceState.status.style.width = `${geometry.width}px`;
-            return;
-        }
+        const state = sourceState;
         lastResponsiveReason = reason;
         clearTimeout(responsiveRefreshTimer);
         responsiveRefreshTimer = setTimeout(() => {
             responsiveRefreshTimer = null;
-            if (!isRouteSessionActive(sessionToken) || responsiveRefreshing) return;
+            if (!isRouteSessionActive(sessionToken) || responsiveRefreshing || sourceState !== state || !state.grid?.isConnected) return;
+            performanceDiagnostics.resize.checks++;
+            if (state.empty && (!state.scroller || !state.track)) {
+                const layout = measureEmptyLayout(state.section);
+                layout.rowGap = measureNativeCarouselGap(state.section);
+                if (responsiveLayoutMatches(state.layout, layout)) {
+                    performanceDiagnostics.resize.unchanged++;
+                    return;
+                }
+                state.layout = layout;
+                const geometry = applyGridGeometry(state.section, state.grid, layout);
+                state.status.style.marginLeft = `${geometry.left}px`;
+                state.status.style.width = `${geometry.width}px`;
+                return;
+            }
+            ensureLiveNativeBinding('responsive-check');
+            if (sourceState !== state || !state.section?.isConnected || !state.scroller?.isConnected || !state.track?.isConnected) return;
 
             // Skip the expensive rescan when measured geometry has not changed.
             // Keep active-slot alignment here and clear it only when the responsive state actually changes.
-            const measured = measureVisibleLayout(sourceState.section, sourceState.scroller, sourceState.track);
-            measured.rowGap = sourceState.layout?.rowGap || measureNativeCarouselGap(sourceState.section);
-            const sig = responsiveSignature(measured);
+            const sample = withNativeReadScope(() => {
+                const measured = measureVisibleLayout(state.section, state.scroller, state.track);
+                measured.rowGap = state.layout?.rowGap || measureNativeCarouselGap(state.section);
+                return { measured, signature: responsiveSignature(measured), geometry: currentGridGeometry(state.section, measured) };
+            });
+            const measured = sample.measured;
+            const sig = sample.signature;
             const logicalMappingStale = Boolean(getCarouselDomRuntime(sourceState.section)?.pageMappingStale);
-            if (sig === lastResponsiveSignature && !logicalMappingStale) {
+            const applied = state.grid.__tmAppliedGeometry;
+            const geometryUnchanged = responsiveLayoutMatches(state.layout, measured) && applied &&
+                ['width', 'left', 'columns'].every(key => Math.abs(applied[key] - sample.geometry[key]) <= 0.5);
+            if (sig === lastResponsiveSignature && geometryUnchanged && !logicalMappingStale) {
                 sourceState.layout = measured;
-                updateResponsiveStatus(measured);
                 realignActiveSource();
-                log(tLog('responsiveRemeasurementNoShapeChange'), {
+                performanceDiagnostics.resize.unchanged++;
+                if (activeClone || pendingGridHoverClone) performanceDiagnostics.resize.hoverPreserved++;
+                trace(() => [tLog('responsiveRemeasurementNoShapeChange'), {
                     reason: lastResponsiveReason,
                     signature: sig,
                     layout: layoutSummary(measured)
-                });
+                }]);
                 return;
             }
 
@@ -10604,13 +10839,14 @@
                     previousParts[1] !== currentParts[1] &&
                     previousParts.every((part, index) => index === 1 || part === currentParts[index]);
 
-                if (pageCountOnlyChanged && !logicalMappingStale) {
+                if (pageCountOnlyChanged && geometryUnchanged && !logicalMappingStale) {
                     const previousSignature = lastResponsiveSignature;
                     sourceState.layout = measured;
                     lastResponsiveSignature = sig;
                     lastPageShape = responsivePageShape(measured);
-                    updateResponsiveStatus(measured);
                     realignActiveSource();
+                    performanceDiagnostics.resize.unchanged++;
+                    if (activeClone || pendingGridHoverClone) performanceDiagnostics.resize.hoverPreserved++;
                     log(tLog('responsiveRemeasurementNoShapeChange'), {
                         reason: lastResponsiveReason,
                         signature: sig,
@@ -10682,36 +10918,29 @@
     }
 
     function handleTargetWindowResize() {
-        cancelPendingGridHover();
-        hoverToken++;
-        clearSourceAlignment();
-        activeVideoId = null;
-        activeClone = null;
-        activePage = null;
-        log(tLog('windowResizeDetected'), {
-            viewport: { width: window.innerWidth, height: window.innerHeight },
-            devicePixelRatio: window.devicePixelRatio
-        });
-        scheduleResponsiveRefresh(140, 'window.resize');
+        handleTargetResize('window.resize');
     }
 
     function handleTargetVisualViewportResize() {
-        cancelPendingGridHover();
-        hoverToken++;
-        clearSourceAlignment();
-        activeVideoId = null;
-        activeClone = null;
-        activePage = null;
-        log(tLog('visualViewportResizeDetected'), {
-            viewport: { width: window.innerWidth, height: window.innerHeight },
-            visualViewport: {
-                width: window.visualViewport?.width,
-                height: window.visualViewport?.height,
-                scale: window.visualViewport?.scale
-            },
-            devicePixelRatio: window.devicePixelRatio
-        });
-        scheduleResponsiveRefresh(140, 'visualViewport.resize');
+        handleTargetResize('visualViewport.resize');
+    }
+
+    function handleTargetResize(reason) {
+        if (!sourceState?.grid?.isConnected) return;
+        performanceDiagnostics.resize.events++;
+        const signature = responsiveViewportSignature();
+        if (sourceState.resizeViewportSignature !== signature) {
+            // Real bounds/zoom/offset changes can invalidate native popup placement
+            // even when the column count is unchanged. Duplicate events cannot.
+            cancelResizeHover();
+            log(tLog(reason === 'window.resize' ? 'windowResizeDetected' : 'visualViewportResizeDetected'), {
+                previousSignature: sourceState.resizeViewportSignature || '', signature,
+                viewport: { width: window.innerWidth, height: window.innerHeight },
+                hoverCancelled: true
+            });
+            sourceState.resizeViewportSignature = signature;
+        }
+        scheduleResponsiveRefresh(140, reason);
     }
 
     function targetDocumentObserverAncestors(host) {
@@ -10818,7 +11047,12 @@
             handleRouteChange('MutationObserver-url');
         }
         if (!targetSessionActive || !isTargetPage() || !targetDocumentObserver) return;
-        if (initializationBlockedSessionToken === routeSessionToken) return;
+        if (initializationBlockedSessionToken === routeSessionToken) {
+            if (mutations.some(mutation => !mutationOnlyChangesScriptUi(mutation))) {
+                recoverNativeInitialization(routeSessionToken, 'document-mutation');
+            }
+            return;
+        }
         // External removal of our whole grid still needs recovery, even though
         // mutations wholly inside the connected script UI are otherwise ignored.
         if (completedSection && sourceState?.grid && !sourceState.grid.isConnected) {
@@ -10899,9 +11133,58 @@
         targetDocumentDiscoveryActive = false;
     }
 
+    function recoverNativeInitialization(sessionToken, reason) {
+        const failure = nativeInitializationFailure;
+        if (!failure || failure.sessionToken !== sessionToken || !isRouteSessionActive(sessionToken)) return false;
+        if (performanceDiagnostics.nativeRecovery.attempts >= 1) {
+            if (!failure.exhaustedReported) {
+                failure.exhaustedReported = true;
+                performanceDiagnostics.nativeRecovery.exhausted++;
+                log(tLog('nativeInitializationRecoveryExhausted'), { sessionToken, reason, maxAttempts: 1 });
+            }
+            return false;
+        }
+        const section = findMyListSection();
+        const scroller = section?.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller);
+        const track = scroller && netflixDom.findTrack(scroller);
+        if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected ||
+            !section.contains(scroller) || !scroller.contains(track) ||
+            (section === failure.section && scroller === failure.scroller && track === failure.track)) return false;
+
+        performanceDiagnostics.nativeRecovery.attempts++;
+        for (const mutation of pendingMyListMutations.values()) mutation.deferredWhileBusy = true;
+        hoverToken++;
+        cancelPendingGridHover();
+        cleanupTargetSessionDom();
+        resizeObserver?.disconnect();
+        resizeObserver = null;
+        clearTimeout(responsiveRefreshTimer);
+        responsiveRefreshTimer = null;
+        responsiveRefreshPromise = null;
+        responsiveRefreshing = false;
+        sourceState = null;
+        completedSection = null;
+        initializationBlockedSessionToken = null;
+        nativeInitializationFailure = null;
+        clearRunningSession(sessionToken, false);
+        bindTargetDocumentObserver(document.querySelector(NETFLIX_DOM_SELECTORS.browseSections), section);
+        // A replacement may have a different membership/count. Use the existing
+        // fresh SPA bootstrap rather than an old initial-page cache on this retry.
+        targetSessionEntryKind = 'spa';
+        log(tLog('nativeInitializationRecovered'), {
+            sessionToken, reason, attempt: performanceDiagnostics.nativeRecovery.attempts,
+            pendingMutations: pendingMyListMutations.size
+        });
+        scheduleRun(40, sessionToken);
+        return true;
+    }
+
     async function runScript(sessionToken = routeSessionToken) {
         if (!isRouteSessionActive(sessionToken)) return;
-        if (initializationBlockedSessionToken === sessionToken) return;
+        if (initializationBlockedSessionToken === sessionToken) {
+            recoverNativeInitialization(sessionToken, 'run');
+            return;
+        }
         if (running && runningSessionToken === sessionToken) return;
         let section = findMyListSection();
         if (!section) {
@@ -10951,6 +11234,7 @@
             cloneMap: new Map(),
             itemMap: new Map(),
             empty: false,
+            resizeViewportSignature: responsiveViewportSignature(),
             initializationStartedAt: initializationStarted
         };
         applyOriginalMyListVisibility();
@@ -11064,6 +11348,7 @@
                     totalCount: earlyTotalCount
                 });
                 initializationBlockedSessionToken = sessionToken;
+                nativeInitializationFailure = { section, scroller, track, sessionToken };
                 warn(tLog('initializationFailed'), {
                     code: error.code,
                     stage: error.stage,
@@ -11073,7 +11358,8 @@
                     snapshot: collectRuntimeSnapshot()
                 });
                 updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
-                clearRunningSession(sessionToken);
+                clearRunningSession(sessionToken, false);
+                recoverNativeInitialization(sessionToken, 'native-source-wait');
                 return;
             }
             scroller = sourceWait.scroller;
@@ -11109,6 +11395,10 @@
             return;
         }
         if (!readiness.ready) {
+            initializationBlockedSessionToken = sessionToken;
+            nativeInitializationFailure = { section, scroller, track, sessionToken };
+            clearRunningSession(sessionToken, false);
+            if (recoverNativeInitialization(sessionToken, 'readiness-' + readiness.reason)) return;
             const readinessError = readiness.reason === 'timeout'
                 ? initializationTimeoutError(readiness.stage || 'native-carousel-readiness', readiness.timeoutMs || NATIVE_READY_TIMEOUT_MS, {
                     elapsedMs: readiness.elapsedMs,
@@ -11122,9 +11412,7 @@
                 error: readinessError,
                 snapshot: collectRuntimeSnapshot()
             });
-            initializationBlockedSessionToken = sessionToken;
             updateStatus(formatInitializationErrorMeta(readinessError, earlyTotalCount));
-            clearRunningSession(sessionToken);
             return;
         }
         if (readiness.empty) {
@@ -11378,6 +11666,9 @@
             });
             if (sourceState) { sourceState.collectedCount = items.length; sourceState.totalCount = totalCount; }
             completedSection = section;
+            if (performanceDiagnostics.nativeRecovery.attempts > performanceDiagnostics.nativeRecovery.completed) {
+                performanceDiagnostics.nativeRecovery.completed++;
+            }
             resetOrderMismatchStateAfterInitialization();
             sourceState.initializationElapsedMs = performance.now() - initializationStarted;
             updateStatus(formatHeaderParts(items.length, totalCount, sourceState.initializationElapsedMs, true));

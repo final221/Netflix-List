@@ -74,6 +74,7 @@ function environment(names, overrides = {}) {
         activeClone: null, activeVideoId: null, activePage: null, activeSourceSlot: null, activeGeometryProxy: null,
         orderMismatchDialogOpen: false, orderMismatchReinitializing: false, responsiveRefreshPromise: null,
         routeSessionToken: 1, targetSessionActive: true,
+        nativeInitializationFailure: null,
         isTargetPage: () => true, isRouteSessionActive: token => token === 1,
         assertRouteSession: () => {}, isRouteSessionCancelledError: () => false,
         ensureLiveNativeBinding: () => {},
@@ -81,9 +82,12 @@ function environment(names, overrides = {}) {
         initializeWatchGroups: () => {},
         ...overrides
     });
-    for (const name of ['createNativeReadScope', 'withNativeReadScope', 'invalidateNativeReadScope', 'trace', 'gridOwnsClone', ...names]) {
+    for (const name of ['createNativeReadScope', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'trace', 'gridOwnsClone',
+        'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'responsiveViewportSignature', 'responsiveLayoutMatches',
+        'cancelResizeHover', 'handleTargetResize', 'recoverNativeInitialization', ...names]) {
         vm.runInContext(declaration(name), c);
     }
+    c.performanceDiagnostics = c.createPerformanceDiagnostics();
     async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
     return {
         c, timers, frames, flush,
@@ -2353,7 +2357,7 @@ const viewingFunctions = [
     'collectViewingEpisodePlans', 'finishViewingSeriesPlan', 'recheckViewingSeries',
     'saveViewingSeriesDetails', 'collectViewingSeriesDiagnostics',
     'viewingLatestEpisode', 'viewingProgressSummary', 'viewingSeriesResult',
-    'validViewingCoverage', 'readManualViewingChoices', 'syncManualViewingProfile', 'saveManualViewingChoices', 'reconcileManualViewingCoverage',
+    'validViewingCoverage', 'readManualViewingChoices', 'syncManualViewingProfile', 'saveManualViewingChoices', 'changedManualViewingIds', 'reconcileManualViewingCoverage',
     'effectiveViewingStatus', 'ensureManualViewingControls', 'syncManualViewingCard', 'ensureManualViewingBehavior',
     'handleGridClonePointerOver', 'handleGridClonePointerLeave',
     'gridOwnsClone', 'createWatchTypeFilter', 'syncWatchTypeFilter', 'ensureWatchGroupUi', 'syncWatchChildOrder', 'syncWatchGroups',
@@ -4536,4 +4540,500 @@ test('refresh keeps the current series grouping until its new finale result arri
     assert.deepEqual(completedViewingIds(e), ['1']);
     assert.equal(e.storageCalls.cacheWrites, 2);
     assert.equal(e.state.watchStatus.cachedResults.size, 0);
+});
+
+test('a warm 500-series scan initializes card controls once and performs no further work while browsing', async () => {
+    const first = await viewingEnvironment(500);
+    useCompleteSeriesResponses(first);
+    await first.start();
+    const e = await viewingEnvironment(500, null, first.storage);
+    useCompleteSeriesResponses(e);
+    let controls = 0, visibilityReads = 0;
+    for (const clone of e.state.cloneMap.values()) {
+        const getAttribute = clone.getAttribute.bind(clone);
+        clone.getAttribute = key => {
+            if (key === 'data-tm-type-hidden') visibilityReads++;
+            return getAttribute(key);
+        };
+    }
+    const syncCard = e.c.syncManualViewingCard;
+    e.c.syncManualViewingCard = (...args) => { controls++; return syncCard(...args); };
+    await e.start();
+    assert.equal(controls, 500, 'the previous warm scan revisited controls 11,500 times');
+    assert.equal(visibilityReads, 500, 'unchanged batches avoid card attribute reads after initial grouping');
+    assert.equal(e.requests.length, 30);
+    assert.equal(e.state.watchStatus.publications, 20);
+    assert.equal(completedViewingIds(e).length, 500);
+    const work = e.c.collectPerformanceDiagnostics();
+    assert.equal(work.viewingGroups.fullSyncs, 1);
+    assert.equal(work.viewingGroups.cardsConsidered, 1500);
+    assert.equal(work.viewingGroups.controlsUpdated, controls);
+    assert.deepEqual(structuredClone(e.logs.find(entry => entry.details?.series).details.work), structuredClone(work));
+    await e.advance(60000);
+    assert.deepEqual(structuredClone(e.c.collectPerformanceDiagnostics()), structuredClone(work));
+    assert.equal(e.timers.size, 0);
+});
+
+async function unfinishedMovieGrid(count = 500) {
+    const e = await viewingEnvironment(count);
+    e.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        e.requests.push({ paths });
+        return { ok: true, json: async () => ({ jsonGraph: {
+            videos: Object.fromEntries(paths[0][1].map(id => [id, viewingVideo('movie', false)]))
+        } }) };
+    };
+    await e.start();
+    return e;
+}
+
+test('one manual movie move touches one of 500 controls and preserves an unrelated stationary hover', async () => {
+    const e = await unfinishedMovieGrid();
+    const first = e.state.cloneMap.get('v:1');
+    e.c.activeClone = first;
+    e.c.activeVideoId = '1';
+    e.c.activeSourceSlot = new Element('source');
+    e.c.pendingGridHoverClone = first;
+    let controls = 0, invalidations = 0;
+    const syncCard = e.c.syncManualViewingCard;
+    e.c.syncManualViewingCard = (...args) => { controls++; return syncCard(...args); };
+    e.c.invalidateGridReact = () => invalidations++;
+    const token = e.c.hoverToken;
+    const before = e.c.collectPerformanceDiagnostics().viewingGroups.cardsConsidered;
+    const requests = e.requests.length;
+    clickManualViewing(e, '500');
+    assert.equal(controls, 1);
+    assert.equal(e.c.collectPerformanceDiagnostics().viewingGroups.cardsConsidered - before, 1);
+    assert.equal(e.c.activeClone, first);
+    assert.equal(e.c.pendingGridHoverClone, first);
+    assert.equal(e.c.hoverToken, token);
+    assert.equal(invalidations, 0);
+    assert.equal(e.requests.length, requests);
+    assert.deepEqual(completedViewingIds(e), ['500']);
+    assert.equal(e.state.watchStatus.completedCount, 1);
+    const action = e.logs.find(entry => entry.name === 'viewingChoiceApplied');
+    assert.equal(action.details.saved, true);
+    assert.equal(action.details.work.controlsUpdated, 1);
+    assert.equal(action.details.work.hoverPreserved, 1);
+});
+
+test('moving a preceding card cancels hover when the protected card actually changes position', async () => {
+    const e = await unfinishedMovieGrid(10);
+    const protectedCard = e.state.cloneMap.get('v:10');
+    protectedCard.getBoundingClientRect = () => ({ left: 0, top: mainViewingIds(e).indexOf('10') * 60, width: 100, height: 60 });
+    e.c.activeClone = protectedCard;
+    e.c.activeVideoId = '10';
+    e.c.pendingGridHoverClone = protectedCard;
+    const token = e.c.hoverToken;
+    clickManualViewing(e, '1');
+    assert.equal(e.c.activeClone, null);
+    assert.equal(e.c.pendingGridHoverClone, null);
+    assert.equal(e.c.hoverToken, token + 1);
+    assert.equal(e.c.performanceDiagnostics.viewingGroups.hoverCancelled, 1);
+});
+
+test('unchanged publication avoids card and layout reads, and filters reuse stored classifications', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    const clone = e.state.cloneMap.get('v:2');
+    e.c.activeClone = clone;
+    clone.getBoundingClientRect = () => { throw new Error('Unchanged synchronization must not measure layout'); };
+    const before = e.c.collectPerformanceDiagnostics().viewingGroups;
+    e.c.syncWatchGroups(e.state, [], 'unchanged-batch');
+    assert.equal(e.c.performanceDiagnostics.viewingGroups.cardsConsidered, before.cardsConsidered);
+    assert.equal(e.c.activeClone, clone);
+    e.c.activeClone = null;
+    const controls = e.c.performanceDiagnostics.viewingGroups.controlsUpdated;
+    e.c.effectiveViewingStatus = () => { throw new Error('A filter must reuse established status'); };
+    e.c.viewingTitleType = () => { throw new Error('A filter must reuse established type'); };
+    clickViewingFilter(e, 'main', 'series');
+    assert.deepEqual(filteredViewingIds(e), ['5', '6']);
+    assert.equal(e.c.performanceDiagnostics.viewingGroups.controlsUpdated, controls);
+});
+
+test('incremental groups follow hover replacement ownership without retaining or revisiting the old card', async () => {
+    const e = await unfinishedMovieGrid(10);
+    for (const name of ['findGridClone', 'setGridClone']) vm.runInContext(declaration(name), e.c);
+    e.c.graftedGridClones = new Set();
+    const item = e.state.items[9];
+    const old = e.state.cloneMap.get('v:10');
+    const fresh = old.cloneNode(true);
+    fresh.__tmMyListItem = item;
+    old.replaceWith(fresh);
+    e.c.setGridClone(item, fresh);
+    assert.equal(e.state.watchStatus.groupIndex.entries.get('10').clone, fresh);
+    clickManualViewing(e, '10');
+    assert.equal(fresh.parentElement, e.state.watchStatus.ui.watchedGrid);
+    assert.equal(old.isConnected, false);
+    assert.equal(e.state.watchStatus.groupIndex.entries.get('10').clone, fresh);
+});
+
+function configureInitializationRecovery(e) {
+    const scheduled = [];
+    e.c.document.querySelector = () => null;
+    e.c.bindTargetDocumentObserver = () => {};
+    e.c.scheduleRun = (...args) => scheduled.push(args);
+    e.c.responsiveRefreshTimer = null;
+    e.c.LEGACY_EMPTY_STATE_ID = 'empty';
+    e.c.ORDER_MISMATCH_DIALOG_ID = 'dialog';
+    e.c.tryMountedSinglePageFastBootstrap = async () => null;
+    for (const name of ['cancelPendingGridHover', 'initializationTimeoutError', 'fetchFreshMyListBootstrap']) {
+        vm.runInContext(declaration(name), e.c);
+    }
+    return scheduled;
+}
+
+test('readiness detachment retries one verified replacement and preserves queued mutations until publication', async () => {
+    const e = initializationEnvironment(6);
+    const scheduled = configureInitializationRecovery(e);
+    const replacement = new ConstructionNode('replacement');
+    let readinessCalls = 0;
+    e.c.waitForNativeCarouselReady = async () => {
+        if (++readinessCalls > 1) return { ready: true, empty: false };
+        e.track.setConnected(false);
+        e.scroller.appendChild(replacement);
+        e.c.netflixDom.findTrack = () => replacement;
+        return { ready: false, reason: 'detached' };
+    };
+    const mutation = { videoId: '2', action: 'remove' };
+    e.c.pendingMyListMutations.set('2', mutation);
+    await e.c.runScript(1);
+    assert.deepEqual(scheduled, [[40, 1]]);
+    assert.equal(e.c.initializationBlockedSessionToken, null);
+    assert.equal(e.c.sourceState, null);
+    assert.equal(e.c.pendingMyListMutations.size, 1);
+    const retry = e.c.runScript(1);
+    await e.drain();
+    await retry;
+    assert.equal(readinessCalls, 2, e.warnings.map(entry => entry.details.error?.message).join(', '));
+    assert.equal(e.c.sourceState.track, replacement);
+    assert.equal(e.c.completedSection, e.section);
+    assert.equal(e.c.sourceState.items.length, 5);
+    assert.equal(e.c.pendingMyListMutations.size, 0);
+    assert.equal(e.c.performanceDiagnostics.nativeRecovery.attempts, 1);
+    assert.equal(e.c.performanceDiagnostics.nativeRecovery.completed, 1);
+    const recovery = e.logs.find(entry => entry.name === 'nativeInitializationRecovered');
+    assert.equal(recovery.details.pendingMutations, 1);
+    assert.equal(e.warnings.length, 0);
+});
+
+test('a replacement mounted after a readiness timeout can unblock through the native observer', async () => {
+    const e = initializationEnvironment(6);
+    const scheduled = configureInitializationRecovery(e);
+    e.c.waitForNativeCarouselReady = async () => ({ ready: false, reason: 'timeout', elapsedMs: 8000 });
+    await e.c.runScript(1);
+    assert.equal(e.c.initializationBlockedSessionToken, 1);
+    assert.equal(scheduled.length, 0);
+    assert.equal(e.c.recoverNativeInitialization(1, 'same-source'), false);
+    const queued = { videoId: '2', action: 'remove' };
+    e.c.pendingMyListMutations.set('2', queued);
+    assert.equal(e.c.tryApplyMyListMutation(queued), false);
+    assert.equal(queued.deferredWhileBusy, true);
+    assert.equal(e.c.pendingMyListMutations.size, 1);
+    const replacement = e.scroller.appendChild(new ConstructionNode('replacement'));
+    e.c.netflixDom.findTrack = () => replacement;
+    e.c.targetDocumentObserver = {};
+    e.c.lastObservedUrl = e.c.location.href;
+    for (const name of ['isScriptOwnedMyListNode', 'mutationOnlyChangesScriptUi', 'handleTargetDocumentMutation']) {
+        vm.runInContext(declaration(name), e.c);
+    }
+    e.c.handleTargetDocumentMutation([mutation(e.scroller, [replacement])]);
+    assert.deepEqual(scheduled, [[40, 1]]);
+    assert.equal(e.c.initializationBlockedSessionToken, null);
+});
+
+test('native initialization replacement recovery stops after one attempt and ignores obsolete sessions', async () => {
+    const e = initializationEnvironment(6);
+    const scheduled = configureInitializationRecovery(e);
+    e.c.waitForNativeCarouselReady = async () => ({ ready: false, reason: 'timeout', elapsedMs: 8000 });
+    await e.c.runScript(1);
+    const replacement = e.scroller.appendChild(new ConstructionNode('replacement'));
+    e.c.netflixDom.findTrack = () => replacement;
+    e.c.isRouteSessionActive = () => false;
+    assert.equal(e.c.recoverNativeInitialization(1, 'obsolete'), false);
+    assert.equal(scheduled.length, 0);
+    e.c.isRouteSessionActive = token => token === 1;
+    assert.equal(e.c.recoverNativeInitialization(1, 'replacement'), true);
+    await e.c.runScript(1);
+    assert.equal(e.c.initializationBlockedSessionToken, 1);
+    const third = e.scroller.appendChild(new ConstructionNode('third'));
+    e.c.netflixDom.findTrack = () => third;
+    for (let i = 0; i < 20; i++) assert.equal(e.c.recoverNativeInitialization(1, 'replacement-again'), false);
+    assert.equal(scheduled.length, 1);
+    assert.equal(e.c.performanceDiagnostics.nativeRecovery.attempts, 1);
+    assert.equal(e.c.performanceDiagnostics.nativeRecovery.exhausted, 1);
+});
+
+test('detached reset restores original geometry descriptors before dropping source and clone references', () => {
+    const e = constructionEnvironment();
+    const slot = e.track.appendChild(new ConstructionNode('source'));
+    const originalRects = () => ['native'];
+    Object.defineProperty(slot, 'getClientRects', { value: originalRects, configurable: true, writable: false });
+    const descriptors = { getBoundingClientRect: null, getClientRects: Object.getOwnPropertyDescriptor(slot, 'getClientRects') };
+    Object.defineProperty(slot, 'getBoundingClientRect', { value: () => e.oldGrid.getBoundingClientRect(), configurable: true });
+    Object.defineProperty(slot, 'getClientRects', { value: () => [e.oldGrid.getBoundingClientRect()], configurable: true });
+    slot.setAttribute('data-tm-source-proxied', 'true');
+    Object.assign(e.c, {
+        completedSection: e.section, activeSourceSlot: slot,
+        LEGACY_EMPTY_STATE_ID: 'empty',
+        activeGeometryProxy: { sourceSlot: slot, clone: e.oldGrid, entries: [{ source: slot, descriptors }] },
+        responsiveRefreshTimer: null, restoreActiveCarouselStyles() {}, clearPendingMyListMutations() {}
+    });
+    for (const name of ['restoreGeometryProxy', 'clearSourceAlignment', 'cancelPendingGridHover', 'resetDetachedTargetState']) {
+        vm.runInContext(declaration(name), e.c);
+    }
+    e.section.setConnected(false);
+    e.c.resetDetachedTargetState();
+    assert.equal(Object.hasOwn(slot, 'getBoundingClientRect'), false);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(slot, 'getClientRects'), descriptors.getClientRects);
+    assert.equal(slot.getAttribute('data-tm-source-proxied'), null);
+    assert.equal(e.c.activeGeometryProxy, null);
+    assert.equal(e.c.activeSourceSlot, null);
+    assert.equal(e.c.sourceState, null);
+    assert.equal(e.c.performanceDiagnostics.nativeRecovery.alignmentRestores, 1);
+});
+
+test('six mounted cards rebuild only the hover target, and another card prepares on its own later hover', async () => {
+    const e = preparedHoverEnvironment();
+    const items = Array.from({ length: 6 }, (_, i) => i ? { videoId: String(123 + i), page: 0 } : e.clone.__tmMyListItem);
+    const slots = items.map((item, i) => {
+        if (!i) return e.sourceSlot;
+        const slot = new Element('source-' + i, e.c.sourceState.track);
+        const card = new Element('card-' + i, slot);
+        card.href = '/watch/' + item.videoId;
+        card.dispatchEvent = () => true;
+        slot.querySelector = () => card;
+        slot.cloneNode = () => new Element('fresh-' + i);
+        return slot;
+    });
+    const clones = new Map(items.map((item, i) => [item.videoId, i ? new Element('clone-' + i, e.grid) : e.clone]));
+    const originals = new Map(clones);
+    for (const item of items) clones.get(item.videoId).__tmMyListItem = item;
+    e.c.sourceState.items = items;
+    e.c.currentPageSlots = () => slots;
+    e.c.resolveExpectedPageSourceItem = async item => ({ status: 'found', slot: slots[items.indexOf(item)], slots, page: 0 });
+    e.c.findItemForSourceSlot = slot => items[slots.indexOf(slot)];
+    e.c.findActiveSourceSlot = item => slots[items.indexOf(item)];
+    e.c.findGridClone = item => clones.get(item.videoId);
+    e.c.setGridClone = (item, clone) => clones.set(item.videoId, clone);
+    for (const index of [0, 4]) {
+        const item = items[index];
+        const task = e.c.prepareMountedPage(0, item, pointer(clones.get(item.videoId)), e.c.hoverToken, 1);
+        await e.flush();
+        await e.frame();
+        assert.ok(await task);
+        assert.notEqual(clones.get(item.videoId), originals.get(item.videoId));
+    }
+    for (const index of [1, 2, 3, 5]) assert.equal(clones.get(items[index].videoId), originals.get(items[index].videoId));
+    assert.equal(e.calls.grafts, 2);
+    assert.equal(e.c.performanceDiagnostics.hoverPreparation.clonesRebuilt, 2);
+    assert.equal(e.c.performanceDiagnostics.hoverPreparation.neighborsSkipped, 10);
+    assert.ok(e.logs.filter(entry => entry.name === 'nativePageClonesUpdated')
+        .every(entry => entry.details.refreshedCount === 1 && entry.details.preparationScope === 'target-card'));
+});
+
+function resizeEnvironment() {
+    const viewport = { innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1,
+        visualViewport: { width: 1280, height: 800, scale: 1, offsetLeft: 0, offsetTop: 0 } };
+    const calls = { measures: 0, styles: 0, refreshes: 0 };
+    let pages = 4;
+    const runtime = { pageMappingStale: false };
+    const layout = { columns: 6, cardWidth: 100, gridWidth: 640, gridLeft: 20, sidePadding: 20,
+        scrollerWidth: 680, scrollerHeight: 60, gap: 8, rowGap: 10 };
+    const measured = { ...layout };
+    const e = hoverEnvironment(['handleTargetWindowResize', 'handleTargetVisualViewportResize', 'scheduleResponsiveRefresh',
+        'responsiveSignature', 'responsivePageShape', 'realignActiveSource'], {
+        window: viewport, responsiveRefreshTimer: null, responsiveRefreshing: false,
+        getCarouselDomRuntime: () => runtime, pageCount: () => pages, layoutSummary: value => value,
+        measureVisibleLayout: () => { calls.measures++; return { ...measured }; },
+        measureNativeCarouselGap: () => 10, updateResponsiveStatus: () => calls.styles++,
+        currentGridGeometry: () => ({ width: 640, left: 20, columns: 6 }),
+        refreshResponsiveLayout: () => { calls.refreshes++; e.c.cancelResizeHover(); }
+    });
+    Object.assign(e.c.sourceState, { layout, scroller: new Element('scroller'), track: new Element('track'),
+        resizeViewportSignature: e.c.responsiveViewportSignature() });
+    e.c.lastResponsiveSignature = e.c.responsiveSignature(layout);
+    e.grid.__tmAppliedGeometry = { width: 640, left: 20, columns: 6 };
+    e.c.lastPageShape = e.c.responsivePageShape(layout);
+    e.c.activeClone = e.clone;
+    return { ...e, viewport, calls, measured, runtime, setPages: value => { pages = value; } };
+}
+
+test('duplicate window and visual-viewport events coalesce to one check and preserve hover without style writes', async () => {
+    const e = resizeEnvironment();
+    const token = e.c.hoverToken;
+    for (let i = 0; i < 20; i++) {
+        e.c.handleTargetWindowResize();
+        e.c.handleTargetVisualViewportResize();
+    }
+    assert.equal(e.c.activeClone, e.clone);
+    assert.equal(e.c.hoverToken, token);
+    assert.equal(e.timers.size, 1);
+    await e.advance(140);
+    assert.deepEqual(e.calls, { measures: 1, styles: 0, refreshes: 0 });
+    assert.equal(e.c.activeClone, e.clone);
+    assert.equal(e.c.performanceDiagnostics.resize.events, 40);
+    assert.equal(e.c.performanceDiagnostics.resize.checks, 1);
+    assert.equal(e.c.performanceDiagnostics.resize.unchanged, 1);
+    assert.equal(e.c.performanceDiagnostics.resize.hoverPreserved, 1);
+});
+
+test('real viewport bounds, zoom, pixel ratio and offset changes still cancel hover immediately', async () => {
+    for (const mutate of [v => v.innerWidth++, v => v.innerHeight++, v => v.devicePixelRatio++,
+        v => v.visualViewport.scale++, v => v.visualViewport.offsetTop++, v => v.visualViewport.width++]) {
+        const e = resizeEnvironment();
+        e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+        mutate(e.viewport);
+        e.c.handleTargetVisualViewportResize();
+        assert.equal(e.c.activeClone, null);
+        assert.equal(e.c.pendingGridHoverClone, null);
+        assert.equal(e.c.performanceDiagnostics.resize.hoverCancelled, 1);
+        await e.advance(140);
+        assert.equal(e.activations.length, 0);
+        assert.equal(e.calls.refreshes, 0, 'unchanged card geometry needs no relayout');
+    }
+});
+
+test('same-viewport geometry changes or stale page mapping still trigger responsive refresh', async () => {
+    for (const change of [e => e.measured.columns++, e => e.measured.gap += 4,
+        e => e.measured.scrollerHeight += 20, e => { e.runtime.pageMappingStale = true; }]) {
+        const e = resizeEnvironment();
+        change(e);
+        e.c.handleTargetWindowResize();
+        assert.equal(e.c.activeClone, e.clone, 'the coalesced geometry check owns this decision');
+        await e.advance(140);
+        assert.equal(e.calls.refreshes, 1);
+        assert.equal(e.c.activeClone, null);
+    }
+});
+
+test('page-count convergence and obsolete scheduled checks avoid relayout and preserve current owners', async () => {
+    const e = resizeEnvironment();
+    e.setPages(5);
+    e.c.scheduleResponsiveRefresh(140, 'ResizeObserver');
+    await e.advance(140);
+    assert.equal(e.calls.refreshes, 0);
+    assert.equal(e.calls.styles, 0);
+    assert.equal(e.c.activeClone, e.clone);
+    assert.match(e.c.lastResponsiveSignature, /^6\|5\|/);
+    e.c.handleTargetWindowResize();
+    e.c.sourceState = { ...e.c.sourceState };
+    await e.advance(140);
+    assert.equal(e.calls.measures, 1);
+    e.c.handleTargetWindowResize();
+    e.c.isRouteSessionActive = () => false;
+    await e.advance(140);
+    assert.equal(e.calls.measures, 1);
+});
+
+test('copied performance counters are independent snapshots without title, profile or DOM data', () => {
+    const e = environment([]);
+    const copy = e.c.collectPerformanceDiagnostics();
+    copy.viewingGroups.controlsUpdated = 100;
+    assert.equal(e.c.performanceDiagnostics.viewingGroups.controlsUpdated, 0);
+    assert.ok(Object.values(copy).every(group => Object.values(group).every(value => typeof value === 'number' || typeof value === 'string')));
+    assert.doesNotMatch(JSON.stringify(copy), /videoId|profileGuid|authURL|sourceSlot|cloneMap/);
+});
+
+test('target-only hover preparation still rejects a target in the wrapped tail buffer', async () => {
+    const e = preparedHoverEnvironment();
+    const otherItems = Array.from({ length: 5 }, (_, i) => ({ videoId: String(200 + i), page: 6 }));
+    const slots = otherItems.map((_, i) => new Element('tail-' + i, e.c.sourceState.track));
+    slots.push(e.sourceSlot);
+    e.c.getCarouselDomRuntime = () => ({ profile: { pageMode: 'logical' } });
+    e.c.logicalSlotPositions = () => [32, 33, 34, 35, 36, 0];
+    e.c.wrappedTailLogicalPageInfo = () => ({ page: 6, wrapIndex: 5 });
+    e.c.resolveExpectedPageSourceItem = async () => ({ status: 'found', slot: e.sourceSlot, slots, page: 6 });
+    e.c.findItemForSourceSlot = slot => slot === e.sourceSlot ? e.clone.__tmMyListItem : otherItems[slots.indexOf(slot)];
+    assert.equal(await e.c.prepareMountedPage(6, e.clone.__tmMyListItem, pointer(e.clone), 1, 1), null);
+    assert.equal(e.calls.grafts, 0);
+    assert.equal(e.c.performanceDiagnostics.hoverPreparation.clonesRebuilt, 0);
+    assert.equal(e.warnings.at(-1).details.reason, 'target-not-in-current-page-slots');
+});
+
+test('grid clipping changes require refresh even when carousel geometry signatures are identical', async () => {
+    const e = resizeEnvironment();
+    e.c.currentGridGeometry = () => ({ width: 620, left: 20, columns: 6 });
+    e.c.handleTargetWindowResize();
+    await e.advance(140);
+    assert.equal(e.calls.refreshes, 1);
+    assert.equal(e.c.activeClone, null);
+});
+
+test('one responsive sample shares the section rectangle between native layout and grid geometry', () => {
+    const section = new Element('section'), scroller = new Element('scroller'), track = new Element('track');
+    let sectionReads = 0, scrollerReads = 0;
+    section.getBoundingClientRect = () => { sectionReads++; return { left: 0, right: 1280, width: 1280 }; };
+    scroller.getBoundingClientRect = () => { scrollerReads++; return { left: 0, width: 680, height: 60 }; };
+    const e = environment(['measureVisibleLayout', 'currentGridGeometry'], {
+        window: { innerWidth: 1280 },
+        parseSlotLayoutFormula: () => ({ columns: 6, gap: 8, paddingLeft: 20, paddingRight: 20, formulaSidePadding: 20 })
+    });
+    e.c.withNativeReadScope(() => {
+        const layout = e.c.measureVisibleLayout(section, scroller, track);
+        assert.equal(e.c.currentGridGeometry(section, layout).width, 640);
+    });
+    assert.equal(sectionReads, 1);
+    assert.equal(scrollerReads, 1);
+});
+
+test('unrestorable native geometry overrides produce a bounded failure diagnostic', () => {
+    const slot = new Element('source');
+    const warnings = [];
+    Object.defineProperty(slot, 'getClientRects', { value: () => [], configurable: false });
+    const e = environment(['restoreGeometryProxy'], {
+        activeGeometryProxy: { sourceSlot: slot, entries: [{ source: slot,
+            descriptors: { getBoundingClientRect: null, getClientRects: null } }] },
+        warn: (name, details) => warnings.push({ name, details })
+    });
+    e.c.restoreGeometryProxy();
+    e.c.restoreGeometryProxy();
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].name, 'sourceAlignmentRestoreFailed');
+    assert.equal(warnings[0].details.methods, 1);
+    assert.equal(e.c.performanceDiagnostics.nativeRecovery.alignmentRestoreFailures, 1);
+});
+
+test('obsolete responsive refreshes cannot update replacement grids or clear a newer refresh owner', async () => {
+    for (const replacement of ['state', 'track', 'route']) {
+        const e = resizeEnvironment();
+        const gate = fetchDeferred();
+        const warnings = [];
+        Object.assign(e.c, {
+            responsiveSequence: 0, lastResponsiveReason: 'window.resize', activeResponsiveReason: '',
+            selectedPage: () => 0, waitResponsiveLayoutSettled: () => gate.promise,
+            retryPendingMyListMutations: () => { throw new Error('An obsolete owner cannot resume mutations'); },
+            warn: (...args) => warnings.push(args)
+        });
+        for (const name of ['createRouteSessionCancelledError', 'isRouteSessionCancelledError', 'assertRouteSession', 'refreshResponsiveLayout']) {
+            vm.runInContext(declaration(name), e.c);
+        }
+        const refresh = e.c.refreshResponsiveLayout(1);
+        if (replacement === 'state') e.c.sourceState = { ...e.c.sourceState };
+        if (replacement === 'track') e.c.sourceState.track = new Element('replacement-track');
+        if (replacement === 'route') e.c.isRouteSessionActive = () => false;
+        e.c.responsiveSequence = 2;
+        e.c.responsiveRefreshing = true;
+        e.c.activeResponsiveReason = 'new-owner';
+        gate.resolve({ ...e.measured });
+        await refresh;
+        assert.equal(e.calls.styles, 0, replacement);
+        assert.equal(e.c.responsiveRefreshing, true, replacement);
+        assert.equal(e.c.activeResponsiveReason, 'new-owner', replacement);
+        assert.equal(warnings.length, 0, replacement);
+    }
+});
+
+test('responsive settling stops before another native read when its source owner is replaced', async () => {
+    const e = resizeEnvironment();
+    e.c.measureVisibleLayout = () => { throw new Error('An obsolete carousel must not be measured'); };
+    for (const name of ['sleep', 'createRouteSessionCancelledError', 'isRouteSessionCancelledError', 'assertRouteSession', 'waitResponsiveLayoutSettled']) {
+        vm.runInContext(declaration(name), e.c);
+    }
+    const settling = e.c.waitResponsiveLayoutSettled(1200, 1);
+    const rejected = assert.rejects(settling, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+    e.c.sourceState = { ...e.c.sourceState };
+    await e.advance(80);
+    await rejected;
+    assert.equal(e.timers.size, 0);
 });
