@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.11
+// @version      1.3.12
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -79,7 +79,7 @@
     });
     const IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES = 4000;
     // Short, coalesced callback-gap samples; never a continuous FPS/paint monitor.
-    const HOVER_FRAME_DIAGNOSTIC_LIMITS = Object.freeze({ routeFrames: 3000, windowFrames: 360,
+    const HOVER_FRAME_DIAGNOSTIC_LIMITS = Object.freeze({ routeFrames: 12000, windowFrames: 1800,
         intentMs: 600, preparationMs: 6000, replayMs: 2000, scrollMs: 1000 });
 
     const GRID_ID = 'tm-netflix-mylist-v15-grid';
@@ -94,7 +94,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.11';
+    const SCRIPT_VERSION = '1.3.12';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -912,6 +912,9 @@
         hoverCoordinateProxyReleased: { en: 'Hover coordinate proxy released', ja: '\u30db\u30d0\u30fc\u5ea7\u6a19\u4ee3\u7406\u89e3\u9664' },
         hoverReplayGuardRejected: { en: 'Hover replay guard rejected target', ja: '\u30db\u30d0\u30fc\u518d\u9001\u6761\u4ef6\u304c\u5bfe\u8c61\u3092\u62d2\u5426' },
         hoverPointerLeaveObserved: { en: 'Hover pointer leave observed', ja: '\u30db\u30d0\u30fc\u4e2d\u306e\u30dd\u30a4\u30f3\u30bf\u96e2\u8131\u3092\u8a18\u9332' },
+        hoverPreviewTransfer: { en: 'Hover positioning retained for matching preview', ja: '\u5bfe\u5fdc\u3059\u308b\u30d7\u30ec\u30d3\u30e5\u30fc\u306e\u30db\u30d0\u30fc\u4f4d\u7f6e\u3092\u4fdd\u6301' },
+        hoverPreviewTransferRejected: { en: 'Hover preview transfer rejected', ja: '\u30db\u30d0\u30fc\u306e\u30d7\u30ec\u30d3\u30e5\u30fc\u79fb\u884c\u3092\u62d2\u5426' },
+        hoverPreviewReleased: { en: 'Hover preview positioning released', ja: '\u30db\u30d0\u30fc\u306e\u30d7\u30ec\u30d3\u30e5\u30fc\u4f4d\u7f6e\u3092\u89e3\u9664' },
         legacyGridBuilt: { en: 'Legacy grid built', ja: '\u30b0\u30ea\u30c3\u30c9\u751f\u6210\u5b8c\u4e86' },
         responsiveStatusNote: { en: 'Responsive status note', ja: '\u30ec\u30b9\u30dd\u30f3\u30b7\u30d6\u72b6\u614b\u30e1\u30e2' },
         responsiveItemPageMappingRecalculatedWithoutNativeCarouselScan: { en: 'Responsive item-page mapping rebuilt from native first-page anchor', ja: '\u30ec\u30b9\u30dd\u30f3\u30b7\u30d6\u4f5c\u54c1\u30da\u30fc\u30b8\u5bfe\u5fdc\u3092\u7d14\u6b63\u5148\u982d\u30a2\u30f3\u30ab\u30fc\u57fa\u6e96\u3067\u518d\u69cb\u6210' },
@@ -1166,17 +1169,21 @@
             hoverPreparation: { calls: 0, slotsConsidered: 0, clonesRebuilt: 0, neighborsSkipped: 0 },
             hoverLifecycle: { replayAttempts: 0, replaysDispatched: 0, replayCancelled: 0, replayFailed: 0,
                 exitsDispatched: 0, exitSkipped: 0, exitFailed: 0, scrollBursts: 0, scrollExits: 0,
-                lastExitReason: '', boundaryDetoursAvoided: 0, duplicateAlignmentsAvoided: 0 },
+                lastExitReason: '', boundaryDetoursAvoided: 0, duplicateAlignmentsAvoided: 0,
+                previewTransfers: 0, previewReturns: 0, previewReleases: 0, previewRejected: 0, lastPreviewReason: '' },
             hoverTiming: { dwellSamples: 0, dwellTotalMs: 0, dwellMaxMs: 0,
                 queueSamples: 0, queueTotalMs: 0, queueMaxMs: 0,
                 moveSamples: 0, moveTotalMs: 0, moveMaxMs: 0,
                 graftSamples: 0, graftTotalMs: 0, graftMaxMs: 0,
                 alignmentSamples: 0, alignmentTotalMs: 0, alignmentMaxMs: 0,
                 replaySamples: 0, replayTotalMs: 0, replayMaxMs: 0,
-                exitSamples: 0, exitTotalMs: 0, exitMaxMs: 0 },
+                exitSamples: 0, exitTotalMs: 0, exitMaxMs: 0,
+                previewSamples: 0, previewTotalMs: 0, previewMaxMs: 0 },
             hoverInteraction: { intentsQueued: 0, intentsCancelled: 0, dwellCompleted: 0, dwellRejected: 0,
                 replacementNotHovered: 0, replayGuardRejected: 0, leavesBeforeReplay: 0, leavesAfterReplay: 0,
-                leavesWithin600ms: 0, stationaryLeaves: 0, leavesToPreviewHint: 0, diagnosticFailures: 0 },
+                leavesWithin600ms: 0, stationaryLeaves: 0, leavesToPreviewHint: 0, diagnosticFailures: 0,
+                replacementPointerChecks: 0, replacementPointerAccepted: 0, replacementPointerRejected: 0,
+                replacementPointerUnavailable: 0 },
             hoverFrames: { scope: 'bounded-animation-callback-gaps', supported: false, active: false, stopReason: '',
                 routeFrameLimit: HOVER_FRAME_DIAGNOSTIC_LIMITS.routeFrames,
                 windowFrameLimit: HOVER_FRAME_DIAGNOSTIC_LIMITS.windowFrames,
@@ -1312,6 +1319,7 @@
                 hoverSuppressed: gridHoverSuppressed(), activeCloneMatches: activeClone === clone,
                 activeVideoMatches: activeVideoId === item.videoId,
                 replacementHoveredAtInsertion: clone?.__tmHoverReplacementHovered ?? null,
+                replacementPointerVerified: clone?.__tmHoverReplacementPointerVerified ?? null,
                 sinceScrollMs: Number.isFinite(lastTargetScrollAt) ? Math.round(performance.now() - lastTargetScrollAt) : null };
         } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; return { unavailable: true }; }
     }
@@ -1963,6 +1971,7 @@
             sourceParked: Boolean(scroller?.classList?.contains(SOURCE_PARKED_CLASS)),
             sourceGeometryProxy: Boolean(activeGeometryProxy),
             nativeHoverOwned: Boolean(activeNativeHover),
+            nativePreviewOwned: Boolean(activeNativeHover?.previewRoot),
             viewOriginalMyList,
             myListSyncMode: 'event-driven',
             pendingMyListMutations: [...pendingMyListMutations.values()].map(entry => ({
@@ -10159,6 +10168,7 @@
         if (!owner) return;
         // Clear ownership first: native exit handlers can synchronously cause another cleanup.
         activeNativeHover = null;
+        clearNativePreviewTransfer(owner, reason);
         const { counters, timing, card, coordinates } = owner;
         const started = performance.now();
         counters.lastExitReason = reason;
@@ -10196,6 +10206,123 @@
         return owner.card.isConnected && owner.sourceSlot.isConnected && Boolean(owner.videoId) &&
             owner.sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard) === owner.card &&
             videoIdFromHref(owner.card.href || owner.card.getAttribute('href') || '') === owner.videoId;
+    }
+
+    function nativePreviewNodeVideoId(node) {
+        const raw = node.getAttribute('data-ui-tracking-context') || '';
+        if (raw && raw.length <= 4096) {
+            const tracking = decodeTrackingContext(node);
+            const direct = tracking?.video_id ?? tracking?.videoId;
+            if ((typeof direct === 'string' || typeof direct === 'number') && /^\d+$/.test(String(direct))) return String(direct);
+            const unified = typeof tracking?.unifiedEntityId === 'string' ? tracking.unifiedEntityId.match(/^Video:(\d+)$/i) : null;
+            if (unified) return unified[1];
+        }
+        const href = node.href || node.getAttribute('href') || '';
+        // A movie's Play link can identify its title. For series an episode ID
+        // alone is insufficient; a series detail/tracking reference must match.
+        return videoIdFromHref(href) || (/\/watch\/(\d+)(?:[/?#]|$)/.exec(href)?.[1] || '');
+    }
+
+    function findNativeHoverPreview(target, videoId) {
+        if (!(target instanceof Element)) return { root: null, reason: 'not-preview' };
+        // Prefer the outer wrapper so movement among image and controls stays inside.
+        const root = target.closest('.previewModal--wrapper, .bob-container') ||
+            target.closest('.previewModal--container, .bob-card');
+        if (!root?.isConnected) return { root: null, reason: 'not-preview' };
+        let node = target;
+        for (let index = 0; node && index < 8; index++, node = node.parentElement) {
+            if (nativePreviewNodeVideoId(node) === videoId) return { root, reason: 'matching-preview-title' };
+            if (node === root) break;
+        }
+        const references = root.querySelectorAll('a[href], [data-ui-tracking-context]');
+        const limit = Math.min(references.length, 16);
+        for (let index = 0; index < limit; index++) {
+            if (nativePreviewNodeVideoId(references[index]) === videoId) {
+                return { root, reason: 'matching-preview-title' };
+            }
+        }
+        return { root: null, reason: limit < references.length ? 'preview-identity-limit' : 'preview-identity-unverified' };
+    }
+
+    function retainNativeHoverForPreview(clone, relatedTarget, event) {
+        const owner = activeNativeHover;
+        if (!owner || activeClone !== clone || event?.type !== 'pointerout' || !event.isTrusted ||
+            owner.token !== hoverToken || !isRouteSessionActive(owner.sessionToken) || !gridOwnsClone(clone, sourceState?.grid)) return false;
+        try {
+            if (!nativeHoverSourceMatches(owner)) return false;
+            const candidate = findNativeHoverPreview(relatedTarget, owner.videoId);
+            if (!candidate.root) {
+                if (candidate.reason !== 'not-preview') {
+                    owner.counters.previewRejected++;
+                    log(tLog('hoverPreviewTransferRejected'), { reason: candidate.reason });
+                }
+                return false;
+            }
+            if (owner.previewRoot === candidate.root) return true;
+            owner.previewRoot = candidate.root;
+            owner.previewClone = clone;
+            owner.previewEnteredAt = performance.now();
+            owner.counters.previewTransfers++;
+            owner.counters.lastPreviewReason = candidate.reason;
+            try {
+                log(tLog('hoverPreviewTransfer'), { reason: candidate.reason,
+                    sinceReplayMs: Math.round(performance.now() - owner.replayedAt) });
+            } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
+            return true;
+        } catch (_) {
+            owner.counters.previewRejected++;
+            try { log(tLog('hoverPreviewTransferRejected'), { reason: 'preview-check-failed' }); } catch (_) {}
+            return false;
+        }
+    }
+
+    function clearNativePreviewTransfer(owner, reason) {
+        if (!owner?.previewRoot) return;
+        owner.previewRoot = null;
+        owner.previewClone = null;
+        try {
+            if (reason === 'preview-return') owner.counters.previewReturns++;
+            else owner.counters.previewReleases++;
+            owner.counters.lastPreviewReason = reason;
+            recordHoverTiming(owner.timing, 'preview', owner.previewEnteredAt);
+            log(tLog('hoverPreviewReleased'), { reason, heldMs: Math.round(performance.now() - owner.previewEnteredAt) });
+        } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
+    }
+
+    function releaseNativePreview(owner, reason, relatedTarget = null) {
+        if (activeNativeHover !== owner || !owner?.previewRoot) return;
+        const clone = owner.previewClone;
+        const releaseToken = ++hoverToken;
+        clearSourceAlignment(undefined, reason, relatedTarget);
+        // Native exit callbacks may synchronously establish another hover owner.
+        if (hoverToken === releaseToken && activeClone === clone) {
+            activeClone = null;
+            activeVideoId = null;
+            activePage = null;
+        }
+    }
+
+    function nativePreviewOwnerMatches(owner) {
+        try {
+            return activeNativeHover === owner && activeClone === owner.previewClone && activeVideoId === owner.videoId &&
+                Boolean(owner.previewClone?.isConnected) && gridOwnsClone(owner.previewClone, sourceState?.grid) &&
+                isRouteSessionActive(owner.sessionToken) && owner.token === hoverToken && nativeHoverSourceMatches(owner);
+        } catch (_) { return false; }
+    }
+
+    function handleTargetPreviewPointerOut(event) {
+        const owner = activeNativeHover;
+        const root = owner?.previewRoot;
+        if (!root || !event.isTrusted || !root.contains(event.target) ||
+            (event.relatedTarget && root.contains(event.relatedTarget))) return;
+        const clone = owner.previewClone;
+        const valid = root.isConnected && nativePreviewOwnerMatches(owner);
+        if (valid && event.relatedTarget &&
+            gridCloneFromPointerEvent({ target: event.relatedTarget }, sourceState.grid) === clone) {
+            clearNativePreviewTransfer(owner, 'preview-return');
+            return;
+        }
+        releaseNativePreview(owner, valid ? 'preview-leave' : 'preview-owner-invalid', event.relatedTarget);
     }
 
     function alignSourceSlotToClone(sourceSlot, clone) {
@@ -10308,7 +10435,7 @@
             };
             try {
                 if (hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) ||
-                    !gridHoverTargetActive(clone, generation) ||
+                    !gridHoverTargetActive(clone, generation, triggerEvent) ||
                     activeClone !== clone || activeVideoId !== item.videoId) {
                     counters.replayCancelled++;
                     if (performanceDiagnostics.hoverLifecycle === counters) {
@@ -10386,6 +10513,7 @@
             oldClone.getAttribute('data-tm-hover-token') === String(hoverToken)) {
             fresh.setAttribute('data-tm-preparing', 'true');
             fresh.setAttribute('data-tm-hover-token', String(hoverToken));
+            fresh.__tmHoverReplacementToken = hoverToken;
         }
         ensureGridHoverBehavior(sourceState.grid);
         associateGridHoverItem(item, fresh);
@@ -10779,7 +10907,7 @@
                 const current = attempt ? findGridClone(item) : clone;
                 if (hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) ||
                     orderMismatchDialogOpen || orderMismatchReinitializing ||
-                    !gridHoverTargetActive(current, generation) ||
+                    !gridHoverTargetActive(current, generation, triggerEvent) ||
                     current.getAttribute('data-tm-hover-token') !== String(token)) break;
 
                 clearSourceAlignment();
@@ -10879,12 +11007,42 @@
         return hoverNeedsPointerMove || performance.now() - lastTargetScrollAt < HOVER_SCROLL_QUIET_MS;
     }
 
-    function gridHoverTargetActive(clone, generation) {
+    function gridHoverReplacementUnderPointer(clone, triggerEvent) {
+        // Only a replacement in this still-current preparation can use hit testing.
+        // Never infer hover merely from a saved rectangle or a nearby popup.
+        if (clone.__tmHoverReplacementToken !== hoverToken ||
+            clone.getAttribute('data-tm-hover-token') !== String(hoverToken) ||
+            clone.getAttribute('data-tm-preparing') !== 'true') return false;
+        const counters = performanceDiagnostics.hoverInteraction;
+        counters.replacementPointerChecks++;
+        const current = lastPointerX !== -1 && lastPointerY !== -1;
+        const x = current ? lastPointerX : triggerEvent?.clientX;
+        const y = current ? lastPointerY : triggerEvent?.clientY;
+        try {
+            if (!Number.isFinite(x) || !Number.isFinite(y) || typeof document?.elementFromPoint !== 'function') {
+                counters.replacementPointerUnavailable++;
+                clone.__tmHoverReplacementPointerVerified = null;
+                return false;
+            }
+            const target = document.elementFromPoint(x, y);
+            const matches = Boolean(target && gridCloneFromPointerEvent({ target }, sourceState.grid) === clone);
+            clone.__tmHoverReplacementPointerVerified = matches;
+            if (matches) counters.replacementPointerAccepted++;
+            else counters.replacementPointerRejected++;
+            return matches;
+        } catch (_) {
+            counters.replacementPointerUnavailable++;
+            clone.__tmHoverReplacementPointerVerified = null;
+            return false;
+        }
+    }
+
+    function gridHoverTargetActive(clone, generation, triggerEvent = null) {
         return !gridHoverSuppressed() && Boolean(sourceState?.grid?.isConnected) &&
             Boolean(clone?.isConnected) && gridOwnsClone(clone, sourceState.grid) &&
             !clone.__tmViewingControlHovered &&
             generation === clone.__tmHoverActivationGeneration &&
-            clone.matches(':hover');
+            (clone.matches(':hover') || gridHoverReplacementUnderPointer(clone, triggerEvent));
     }
 
     function cancelPendingGridHover() {
@@ -10939,6 +11097,7 @@
             clone.getAttribute('data-tm-hover-token') === String(hoverToken)) {
             recordGridHoverLeave(clone, relatedTarget, event);
         }
+        if (retainNativeHoverForPreview(clone, relatedTarget, event)) return;
         if (pendingGridHoverClone === clone) cancelPendingGridHover();
         clone.__tmHoverActivationGeneration = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
         if (clone.__tmHoverActivationTimer !== null && clone.__tmHoverActivationTimer !== undefined) {
@@ -11658,6 +11817,17 @@
         const grid = sourceState?.grid;
         if (!grid?.isConnected) return;
         const clone = gridCloneFromPointerEvent(event, grid);
+        const owner = activeNativeHover;
+        if (owner?.previewRoot) {
+            if (!owner.previewRoot.isConnected || !gridOwnsClone(owner.previewClone, grid)) {
+                releaseNativePreview(owner, 'preview-removed');
+            } else if (owner.previewRoot.contains(event.target)) {
+                cancelPendingGridHover();
+                return;
+            } else if (clone === owner.previewClone && nativePreviewOwnerMatches(owner)) {
+                clearNativePreviewTransfer(owner, 'preview-return');
+            } else releaseNativePreview(owner, 'preview-leave', event.target);
+        }
         if (performance.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) hoverNeedsPointerMove = false;
         if (clone) handleGridClonePointerOver(event, clone, clone.__tmMyListItem, true);
         else cancelPendingGridHover();
@@ -11812,6 +11982,9 @@
             handleRouteChange('MutationObserver-url');
         }
         if (!targetSessionActive || !isTargetPage() || !targetDocumentObserver) return;
+        if (activeNativeHover?.previewRoot && !activeNativeHover.previewRoot.isConnected) {
+            releaseNativePreview(activeNativeHover, 'preview-removed');
+        }
         if (initializationBlockedSessionToken === routeSessionToken) {
             if (mutations.some(mutation => !mutationOnlyChangesScriptUi(mutation))) {
                 recoverNativeInitialization(routeSessionToken, 'document-mutation');
@@ -11864,6 +12037,7 @@
         if (targetListenersActive) return;
         targetListenersActive = true;
         document.addEventListener('pointermove', handleTargetPointerMove, { passive: true, capture: true });
+        document.addEventListener('pointerout', handleTargetPreviewPointerOut, { passive: true, capture: true });
         document.addEventListener('visibilitychange', handleHoverDiagnosticVisibilityChange, { passive: true });
         document.addEventListener('wheel', handleTargetScroll, { passive: true, capture: true });
         document.addEventListener('scroll', handleTargetScroll, { passive: true, capture: true });
@@ -11877,6 +12051,7 @@
 
     function stopTargetEventListeners() {
         stopHoverFrameDiagnostics();
+        if (activeNativeHover?.previewRoot) releaseNativePreview(activeNativeHover, 'listeners-stopped');
         if (!targetListenersActive && !targetDocumentObserver) return;
         targetListenersActive = false;
         cancelPendingGridHover();
@@ -11887,6 +12062,7 @@
         if (targetMutationFrame !== null) cancelAnimationFrame(targetMutationFrame);
         targetMutationFrame = null;
         document.removeEventListener('pointermove', handleTargetPointerMove, true);
+        document.removeEventListener('pointerout', handleTargetPreviewPointerOut, true);
         document.removeEventListener('visibilitychange', handleHoverDiagnosticVisibilityChange);
         document.removeEventListener('wheel', handleTargetScroll, true);
         document.removeEventListener('scroll', handleTargetScroll, true);

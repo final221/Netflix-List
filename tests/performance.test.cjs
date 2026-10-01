@@ -90,6 +90,8 @@ function environment(names, overrides = {}) {
     for (const name of ['createNativeReadScope', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'trace', 'gridOwnsClone',
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
+        'nativePreviewNodeVideoId', 'decodeTrackingContext', 'findNativeHoverPreview', 'retainNativeHoverForPreview', 'clearNativePreviewTransfer',
+        'releaseNativePreview', 'nativePreviewOwnerMatches', 'handleTargetPreviewPointerOut', 'gridHoverReplacementUnderPointer',
         'stopHoverFrameDiagnostics', 'handleHoverDiagnosticVisibilityChange',
         'hoverReplayGuardDiagnostic', 'hoverLeaveDestinationDiagnostic', 'recordGridHoverLeave',
         'startImageResourceDiagnostics', 'stopImageResourceDiagnostics', 'recordImageResourceEntries',
@@ -109,8 +111,8 @@ function environment(names, overrides = {}) {
             }
             await flush();
         },
-        async frame() {
-            now += 16;
+        async frame(ms = 16) {
+            now += ms;
             const callbacks = [...frames.values()];
             frames.clear();
             for (const callback of callbacks) callback(now);
@@ -900,6 +902,252 @@ test('replay rejection reports loss of hover after insertion and leaves existing
     assert.equal(e.c.activeClone, null);
 });
 
+function laggingHoverReplacement(e) {
+    e.clone.replaceWith = fresh => {
+        Element.prototype.replaceWith.call(e.clone, fresh);
+        fresh.hovered = false;
+    };
+}
+
+test('a fresh replacement still under the physical pointer replays on the first attempt despite delayed CSS hover', async () => {
+    const e = preparedHoverEnvironment();
+    laggingHoverReplacement(e);
+    const points = [];
+    e.c.lastPointerX = 80; e.c.lastPointerY = 40;
+    e.c.document = { elementFromPoint(x, y) { points.push([x, y]); return new Element('image', e.current()); } };
+    const activation = e.start();
+    await e.flush();
+    assert.equal(e.logs.find(log => log.name === 'nativePageClonesUpdated').details.targetHoveredAtInsertion, false);
+    await e.frame(); await activation;
+    assert.deepEqual(points, [[80, 40]], 'use the current physical position instead of the original event');
+    assert.equal(e.calls.preparations, 1);
+    assert.equal(e.calls.grafts, 1);
+    assert.equal(e.events.length, 4);
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.replacementPointerAccepted, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.replayCancelled, 0);
+    assert.equal(e.timers.size, 0, 'there is no 180 ms retry or second replacement');
+    assert.equal(e.c.gridHoverTargetActive(e.current(), 1, pointer(e.current())), false,
+        'hit-test admission expires when preparation ends');
+    assert.equal(points.length, 1);
+});
+
+test('replacement hit testing cannot admit an overlay, another card, a viewing control, or an obsolete hover', async () => {
+    for (const change of ['overlay', 'card', 'control', 'missing', 'token', 'generation', 'route', 'filter', 'scroll']) {
+        const e = preparedHoverEnvironment();
+        laggingHoverReplacement(e);
+        let checks = 0;
+        const foreign = new Element('other', e.grid);
+        foreign.__tmMyListItem = { videoId: '456' };
+        e.c.document = { elementFromPoint() {
+            checks++;
+            if (change === 'overlay') return new Element('overlay');
+            if (change === 'card') return foreign;
+            if (change === 'missing') return null;
+            const child = new Element('control', e.current());
+            child.setAttribute('data-tm-viewing-actions', 'true');
+            return child;
+        } };
+        const activation = e.start();
+        await e.flush();
+        if (change === 'token') e.c.hoverToken++;
+        if (change === 'generation') e.current().__tmHoverActivationGeneration++;
+        if (change === 'route') e.c.isRouteSessionActive = () => false;
+        if (change === 'filter') e.current().setAttribute('data-tm-type-hidden', 'true');
+        if (change === 'scroll') e.c.handleTargetScroll();
+        await e.frame(); await e.advance(180); await activation;
+        assert.equal(e.events.length, 0, change);
+        assert.equal(e.calls.preparations, 1, change);
+        if (['token', 'generation', 'route', 'filter', 'scroll'].includes(change)) assert.equal(checks, 0, change);
+        else assert.ok(checks > 0, change);
+    }
+});
+
+function matchingPreview(e, videoId = '123') {
+    const root = new Element('previewModal--wrapper');
+    root.classList = { length: 1, item: () => 'previewModal--wrapper' };
+    const image = new Element('image', root);
+    image.localName = 'img';
+    const anchor = new Element('play', root);
+    anchor.href = '/watch/' + videoId;
+    root.querySelectorAll = () => [anchor];
+    return { root, image, anchor };
+}
+
+async function openedPreview() {
+    const e = preparedHoverEnvironment();
+    liveHoverGeometry(e);
+    const activation = e.start();
+    await e.flush(); await e.frame(); await activation;
+    const preview = matchingPreview(e);
+    const clone = e.current();
+    clone.hovered = false;
+    await e.advance(420);
+    e.c.handleGridClonePointerLeave(clone, clone.__tmMyListItem, preview.image,
+        pointer(clone, { type: 'pointerout', relatedTarget: preview.image }));
+    return { ...e, preview };
+}
+
+test('the recorded stationary transfer onto a matching preview keeps positioning until the pointer leaves its controls', async () => {
+    const e = await openedPreview();
+    const owner = e.c.activeNativeHover;
+    assert.equal(owner.previewRoot, e.preview.root);
+    assert.equal(e.c.activeClone, e.current());
+    assert.equal(e.events.length, 4, 'opening the preview does not send an early native exit');
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 0);
+    const button = new Element('button', e.preview.root);
+    e.c.handleTargetPreviewPointerOut(pointer(e.preview.image, { type: 'pointerout', relatedTarget: button }));
+    assert.equal(e.c.activeNativeHover, owner, 'movement among image and controls remains inside the preview');
+    await e.advance(3000);
+    const margin = new Element('margin');
+    e.c.handleTargetPreviewPointerOut(pointer(button, { type: 'pointerout', relatedTarget: margin }));
+    assert.equal(e.c.activeNativeHover, null);
+    assert.equal(e.c.activeClone, null);
+    assert.equal(owner.previewRoot, null);
+    assert.equal(owner.previewClone, null);
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000);
+    assert.equal(e.events.length, 6);
+    assert.ok(e.events.slice(4).every(event => event.relatedTarget === margin));
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.previewTransfers, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.previewReleases, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.previewMaxMs, 3000);
+    assert.doesNotMatch(JSON.stringify(e.logs.filter(log => log.name.startsWith('hoverPreview'))), /watch\/|123|previewModal/);
+});
+
+test('returning from a preview to its card keeps the native owner without replaying or preparing again', async () => {
+    const e = await openedPreview();
+    const owner = e.c.activeNativeHover;
+    const image = new Element('card-image', e.current());
+    e.c.handleTargetPreviewPointerOut(pointer(e.preview.image, { type: 'pointerout', relatedTarget: image }));
+    assert.equal(e.c.activeNativeHover, owner);
+    assert.equal(owner.previewRoot, null);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.previewReturns, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.previewReleases, 0);
+    assert.equal(e.events.length, 4);
+    assert.equal(e.calls.preparations, 1);
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 0);
+    e.c.handleGridClonePointerLeave(e.current(), e.clone.__tmMyListItem, new Element('margin'), pointer(e.current(), { type: 'pointerout' }));
+    assert.equal(e.events.length, 6);
+    assert.equal(e.c.activeNativeHover, null);
+});
+
+test('return to a viewing control or a card with a recycled native identity ends the preview owner', async () => {
+    for (const reason of ['control', 'source']) {
+        const e = await openedPreview();
+        const child = new Element('return-target', e.current());
+        if (reason === 'control') child.setAttribute('data-tm-viewing-actions', 'true');
+        if (reason === 'source') e.card.href = '/watch/456';
+        e.c.handleTargetPreviewPointerOut(pointer(e.preview.image, { type: 'pointerout', relatedTarget: child }));
+        assert.equal(e.c.activeNativeHover, null, reason);
+        assert.equal(e.c.activeGeometryProxy, null, reason);
+        assert.equal(e.c.performanceDiagnostics.hoverLifecycle.previewReturns, 0, reason);
+        assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000, reason);
+    }
+});
+
+test('preview admission requires a matching bounded title reference and a trusted current source', async () => {
+    for (const change of ['foreign', 'missing', 'limit', 'source', 'untrusted']) {
+        const e = preparedHoverEnvironment();
+        liveHoverGeometry(e);
+        const activation = e.start();
+        await e.flush(); await e.frame(); await activation;
+        const preview = matchingPreview(e, change === 'foreign' ? '456' : '123');
+        if (change === 'missing') preview.root.querySelectorAll = () => [];
+        let reads = 0;
+        if (change === 'limit') {
+            const anchors = { length: 100 };
+            for (let index = 0; index < 100; index++) Object.defineProperty(anchors, index, { get() {
+                reads++; if (index >= 16) throw new Error('Unbounded preview inspection');
+                const anchor = new Element();
+                anchor.href = '/watch/456';
+                return anchor;
+            } });
+            preview.root.querySelectorAll = () => anchors;
+        }
+        if (change === 'source') e.card.href = '/watch/456';
+        e.c.handleGridClonePointerLeave(e.current(), e.clone.__tmMyListItem, preview.image,
+            pointer(e.current(), { type: 'pointerout', isTrusted: change !== 'untrusted', relatedTarget: preview.image }));
+        assert.equal(e.c.activeNativeHover, null, change);
+        assert.equal(e.c.activeGeometryProxy, null, change);
+        assert.equal(e.c.performanceDiagnostics.hoverLifecycle.previewTransfers, 0, change);
+        if (change === 'limit') assert.equal(reads, 16);
+    }
+});
+
+test('a series preview can identify its series while its play link points to an episode', () => {
+    const e = preparedHoverEnvironment();
+    e.c.URL = URL;
+    e.c.location = { href: 'https://www.netflix.com/browse/my-list' };
+    vm.runInContext(declaration('videoIdFromHref'), e.c);
+    const preview = matchingPreview(e);
+    preview.anchor.href = '/watch/456';
+    const detail = new Element('details', preview.root);
+    detail.href = 'https://www.netflix.com/browse?jbv=123';
+    preview.root.querySelectorAll = () => [preview.anchor, detail];
+    assert.equal(e.c.findNativeHoverPreview(preview.image, '123').root, preview.root);
+    preview.root.querySelectorAll = () => [preview.anchor];
+    preview.image.setAttribute('data-ui-tracking-context', encodeURIComponent(JSON.stringify({ video_id: 123 })));
+    assert.equal(e.c.findNativeHoverPreview(preview.image, '123').root, preview.root);
+    preview.image.setAttribute('data-ui-tracking-context', 'x'.repeat(4097));
+    assert.equal(e.c.findNativeHoverPreview(preview.image, '123').root, null,
+        'an unverified episode and oversized tracking data cannot invent a series identity');
+});
+
+test('scroll, real resize, source release and route listener cleanup release a retained preview once', async () => {
+    for (const reason of ['scroll', 'resize', 'source', 'route']) {
+        const e = await openedPreview();
+        const owner = e.c.activeNativeHover;
+        if (reason === 'scroll') { e.c.handleTargetScroll(); e.c.handleTargetScroll(); }
+        if (reason === 'resize') e.c.cancelResizeHover();
+        if (reason === 'source') { e.c.clearSourceAlignment(); e.c.clearSourceAlignment(); }
+        if (reason === 'route') {
+            e.c.targetListenersActive = false; e.c.targetDocumentObserver = null;
+            vm.runInContext(declaration('stopTargetEventListeners'), e.c);
+            e.c.stopTargetEventListeners();
+        }
+        assert.equal(e.c.activeNativeHover, null, reason);
+        assert.equal(owner.previewRoot, null, reason);
+        assert.equal(owner.previewClone, null, reason);
+        assert.equal(e.c.performanceDiagnostics.hoverLifecycle.previewReleases, 1, reason);
+        assert.equal(e.events.length, 6, reason);
+        assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000, reason);
+    }
+});
+
+test('removed previews and missed pointer-out events recover through existing mutation and physical movement handlers', async () => {
+    for (const reason of ['mutation', 'move', 'outside']) {
+        const e = await openedPreview();
+        const owner = e.c.activeNativeHover;
+        if (reason !== 'outside') e.preview.root.isConnected = false;
+        if (reason === 'mutation') {
+            Object.assign(e.c, { location: { href: '/my-list' }, lastObservedUrl: '/my-list',
+                targetDocumentObserver: {}, initializationBlockedSessionToken: null, completedSection: null });
+            for (const name of ['mutationOnlyChangesScriptUi', 'handleTargetDocumentMutation']) vm.runInContext(declaration(name), e.c);
+            e.c.handleTargetDocumentMutation([]);
+        } else {
+            e.c.handleTargetPointerMove(pointer(new Element('margin'), { type: 'pointermove', clientX: 40 }));
+        }
+        assert.equal(e.c.activeNativeHover, null, reason);
+        assert.equal(owner.previewRoot, null, reason);
+        assert.equal(e.events.length, 6, reason);
+        assert.equal(e.c.activeClone, null, reason);
+    }
+});
+
+test('a stale preview boundary or release cannot dispose of a newer native hover owner', async () => {
+    const e = await openedPreview();
+    const old = e.c.activeNativeHover;
+    e.c.replayHoverOnNativeSource(e.sourceSlot, pointer(e.current()));
+    const current = e.c.activeNativeHover;
+    const events = e.events.length;
+    assert.notEqual(current, old);
+    assert.equal(old.previewRoot, null);
+    e.c.releaseNativePreview(old, 'preview-leave');
+    e.c.handleTargetPreviewPointerOut(pointer(e.preview.image, { type: 'pointerout', relatedTarget: new Element('margin') }));
+    assert.equal(e.c.activeNativeHover, current);
+    assert.equal(e.events.length, events);
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 0);
+});
+
 test('dwell diagnostics distinguish cancelled intent and a target rejected when the dwell expires', async () => {
     const e = hoverEnvironment();
     e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
@@ -975,7 +1223,7 @@ test('frame sampling stops at time, window and route limits and cannot restart a
     assert.equal(counters.stopReason, 'window-complete');
     assert.equal(e.frames.size, 0);
     e.c.startHoverFrameDiagnostics('preparation');
-    for (let index = 0; index < counters.windowFrameLimit; index++) await e.frame();
+    for (let index = 0; index < counters.windowFrameLimit; index++) await e.frame(1);
     assert.equal(counters.stopReason, 'window-frame-limit');
     assert.equal(e.frames.size, 0);
     counters.callbacks = counters.routeFrameLimit - 1;
@@ -987,6 +1235,22 @@ test('frame sampling stops at time, window and route limits and cannot restart a
     assert.equal(e.frames.size, 0);
     assert.equal(counters.active, false);
     assert.equal(e.timers.size, 0);
+});
+
+test('high-refresh sampling covers later hovers beyond the old 3000-callback budget while keeping one bounded owner', async () => {
+    const e = environment(hoverFrameFunctions);
+    for (let index = 0; index < 4000; index++) {
+        if (index % 400 === 0) e.c.startHoverFrameDiagnostics('replay');
+        await e.frame(4);
+    }
+    const counters = e.c.performanceDiagnostics.hoverFrames;
+    assert.equal(counters.callbacks, 4000);
+    assert.equal(counters.active, true);
+    assert.equal(counters.maxGapMs, 4);
+    assert.equal(e.frames.size, 1);
+    assert.ok(counters.callbacks < counters.routeFrameLimit);
+    e.c.stopHoverFrameDiagnostics();
+    assert.equal(e.frames.size, 0);
 });
 
 test('a delayed dwell or replay transition cannot erase the pending callback stall or misattribute its phase', async () => {
