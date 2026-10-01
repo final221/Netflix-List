@@ -33,12 +33,15 @@ what it should not contain
 - For this repository, the user authorizes commits and pushes of changes to `origin` without per-commit confirmation. Use the configured GitHub SSH remote, which is authenticated without requiring the user to supply credentials. This is user authorization; it does not bypass the app's sandbox or automated-review gates. Follow those system gates without asking the user to repeat the standing authorization.
 - A request to discuss, assess, or suggest optional work is not approval to implement it. Explain tradeoffs and work only on the selected step; do not add speculative changes just to finish a plan.
 - For multi-step code reviews, the user prefers a clear ordered plan with progress reported as each step is completed.
+- During investigations, proactively propose structural alternatives that remove underlying work or delays, without waiting for the user to suggest them; do not limit ideas to tuning the current approach.
 - Performance and reliability patches should include low-cost diagnostic logging or counters that help verify their effect and investigate failures in user-supplied logs, without making normal browsing noisy or expensive. The user explicitly authorizes adding or updating bounded, low-cost diagnostics during investigations when existing logs leave important questions unanswered; do not wait for separate approval to improve those logs.
 - On list entry, the user prefers Films selected by default in both the main grid and Watched / Caught up, with independent Films/Series selections for those sections.
 - For viewing groups, the user accepts a completed latest episode as a caught-up hint and wants reversible manual choices remembered separately for each Netflix profile. Manual choices take priority over automatic status; a series correction should cover the current episodes and expire when reliable metadata reveals added episodes.
 - Marking or reversing a viewing choice should preserve the user's browsing position instead of scrolling to the destination section.
 - Known watched/caught-up titles should start in their section on list entry, and newly established viewing results should appear promptly.
 - After initial loading, viewing groups should remain stable while browsing; changes should follow explicit viewing actions/refresh, a new list entry, or actual list/profile changes.
+- Cached title details may appear immediately on hover and refresh later; strict live information freshness on every hover is not required.
+- Background title-detail loading should give every title equal priority; do not favor visible or nearby cards. Background loading to reduce later hover latency is acceptable.
 - The user authorizes the assistant to maintain the editable durable-context sections of this file when lasting repository knowledge or preferences change, following the protected instructions above. Routine maintenance of those sections does not require another permission request.
 
 ## Cross-cutting repository knowledge
