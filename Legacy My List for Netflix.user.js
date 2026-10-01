@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.14
+// @version      1.3.15
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -84,6 +84,10 @@
     // One delayed presence check per sampled replay, cancelled by an earlier
     // preview transfer or exit. This does not retry or alter native hover.
     const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze({ delayMs: 900, routeReplays: 48, roots: 6 });
+    const HOVER_INTERRUPTION_LOG_LIMIT = 48;
+    const HOVER_CANCELLATION_REASONS = Object.freeze({ scroll: 'Scroll', 'pointer-leave': 'PointerLeave',
+        superseded: 'Superseded', resize: 'Resize', group: 'Group', source: 'Source', route: 'Route',
+        controls: 'Controls', 'outside-grid': 'OutsideGrid', preview: 'Preview', other: 'Other' });
 
     const GRID_ID = 'tm-netflix-mylist-v15-grid';
     const STATUS_ID = 'tm-netflix-mylist-v15-status';
@@ -97,7 +101,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.14';
+    const SCRIPT_VERSION = '1.3.15';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -1123,6 +1127,8 @@
     let lastTargetScrollAt = -Infinity;
     let hoverNeedsPointerMove = false;
     let pendingGridHoverClone = null;
+    let pendingGridHoverDiagnostic = null;
+    let activeHoverPreparationDiagnostic = null;
     let pageMoveSequence = 0;
     let carouselMoveQueue = Promise.resolve();
     let carouselDomRuntime = new WeakMap();
@@ -1195,6 +1201,15 @@
                 leavesWithin600ms: 0, stationaryLeaves: 0, leavesToPreviewHint: 0, diagnosticFailures: 0,
                 replacementPointerChecks: 0, replacementPointerAccepted: 0, replacementPointerRejected: 0,
                 replacementPointerUnavailable: 0 },
+            hoverScroll: { scope: 'scroll-intent-and-interruptions', interruptionLogLimit: HOVER_INTERRUPTION_LOG_LIMIT,
+                wheelEvents: 0, scrollEvents: 0, otherScrollEvents: 0, lastScrollEvent: '',
+                boundarySuppressedQuiet: 0, boundarySuppressedMovement: 0, unchangedPointerEvents: 0,
+                physicalRearms: 0, dwellRearms: 0, intentsDuringQuiet: 0, intentsAwaitingMovement: 0,
+                cancelledDwellTotalMs: 0, cancelledDwellMaxMs: 0, lastIntentCancellationReason: '',
+                preparationInterruptions: 0, interruptionLogs: 0, interruptionLogsSkipped: 0,
+                lastPreparationCancellationReason: '',
+                ...Object.fromEntries(Object.values(HOVER_CANCELLATION_REASONS).flatMap(reason =>
+                    [[`intentCancelled${reason}`, 0], [`preparationCancelled${reason}`, 0]])) },
             hoverPreview: { scope: 'bounded-preview-presence', delayMs: HOVER_PREVIEW_DIAGNOSTIC_LIMITS.delayMs,
                 routeReplayLimit: HOVER_PREVIEW_DIAGNOSTIC_LIMITS.routeReplays, rootLimit: HOVER_PREVIEW_DIAGNOSTIC_LIMITS.roots,
                 scheduled: 0, completed: 0, checks: 0, pointerChecks: 0, rootSearches: 0,
@@ -1561,6 +1576,58 @@
         return token !== null && token !== undefined && token !== hoverToken;
     }
 
+    function hoverScrollElapsed(now = performance.now()) {
+        return Number.isFinite(lastTargetScrollAt) ? Math.max(0, Math.round(now - lastTargetScrollAt)) : null;
+    }
+
+    function recordHoverCancellation(counters, kind, reason) {
+        const knownReason = Object.hasOwn(HOVER_CANCELLATION_REASONS, reason) ? reason : 'other';
+        if (performanceDiagnostics.hoverScroll === counters) {
+            counters[`${kind}Cancelled${HOVER_CANCELLATION_REASONS[knownReason]}`]++;
+        }
+        return knownReason;
+    }
+
+    function advanceHoverToken(reason = 'other') {
+        const token = ++hoverToken;
+        const owner = activeHoverPreparationDiagnostic;
+        // Dispose before logging: a newer intent or native exit may reenter.
+        activeHoverPreparationDiagnostic = null;
+        if (!owner || owner.token !== token - 1) return token;
+        try {
+            const counters = owner.counters;
+            if (performanceDiagnostics.hoverScroll !== counters) return token;
+            const knownReason = recordHoverCancellation(counters, 'preparation', reason);
+            counters.preparationInterruptions++;
+            counters.lastPreparationCancellationReason = knownReason;
+            if (counters.interruptionLogs >= HOVER_INTERRUPTION_LOG_LIMIT) {
+                counters.interruptionLogsSkipped++;
+                return token;
+            }
+            counters.interruptionLogs++;
+            log('Hover preparation interrupted', { seq: owner.seq, token: owner.token, nextToken: token,
+                group: owner.group, reason: knownReason, elapsedMs: Math.round(performance.now() - owner.started),
+                sinceScrollMs: hoverScrollElapsed(), intent: owner.intent });
+        } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
+        return token;
+    }
+
+    function hoverIntentDiagnosticSnapshot(owner) {
+        if (!owner) return null;
+        return { physicalMove: owner.physicalMove, sinceScrollAtQueueMs: owner.sinceScrollAtQueueMs,
+            quietRemainingAtQueueMs: owner.quietRemainingAtQueueMs, needsMovementAtQueue: owner.needsMovementAtQueue,
+            scheduledDwellMs: owner.scheduledDwellMs, actualDwellMs: Math.round(performance.now() - owner.started),
+            sinceScrollAtActivationMs: hoverScrollElapsed() };
+    }
+
+    function hoverScrollStateSnapshot() {
+        const sinceScrollMs = hoverScrollElapsed();
+        return { needsPointerMove: hoverNeedsPointerMove, sinceScrollMs,
+            quietRemainingMs: sinceScrollMs === null ? 0 : Math.max(0, HOVER_SCROLL_QUIET_MS - sinceScrollMs),
+            pendingIntent: Boolean(pendingGridHoverClone), preparing: Boolean(activeHoverPreparationDiagnostic),
+            lastEvent: performanceDiagnostics.hoverScroll.lastScrollEvent };
+    }
+
     function clearRunningSession(sessionToken, retryMutations = true) {
         if (runningSessionToken !== sessionToken) return;
         running = false;
@@ -1587,9 +1654,9 @@
 
         clearSourceAlignment();
         restoreActiveCarouselStyles();
-        hoverToken++;
+        advanceHoverToken('source');
         invalidateGridReact();
-        cancelPendingGridHover();
+        cancelPendingGridHover('source');
         completedSection = null;
         if (sourceState?.section && !sourceState.section.isConnected) {
             sourceState = null;
@@ -1666,7 +1733,7 @@
         scheduledSessionToken = null;
         scheduledRunDueAt = 0;
 
-        hoverToken++;
+        advanceHoverToken('route');
         cleanupTargetSessionDom();
         stopTargetEventListeners();
         resizeObserver?.disconnect();
@@ -2020,6 +2087,7 @@
             responsivePageShape: lastPageShape,
             responsiveReason: lastResponsiveReason,
             resizeViewportSignature: sourceState?.resizeViewportSignature || '',
+            hoverScrollState: hoverScrollStateSnapshot(),
             pointer: { x: lastPointerX, y: lastPointerY }
         };
     }
@@ -4541,8 +4609,8 @@
         details.addEventListener('toggle', () => {
             if (sourceState !== state || watch.ui?.details !== details) return;
             watch.expanded = details.open;
-            cancelPendingGridHover();
-            hoverToken++;
+            cancelPendingGridHover('group');
+            advanceHoverToken('group');
             clearSourceAlignment();
             activeClone = null;
             activeVideoId = null;
@@ -4713,8 +4781,8 @@
             return ['left', 'top', 'width', 'height'].some(key => Math.abs(before[key] - after[key]) > 0.5);
         }) || Boolean(activeSourceSlot && !activeSourceSlot.isConnected);
         if (hoverChanged) {
-            cancelPendingGridHover();
-            hoverToken++;
+            cancelPendingGridHover('group');
+            advanceHoverToken('group');
             clearSourceAlignment();
             activeClone = null;
             activeVideoId = null;
@@ -6047,7 +6115,7 @@
         const [removed] = sourceState.items.splice(index, 1);
         const clone = sourceState.cloneMap?.get(key);
         if (activeVideoId === String(videoId) || activeClone === clone) {
-            hoverToken++;
+            advanceHoverToken('source');
             clearSourceAlignment();
             activeVideoId = null;
             activeClone = null;
@@ -6540,7 +6608,7 @@
         orderMismatchDismissed = true;
         hideOrderMismatchDialog();
 
-        hoverToken++;
+        advanceHoverToken('source');
         clearSourceAlignment();
         activeVideoId = null;
         activeClone = null;
@@ -10510,7 +10578,7 @@
     function releaseNativePreview(owner, reason, relatedTarget = null) {
         if (activeNativeHover !== owner || !owner?.previewRoot) return;
         const clone = owner.previewClone;
-        const releaseToken = ++hoverToken;
+        const releaseToken = advanceHoverToken('preview');
         clearSourceAlignment(undefined, reason, relatedTarget);
         // Native exit callbacks may synchronously establish another hover owner.
         if (hoverToken === releaseToken && activeClone === clone) {
@@ -11072,7 +11140,7 @@
         return freshTarget;
     }
 
-    async function activateClone(item, clone, triggerEvent = null, generation = clone?.__tmHoverActivationGeneration) {
+    async function activateClone(item, clone, triggerEvent = null, generation = clone?.__tmHoverActivationGeneration, intentDiagnostic = null) {
         if (!gridHoverTargetActive(clone, generation)) return;
         const seq = ++hoverSequence;
         const started = performance.now();
@@ -11113,11 +11181,14 @@
             }
         }
 
-        const token = ++hoverToken;
+        const token = advanceHoverToken('superseded');
         const sessionToken = routeSessionToken;
         startHoverFrameDiagnostics('preparation');
         clone.setAttribute('data-tm-hover-token', String(token));
         clone.setAttribute('data-tm-preparing', 'true');
+        const diagnosticOwner = { seq, token, group, started, intent: intentDiagnostic,
+            counters: performanceDiagnostics.hoverScroll };
+        activeHoverPreparationDiagnostic = diagnosticOwner;
         let fresh = null;
         try {
             assertRouteSession(sessionToken);
@@ -11161,6 +11232,7 @@
                     log(tLog('hoverReusedImmediately'), {
                         seq,
                         group,
+                        intent: intentDiagnostic,
                         item: itemSummary(item),
                         selectedPage: selected,
                         backedPage,
@@ -11175,6 +11247,7 @@
                     log(tLog('hoverRequestedNativePagePreparation'), {
                         seq,
                         group,
+                        intent: intentDiagnostic,
                         directPageDistance: Math.abs(selected - item.page),
                         item: itemSummary(item),
                         selectedPage: selected,
@@ -11194,6 +11267,7 @@
             log(tLog('hoverNativePagePreparationResult'), {
                 seq,
                 group,
+                intent: intentDiagnostic,
                 item: itemSummary(item),
                 success: Boolean(fresh),
                 replayDispatched: Boolean(fresh),
@@ -11206,6 +11280,7 @@
                 warn(tLog('liveClonePreparationFailed'), { seq, item: itemSummary(item), error });
             }
         } finally {
+            if (activeHoverPreparationDiagnostic === diagnosticOwner) activeHoverPreparationDiagnostic = null;
             if (!fresh) releaseFailedGridHover(activeClone, token);
             const current = findGridClone(item);
             if (current?.isConnected && current.getAttribute('data-tm-hover-token') === String(token)) {
@@ -11271,20 +11346,37 @@
             (clone.matches(':hover') || gridHoverReplacementUnderPointer(clone, triggerEvent));
     }
 
-    function cancelPendingGridHover() {
+    function cancelPendingGridHover(reason = 'other') {
         const clone = pendingGridHoverClone;
+        const diagnostic = pendingGridHoverDiagnostic;
         pendingGridHoverClone = null;
+        pendingGridHoverDiagnostic = null;
         if (!clone) return;
         performanceDiagnostics.hoverInteraction.intentsCancelled++;
         clone.__tmHoverActivationGeneration = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
         clearTimeout(clone.__tmHoverActivationTimer);
         clone.__tmHoverActivationTimer = null;
+        try {
+            if (diagnostic && performanceDiagnostics.hoverScroll === diagnostic.counters) {
+                const counters = diagnostic.counters;
+                const elapsed = Math.max(0, Math.round(performance.now() - diagnostic.started));
+                counters.cancelledDwellTotalMs += elapsed;
+                counters.cancelledDwellMaxMs = Math.max(counters.cancelledDwellMaxMs, elapsed);
+                counters.lastIntentCancellationReason = recordHoverCancellation(counters, 'intent', reason);
+            }
+        } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
     }
 
     function handleGridClonePointerOver(event, clone, item, physicalMove = false) {
         if (orderMismatchDialogOpen || orderMismatchReinitializing) return;
         if (event.relatedTarget && clone.contains(event.relatedTarget)) return;
-        if (!sourceState?.section || (gridHoverSuppressed() && !physicalMove)) return;
+        if (!sourceState?.section) return;
+        if (gridHoverSuppressed() && !physicalMove) {
+            const counters = performanceDiagnostics.hoverScroll;
+            if (hoverNeedsPointerMove) counters.boundarySuppressedMovement++;
+            if (performance.now() - lastTargetScrollAt < HOVER_SCROLL_QUIET_MS) counters.boundarySuppressedQuiet++;
+            return;
+        }
         if (pendingGridHoverClone === clone || activeClone === clone) return;
         if (clone.getAttribute('data-tm-preparing') === 'true' &&
             clone.getAttribute('data-tm-hover-token') === String(hoverToken)) return;
@@ -11292,7 +11384,7 @@
         // All preparation, including ready-source reuse, goes through the dwell.
         // Physical intent received just after a scroll survives the quiet period.
         // Boundary events alone still cannot prepare a stationary scroll target.
-        cancelPendingGridHover();
+        cancelPendingGridHover('superseded');
         const generation = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
         clone.__tmHoverActivationGeneration = generation;
         pendingGridHoverClone = clone;
@@ -11300,13 +11392,24 @@
         startHoverFrameDiagnostics('intent');
         const dwellStarted = performance.now();
         const timing = performanceDiagnostics.hoverTiming;
+        const counters = performanceDiagnostics.hoverScroll;
+        const quietRemaining = Math.max(0, HOVER_SCROLL_QUIET_MS - (dwellStarted - lastTargetScrollAt));
+        const delay = Math.max(HOVER_ACTIVATION_DELAY_MS, quietRemaining);
+        const diagnostic = { started: dwellStarted, counters, physicalMove,
+            sinceScrollAtQueueMs: hoverScrollElapsed(dwellStarted), quietRemainingAtQueueMs: Math.round(quietRemaining),
+            needsMovementAtQueue: hoverNeedsPointerMove, scheduledDwellMs: Math.round(delay) };
+        pendingGridHoverDiagnostic = diagnostic;
+        if (quietRemaining > 0) counters.intentsDuringQuiet++;
+        if (hoverNeedsPointerMove) counters.intentsAwaitingMovement++;
         clone.__tmHoverActivationTimer = setTimeout(() => {
             recordHoverTiming(timing, 'dwell', dwellStarted);
             clone.__tmHoverActivationTimer = null;
             if (pendingGridHoverClone === clone) pendingGridHoverClone = null;
+            if (pendingGridHoverDiagnostic === diagnostic) pendingGridHoverDiagnostic = null;
             if (physicalMove && sourceState?.grid?.isConnected && clone.isConnected &&
                 gridOwnsClone(clone, sourceState.grid) && generation === clone.__tmHoverActivationGeneration &&
                 clone.matches(':hover') && performance.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) {
+                if (hoverNeedsPointerMove && performanceDiagnostics.hoverScroll === counters) counters.dwellRearms++;
                 hoverNeedsPointerMove = false;
             }
             if (!gridHoverTargetActive(clone, generation)) {
@@ -11314,8 +11417,8 @@
                 return;
             }
             performanceDiagnostics.hoverInteraction.dwellCompleted++;
-            activateClone(item, clone, event, generation);
-        }, Math.max(HOVER_ACTIVATION_DELAY_MS, HOVER_SCROLL_QUIET_MS - (performance.now() - lastTargetScrollAt)));
+            activateClone(item, clone, event, generation, hoverIntentDiagnosticSnapshot(diagnostic));
+        }, delay);
     }
 
     function handleGridClonePointerLeave(clone, item, relatedTarget = null, event = null) {
@@ -11324,7 +11427,8 @@
             recordGridHoverLeave(clone, relatedTarget, event);
         }
         if (retainNativeHoverForPreview(clone, relatedTarget, event)) return;
-        if (pendingGridHoverClone === clone) cancelPendingGridHover();
+        const cancellationReason = clone.__tmViewingControlHovered ? 'controls' : 'pointer-leave';
+        if (pendingGridHoverClone === clone) cancelPendingGridHover(cancellationReason);
         clone.__tmHoverActivationGeneration = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
         if (clone.__tmHoverActivationTimer !== null && clone.__tmHoverActivationTimer !== undefined) {
             clearTimeout(clone.__tmHoverActivationTimer);
@@ -11334,7 +11438,7 @@
         const cloneTokenText = clone.getAttribute('data-tm-hover-token');
         const cloneToken = cloneTokenText === null ? NaN : Number(cloneTokenText);
         if (Number.isFinite(cloneToken) && cloneToken === hoverToken) {
-            hoverToken++;
+            advanceHoverToken(cancellationReason);
             clone.removeAttribute('data-tm-hover-token');
             clone.removeAttribute('data-tm-preparing');
             log(tLog('pendingHoverCancelledOnLeave'), {
@@ -11368,7 +11472,7 @@
                 if (controlClone) {
                     controlClone.__tmViewingControlHovered = true;
                     handleGridClonePointerLeave(controlClone, controlClone.__tmMyListItem, event.target, event);
-                } else cancelPendingGridHover();
+                } else cancelPendingGridHover('controls');
             }
         }, { capture: true, passive: true });
         grid.addEventListener('pointerout', event => {
@@ -11493,8 +11597,8 @@
     }
 
     function cancelResizeHover() {
-        cancelPendingGridHover();
-        hoverToken++;
+        cancelPendingGridHover('resize');
+        advanceHoverToken('resize');
         clearSourceAlignment();
         activeVideoId = null;
         activeClone = null;
@@ -12039,7 +12143,10 @@
         const moved = event.clientX !== lastPointerX || event.clientY !== lastPointerY;
         lastPointerX = event.clientX;
         lastPointerY = event.clientY;
-        if (!moved) return;
+        if (!moved) {
+            if (hoverNeedsPointerMove) performanceDiagnostics.hoverScroll.unchangedPointerEvents++;
+            return;
+        }
         const grid = sourceState?.grid;
         if (!grid?.isConnected) return;
         const clone = gridCloneFromPointerEvent(event, grid);
@@ -12048,27 +12155,34 @@
             if (!owner.previewRoot.isConnected || !gridOwnsClone(owner.previewClone, grid)) {
                 releaseNativePreview(owner, 'preview-removed');
             } else if (owner.previewRoot.contains(event.target)) {
-                cancelPendingGridHover();
+                cancelPendingGridHover('preview');
                 return;
             } else if (clone === owner.previewClone && nativePreviewOwnerMatches(owner)) {
                 clearNativePreviewTransfer(owner, 'preview-return');
             } else releaseNativePreview(owner, 'preview-leave', event.target);
         }
-        if (performance.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) hoverNeedsPointerMove = false;
+        if (performance.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) {
+            if (hoverNeedsPointerMove) performanceDiagnostics.hoverScroll.physicalRearms++;
+            hoverNeedsPointerMove = false;
+        }
         if (clone) handleGridClonePointerOver(event, clone, clone.__tmMyListItem, true);
-        else cancelPendingGridHover();
+        else cancelPendingGridHover('outside-grid');
     }
 
-    function handleTargetScroll() {
+    function handleTargetScroll(event = null) {
         const now = performance.now();
         const starting = now - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS;
         lastTargetScrollAt = now;
+        const counters = performanceDiagnostics.hoverScroll;
+        const kind = event?.type === 'wheel' ? 'wheel' : event?.type === 'scroll' ? 'scroll' : 'other';
+        counters[kind === 'wheel' ? 'wheelEvents' : kind === 'scroll' ? 'scrollEvents' : 'otherScrollEvents']++;
+        counters.lastScrollEvent = kind;
         hoverNeedsPointerMove = true;
-        cancelPendingGridHover();
+        cancelPendingGridHover('scroll');
         if (!starting) return;
         performanceDiagnostics.hoverLifecycle.scrollBursts++;
         startHoverFrameDiagnostics('scroll');
-        hoverToken++;
+        advanceHoverToken('scroll');
         clearSourceAlignment(undefined, 'scroll');
         activeVideoId = null;
         activeClone = null;
@@ -12281,7 +12395,7 @@
         if (activeNativeHover?.previewRoot) releaseNativePreview(activeNativeHover, 'listeners-stopped');
         if (!targetListenersActive && !targetDocumentObserver) return;
         targetListenersActive = false;
-        cancelPendingGridHover();
+        cancelPendingGridHover('route');
         lastTargetScrollAt = -Infinity;
         hoverNeedsPointerMove = false;
         lastPointerX = -1;
@@ -12324,8 +12438,8 @@
 
         performanceDiagnostics.nativeRecovery.attempts++;
         for (const mutation of pendingMyListMutations.values()) mutation.deferredWhileBusy = true;
-        hoverToken++;
-        cancelPendingGridHover();
+        advanceHoverToken('source');
+        cancelPendingGridHover('source');
         cleanupTargetSessionDom();
         resizeObserver?.disconnect();
         resizeObserver = null;

@@ -70,6 +70,7 @@ function environment(names, overrides = {}) {
         HOVER_ACTIVATION_DELAY_MS: 120, HOVER_SCROLL_QUIET_MS: 180, HOVER_RETRY_DELAY_MS: 180, CANCELLED_MOVE_POLL_MS: 80,
         HOVER_SOURCE_TIMEOUT_MS: 500, HOVER_SOURCE_INTERVAL_MS: 10, PAGE_STABLE_TIMEOUT_MS: 2000,
         hoverToken: 1, hoverSequence: 0, pendingGridHoverClone: null,
+        pendingGridHoverDiagnostic: null, activeHoverPreparationDiagnostic: null,
         lastTargetScrollAt: -Infinity, hoverNeedsPointerMove: false, lastPointerX: -1, lastPointerY: -1,
         activeClone: null, activeVideoId: null, activePage: null, activeSourceSlot: null, activeGeometryProxy: null,
         activeNativeHover: null,
@@ -88,9 +89,12 @@ function environment(names, overrides = {}) {
     });
     vm.runInContext(source.match(/^    const HOVER_FRAME_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
+    vm.runInContext(source.match(/^    const HOVER_INTERRUPTION_LOG_LIMIT = \d+;/m)?.[0] || '', c);
+    vm.runInContext(source.match(/^    const HOVER_CANCELLATION_REASONS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     for (const name of ['createNativeReadScope', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'trace', 'gridOwnsClone',
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
+        'hoverScrollElapsed', 'recordHoverCancellation', 'advanceHoverToken', 'hoverIntentDiagnosticSnapshot', 'hoverScrollStateSnapshot',
         'createLogicalMoveSignal',
         'finishNativePreviewDiagnostic', 'inspectNativePreviewDiagnostic', 'scheduleNativePreviewDiagnostic',
         'nativePreviewNodeVideoId', 'decodeTrackingContext', 'findNativeHoverPreview', 'retainNativeHoverForPreview', 'clearNativePreviewTransfer',
@@ -402,6 +406,293 @@ test('only the latest physical target resumes after scrolling, and it must still
     await e.advance(300);
     assert.equal(e.activations.length, 0);
     assert.equal(e.c.hoverNeedsPointerMove, true);
+});
+
+test('post-scroll diagnostics separate boundary suppression, unchanged coordinates and deferred physical intent', async () => {
+    const e = hoverEnvironment();
+    const counters = e.c.performanceDiagnostics.hoverScroll;
+    e.c.lastPointerX = 20; e.c.lastPointerY = 30;
+    e.c.handleTargetScroll({ type: 'wheel' });
+    e.c.handleTargetScroll({ type: 'scroll' });
+    await e.advance(50);
+    e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+    e.c.handleTargetPointerMove(pointer(e.clone, { type: 'pointermove' }));
+    e.c.handleTargetPointerMove(pointer(e.clone, { type: 'pointermove', isTrusted: false, clientX: 21 }));
+    assert.equal(counters.wheelEvents, 1);
+    assert.equal(counters.scrollEvents, 1);
+    assert.equal(counters.boundarySuppressedQuiet, 1);
+    assert.equal(counters.boundarySuppressedMovement, 1);
+    assert.equal(counters.unchangedPointerEvents, 1);
+    assert.equal(e.timers.size, 0);
+    e.c.handleTargetPointerMove(pointer(e.clone, { type: 'pointermove', clientX: 21 }));
+    assert.equal(e.timers.size, 1);
+    assert.equal(e.c.hoverScrollStateSnapshot().quietRemainingMs, 130);
+    assert.equal(e.c.hoverScrollStateSnapshot().needsPointerMove, true);
+    assert.equal(e.c.hoverScrollStateSnapshot().pendingIntent, true);
+    assert.equal(counters.intentsDuringQuiet, 1);
+    assert.equal(counters.intentsAwaitingMovement, 1);
+    await e.advance(129);
+    assert.equal(e.activations.length, 0);
+    await e.advance(1);
+    assert.equal(e.activations.length, 1);
+    const intent = e.activations[0][4];
+    assert.deepEqual({ ...intent }, { physicalMove: true, sinceScrollAtQueueMs: 50, quietRemainingAtQueueMs: 130,
+        needsMovementAtQueue: true, scheduledDwellMs: 130, actualDwellMs: 130, sinceScrollAtActivationMs: 180 });
+    assert.equal(counters.dwellRearms, 1);
+    assert.equal(counters.physicalRearms, 0);
+    assert.equal(e.c.pendingGridHoverDiagnostic, null);
+    assert.equal(e.c.hoverScrollStateSnapshot().pendingIntent, false);
+    assert.equal(e.c.hoverScrollStateSnapshot().needsPointerMove, false);
+    assert.equal(e.timers.size, 0);
+});
+
+test('late post-scroll movement and ordinary hover report distinct intent context without added scheduling', async () => {
+    for (const postScroll of [false, true]) {
+        const e = hoverEnvironment();
+        if (postScroll) {
+            e.c.handleTargetScroll({ type: 'scroll' });
+            await e.advance(300);
+            e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+            assert.equal(e.c.performanceDiagnostics.hoverScroll.boundarySuppressedQuiet, 0);
+            assert.equal(e.c.performanceDiagnostics.hoverScroll.boundarySuppressedMovement, 1);
+            e.c.handleTargetPointerMove(pointer(e.clone, { type: 'pointermove' }));
+        } else e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+        assert.equal(e.timers.size, 1);
+        assert.equal(e.frames.size, 0);
+        await e.advance(120);
+        assert.equal(e.activations.length, 1);
+        const intent = e.activations[0][4];
+        assert.equal(intent.scheduledDwellMs, 120);
+        assert.equal(intent.actualDwellMs, 120);
+        assert.equal(intent.physicalMove, postScroll);
+        assert.equal(intent.sinceScrollAtQueueMs, postScroll ? 300 : null);
+        assert.equal(intent.sinceScrollAtActivationMs, postScroll ? 420 : null);
+        assert.equal(intent.needsMovementAtQueue, false);
+        assert.equal(intent.quietRemainingAtQueueMs, 0);
+        assert.equal(e.c.performanceDiagnostics.hoverScroll.physicalRearms, postScroll ? 1 : 0);
+        assert.equal(e.c.performanceDiagnostics.hoverScroll.dwellRearms, 0);
+        assert.equal(e.timers.size, 0);
+    }
+});
+
+test('cancelled intent records cause and elapsed partial dwell once without adding cancellation logs', async () => {
+    for (const reason of ['scroll', 'pointer-leave', 'outside-grid', 'superseded', 'resize']) {
+        const logs = [];
+        const e = hoverEnvironment([], { log: (...args) => logs.push(args) });
+        e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+        await e.advance(45);
+        if (reason === 'scroll') e.c.handleTargetScroll({ type: 'wheel' });
+        if (reason === 'pointer-leave') e.c.handleGridClonePointerLeave(e.clone, e.clone.__tmMyListItem);
+        if (reason === 'outside-grid') e.c.handleTargetPointerMove(pointer(new Element('outside'), { type: 'pointermove' }));
+        if (reason === 'resize') e.c.cancelResizeHover();
+        if (reason === 'superseded') {
+            const next = new Element('next', e.grid);
+            next.__tmMyListItem = { videoId: '456' };
+            e.c.handleGridClonePointerOver(pointer(next), next, next.__tmMyListItem);
+        }
+        const counters = e.c.performanceDiagnostics.hoverScroll;
+        const key = { scroll: 'Scroll', 'pointer-leave': 'PointerLeave', 'outside-grid': 'OutsideGrid', superseded: 'Superseded', resize: 'Resize' }[reason];
+        assert.equal(counters[`intentCancelled${key}`], 1, reason);
+        assert.equal(counters.cancelledDwellTotalMs, 45, reason);
+        assert.equal(counters.cancelledDwellMaxMs, 45, reason);
+        assert.equal(counters.lastIntentCancellationReason, reason);
+        assert.equal(logs.filter(entry => entry[0] === 'Hover preparation interrupted').length, 0);
+        if (reason === 'superseded') {
+            assert.equal(e.timers.size, 1);
+            e.c.cancelPendingGridHover('other');
+        }
+        assert.equal(e.c.pendingGridHoverDiagnostic, null);
+        assert.equal(e.timers.size, 0);
+        const before = counters[`intentCancelled${key}`];
+        e.c.cancelPendingGridHover(reason);
+        assert.equal(counters[`intentCancelled${key}`], before);
+        await e.advance(200);
+        assert.equal(e.activations.length, 0);
+    }
+});
+
+test('accepted intent context reaches preparation events without retaining grid or pointer objects', async () => {
+    const e = preparedHoverEnvironment();
+    e.c.handleTargetScroll({ type: 'scroll' });
+    await e.advance(70);
+    e.c.handleTargetPointerMove(pointer(e.clone, { type: 'pointermove' }));
+    await e.advance(120);
+    await e.frame();
+    const requested = e.logs.find(entry => entry.name === 'hoverRequestedNativePagePreparation');
+    const result = e.logs.find(entry => entry.name === 'hoverNativePagePreparationResult');
+    assert.equal(result.details.success, true);
+    assert.equal(requested.details.intent.physicalMove, true);
+    assert.equal(requested.details.intent.sinceScrollAtQueueMs, 70);
+    assert.equal(requested.details.intent.quietRemainingAtQueueMs, 110);
+    assert.equal(requested.details.intent.scheduledDwellMs, 120);
+    assert.equal(requested.details.intent.actualDwellMs, 120);
+    assert.equal(requested.details.intent.sinceScrollAtActivationMs, 190);
+    assert.deepEqual(result.details.intent, requested.details.intent);
+    assert.ok(Object.values(requested.details.intent).every(value => value === null || ['number', 'boolean'].includes(typeof value)));
+    assert.equal(e.c.pendingGridHoverDiagnostic, null);
+    assert.equal(e.c.activeHoverPreparationDiagnostic, null);
+    assert.equal(e.c.performanceDiagnostics.hoverScroll.preparationInterruptions, 0);
+    assert.equal(e.events.length, 4);
+    assert.equal(e.calls.preparations, 1);
+});
+
+test('preparation interruptions report the first scroll, leave or resize cause before obsolete replay cleanup', async () => {
+    for (const reason of ['scroll', 'pointer-leave', 'resize']) {
+        const e = preparedHoverEnvironment();
+        const activation = e.start();
+        await e.flush();
+        const current = e.current();
+        await e.advance(30);
+        if (reason === 'scroll') e.c.handleTargetScroll({ type: 'scroll' });
+        if (reason === 'pointer-leave') e.c.handleGridClonePointerLeave(current, current.__tmMyListItem);
+        if (reason === 'resize') e.c.cancelResizeHover();
+        const interruptions = e.logs.filter(entry => entry.name === 'Hover preparation interrupted');
+        assert.equal(interruptions.length, 1, reason);
+        assert.equal(interruptions[0].details.reason, reason);
+        assert.equal(interruptions[0].details.group, 'main');
+        assert.equal(interruptions[0].details.seq, 1);
+        assert.equal(interruptions[0].details.token, 2);
+        assert.equal(interruptions[0].details.elapsedMs, 30);
+        assert.equal(interruptions[0].details.intent, null, 'direct test activation has no fabricated dwell');
+        assert.equal(e.c.activeHoverPreparationDiagnostic, null);
+        await e.frame();
+        await activation;
+        assert.equal(e.events.length, 0);
+        assert.equal(e.logs.filter(entry => entry.name === 'Hover preparation interrupted').length, 1);
+        assert.equal(e.c.performanceDiagnostics.hoverScroll.preparationInterruptions, 1);
+    }
+});
+
+test('older preparation completion cannot clear a newer diagnostic owner or alter its route counters', async () => {
+    const firstSource = deferred(), secondSource = deferred();
+    const e = preparedHoverEnvironment();
+    let requests = 0;
+    e.c.resolveExpectedPageSourceItem = () => ++requests === 1 ? firstSource.promise : secondSource.promise;
+    const first = e.start();
+    await e.flush();
+    const oldCounters = e.c.performanceDiagnostics.hoverScroll;
+    e.c.handleTargetScroll({ type: 'scroll' });
+    assert.equal(oldCounters.preparationCancelledScroll, 1);
+    await e.advance(200);
+    e.c.hoverNeedsPointerMove = false;
+    const second = e.start();
+    await e.flush();
+    const currentOwner = e.c.activeHoverPreparationDiagnostic;
+    assert.notEqual(currentOwner, null);
+    firstSource.resolve({ status: 'unknown', slot: null, slots: [], page: 0 });
+    await first;
+    assert.equal(e.c.activeHoverPreparationDiagnostic, currentOwner);
+    e.c.advanceHoverToken('route');
+    assert.equal(oldCounters.preparationCancelledRoute, 1);
+    e.c.performanceDiagnostics = e.c.createPerformanceDiagnostics();
+    secondSource.resolve({ status: 'unknown', slot: null, slots: [], page: 0 });
+    await second;
+    assert.equal(e.c.activeHoverPreparationDiagnostic, null);
+    assert.equal(e.c.performanceDiagnostics.hoverScroll.preparationInterruptions, 0);
+    assert.equal(e.c.performanceDiagnostics.hoverScroll.interruptionLogs, 0);
+    assert.equal(e.c.performanceDiagnostics.hoverScroll.lastPreparationCancellationReason, '');
+});
+
+test('preparation interruption logging is finite, scalar-only and excludes reasons outside the fixed vocabulary', () => {
+    const logs = [];
+    const e = environment([], { log: (name, details) => logs.push({ name, details }) });
+    const counters = e.c.performanceDiagnostics.hoverScroll;
+    for (let index = 0; index < 60; index++) {
+        e.c.activeHoverPreparationDiagnostic = { seq: index, token: e.c.hoverToken, started: 0, group: 'watched', counters, intent: null };
+        e.c.advanceHoverToken(index === 0 ? 'private title or unknown reason' : 'scroll');
+        e.c.advanceHoverToken('resize');
+    }
+    assert.equal(counters.preparationInterruptions, 60);
+    assert.equal(counters.preparationCancelledOther, 1);
+    assert.equal(counters.preparationCancelledScroll, 59);
+    assert.equal(counters.preparationCancelledResize, 0);
+    assert.equal(counters.interruptionLogs, 48);
+    assert.equal(counters.interruptionLogsSkipped, 12);
+    assert.equal(logs.length, 48);
+    assert.equal(logs[0].details.reason, 'other');
+    assert.ok(logs.every(entry => Object.values(entry.details).every(value => value === null || ['number', 'string'].includes(typeof value))));
+    assert.ok(!JSON.stringify(logs).includes('private title'));
+    assert.equal(e.c.activeHoverPreparationDiagnostic, null);
+    assert.equal(e.frames.size, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('failed interruption logging still invalidates hover and preserves cancellation cleanup', async () => {
+    const e = preparedHoverEnvironment();
+    const activation = e.start();
+    await e.flush();
+    const token = e.c.hoverToken;
+    e.c.log = () => { throw new Error('logger failed'); };
+    assert.doesNotThrow(() => e.c.handleTargetScroll({ type: 'wheel' }));
+    assert.equal(e.c.hoverToken, token + 1);
+    assert.equal(e.c.activeHoverPreparationDiagnostic, null);
+    assert.equal(e.c.performanceDiagnostics.hoverScroll.preparationCancelledScroll, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.diagnosticFailures, 1);
+    await e.frame();
+    await activation;
+    assert.equal(e.events.length, 0);
+    assert.equal(e.c.activeClone, null);
+    assert.equal(e.current().getAttribute('data-tm-preparing'), null);
+    assert.equal(e.timers.size, 0);
+});
+
+test('a new card supersedes the old preparation once and its diagnostic survives old cleanup', async () => {
+    const firstReady = deferred(), secondReady = deferred();
+    const e = preparedHoverEnvironment();
+    const next = new Element('next', e.grid);
+    next.__tmMyListItem = { videoId: '456', page: 0 };
+    next.__tmHoverActivationGeneration = 1;
+    let calls = 0;
+    e.c.prepareMountedPage = () => ++calls === 1 ? firstReady.promise : secondReady.promise;
+    e.c.findGridClone = item => item.videoId === '456' ? next : e.clone;
+    const first = e.start();
+    await e.flush();
+    const second = e.c.activateClone(next.__tmMyListItem, next, pointer(next), 1);
+    await e.flush();
+    const owner = e.c.activeHoverPreparationDiagnostic;
+    const interrupted = e.logs.filter(entry => entry.name === 'Hover preparation interrupted');
+    assert.equal(interrupted.length, 1);
+    assert.equal(interrupted[0].details.reason, 'superseded');
+    assert.equal(interrupted[0].details.seq, 1);
+    assert.equal(owner.seq, 2);
+    firstReady.resolve(null);
+    await first;
+    assert.equal(e.c.activeHoverPreparationDiagnostic, owner);
+    next.__tmViewingControlHovered = true;
+    e.c.handleGridClonePointerLeave(next, next.__tmMyListItem);
+    assert.equal(e.c.performanceDiagnostics.hoverScroll.preparationCancelledSuperseded, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverScroll.preparationCancelledControls, 1);
+    secondReady.resolve(null);
+    await second;
+    assert.equal(e.c.activeHoverPreparationDiagnostic, null);
+    assert.equal(e.c.performanceDiagnostics.hoverScroll.preparationInterruptions, 2);
+    assert.equal(e.timers.size, 0);
+    assert.equal(e.frames.size, 0);
+});
+
+test('scroll state and diagnostic exports remain copied scalar data without native DOM reads', async () => {
+    const e = hoverEnvironment();
+    assert.deepEqual({ ...e.c.hoverScrollStateSnapshot() }, { needsPointerMove: false, sinceScrollMs: null,
+        quietRemainingMs: 0, pendingIntent: false, preparing: false, lastEvent: '' });
+    e.c.handleTargetScroll({ type: 'wheel' });
+    await e.advance(40);
+    e.c.handleTargetPointerMove(pointer(e.clone, { type: 'pointermove' }));
+    const state = e.c.hoverScrollStateSnapshot();
+    const copied = e.c.collectPerformanceDiagnostics();
+    assert.equal(state.pendingIntent, true);
+    assert.equal(state.quietRemainingMs, 140);
+    assert.ok(Object.values(state).every(value => value === null || ['boolean', 'number', 'string'].includes(typeof value)));
+    assert.ok(Object.values(copied.hoverScroll).every(value => ['number', 'string'].includes(typeof value)));
+    copied.hoverScroll.wheelEvents = 100;
+    assert.equal(e.c.performanceDiagnostics.hoverScroll.wheelEvents, 1);
+    const oldCounters = e.c.performanceDiagnostics.hoverScroll;
+    e.c.performanceDiagnostics = e.c.createPerformanceDiagnostics();
+    e.c.cancelPendingGridHover('route');
+    assert.equal(oldCounters.intentCancelledRoute, 0);
+    assert.equal(e.c.performanceDiagnostics.hoverScroll.intentCancelledRoute, 0);
+    assert.equal(e.c.pendingGridHoverDiagnostic, null);
+    assert.equal(e.timers.size, 0);
+    assert.equal(e.frames.size, 0);
 });
 
 test('main and watched preparation use the same hover path and report separate comparable timing', async () => {
