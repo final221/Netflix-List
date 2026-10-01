@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.15
+// @version      1.3.16
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -101,7 +101,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.15';
+    const SCRIPT_VERSION = '1.3.16';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -1225,7 +1225,8 @@
                 mixedPhaseSamples: 0, mixedPhaseMaxMs: 0,
                 intentSamples: 0, intentMaxMs: 0, preparationSamples: 0, preparationMaxMs: 0,
                 replaySamples: 0, replayMaxMs: 0, scrollSamples: 0, scrollMaxMs: 0 },
-            resize: { events: 0, checks: 0, unchanged: 0, refreshes: 0, hoverPreserved: 0, hoverCancelled: 0 },
+            resize: { events: 0, checks: 0, unchanged: 0, refreshes: 0, hoverPreserved: 0, hoverCancelled: 0,
+                parkedHeightChangesIgnored: 0, parkedHeightHoverPreserved: 0 },
             nativeRecovery: { attempts: 0, completed: 0, exhausted: 0, alignmentRestores: 0, alignmentRestoreFailures: 0 },
             undoRetention: { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 },
             membershipReuse: { attempts: 0, reused: 0, rejected: 0, itemsCaptured: 0, requestsAvoided: 0 },
@@ -1249,6 +1250,7 @@
         counters[`${phase}Samples`]++;
         counters[`${phase}TotalMs`] = Math.round((counters[`${phase}TotalMs`] + elapsed) * 10) / 10;
         counters[`${phase}MaxMs`] = Math.max(counters[`${phase}MaxMs`], elapsed);
+        return elapsed;
     }
 
     function stopHoverFrameDiagnostics(reason = 'route-leave') {
@@ -7267,6 +7269,8 @@
             let afterTransform = beforeTransform;
             let afterSignature = beforeSignature;
             let settleObservedChange = false;
+            let acknowledgementMs = null;
+            let settlementMs = null;
 
             log(tLog('carouselMoveStarted'), {
                 seq,
@@ -7323,7 +7327,7 @@
                     } else {
                         after = await waitPage(section, before, PAGE_CHANGE_TIMEOUT_MS, sessionToken, token);
                     }
-                } finally { if (hoverTiming) recordHoverTiming(hoverTiming, 'acknowledgement', acknowledgementStarted); }
+                } finally { if (hoverTiming) acknowledgementMs = recordHoverTiming(hoverTiming, 'acknowledgement', acknowledgementStarted) ?? null; }
                 assertRouteSession(sessionToken);
                 const settlementStarted = hoverTiming ? performance.now() : 0;
                 try {
@@ -7345,7 +7349,7 @@
                         afterSignature = settled.signature;
                         settleObservedChange = settled.observedChange;
                     }
-                } finally { if (hoverTiming) recordHoverTiming(hoverTiming, 'settlement', settlementStarted); }
+                } finally { if (hoverTiming) settlementMs = recordHoverTiming(hoverTiming, 'settlement', settlementStarted) ?? null; }
             } finally {
                 restoreMoveStyles();
                 unregisterActiveCarouselStyleCleanup(restoreMoveStyles);
@@ -7364,6 +7368,7 @@
                 beforeTransform,
                 afterTransform,
                 elapsedMs: Math.round(performance.now() - started),
+                ...(hoverTiming ? { acknowledgementMs, settlementMs } : {}),
                 animationRestored: sharedFastMode ? false : (!section.classList.contains(FAST_MOVE_CLASS) &&
                     track.style.getPropertyValue('transition') === savedTransition.value &&
                     track.style.getPropertyPriority('transition') === savedTransition.priority),
@@ -11549,6 +11554,9 @@
 
         lastResponsiveSignature = responsiveSignature(layout);
         lastPageShape = responsivePageShape(layout);
+        // Remember the viewport used to publish this grid before observing the
+        // source's own collapse to the hidden, one-pixel standby height.
+        buildState.resizeViewportSignature = responsiveViewportSignature();
 
         resizeObserver?.disconnect();
         resizeObserver = new ResizeObserver(() => {
@@ -11589,11 +11597,12 @@
             visual?.width, visual?.height, visual?.scale, visual?.offsetLeft, visual?.offsetTop].join('|');
     }
 
-    function responsiveLayoutMatches(previous, next) {
+    function responsiveLayoutMatches(previous, next, ignoreScrollerHeight = false) {
         if (!previous) return false;
         return ['columns', 'cardWidth', 'gridWidth', 'gridLeft', 'sidePadding', 'sidePaddingLeft',
             'sidePaddingRight', 'scrollerWidth', 'scrollerHeight', 'gap', 'rowGap']
-            .every(key => Math.abs((previous[key] || 0) - (next[key] || 0)) <= 0.5);
+            .every(key => (ignoreScrollerHeight && key === 'scrollerHeight') ||
+                Math.abs((previous[key] || 0) - (next[key] || 0)) <= 0.5);
     }
 
     function cancelResizeHover() {
@@ -12063,14 +12072,39 @@
             const sig = sample.signature;
             const logicalMappingStale = Boolean(getCarouselDomRuntime(sourceState.section)?.pageMappingStale);
             const applied = state.grid.__tmAppliedGeometry;
-            const geometryUnchanged = responsiveLayoutMatches(state.layout, measured) && applied &&
+            const layoutUnchanged = responsiveLayoutMatches(state.layout, measured);
+            // Parking a hidden source changes its own height, not the displayed
+            // grid. Preserve the first hover only after all other checks agree.
+            const parkedHeightOnlyChange = !layoutUnchanged && lastResponsiveReason === 'ResizeObserver' &&
+                sig === lastResponsiveSignature && !logicalMappingStale &&
+                state.section.getAttribute(ORIGINAL_VISIBILITY_ATTR) === 'false' &&
+                state.scroller.classList.contains(SOURCE_PARKED_CLASS) &&
+                state.resizeViewportSignature === responsiveViewportSignature() &&
+                Number.isFinite(state.layout?.scrollerHeight) && state.layout.scrollerHeight > 1.5 &&
+                Number.isFinite(measured.scrollerHeight) && measured.scrollerHeight >= 1 && measured.scrollerHeight <= 1.5 &&
+                responsiveLayoutMatches(state.layout, measured, true);
+            const geometryUnchanged = (layoutUnchanged || parkedHeightOnlyChange) && applied &&
                 ['width', 'left', 'columns'].every(key => Math.abs(applied[key] - sample.geometry[key]) <= 0.5);
             if (sig === lastResponsiveSignature && geometryUnchanged && !logicalMappingStale) {
+                const previousScrollerHeight = state.layout.scrollerHeight;
                 sourceState.layout = measured;
                 realignActiveSource();
                 performanceDiagnostics.resize.unchanged++;
-                if (activeClone || pendingGridHoverClone) performanceDiagnostics.resize.hoverPreserved++;
-                trace(() => [tLog('responsiveRemeasurementNoShapeChange'), {
+                const hoverPreserved = Boolean(activeClone || pendingGridHoverClone ||
+                    activeHoverPreparationDiagnostic?.token === hoverToken);
+                if (hoverPreserved) performanceDiagnostics.resize.hoverPreserved++;
+                if (parkedHeightOnlyChange) {
+                    const counters = performanceDiagnostics.resize;
+                    counters.parkedHeightChangesIgnored++;
+                    if (hoverPreserved) counters.parkedHeightHoverPreserved++;
+                    // One event per route; later occurrences remain in Copy Logs.
+                    if (counters.parkedHeightChangesIgnored === 1) {
+                        try { log(tLog('responsiveRemeasurementNoShapeChange'), {
+                            reason: lastResponsiveReason, signature: sig, parkedHeightOnlyChange: true,
+                            previousScrollerHeight, scrollerHeight: measured.scrollerHeight, hoverPreserved
+                        }); } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
+                    }
+                } else trace(() => [tLog('responsiveRemeasurementNoShapeChange'), {
                     reason: lastResponsiveReason,
                     signature: sig,
                     layout: layoutSummary(measured)

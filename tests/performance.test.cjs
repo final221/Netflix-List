@@ -1123,10 +1123,10 @@ test('hover phase timing cannot write into a new route diagnostic owner', async 
     const e = preparedHoverEnvironment();
     const old = e.c.performanceDiagnostics.hoverTiming;
     await e.advance(125);
-    e.c.recordHoverTiming(old, 'queue', 0);
+    assert.equal(e.c.recordHoverTiming(old, 'queue', 0), 125);
     assert.equal(old.queueTotalMs, 125);
     e.c.performanceDiagnostics = e.c.createPerformanceDiagnostics();
-    e.c.recordHoverTiming(old, 'move', 0);
+    assert.equal(e.c.recordHoverTiming(old, 'move', 0), undefined);
     assert.equal(old.moveSamples, 0);
     assert.equal(e.c.performanceDiagnostics.hoverTiming.queueSamples, 0);
     assert.equal(e.c.performanceDiagnostics.hoverTiming.moveSamples, 0);
@@ -2152,6 +2152,7 @@ test('cancelled indicator polling still acknowledges the clicked page at a lower
 test('clicked moves remain serialized through native settlement and restore their styles', async () => {
     const acknowledgement = deferred();
     const settlement = deferred();
+    const logs = [];
     let clicks = 0, page = 0, restorations = 0;
     const classes = new Set();
     const section = { classList: { contains: key => classes.has(key), add: key => classes.add(key), remove: key => classes.delete(key) } };
@@ -2170,6 +2171,7 @@ test('clicked moves remain serialized through native settlement and restore thei
         captureInlineStyleProperty: (node, key) => ({ value: node.style.getPropertyValue(key), priority: '' }),
         restoreInlineStyleProperty: (node, key, saved) => { restorations++; node.style.setProperty(key, saved.value); },
         registerActiveCarouselStyleCleanup: () => {}, unregisterActiveCarouselStyleCleanup: () => {},
+        log: (name, details) => logs.push({ name, details }),
         waitLogicalPageChange: () => clicks === 1 ? acknowledgement.promise : Promise.resolve({ page: 2, transform: 'after', signature: 'after', changed: true }),
         waitForScriptMoveSettle: () => clicks === 1 ? settlement.promise : Promise.resolve({ transform: 'after', signature: 'after', observedChange: true })
     });
@@ -2200,6 +2202,12 @@ test('clicked moves remain serialized through native settlement and restore thei
     assert.equal(e.c.performanceDiagnostics.hoverTiming.acknowledgementTotalMs, 80);
     assert.equal(e.c.performanceDiagnostics.hoverTiming.settlementSamples, 2);
     assert.equal(e.c.performanceDiagnostics.hoverTiming.settlementTotalMs, 40);
+    const completed = logs.filter(entry => entry.name === 'carouselMoveCompleted');
+    assert.equal(completed.length, 2);
+    assert.equal(completed[0].details.acknowledgementMs, 80);
+    assert.equal(completed[0].details.settlementMs, 40);
+    assert.equal(completed[1].details.acknowledgementMs, 0);
+    assert.equal(completed[1].details.settlementMs, 0);
 });
 
 test('signal-acknowledged clicks remain serialized through native settling after hover cancellation', async () => {
@@ -3046,6 +3054,7 @@ test('snapshot construction cancels after a yield without reading more edges', a
 test('chunked grid publishes its complete tree and maps once while preserving card interactions', async () => {
     const e = constructionEnvironment();
     const items = e.items(150), state = e.c.sourceState;
+    state.resizeViewportSignature = 'old-grid-viewport';
     const oldMap = state.cloneMap;
     const completion = e.c.buildGrid(e.section, e.scroller, items, e.layout, 150, 1);
     await e.flush();
@@ -3057,6 +3066,7 @@ test('chunked grid publishes its complete tree and maps once while preserving ca
     await e.drain();
     const grid = await completion;
     assert.equal(grid.isConnected, true);
+    assert.equal(state.resizeViewportSignature, e.c.responsiveViewportSignature());
     assert.equal(e.oldGrid.isConnected, false);
     assert.equal(state.grid, grid);
     assert.equal(state.cloneMap.size, 150);
@@ -7369,6 +7379,7 @@ function resizeEnvironment() {
     const viewport = { innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1,
         visualViewport: { width: 1280, height: 800, scale: 1, offsetLeft: 0, offsetTop: 0 } };
     const calls = { measures: 0, styles: 0, refreshes: 0 };
+    const logs = [];
     let pages = 4;
     const runtime = { pageMappingStale: false };
     const layout = { columns: 6, cardWidth: 100, gridWidth: 640, gridLeft: 20, sidePadding: 20,
@@ -7377,6 +7388,8 @@ function resizeEnvironment() {
     const e = hoverEnvironment(['handleTargetWindowResize', 'handleTargetVisualViewportResize', 'scheduleResponsiveRefresh',
         'responsiveSignature', 'responsivePageShape', 'realignActiveSource'], {
         window: viewport, responsiveRefreshTimer: null, responsiveRefreshing: false,
+        SOURCE_PARKED_CLASS: 'parked', ORIGINAL_VISIBILITY_ATTR: 'original-visible',
+        log: (name, details) => logs.push({ name, details }),
         getCarouselDomRuntime: () => runtime, pageCount: () => pages, layoutSummary: value => value,
         measureVisibleLayout: () => { calls.measures++; return { ...measured }; },
         measureNativeCarouselGap: () => 10, updateResponsiveStatus: () => calls.styles++,
@@ -7389,8 +7402,198 @@ function resizeEnvironment() {
     e.grid.__tmAppliedGeometry = { width: 640, left: 20, columns: 6 };
     e.c.lastPageShape = e.c.responsivePageShape(layout);
     e.c.activeClone = e.clone;
-    return { ...e, viewport, calls, measured, runtime, setPages: value => { pages = value; } };
+    return { ...e, viewport, calls, logs, measured, runtime, setPages: value => { pages = value; } };
 }
+
+function parkedResizeEnvironment() {
+    const e = resizeEnvironment();
+    e.section.setAttribute('original-visible', 'false');
+    const classes = new Set(['parked']);
+    e.c.sourceState.scroller.classList = { contains: key => classes.has(key),
+        add: key => classes.add(key), remove: key => classes.delete(key) };
+    e.measured.scrollerHeight = 1;
+    return e;
+}
+
+test('owned hidden-source collapse preserves active, pending and preparing hovers with one route log', async () => {
+    for (const phase of ['active', 'pending', 'preparing', 'none']) {
+        const e = parkedResizeEnvironment();
+        if (phase !== 'active') e.c.activeClone = null;
+        e.c.scheduleResponsiveRefresh(140, 'ResizeObserver');
+        if (phase === 'pending') {
+            await e.advance(50);
+            e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+        }
+        if (phase === 'preparing') e.c.activeHoverPreparationDiagnostic = { token: e.c.hoverToken };
+        const token = e.c.hoverToken, generation = e.clone.__tmHoverActivationGeneration;
+        await e.advance(phase === 'pending' ? 90 : 140);
+        assert.deepEqual(e.calls, { measures: 1, styles: 0, refreshes: 0 }, phase);
+        assert.equal(e.c.hoverToken, token, phase);
+        assert.equal(e.clone.__tmHoverActivationGeneration, generation, phase);
+        assert.equal(e.c.performanceDiagnostics.resize.hoverCancelled, 0, phase);
+        assert.equal(e.c.performanceDiagnostics.resize.parkedHeightChangesIgnored, 1, phase);
+        assert.equal(e.c.performanceDiagnostics.resize.parkedHeightHoverPreserved, phase === 'none' ? 0 : 1, phase);
+        assert.equal(e.c.sourceState.layout.scrollerHeight, 1, phase);
+        if (phase === 'pending') assert.equal(e.c.pendingGridHoverClone, e.clone);
+        if (phase === 'preparing') assert.equal(e.c.activeHoverPreparationDiagnostic.token, token);
+        assert.equal(e.logs.length, 1, phase);
+        assert.equal(e.logs[0].details.parkedHeightOnlyChange, true);
+        assert.equal(e.logs[0].details.previousScrollerHeight, 60);
+        assert.equal(e.logs[0].details.scrollerHeight, 1);
+        // Repeated observations neither repeat the transition nor create logs.
+        e.c.scheduleResponsiveRefresh(140, 'ResizeObserver');
+        await e.advance(140);
+        assert.equal(e.c.performanceDiagnostics.resize.parkedHeightChangesIgnored, 1);
+        // A second actual collapse is still counted, without another route log.
+        e.c.sourceState.layout.scrollerHeight = 60;
+        e.c.scheduleResponsiveRefresh(140, 'ResizeObserver');
+        await e.advance(140);
+        assert.equal(e.c.performanceDiagnostics.resize.parkedHeightChangesIgnored, 2);
+        assert.equal(e.logs.length, 1);
+        assert.equal(e.calls.refreshes, 0);
+        assert.ok(Object.values(e.logs[0].details).every(value =>
+            ['string', 'number', 'boolean'].includes(typeof value)));
+    }
+});
+
+test('hidden height transitions cannot bypass source, viewport, signature, mapping or clipping guards', async () => {
+    const changes = [
+        e => e.section.setAttribute('original-visible', 'true'),
+        e => e.section.removeAttribute('original-visible'),
+        e => e.c.sourceState.scroller.classList.remove('parked'),
+        e => { delete e.c.sourceState.resizeViewportSignature; },
+        e => e.viewport.innerWidth++, e => e.viewport.innerHeight++,
+        e => e.viewport.visualViewport.scale++, e => e.viewport.devicePixelRatio++,
+        e => e.measured.columns++, e => e.measured.cardWidth++, e => e.measured.scrollerWidth++,
+        e => e.measured.gridWidth++, e => e.measured.gridLeft++, e => e.measured.sidePaddingLeft = 10,
+        e => e.measured.sidePaddingRight = 10, e => e.measured.gap++,
+        e => { e.c.sourceState.layout.rowGap = 0; },
+        e => e.measured.scrollerHeight = 2,
+        e => { e.c.sourceState.layout.scrollerHeight = 1; e.measured.scrollerHeight = 60; },
+        e => e.measured.scrollerHeight = NaN,
+        e => e.c.sourceState.layout.scrollerHeight = '60',
+        e => e.setPages(5), e => { e.runtime.pageMappingStale = true; },
+        e => { e.grid.__tmAppliedGeometry = null; },
+        e => { e.c.currentGridGeometry = () => ({ width: 620, left: 20, columns: 6 }); }
+    ];
+    for (const [index, change] of changes.entries()) {
+        const e = parkedResizeEnvironment();
+        change(e);
+        e.c.scheduleResponsiveRefresh(140, 'ResizeObserver');
+        await e.advance(140);
+        assert.equal(e.calls.refreshes, 1, String(index));
+        assert.equal(e.c.activeClone, null, String(index));
+        assert.equal(e.c.performanceDiagnostics.resize.parkedHeightChangesIgnored, 0, String(index));
+        assert.equal(e.logs.some(entry => entry.details?.parkedHeightOnlyChange), false, String(index));
+    }
+});
+
+test('parked-height exception is limited to observer notifications and coalesces duplicate callbacks', async () => {
+    for (const reason of ['window.resize', 'visualViewport.resize', 'unknown', 'logical-page-model-retry']) {
+        const e = parkedResizeEnvironment();
+        e.c.scheduleResponsiveRefresh(140, reason);
+        await e.advance(140);
+        assert.equal(e.calls.refreshes, 1, reason);
+        assert.equal(e.c.performanceDiagnostics.resize.parkedHeightChangesIgnored, 0, reason);
+    }
+    const e = parkedResizeEnvironment();
+    for (let index = 0; index < 40; index++) e.c.scheduleResponsiveRefresh(140, 'ResizeObserver');
+    assert.equal(e.timers.size, 1);
+    await e.advance(140);
+    assert.equal(e.calls.measures, 1);
+    assert.equal(e.calls.refreshes, 0);
+    assert.equal(e.c.performanceDiagnostics.resize.parkedHeightChangesIgnored, 1);
+    assert.equal(e.timers.size, 0);
+    assert.equal(e.frames.size, 0);
+});
+
+test('real viewport events still cancel hover before a later parked-height observer check', async () => {
+    for (const event of ['handleTargetWindowResize', 'handleTargetVisualViewportResize']) {
+        const e = parkedResizeEnvironment();
+        e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+        e.viewport.visualViewport.scale++;
+        e.c[event]();
+        assert.equal(e.c.activeClone, null);
+        assert.equal(e.c.pendingGridHoverClone, null);
+        assert.equal(e.c.performanceDiagnostics.resize.hoverCancelled, 1);
+        e.c.scheduleResponsiveRefresh(140, 'ResizeObserver');
+        await e.advance(140);
+        assert.equal(e.activations.length, 0);
+        assert.equal(e.c.performanceDiagnostics.resize.parkedHeightHoverPreserved, 0);
+    }
+});
+
+test('obsolete route and source checks cannot count or log an ignored parked-height change', async () => {
+    for (const change of [e => { e.c.sourceState = { ...e.c.sourceState }; },
+        e => { e.c.isRouteSessionActive = () => false; }, e => { e.grid.isConnected = false; }]) {
+        const e = parkedResizeEnvironment();
+        e.c.scheduleResponsiveRefresh(140, 'ResizeObserver');
+        change(e);
+        await e.advance(140);
+        assert.equal(e.calls.measures, 0);
+        assert.equal(e.calls.refreshes, 0);
+        assert.equal(e.c.performanceDiagnostics.resize.parkedHeightChangesIgnored, 0);
+        assert.equal(e.logs.length, 0);
+    }
+});
+
+test('failed parked-height diagnostics cannot cancel or strand an active hover', async () => {
+    const e = parkedResizeEnvironment();
+    const token = e.c.hoverToken;
+    e.c.log = () => { throw new Error('diagnostic failure'); };
+    e.c.scheduleResponsiveRefresh(140, 'ResizeObserver');
+    await e.advance(140);
+    assert.equal(e.c.activeClone, e.clone);
+    assert.equal(e.c.hoverToken, token);
+    assert.equal(e.calls.refreshes, 0);
+    assert.equal(e.c.performanceDiagnostics.resize.parkedHeightHoverPreserved, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.diagnosticFailures, 1);
+    assert.equal(e.timers.size, 0);
+});
+
+test('a first real native preparation survives the parked-height startup check and dispatches replay', async () => {
+    const e = preparedHoverEnvironment();
+    for (const name of ['scheduleResponsiveRefresh', 'responsiveSignature', 'responsivePageShape', 'realignActiveSource']) {
+        vm.runInContext(declaration(name), e.c);
+    }
+    const nativeSource = deferred();
+    let refreshes = 0;
+    const layout = { columns: 6, cardWidth: 100, gridWidth: 640, gridLeft: 20, sidePadding: 20,
+        scrollerWidth: 680, scrollerHeight: 60, gap: 8, rowGap: 10 };
+    Object.assign(e.c, {
+        SOURCE_PARKED_CLASS: 'parked', ORIGINAL_VISIBILITY_ATTR: 'original-visible',
+        window: { innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1 },
+        responsiveRefreshTimer: null, responsiveRefreshing: false, pageCount: () => 1,
+        measureVisibleLayout: () => ({ ...layout, scrollerHeight: 1 }),
+        currentGridGeometry: () => ({ width: 640, left: 20, columns: 6 }),
+        refreshResponsiveLayout: () => { refreshes++; e.c.cancelResizeHover(); },
+        resolveExpectedPageSourceItem: () => nativeSource.promise
+    });
+    e.section.setAttribute('original-visible', 'false');
+    e.c.sourceState.scroller.classList = { contains: key => key === 'parked' };
+    Object.assign(e.c.sourceState, { layout, resizeViewportSignature: e.c.responsiveViewportSignature() });
+    e.grid.__tmAppliedGeometry = { width: 640, left: 20, columns: 6 };
+    e.c.lastResponsiveSignature = e.c.responsiveSignature(layout);
+    e.c.lastPageShape = e.c.responsivePageShape(layout);
+    e.c.scheduleResponsiveRefresh(140, 'ResizeObserver');
+    e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+    await e.advance(120);
+    const owner = e.c.activeHoverPreparationDiagnostic;
+    assert.ok(owner);
+    await e.advance(20);
+    assert.equal(e.c.activeHoverPreparationDiagnostic, owner);
+    assert.equal(e.c.hoverToken, owner.token);
+    assert.equal(refreshes, 0);
+    assert.equal(e.c.performanceDiagnostics.resize.parkedHeightHoverPreserved, 1);
+    nativeSource.resolve({ status: 'found', slot: e.sourceSlot, slots: [e.sourceSlot], page: 0 });
+    await e.flush();
+    await e.frame();
+    await e.flush();
+    assert.equal(e.events.length, 4);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.replaysDispatched, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverScroll.preparationCancelledResize, 0);
+    assert.equal(e.c.activeHoverPreparationDiagnostic, null);
+});
 
 test('duplicate window and visual-viewport events coalesce to one check and preserve hover without style writes', async () => {
     const e = resizeEnvironment();
