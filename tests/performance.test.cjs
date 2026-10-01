@@ -78,6 +78,7 @@ function environment(names, overrides = {}) {
         recentRemovedMyListItems: new Map(), undoExpiryTimer: null,
         nativeInitializationFailure: null,
         imageResourceObserver: null, IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES: 4000,
+        hoverFrameDiagnosticOwner: null, startHoverFrameDiagnostics: () => {},
         isTargetPage: () => true, isRouteSessionActive: token => token === 1,
         assertRouteSession: () => {}, isRouteSessionCancelledError: () => false,
         ensureLiveNativeBinding: () => {},
@@ -85,9 +86,12 @@ function environment(names, overrides = {}) {
         initializeWatchGroups: () => {},
         ...overrides
     });
+    vm.runInContext(source.match(/^    const HOVER_FRAME_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     for (const name of ['createNativeReadScope', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'trace', 'gridOwnsClone',
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
+        'stopHoverFrameDiagnostics', 'handleHoverDiagnosticVisibilityChange',
+        'hoverReplayGuardDiagnostic', 'hoverLeaveDestinationDiagnostic', 'recordGridHoverLeave',
         'startImageResourceDiagnostics', 'stopImageResourceDiagnostics', 'recordImageResourceEntries',
         'responsiveViewportSignature', 'responsiveLayoutMatches',
         'cancelResizeHover', 'handleTargetResize', 'recoverNativeInitialization', ...names]) {
@@ -796,6 +800,251 @@ test('hover phase timing cannot write into a new route diagnostic owner', async 
     assert.equal(old.moveSamples, 0);
     assert.equal(e.c.performanceDiagnostics.hoverTiming.queueSamples, 0);
     assert.equal(e.c.performanceDiagnostics.hoverTiming.moveSamples, 0);
+});
+
+test('hover leave diagnostics identify a stationary early preview transfer without exporting DOM data', async () => {
+    const e = preparedHoverEnvironment();
+    liveHoverGeometry(e);
+    const activation = e.start();
+    await e.flush(); await e.frame(); await activation;
+    const clone = e.current();
+    const popup = new Element('private-profile-123');
+    popup.localName = 'div';
+    popup.classList = { length: 2, item: index => ['private-profile-123', 'previewModal--wrapper'][index] };
+    const control = new Element('private-title-456', popup);
+    control.localName = 'button';
+    for (const node of [clone, control, popup]) {
+        node.getBoundingClientRect = () => { throw new Error('Diagnostic layout read'); };
+        Object.defineProperty(node, 'textContent', { get() { throw new Error('Private DOM text'); } });
+        Object.defineProperty(node, 'href', { get() { throw new Error('Private URL'); } });
+    }
+    await e.advance(420);
+    e.c.handleGridClonePointerLeave(clone, clone.__tmMyListItem, control,
+        pointer(clone, { type: 'pointerout', relatedTarget: control }));
+    const entry = e.logs.find(log => log.name === 'hoverPointerLeaveObserved').details;
+    assert.equal(entry.afterReplay, true);
+    assert.equal(entry.sinceReplayMs, 420);
+    assert.equal(entry.pointerDeltaPx, 0);
+    assert.equal(entry.destination.previewHint, true);
+    assert.equal(entry.destination.tag, 'button');
+    assert.equal(entry.destination.ancestorsExamined, 2);
+    assert.equal(entry.trusted, true);
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.stationaryLeaves, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.leavesWithin600ms, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.leavesToPreviewHint, 1);
+    assert.equal(e.events.length, 6, 'diagnostics preserve the existing native exit');
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000);
+    assert.doesNotMatch(JSON.stringify(entry), /private|123|456|previewModal|href|textContent/);
+});
+
+test('unknown pointer coordinates and bounded destination hints are not treated as stationary movement', async () => {
+    const e = preparedHoverEnvironment();
+    const activation = e.start();
+    await e.flush(); await e.frame(); await activation;
+    const target = new Element();
+    let node = target, classReads = 0;
+    for (let index = 0; index < 8; index++) {
+        node.localName = 'div';
+        node.classList = { length: 100, item() { classReads++; return 'generic'; } };
+        node.parentElement = new Element();
+        node = node.parentElement;
+    }
+    // A preview beyond the ancestry cap is deliberately unknown.
+    node.classList = { length: 1, item: () => 'previewModal' };
+    const result = e.c.hoverLeaveDestinationDiagnostic(target);
+    assert.equal(result.ancestorsExamined, 6);
+    assert.equal(result.truncated, true);
+    assert.equal(result.previewHint, false);
+    assert.equal(classReads, 48);
+    e.c.handleGridClonePointerLeave(e.current(), e.clone.__tmMyListItem, target);
+    const entry = e.logs.find(log => log.name === 'hoverPointerLeaveObserved').details;
+    assert.equal(entry.pointerDeltaPx, null);
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.stationaryLeaves, 0);
+});
+
+test('a diagnostic destination failure cannot interrupt hover exit and geometry restoration', async () => {
+    const e = preparedHoverEnvironment();
+    liveHoverGeometry(e);
+    const activation = e.start();
+    await e.flush(); await e.frame(); await activation;
+    const destination = new Element();
+    Object.defineProperty(destination, 'classList', { get() { throw new Error('Private diagnostic failure'); } });
+    e.c.handleGridClonePointerLeave(e.current(), e.clone.__tmMyListItem, destination, pointer(e.current()));
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.diagnosticFailures, 1);
+    assert.equal(e.c.activeNativeHover, null);
+    assert.equal(e.events.length, 6);
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000);
+    assert.doesNotMatch(JSON.stringify(e.logs), /Private diagnostic failure/);
+});
+
+test('replay rejection reports loss of hover after insertion and leaves existing retry behavior intact', async () => {
+    const e = preparedHoverEnvironment();
+    const activation = e.start();
+    await e.flush();
+    const fresh = e.current();
+    assert.equal(e.logs.find(log => log.name === 'nativePageClonesUpdated').details.targetHoveredAtInsertion, true);
+    fresh.hovered = false;
+    fresh.getBoundingClientRect = () => { throw new Error('Rejected target cannot be measured'); };
+    await e.frame();
+    const rejection = e.logs.find(log => log.name === 'hoverReplayGuardRejected').details;
+    assert.equal(rejection.replacementHoveredAtInsertion, true);
+    assert.equal(rejection.targetHovered, false);
+    assert.equal(rejection.targetConnected, true);
+    assert.equal(rejection.generationMatches, true);
+    assert.equal(rejection.activeCloneMatches, true);
+    assert.equal(rejection.hoverSuppressed, false);
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.replayGuardRejected, 1);
+    assert.equal(e.events.length, 0);
+    await e.advance(180); await activation;
+    assert.equal(e.calls.preparations, 1, 'a non-hovered target still fails the existing retry admission');
+    assert.equal(e.c.activeClone, null);
+});
+
+test('dwell diagnostics distinguish cancelled intent and a target rejected when the dwell expires', async () => {
+    const e = hoverEnvironment();
+    e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+    e.c.handleGridClonePointerLeave(e.clone, e.clone.__tmMyListItem);
+    e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+    e.clone.hovered = false;
+    await e.advance(120);
+    e.clone.hovered = true;
+    e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+    await e.advance(120);
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.intentsQueued, 3);
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.intentsCancelled, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.dwellRejected, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.dwellCompleted, 1);
+    assert.equal(e.activations.length, 1);
+});
+
+test('the actual dwell delay reports a late timer rather than only its configured 120 ms', async () => {
+    const e = hoverEnvironment();
+    e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
+    await e.advance(2400);
+    assert.equal(e.activations.length, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.dwellSamples, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.dwellMaxMs, 2400);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.dwellTotalMs, 2400);
+});
+
+const hoverFrameFunctions = ['startHoverFrameDiagnostics', 'sampleHoverFrameDiagnostics'];
+
+test('one bounded frame owner separates callback gaps by phase without reading DOM layout or logging each frame', async () => {
+    const phases = [];
+    const e = preparedHoverEnvironment();
+    e.c.document = { visibilityState: 'visible', querySelector() { throw new Error('Frame DOM search'); } };
+    e.c.getComputedStyle = () => { throw new Error('Frame style read'); };
+    for (const name of hoverFrameFunctions) vm.runInContext(declaration(name), e.c);
+    const activation = e.start();
+    phases.push(e.c.hoverFrameDiagnosticOwner.phase);
+    await e.flush(); await e.advance(84); await e.frame(); await activation;
+    phases.push(e.c.hoverFrameDiagnosticOwner.phase);
+    const counters = e.c.performanceDiagnostics.hoverFrames;
+    assert.equal(counters.preparationSamples, 1);
+    assert.equal(counters.preparationMaxMs, 100);
+    assert.equal(counters.replaySamples, 0, 'preparation samples are not counted as popup replay samples');
+    assert.equal(e.frames.size, 1, 'replay renews the preparation owner');
+    const logCount = e.logs.length;
+    await e.frame();
+    await e.advance(44); await e.frame();
+    assert.equal(counters.replaySamples, 2);
+    assert.equal(counters.replayMaxMs, 60);
+    assert.equal(counters.gapsOver50ms, 2);
+    assert.equal(e.logs.length, logCount, 'callback samples only update scalar counters');
+    e.c.handleTargetScroll();
+    phases.push(e.c.hoverFrameDiagnosticOwner.phase);
+    e.c.handleTargetScroll();
+    assert.equal(e.frames.size, 1);
+    await e.frame();
+    assert.equal(counters.scrollSamples, 1);
+    assert.deepEqual(phases, ['preparation', 'replay', 'scroll']);
+    const copy = e.c.collectPerformanceDiagnostics();
+    copy.hoverFrames.callbacks = -1;
+    assert.ok(counters.callbacks > 0);
+    e.c.stopHoverFrameDiagnostics();
+    assert.equal(e.frames.size, 0);
+    assert.equal(counters.active, false);
+});
+
+test('frame sampling stops at time, window and route limits and cannot restart an exhausted route', async () => {
+    const e = environment(hoverFrameFunctions, { document: { visibilityState: 'visible' } });
+    e.c.startHoverFrameDiagnostics('replay');
+    await e.advance(2500); await e.frame();
+    const counters = e.c.performanceDiagnostics.hoverFrames;
+    assert.equal(counters.replayMaxMs, 2516, 'a delayed final callback is recorded before deadline cleanup');
+    assert.equal(counters.stopReason, 'window-complete');
+    assert.equal(e.frames.size, 0);
+    e.c.startHoverFrameDiagnostics('preparation');
+    for (let index = 0; index < counters.windowFrameLimit; index++) await e.frame();
+    assert.equal(counters.stopReason, 'window-frame-limit');
+    assert.equal(e.frames.size, 0);
+    counters.callbacks = counters.routeFrameLimit - 1;
+    e.c.startHoverFrameDiagnostics('scroll');
+    await e.frame();
+    assert.equal(counters.callbacks, counters.routeFrameLimit);
+    assert.equal(counters.stopReason, 'route-frame-limit');
+    for (let index = 0; index < 20; index++) e.c.startHoverFrameDiagnostics('intent');
+    assert.equal(e.frames.size, 0);
+    assert.equal(counters.active, false);
+    assert.equal(e.timers.size, 0);
+});
+
+test('a delayed dwell or replay transition cannot erase the pending callback stall or misattribute its phase', async () => {
+    const e = environment(hoverFrameFunctions);
+    e.c.startHoverFrameDiagnostics('intent');
+    await e.frame();
+    await e.advance(2000);
+    e.c.startHoverFrameDiagnostics('preparation');
+    await e.frame();
+    const counters = e.c.performanceDiagnostics.hoverFrames;
+    assert.equal(counters.maxGapMs, 2016);
+    assert.equal(counters.mixedPhaseSamples, 1);
+    assert.equal(counters.mixedPhaseMaxMs, 2016);
+    assert.equal(counters.preparationSamples, 0);
+    await e.frame();
+    assert.equal(counters.preparationSamples, 1);
+    assert.equal(counters.preparationMaxMs, 16);
+    e.c.stopHoverFrameDiagnostics();
+});
+
+test('hidden tabs, route cleanup and obsolete callbacks stop diagnostics without writing into newer owners', async () => {
+    const e = hoverEnvironment([...hoverFrameFunctions, 'stopTargetEventListeners'], {
+        document: { visibilityState: 'visible' }, targetListenersActive: false, targetDocumentObserver: null
+    });
+    e.c.startHoverFrameDiagnostics('intent');
+    const stale = [...e.frames.values()][0];
+    const old = e.c.performanceDiagnostics.hoverFrames;
+    e.c.document.visibilityState = 'hidden';
+    e.c.handleHoverDiagnosticVisibilityChange();
+    assert.equal(old.stopReason, 'hidden');
+    assert.equal(e.frames.size, 0);
+    await e.advance(5000);
+    stale();
+    assert.equal(old.callbacks, 0);
+    e.c.document.visibilityState = 'visible';
+    e.c.performanceDiagnostics = e.c.createPerformanceDiagnostics();
+    e.c.startHoverFrameDiagnostics('scroll');
+    stale();
+    assert.equal(e.frames.size, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverFrames.callbacks, 0);
+    e.c.stopTargetEventListeners();
+    assert.equal(e.frames.size, 0, 'diagnostics stop even when normal route listeners have already stopped');
+    e.c.startHoverFrameDiagnostics('preparation');
+    e.c.isRouteSessionActive = () => false;
+    await e.frame();
+    assert.equal(e.c.performanceDiagnostics.hoverFrames.callbacks, 0);
+    assert.equal(e.frames.size, 0);
+});
+
+test('unavailable or throwing sampling APIs fail safely without leaking private error details', async () => {
+    for (const api of [undefined, () => { throw new Error('Private frame failure'); }]) {
+        const e = environment(hoverFrameFunctions, { requestAnimationFrame: api });
+        assert.doesNotThrow(() => e.c.startHoverFrameDiagnostics('intent'));
+        assert.equal(e.c.performanceDiagnostics.hoverFrames.active, false);
+        assert.equal(e.frames.size, 0);
+        assert.equal(e.c.performanceDiagnostics.hoverFrames.stopReason, api ? 'api-failed' : 'unsupported');
+        assert.doesNotMatch(JSON.stringify(e.c.collectPerformanceDiagnostics()), /Private frame failure/);
+    }
 });
 
 test('a graft without React assignments is not marked ready for later clone reuse', async () => {
