@@ -41,6 +41,7 @@ what it should not contain
 - Known watched/caught-up titles should start in their section on list entry, and newly established viewing results should appear promptly.
 - After initial loading, viewing groups should remain stable while browsing; changes should follow explicit viewing actions/refresh, a new list entry, or actual list/profile changes.
 - Cached title details may appear immediately on hover and refresh later; strict live information freshness on every hover is not required.
+- The user expects the eventual hover popup to look like Netflix's normal popup. Acceptance of cached information does not imply acceptance of a permanently different popup design.
 - Hover popups should preserve normal page scrolling and dismiss when the pointer moves away; the user does not want a visible close button.
 - Background title-detail loading should give every title equal priority; do not favor visible or nearby cards. Background loading to reduce later hover latency is acceptable.
 - The user authorizes the assistant to maintain the editable durable-context sections of this file when lasting repository knowledge or preferences change, following the protected instructions above. Routine maintenance of those sections does not require another permission request.
