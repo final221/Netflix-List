@@ -76,6 +76,7 @@ function environment(names, overrides = {}) {
         routeSessionToken: 1, targetSessionActive: true,
         recentRemovedMyListItems: new Map(), undoExpiryTimer: null,
         nativeInitializationFailure: null,
+        imageResourceObserver: null, IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES: 4000,
         isTargetPage: () => true, isRouteSessionActive: token => token === 1,
         assertRouteSession: () => {}, isRouteSessionCancelledError: () => false,
         ensureLiveNativeBinding: () => {},
@@ -85,6 +86,7 @@ function environment(names, overrides = {}) {
     });
     for (const name of ['createNativeReadScope', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'trace', 'gridOwnsClone',
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
+        'startImageResourceDiagnostics', 'stopImageResourceDiagnostics', 'recordImageResourceEntries',
         'responsiveViewportSignature', 'responsiveLayoutMatches',
         'cancelResizeHover', 'handleTargetResize', 'recoverNativeInitialization', ...names]) {
         vm.runInContext(declaration(name), c);
@@ -4476,6 +4478,131 @@ function thumbnailEnvironment() {
     return { ...e, reads, addImage, report: () => e.c.collectThumbnailDiagnostics(e.c.sourceState) };
 }
 
+function imageResourceEnvironment() {
+    const observers = [];
+    class Observer {
+        static supportedEntryTypes = ['resource'];
+        constructor(callback) { this.callback = callback; this.disconnections = 0; observers.push(this); }
+        observe(options) { this.options = structuredClone(options); }
+        disconnect() { this.disconnections++; }
+        emit(entries) { this.callback({ getEntries: () => entries }); }
+    }
+    const e = environment(['startImageResourceDiagnostics', 'stopImageResourceDiagnostics', 'recordImageResourceEntries'], {
+        PerformanceObserver: Observer, imageResourceObserver: null,
+        sourceState: { watchStatus: { network: { finishedAt: 100 } } }
+    });
+    vm.runInContext(source.match(/^    const IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES = \d+;/m)?.[0] || '', e.c);
+    return { ...e, observers, Observer, start: () => e.c.startImageResourceDiagnostics(e.c.routeSessionToken),
+        report: () => e.c.collectPerformanceDiagnostics().imageResources };
+}
+
+test('image resource observations continue beyond full history using scalar counters without reading URLs or DOM', () => {
+    const e = imageResourceEnvironment();
+    e.c.performance.getEntriesByType = () => { throw new Error('Saved resource history was queried'); };
+    e.c.performance.clearResourceTimings = e.c.performance.setResourceTimingBufferSize = () => { throw new Error('Global timing buffer changed'); };
+    e.start();
+    assert.deepEqual(e.observers[0].options, { entryTypes: ['resource'] });
+    const entries = Array.from({ length: 300 }, (_, index) => {
+        const entry = { initiatorType: 'img', startTime: index + 1, duration: 8, transferSize: 0, deliveryType: '' };
+        Object.defineProperty(entry, 'name', { get() { throw new Error('Resource URL read'); } });
+        return entry;
+    });
+    e.observers[0].emit([{ initiatorType: 'img', startTime: -10 }, { initiatorType: 'fetch', startTime: 1 }, ...entries]);
+    const report = e.report();
+    assert.equal(report.active, true);
+    assert.equal(report.entriesExamined, 302);
+    assert.equal(report.beforeRouteOrInvalid, 1);
+    assert.equal(report.imageEntries, 300);
+    assert.equal(report.startedAfterViewingScan, 201);
+    assert.equal(report.totalFetchMs, 2400);
+    assert.equal(report.maxFetchMs, 8);
+    assert.equal(report.lastImageStartOffsetMs, 300);
+    assert.equal(report.zeroTransferSizeEntries, 300);
+    assert.equal(report.cacheDelivery, 0, 'zero transfer size alone cannot establish cache delivery');
+    report.imageEntries = -1;
+    assert.equal(e.report().imageEntries, 300);
+    assert.equal(e.timers.size + e.frames.size, 0);
+    assert.equal(e.c.imageResourceObserver.observer, e.observers[0]);
+});
+
+test('image resource diagnostics stop at their route budget and ignore obsolete callbacks', () => {
+    const e = imageResourceEnvironment();
+    e.start(); e.start();
+    assert.equal(e.observers.length, 1);
+    e.observers[0].emit(Array.from({ length: 4005 }, () => ({ initiatorType: 'img', startTime: 10, duration: 1 })));
+    const stopped = e.report();
+    assert.equal(stopped.imageEntries, 4000);
+    assert.equal(stopped.entriesExamined, 4000);
+    assert.equal(stopped.skippedAtLimit, 5);
+    assert.equal(stopped.active, false);
+    assert.equal(stopped.stopReason, 'entry-limit');
+    assert.equal(e.observers[0].disconnections, 1);
+    e.observers[0].emit([{ initiatorType: 'img', startTime: 10 }]);
+    e.start();
+    assert.equal(e.observers.length, 1);
+    assert.deepEqual(e.report(), stopped);
+    e.c.performanceDiagnostics = e.c.createPerformanceDiagnostics();
+    e.start();
+    const next = e.report();
+    e.observers[0].emit([{ initiatorType: 'img', startTime: 10 }]);
+    assert.deepEqual(e.report(), next);
+    e.c.isRouteSessionActive = () => false;
+    e.observers[1].emit([{ initiatorType: 'img', startTime: 10 }]);
+    assert.deepEqual(e.report(), next);
+});
+
+test('image resource observation failures remain private and route lifecycle disconnects the observer', () => {
+    const e = imageResourceEnvironment();
+    e.c.PerformanceObserver = undefined;
+    e.start();
+    assert.equal(e.report().stopReason, 'unsupported');
+    e.c.PerformanceObserver = class { static supportedEntryTypes = ['mark']; };
+    e.start();
+    assert.equal(e.report().stopReason, 'unsupported');
+    e.c.PerformanceObserver = class { static get supportedEntryTypes() { throw new Error('private-support-details'); } };
+    e.start();
+    assert.equal(e.report().stopReason, 'observe-failed');
+    assert.ok(!JSON.stringify(e.report()).includes('private-support-details'));
+    e.c.PerformanceObserver = class extends e.Observer { observe() { throw new Error('private-api-details'); } };
+    e.start();
+    assert.equal(e.report().stopReason, 'observe-failed');
+    assert.equal(e.c.imageResourceObserver, null);
+    assert.equal(e.observers[0].disconnections, 1);
+    assert.ok(!JSON.stringify(e.report()).includes('private-api-details'));
+    e.c.PerformanceObserver = e.Observer;
+    e.start();
+    e.observers[1].callback({ getEntries() { throw new Error('private-resource-information'); } });
+    assert.equal(e.report().stopReason, 'read-failed');
+    assert.equal(e.observers[1].disconnections, 1);
+    const live = fetchEnvironment(6);
+    live.routeLifecycle();
+    live.c.PerformanceObserver = e.Observer;
+    live.c.startImageResourceDiagnostics(live.c.routeSessionToken);
+    live.c.suspendTargetSession('resource-test-leave');
+    assert.equal(e.observers[2].disconnections, 1);
+    assert.equal(live.c.collectPerformanceDiagnostics().imageResources.active, false);
+    live.c.startTargetSession('resource-test-enter');
+    assert.equal(live.c.collectPerformanceDiagnostics().imageResources.active, true);
+    assert.equal(live.c.collectPerformanceDiagnostics().imageResources.imageEntries, 0);
+    assert.equal(e.observers.length, 4);
+    live.c.suspendTargetSession('resource-test-done');
+    assert.equal(e.observers[3].disconnections, 1);
+});
+
+test('thumbnail diagnostics distinguish the selected image from script-assigned artwork without exposing either URL', () => {
+    const e = thumbnailEnvironment();
+    const same = e.addImage();
+    const different = e.addImage({ src: 'https://images.test/assigned-secret.jpg', currentSrc: 'https://images.test/selected-secret.jpg' });
+    const unselected = e.addImage({ currentSrc: '', complete: false, naturalWidth: 0, naturalHeight: 0 });
+    for (const row of [same, different, unselected]) row.image.attributes.set('data-tm-graphql-image', 'true');
+    const report = e.report();
+    assert.equal(report.sourceSelection.graphqlAssigned, 3);
+    assert.equal(report.sourceSelection.graphqlSelectionMatches, 1);
+    assert.equal(report.sourceSelection.graphqlSelectionDiffers, 1);
+    assert.equal(report.sourceSelection.graphqlSelectionUnresolved, 1);
+    assert.ok(!JSON.stringify(report).includes('secret'));
+});
+
 test('copy-only thumbnail measurements separate pending, hidden and current geometry without exposing sources', () => {
     const e = thumbnailEnvironment();
     const ready = e.addImage();
@@ -5787,7 +5914,8 @@ test('copied performance counters are independent snapshots without title, profi
     const copy = e.c.collectPerformanceDiagnostics();
     copy.viewingGroups.controlsUpdated = 100;
     assert.equal(e.c.performanceDiagnostics.viewingGroups.controlsUpdated, 0);
-    assert.ok(Object.values(copy).every(group => Object.values(group).every(value => typeof value === 'number' || typeof value === 'string')));
+    assert.ok(Object.values(copy).every(group => Object.values(group).every(value => value === null ||
+        ['number', 'string', 'boolean'].includes(typeof value))));
     assert.doesNotMatch(JSON.stringify(copy), /videoId|profileGuid|authURL|sourceSlot|cloneMap/);
 });
 

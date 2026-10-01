@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.8
+// @version      1.3.9
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -77,6 +77,7 @@
     const THUMBNAIL_DIAGNOSTIC_LIMITS = Object.freeze({
         cards: 600, geometry: 24, resourceEntries: 2000
     });
+    const IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES = 4000;
 
     const GRID_ID = 'tm-netflix-mylist-v15-grid';
     const STATUS_ID = 'tm-netflix-mylist-v15-status';
@@ -90,7 +91,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.8';
+    const SCRIPT_VERSION = '1.3.9';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -1147,6 +1148,7 @@
     let initializationBlockedSessionToken = null;
     let nativeInitializationFailure = null;
     let performanceDiagnostics = createPerformanceDiagnostics();
+    let imageResourceObserver = null;
     const investigationLog = [];
     let investigationLogStart = 0;
 
@@ -1160,12 +1162,92 @@
             undoRetention: { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 },
             membershipReuse: { attempts: 0, reused: 0, rejected: 0, itemsCaptured: 0, requestsAvoided: 0 },
             nativeCollection: { metadataReads: 0, snapshotsCaptured: 0, duplicateSnapshotsAvoided: 0,
-                invalidMetadata: 0, consistencyFailures: 0 }
+                invalidMetadata: 0, consistencyFailures: 0 },
+            imageResources: { scope: 'page-images-during-list-route', supported: false, active: false, stopReason: '',
+                limit: IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES, batches: 0, entriesExamined: 0, beforeRouteOrInvalid: 0,
+                skippedAtLimit: 0, imageEntries: 0, startedAfterViewingScan: 0, durationSamples: 0,
+                totalFetchMs: 0, maxFetchMs: 0, lastImageStartOffsetMs: null, cacheDelivery: 0,
+                transferBytesReported: 0, zeroTransferSizeEntries: 0, disconnectFailures: 0 }
         };
     }
 
     function collectPerformanceDiagnostics() {
         return Object.fromEntries(Object.entries(performanceDiagnostics).map(([key, counters]) => [key, { ...counters }]));
+    }
+
+    function stopImageResourceDiagnostics(reason = 'route-leave') {
+        const owner = imageResourceObserver;
+        if (!owner) return;
+        imageResourceObserver = null;
+        owner.counters.active = false;
+        owner.counters.stopReason = reason;
+        try { owner.observer?.disconnect(); } catch (_) { owner.counters.disconnectFailures++; }
+    }
+
+    function recordImageResourceEntries(owner, entries) {
+        if (imageResourceObserver !== owner || !isRouteSessionActive(owner.sessionToken) ||
+            performanceDiagnostics.imageResources !== owner.counters) return;
+        const counters = owner.counters;
+        counters.batches++;
+        const count = Math.min(entries.length, IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES - counters.entriesExamined);
+        const scanFinishedAt = sourceState?.watchStatus?.network?.finishedAt;
+        for (let index = 0; index < count; index++) {
+            const entry = entries[index];
+            counters.entriesExamined++;
+            if (!Number.isFinite(entry.startTime) || entry.startTime < owner.startedAt) {
+                counters.beforeRouteOrInvalid++; continue;
+            }
+            if (entry.initiatorType !== 'img') continue;
+            counters.imageEntries++;
+            if (Number.isFinite(scanFinishedAt) && entry.startTime >= scanFinishedAt) counters.startedAfterViewingScan++;
+            counters.lastImageStartOffsetMs = Math.max(counters.lastImageStartOffsetMs ?? 0, Math.round(entry.startTime - owner.startedAt));
+            if (Number.isFinite(entry.duration) && entry.duration >= 0) {
+                counters.durationSamples++;
+                counters.totalFetchMs += Math.round(entry.duration);
+                counters.maxFetchMs = Math.max(counters.maxFetchMs, Math.round(entry.duration));
+            }
+            if (entry.deliveryType === 'cache') counters.cacheDelivery++;
+            if (Number.isFinite(entry.transferSize) && entry.transferSize > 0) counters.transferBytesReported += entry.transferSize;
+            else if (entry.transferSize === 0) counters.zeroTransferSizeEntries++;
+        }
+        if (counters.entriesExamined >= IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES) {
+            counters.skippedAtLimit += entries.length - count;
+            stopImageResourceDiagnostics('entry-limit');
+        }
+        // No URL is read or retained. These include native Netflix images as well as grid thumbnails.
+    }
+
+    function startImageResourceDiagnostics(sessionToken) {
+        if (!isRouteSessionActive(sessionToken)) return;
+        const counters = performanceDiagnostics.imageResources;
+        if (imageResourceObserver?.sessionToken === sessionToken && imageResourceObserver.counters === counters) return;
+        if (counters.entriesExamined >= IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES) return;
+        stopImageResourceDiagnostics('replaced');
+        if (typeof PerformanceObserver !== 'function') {
+            counters.stopReason = 'unsupported'; return;
+        }
+        const owner = { sessionToken, counters, startedAt: performance.now(), observer: null };
+        try {
+            const supportedTypes = PerformanceObserver.supportedEntryTypes;
+            if (Array.isArray(supportedTypes) && !supportedTypes.includes('resource')) {
+                counters.stopReason = 'unsupported'; return;
+            }
+            owner.observer = new PerformanceObserver(list => {
+                if (imageResourceObserver !== owner || !isRouteSessionActive(sessionToken) ||
+                    performanceDiagnostics.imageResources !== counters) return;
+                try { recordImageResourceEntries(owner, list.getEntries()); }
+                catch (_) { stopImageResourceDiagnostics('read-failed'); }
+            });
+            imageResourceObserver = owner;
+            // Subscribe only to future entries. Do not enlarge or clear Netflix's saved timing buffer.
+            owner.observer.observe({ entryTypes: ['resource'] });
+            counters.supported = true;
+            counters.active = true;
+            counters.stopReason = '';
+        } catch (_) {
+            if (imageResourceObserver === owner) stopImageResourceDiagnostics('observe-failed');
+            else counters.stopReason = 'observe-failed';
+        }
     }
 
     function createNativeReadScope() {
@@ -1359,6 +1441,7 @@
         routeSessionToken++;
         targetSessionActive = false;
         abortObsoleteRouteFetches();
+        stopImageResourceDiagnostics();
 
         if (scheduledRunTimer !== null) clearTimeout(scheduledRunTimer);
         scheduledRunTimer = null;
@@ -1421,6 +1504,7 @@
         initializationBlockedSessionToken = null;
         nativeInitializationFailure = null;
         performanceDiagnostics = createPerformanceDiagnostics();
+        startImageResourceDiagnostics(routeSessionToken);
         targetSessionEntryKind = reason === 'route:initial' ? 'initial' : 'spa';
         targetSessionReason = reason;
         const sessionToken = routeSessionToken;
@@ -1732,7 +1816,8 @@
             detachedCards: 0, cardsWithoutImage: 0, duplicateImagesSkipped: 0, images: 0,
             loading: { lazy: 0, eager: 0, other: 0 }, decoding: { async: 0, sync: 0, other: 0 },
             pixels: { ready: 0, pending: 0, completeWithoutPixels: 0, noSource: 0 },
-            sourceSelection: { current: 0, srcFallback: 0, unresolved: 0, invalidUrl: 0 },
+            sourceSelection: { current: 0, srcFallback: 0, unresolved: 0, invalidUrl: 0,
+                graphqlAssigned: 0, graphqlSelectionMatches: 0, graphqlSelectionDiffers: 0, graphqlSelectionUnresolved: 0 },
             dimensionAttributes: { paired: 0, missingOrPartial: 0 },
             visibility: { renderEligible: 0, filterHidden: 0, collapsedWatched: 0, otherHidden: 0 }
         };
@@ -1753,6 +1838,11 @@
                 report.decoding[['async', 'sync'].includes(image.decoding) ? image.decoding : 'other']++;
                 const current = image.currentSrc || '';
                 const src = image.src || image.getAttribute('src') || '';
+                if (image.getAttribute('data-tm-graphql-image') === 'true') {
+                    report.sourceSelection.graphqlAssigned++;
+                    report.sourceSelection[!current ? 'graphqlSelectionUnresolved' : current === src ?
+                        'graphqlSelectionMatches' : 'graphqlSelectionDiffers']++;
+                }
                 const hasSource = Boolean(current || src || image.getAttribute('srcset'));
                 // Complete with intrinsic dimensions does not establish decode/paint completion.
                 const status = !hasSource ? 'noSource' : image.complete !== true ? 'pending' :
