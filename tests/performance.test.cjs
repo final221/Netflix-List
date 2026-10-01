@@ -2056,6 +2056,149 @@ test('native order reads allocate no card trees and native additions capture onl
     assert.equal(e.template.cloneCounter.count, before + 1);
 });
 
+function nativeCollectionEnvironment(mode, windows, totalCount = 4) {
+    const e = constructionEnvironment();
+    let currentPage = 0;
+    const runtime = { profile: { pageMode: mode, generation: mode === 'logical' ? 2 : 1, navigationMode: mode },
+        signatureToPage: new Map(), pageToSignature: new Map(), currentPage: 0 };
+    const cleanup = new Set();
+    const pages = windows.map((entries, page) => entries.map(entry => {
+        const slot = e.template.cloneNode(true);
+        const card = slot.querySelector('card');
+        card.href = entry.missingHref ? '' : `https://www.netflix.com/browse?jbv=${entry.id}`;
+        card.setAttribute('aria-label', `Title ${entry.id}`);
+        slot.itemIndex = entry.index;
+        slot.setAttribute('native-variant', `page-${page}-title-${entry.id}`);
+        return slot;
+    }));
+    const state = () => ({ page: currentPage, slots: pages[currentPage],
+        positions: pages[currentPage].map(slot => ({ slot, itemIndex: slot.itemIndex, logicalIndex: slot.itemIndex })),
+        itemIndices: pages[currentPage].map(slot => slot.itemIndex), logicalIndices: pages[currentPage].map(slot => slot.itemIndex) });
+    Object.assign(e.c, {
+        FAST_MOVE_CLASS: 'fast', LOGICAL_COLLECTION_TIMEOUT_MS: 120000, PAGE_STABLE_TIMEOUT_MS: 2000,
+        PARTIAL_PAGE_RECOVERY_TIMEOUT_MS: 2000,
+        detectCarouselDomProfile: () => runtime.profile, resetCarouselDomRuntime: () => runtime, getCarouselDomRuntime: () => runtime,
+        carouselDomProfileSummary: () => ({ pageMode: mode }),
+        currentPageSlots: () => pages[currentPage], pageCount: () => pages.length, selectedPage: () => currentPage,
+        nativeLogicalPageState: state, requireNativeLogicalPageState: state,
+        waitStableCurrentPage: async () => pages[currentPage],
+        trackTransformValue: () => `page-${currentPage}`,
+        goToPage: async (_, __, page) => { currentPage = page; return page; },
+        moveOnePage: async () => { currentPage++; return currentPage; },
+        restoreNativePageFast: async (_, __, ___, ____, _____, page) => { currentPage = page; return true; },
+        forceLogicalPageSignature: (_, signature, page) => { runtime.signatureToPage.set(signature, page); },
+        carouselMoveButton: () => ({ button: {}, selector: 'right' }), carouselMoveButtonDisabled: () => false,
+        captureInlineStyleProperty: (node, key) => ({ value: node.style.getPropertyValue(key) }),
+        restoreInlineStyleProperty: (node, key, saved) => {
+            if (saved.value) node.style.setProperty(key, saved.value);
+            else node.style.removeProperty(key);
+        },
+        registerActiveCarouselStyleCleanup: callback => cleanup.add(callback), unregisterActiveCarouselStyleCleanup: callback => cleanup.delete(callback),
+        logOperationTimeout() {}, initializationTimeoutError: (stage, _, details) => e.c.initializationError('TIMEOUT', stage, 'timeout', details)
+    });
+    const styles = new Map(), classes = new Set();
+    e.track.style = { setProperty: (key, value) => styles.set(key, value),
+        getPropertyValue: key => styles.get(key) || '', removeProperty: key => styles.delete(key) };
+    e.section.classList = { add: value => classes.add(value), remove: value => classes.delete(value), contains: value => classes.has(value) };
+    e.c.sourceState.layout.columns = 3;
+    e.track.style.setProperty('transition', 'original-transition');
+    e.track.style.setProperty('animation', 'original-animation');
+    for (const name of ['visibleSignature', 'itemKeyFromCard', 'collectAllItemsLogical', 'collectAllItems']) {
+        vm.runInContext(declaration(name), e.c);
+    }
+    return { ...e, pages, runtime, cleanup, async scan() {
+        const pending = e.c.collectAllItems(e.section, e.scroller, e.track, totalCount, 1);
+        let settled = false;
+        pending.then(() => { settled = true; }, () => { settled = true; });
+        for (let attempt = 0; attempt < 20 && !settled; attempt++) {
+            await e.flush();
+            if (e.frames.size) await e.frame();
+        }
+        assert.equal(settled, true, 'modeled collection must finish within its finite windows');
+        return pending;
+    } };
+}
+
+const overlapCollectionWindows = [
+    [{ id: 1, index: 0 }, { id: 2, index: 1 }, { id: 3, index: 2 }],
+    [{ id: 2, index: 1 }, { id: 3, index: 2 }, { id: 4, index: 3 }]
+];
+
+test('native collection snapshots accepted cards once across overlapping logical and indicator windows', async () => {
+    for (const mode of ['logical', 'indicator']) {
+        const e = nativeCollectionEnvironment(mode, overlapCollectionWindows);
+        const before = e.template.cloneCounter.count;
+        const items = await e.scan();
+        assert.deepEqual(Array.from(items, item => item.videoId), ['1', '2', '3', '4']);
+        assert.equal(e.template.cloneCounter.count - before, 4, 'duplicate metadata must be checked before cloning');
+        assert.equal(items[1].snapshot.getAttribute('native-variant'), 'page-0-title-2');
+        assert.equal(items[3].snapshot.getAttribute('native-variant'), 'page-1-title-4');
+        if (mode === 'logical') assert.deepEqual(Array.from(items, item => item.logicalIndex), [0, 1, 2, 3]);
+        assert.deepEqual(Array.from(items, item => item.page), [0, 0, 0, 1]);
+        const work = e.c.collectPerformanceDiagnostics().nativeCollection;
+        assert.equal(work.metadataReads, 6);
+        assert.equal(work.snapshotsCaptured, 4);
+        assert.equal(work.duplicateSnapshotsAvoided, 2);
+        assert.equal(work.consistencyFailures, 0);
+        const completion = e.logs.find(row => row.name === 'fullCollectionCompleted');
+        assert.deepEqual({ ...completion.details.snapshotWork }, { ...work });
+        assert.equal(e.track.style.getPropertyValue('transition'), 'original-transition');
+        assert.equal(e.track.style.getPropertyValue('animation'), 'original-animation');
+        assert.equal(e.section.classList.contains('fast'), false);
+        assert.equal(e.cleanup.size, 0);
+    }
+});
+
+test('logical native collection rejects changed indices and moved titles before snapshotting the conflicting card', async () => {
+    for (const scenario of ['changed-content', 'moved-title', 'invalid-index']) {
+        const changed = scenario === 'changed-content' ? { id: 9, index: 1 }
+            : { id: 2, index: scenario === 'moved-title' ? 3 : -1 };
+        const e = nativeCollectionEnvironment('logical', [overlapCollectionWindows[0],
+            [changed, { id: 3, index: 2 }, { id: 4, index: 3 }]]);
+        const before = e.template.cloneCounter.count;
+        const reason = scenario === 'changed-content' ? 'logical-index-content-changed-during-scan'
+            : scenario === 'moved-title' ? 'video-id-moved-during-scan' : 'invalid-logical-index';
+        await assert.rejects(e.scan(), error => error.code === 'COLLECTION_INCOMPLETE' && error.details.reason === reason);
+        assert.equal(e.template.cloneCounter.count - before, 3);
+        assert.equal(e.c.collectPerformanceDiagnostics().nativeCollection.consistencyFailures, 1);
+        assert.equal(e.track.style.getPropertyValue('transition'), 'original-transition');
+        assert.equal(e.cleanup.size, 0);
+    }
+});
+
+test('native collection skips incomplete card metadata without a snapshot or loss of later valid index coverage', async () => {
+    const e = nativeCollectionEnvironment('logical', [
+        [{ id: 1, index: 0 }, { id: 2, index: 1 }, { id: 3, index: 2, missingHref: true }],
+        overlapCollectionWindows[1]
+    ]);
+    const before = e.template.cloneCounter.count;
+    const items = await e.scan();
+    assert.equal(items.length, 4);
+    assert.equal(e.template.cloneCounter.count - before, 4);
+    const work = e.c.collectPerformanceDiagnostics().nativeCollection;
+    assert.equal(work.invalidMetadata, 1);
+    assert.equal(work.duplicateSnapshotsAvoided, 1);
+    assert.equal(work.snapshotsCaptured, 4);
+});
+
+test('native collection cancellation preserves cleanup and takes no snapshots from the obsolete next window', async () => {
+    for (const mode of ['logical', 'indicator']) {
+        const e = nativeCollectionEnvironment(mode, overlapCollectionWindows);
+        const wait = e.c.waitStableCurrentPage;
+        let calls = 0;
+        e.c.waitStableCurrentPage = async (...args) => {
+            if (++calls === 2) e.c.isRouteSessionActive = () => false;
+            return wait(...args);
+        };
+        const before = e.template.cloneCounter.count;
+        await assert.rejects(e.scan(), error => e.c.isRouteSessionCancelledError(error));
+        assert.equal(e.template.cloneCounter.count - before, 3);
+        assert.equal(e.cleanup.size, 0);
+        assert.equal(e.track.style.getPropertyValue('transition'), 'original-transition');
+        assert.equal(e.frames.size, 0);
+    }
+});
+
 test('failed addition leaves membership, maps, and retained fallback intact for retry', async () => {
     const e = constructionEnvironment();
     await e.c.buildGrid(e.section, e.scroller, e.items(1), e.layout, 1, 1);

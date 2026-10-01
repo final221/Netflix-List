@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.6
+// @version      1.3.7
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -86,7 +86,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.6';
+    const SCRIPT_VERSION = '1.3.7';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -1154,7 +1154,9 @@
             resize: { events: 0, checks: 0, unchanged: 0, refreshes: 0, hoverPreserved: 0, hoverCancelled: 0 },
             nativeRecovery: { attempts: 0, completed: 0, exhausted: 0, alignmentRestores: 0, alignmentRestoreFailures: 0 },
             undoRetention: { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 },
-            membershipReuse: { attempts: 0, reused: 0, rejected: 0, itemsCaptured: 0, requestsAvoided: 0 }
+            membershipReuse: { attempts: 0, reused: 0, rejected: 0, itemsCaptured: 0, requestsAvoided: 0 },
+            nativeCollection: { metadataReads: 0, snapshotsCaptured: 0, duplicateSnapshotsAvoided: 0,
+                invalidMetadata: 0, consistencyFailures: 0 }
         };
     }
 
@@ -8341,6 +8343,7 @@
 
     async function collectAllItemsLogical(section, scroller, track, totalCount, sessionToken = null) {
         assertRouteSession(sessionToken);
+        const snapshotWork = performanceDiagnostics.nativeCollection;
         if (!Number.isFinite(totalCount) || totalCount < 0) {
             throw initializationError(
                 'TOTAL_COUNT_REQUIRED',
@@ -8396,6 +8399,7 @@
                 missing: Math.max(0, totalCount - collectedCount()),
                 logicalPage: runtime.currentPage,
                 cycleDetected: runtime.cycleDetected,
+                snapshotWork: { ...snapshotWork },
                 carouselDom: carouselDomProfileSummary(section),
                 ...details
             };
@@ -8576,6 +8580,7 @@
                 for (const position of pageState.positions) {
                     const logicalIndex = position.logicalIndex;
                     if (!Number.isSafeInteger(logicalIndex) || logicalIndex < 0 || logicalIndex >= totalCount) {
+                        snapshotWork.consistencyFailures++;
                         incomplete('collect-page', 'invalid-logical-index', {
                             page,
                             itemIndex: position.itemIndex,
@@ -8583,11 +8588,13 @@
                         });
                     }
                     const canonicalPage = Math.min(estimatedPages - 1, Math.floor(logicalIndex / responsiveColumns));
-                    const item = itemFromSlot(position.slot, canonicalPage);
-                    if (!item) continue;
+                    snapshotWork.metadataReads++;
+                    const item = itemFromSlot(position.slot, canonicalPage, false);
+                    if (!item) { snapshotWork.invalidMetadata++; continue; }
                     const key = itemKey(item);
                     const existingAtIndex = itemsByLogicalIndex.get(logicalIndex);
                     if (existingAtIndex && itemKey(existingAtIndex) !== key) {
+                        snapshotWork.consistencyFailures++;
                         incomplete('collect-page', 'logical-index-content-changed-during-scan', {
                             page,
                             logicalIndex,
@@ -8597,6 +8604,7 @@
                     }
                     const existingIndex = videoIndex.get(key);
                     if (Number.isSafeInteger(existingIndex) && existingIndex !== logicalIndex) {
+                        snapshotWork.consistencyFailures++;
                         incomplete('collect-page', 'video-id-moved-during-scan', {
                             page,
                             key,
@@ -8604,7 +8612,11 @@
                             currentLogicalIndex: logicalIndex
                         });
                     }
-                    if (existingAtIndex) continue;
+                    if (existingAtIndex) { snapshotWork.duplicateSnapshotsAvoided++; continue; }
+                    // Capture only after identity/index consistency checks in
+                    // this synchronous sample, before native navigation resumes.
+                    item.snapshot = position.slot.cloneNode(true);
+                    snapshotWork.snapshotsCaptured++;
                     item.logicalIndex = logicalIndex;
                     itemsByLogicalIndex.set(logicalIndex, item);
                     videoIndex.set(key, logicalIndex);
@@ -8619,6 +8631,7 @@
                     goal,
                     missing: Math.max(0, goal - collectedCount()),
                     pageMode: 'logical',
+                    snapshotWork: { ...snapshotWork },
                     items: added.map(itemSummary)
                 });
                 if (sourceState) sourceState.collectedCount = collectedCount();
@@ -8747,6 +8760,7 @@
                 initialPage: sourceState?.initialPage ?? 0,
                 pageMode: 'logical',
                 domGeneration: runtime.profile.generation,
+                snapshotWork: { ...snapshotWork },
                 ids: items.map(item => item.videoId || item.href)
             });
             return items;
@@ -8762,6 +8776,7 @@
             return collectAllItemsLogical(section, scroller, track, totalCount, sessionToken);
         }
         assertRouteSession(sessionToken);
+        const snapshotWork = performanceDiagnostics.nativeCollection;
         const items = [];
         const seen = new Set();
         const pages = pageCount(section);
@@ -8882,10 +8897,13 @@
 
                 for (const slot of slots) {
                     if (Number.isFinite(goal) && items.length >= goal) break;
-                    const item = itemFromSlot(slot, actualPage);
-                    if (!item) continue;
+                    snapshotWork.metadataReads++;
+                    const item = itemFromSlot(slot, actualPage, false);
+                    if (!item) { snapshotWork.invalidMetadata++; continue; }
                     const key = itemKey(item);
-                    if (seen.has(key)) continue;
+                    if (seen.has(key)) { snapshotWork.duplicateSnapshotsAvoided++; continue; }
+                    item.snapshot = slot.cloneNode(true);
+                    snapshotWork.snapshotsCaptured++;
                     seen.add(key);
                     items.push(item);
                 }
@@ -8896,6 +8914,7 @@
                     added: added.length,
                     total: items.length,
                     goal,
+                    snapshotWork: { ...snapshotWork },
                     items: added.map(itemSummary)
                 });
 
@@ -8970,6 +8989,7 @@
             endingPage,
             restoredPage: selectedPage(section),
             initialPage,
+            snapshotWork: { ...snapshotWork },
             ids: items.map(item => item.videoId || item.href)
         });
         return items;
