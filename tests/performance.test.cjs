@@ -74,6 +74,7 @@ function environment(names, overrides = {}) {
         activeClone: null, activeVideoId: null, activePage: null, activeSourceSlot: null, activeGeometryProxy: null,
         orderMismatchDialogOpen: false, orderMismatchReinitializing: false, responsiveRefreshPromise: null,
         routeSessionToken: 1, targetSessionActive: true,
+        recentRemovedMyListItems: new Map(), undoExpiryTimer: null,
         nativeInitializationFailure: null,
         isTargetPage: () => true, isRouteSessionActive: token => token === 1,
         assertRouteSession: () => {}, isRouteSessionCancelledError: () => false,
@@ -83,7 +84,8 @@ function environment(names, overrides = {}) {
         ...overrides
     });
     for (const name of ['createNativeReadScope', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'trace', 'gridOwnsClone',
-        'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'responsiveViewportSignature', 'responsiveLayoutMatches',
+        'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
+        'responsiveViewportSignature', 'responsiveLayoutMatches',
         'cancelResizeHover', 'handleTargetResize', 'recoverNativeInitialization', ...names]) {
         vm.runInContext(declaration(name), c);
     }
@@ -1404,7 +1406,7 @@ function constructionEnvironment() {
     async function drain() {
         await e.flush();
         let yields = 0;
-        while (e.timers.size) {
+        while ([...e.timers.values()].some(timer => timer.due <= e.c.performance.now())) {
             assert.ok(++yields < 200, 'construction must finish in bounded chunks');
             await e.advance(0);
         }
@@ -1640,6 +1642,10 @@ test('GraphQL adapter awaits snapshot chunks and initialization awaits grid publ
     assert.equal(e.c.pendingMyListMutations.size, 0);
     assert.equal(e.logs.filter(entry => entry.name === 'initializationCompleted').length, 1);
     assert.equal(e.warnings.length, 0);
+    assert.equal(e.timers.size, 1, 'the queued removal leaves only its future Undo expiry timer');
+    await e.advance(30000);
+    assert.equal(e.c.recentRemovedMyListItems.size, 0);
+    assert.equal(e.timers.size, 0);
 });
 
 test('route leave during snapshot chunks exits initialization cleanly and preserves a newer session owner', async () => {
@@ -1926,6 +1932,101 @@ test('expired Undo entries release their last retained snapshot reference when p
     e.c.pruneUndoEntries();
     assert.equal(e.c.recentRemovedMyListItems.size, 0);
     assert.equal(retainedCardTrees(e.c.sourceState, e.c.recentRemovedMyListItems).has(removed), false);
+});
+
+test('Undo expiry releases idle snapshots at 30 seconds using one finite timer and aggregate diagnostics', async () => {
+    const e = constructionEnvironment();
+    await e.c.buildGrid(e.section, e.scroller, e.items(6), e.layout, 6, 1);
+    e.c.applyLegacyRemoval('1');
+    const removed = e.c.recentRemovedMyListItems.get('1').item.snapshot;
+    assert.equal(e.timers.size, 1);
+    await e.advance(29999);
+    assert.equal(e.c.recentRemovedMyListItems.size, 1);
+    await e.advance(1);
+    assert.equal(e.c.recentRemovedMyListItems.size, 0, 'expiry needs no later removal, Undo click or explicit prune');
+    assert.equal(retainedCardTrees(e.c.sourceState, e.c.recentRemovedMyListItems).has(removed), false);
+    assert.equal(e.timers.size, 0);
+    assert.equal(e.c.undoExpiryTimer, null);
+    const counters = e.c.collectPerformanceDiagnostics().undoRetention;
+    assert.equal(counters.expired, 1);
+    assert.equal(counters.expiryCallbacks, 1);
+    assert.equal(counters.schedules, 1);
+    const expiry = e.logs.find(entry => entry.name === 'undoEntriesExpired');
+    assert.deepEqual({ ...expiry.details }, { expired: 1, remaining: 0, pendingFallbacksPreserved: 0 });
+    const work = structuredClone(e.c.collectPerformanceDiagnostics());
+    await e.advance(120000);
+    assert.deepEqual(structuredClone(e.c.collectPerformanceDiagnostics()), work);
+});
+
+test('Undo expiry retains a single next-expiry timer across staggered removals and consumes it after Undo', async () => {
+    const e = constructionEnvironment();
+    await e.c.buildGrid(e.section, e.scroller, e.items(6), e.layout, 6, 1);
+    e.c.applyLegacyRemoval('1');
+    const firstTimer = [...e.timers.keys()][0];
+    await e.advance(5000);
+    e.c.applyLegacyRemoval('2');
+    assert.deepEqual([...e.timers.keys()], [firstTimer], 'a later expiry does not restart the earliest timer');
+    const first = e.c.recentRemovedMyListItems.get('1');
+    assert.equal(e.c.applyLegacyAddition(first.item, first.index, 'undo'), true);
+    assert.equal(e.timers.size, 1);
+    assert.equal([...e.timers.values()][0].due, 35000);
+    assert.equal(e.c.collectPerformanceDiagnostics().undoRetention.consumed, 1);
+    await e.advance(25000);
+    assert.equal(e.c.recentRemovedMyListItems.size, 1);
+    await e.advance(5000);
+    assert.equal(e.c.recentRemovedMyListItems.size, 0);
+    assert.equal(e.timers.size, 0);
+    e.c.applyLegacyRemoval('1');
+    const latest = e.c.recentRemovedMyListItems.get('1');
+    assert.equal(e.c.applyLegacyAddition(latest.item, latest.index, 'undo'), true);
+    assert.equal(e.timers.size, 0, 'consuming the last entry cancels its expiry timer');
+});
+
+test('Undo expiry preserves a queued mutation fallback after removing the Undo cache entry', async () => {
+    const e = constructionEnvironment();
+    await e.c.buildGrid(e.section, e.scroller, e.items(6), e.layout, 6, 1);
+    e.c.applyLegacyRemoval('1');
+    const entry = e.c.recentRemovedMyListItems.get('1');
+    const snapshot = entry.item.snapshot;
+    const mutation = { videoId: '1', action: 'add', fallbackItem: entry.item, preferredIndex: entry.index,
+        timeoutId: null, observer: null };
+    e.c.pendingMyListMutations.set('1', mutation);
+    await e.advance(30000);
+    assert.equal(e.c.recentRemovedMyListItems.size, 0);
+    assert.equal(mutation.fallbackItem.snapshot, snapshot);
+    assert.equal(e.c.cardSourceForItem(mutation.fallbackItem), snapshot);
+    const expiry = e.logs.find(row => row.name === 'undoEntriesExpired');
+    assert.equal(expiry.details.pendingFallbacksPreserved, 1);
+    e.c.running = false;
+    assert.equal(e.c.tryApplyMyListMutation(mutation, 'after-expiry'), true);
+    assert.equal(e.c.sourceState.items.length, 6);
+    assert.equal(e.c.pendingMyListMutations.size, 0);
+    assert.equal(mutation.fallbackItem.snapshot, null);
+    assert.equal(e.timers.size, 0);
+});
+
+test('Undo expiry clears route-owned timers and ignores an obsolete callback after a new session', async () => {
+    const e = fetchEnvironment(6);
+    e.routeLifecycle();
+    await e.c.buildGrid(e.section, e.scroller, e.items(6), e.layout, 6, 1);
+    e.c.applyLegacyRemoval('1');
+    const obsoleteCallback = [...e.timers.values()][0].callback;
+    e.c.suspendTargetSession('undo-test-leave');
+    assert.equal(e.timers.size, 0);
+    assert.equal(e.c.recentRemovedMyListItems.size, 0);
+    assert.equal(e.c.undoExpiryTimer, null);
+    e.c.scheduleRun = () => {};
+    e.c.startTargetSession('undo-test-enter');
+    e.c.isRouteSessionActive = token => e.c.targetSessionActive && token === e.c.routeSessionToken;
+    e.c.rememberUndoEntry(e.items(1)[0], 0);
+    const currentTimer = e.c.undoExpiryTimer;
+    obsoleteCallback();
+    assert.equal(e.c.undoExpiryTimer, currentTimer);
+    assert.equal(e.timers.size, 1);
+    assert.equal(e.c.recentRemovedMyListItems.size, 1);
+    await e.advance(30000);
+    assert.equal(e.c.recentRemovedMyListItems.size, 0);
+    assert.equal(e.timers.size, 0);
 });
 
 test('stale same-id item objects cannot borrow another item tree', async () => {

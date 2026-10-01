@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.4
+// @version      1.3.5
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -86,7 +86,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.4';
+    const SCRIPT_VERSION = '1.3.5';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -802,6 +802,7 @@
         viewingStatusStarted: { en: 'Viewing status collection started', ja: '\u8996\u8074\u72b6\u6cc1\u306e\u53d6\u5f97\u958b\u59cb' },
         viewingStatusCompleted: { en: 'Viewing status collection completed', ja: '\u8996\u8074\u72b6\u6cc1\u306e\u53d6\u5f97\u5b8c\u4e86' },
         viewingStatusUnavailable: { en: 'Viewing status unavailable; uncertain titles stay visible', ja: '\u8996\u8074\u72b6\u6cc1\u4e0d\u660e\u306e\u4f5c\u54c1\u306f\u8868\u793a\u3092\u7d99\u7d9a' },
+        undoEntriesExpired: { en: 'Expired Undo entries released', ja: '\u671f\u9650\u5207\u308c\u306eUndo\u9805\u76ee\u3092\u89e3\u653e' },
         targetSessionSuspended: { en: 'Target session suspended', ja: '\u5bfe\u8c61\u30bb\u30c3\u30b7\u30e7\u30f3\u4e2d\u65ad' },
         targetSessionStarted: { en: 'Target session started', ja: '\u5bfe\u8c61\u30bb\u30c3\u30b7\u30e7\u30f3\u958b\u59cb' },
         routeChangeDetected: { en: 'Route change detected', ja: '\u30da\u30fc\u30b8\u9077\u79fb\u691c\u51fa' },
@@ -1134,6 +1135,7 @@
     let myListGraphqlKey = null;
     let pendingMyListMutations = new Map();
     let recentRemovedMyListItems = new Map();
+    let undoExpiryTimer = null;
     let myListMutationSequence = 0;
     let waitingForNativeEmpty = false;
     let cachedNativeEmptyContent = null;
@@ -1150,7 +1152,8 @@
                 hoverPreserved: 0, hoverCancelled: 0, lastReason: '' },
             hoverPreparation: { calls: 0, slotsConsidered: 0, clonesRebuilt: 0, neighborsSkipped: 0 },
             resize: { events: 0, checks: 0, unchanged: 0, refreshes: 0, hoverPreserved: 0, hoverCancelled: 0 },
-            nativeRecovery: { attempts: 0, completed: 0, exhausted: 0, alignmentRestores: 0, alignmentRestoreFailures: 0 }
+            nativeRecovery: { attempts: 0, completed: 0, exhausted: 0, alignmentRestores: 0, alignmentRestoreFailures: 0 },
+            undoRetention: { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 }
         };
     }
 
@@ -1305,7 +1308,7 @@
         missingSectionSince = 0;
         document.getElementById(LEGACY_EMPTY_STATE_ID)?.remove();
         clearPendingMyListMutations();
-        recentRemovedMyListItems.clear();
+        clearUndoEntries();
         myListGraphqlKey = null;
         waitingForNativeEmpty = false;
         cachedNativeEmptyContent = null;
@@ -1370,7 +1373,7 @@
         carouselMoveQueue = Promise.resolve();
         carouselDomRuntime = new WeakMap();
         clearPendingMyListMutations();
-        recentRemovedMyListItems.clear();
+        clearUndoEntries();
 
         running = false;
         runningSessionToken = null;
@@ -1666,6 +1669,8 @@
             currentPageCards: scroller && track ? currentPageSlots(scroller, track).length : 0,
             gridCards: sourceState?.cloneMap?.size ?? 0,
             performanceWork: collectPerformanceDiagnostics(),
+            undoRetention: { entries: recentRemovedMyListItems.size, expiryScheduled: Boolean(undoExpiryTimer),
+                nextExpiryInMs: undoExpiryTimer ? Math.max(0, Math.round(undoExpiryTimer.dueAt - performance.now())) : null },
             viewingStatus: sourceState?.watchStatus ? {
                 completed: sourceState.watchStatus.completedCount,
                 unknown: sourceState.watchStatus.unknownCount,
@@ -5125,12 +5130,61 @@
             .trim();
     }
 
+    function clearUndoExpiryTimer() {
+        if (undoExpiryTimer) clearTimeout(undoExpiryTimer.id);
+        undoExpiryTimer = null;
+    }
+
+    function clearUndoEntries() {
+        clearUndoExpiryTimer();
+        performanceDiagnostics.undoRetention.cleared += recentRemovedMyListItems.size;
+        recentRemovedMyListItems.clear();
+    }
+
+    function scheduleUndoExpiry() {
+        let dueAt = Infinity;
+        for (const entry of recentRemovedMyListItems.values()) {
+            if (Number.isFinite(entry?.removedAt)) dueAt = Math.min(dueAt, entry.removedAt + UNDO_ENTRY_TTL_MS);
+        }
+        if (!Number.isFinite(dueAt) || !isRouteSessionActive(routeSessionToken)) {
+            clearUndoExpiryTimer();
+            return;
+        }
+        if (undoExpiryTimer?.dueAt === dueAt && undoExpiryTimer.sessionToken === routeSessionToken) return;
+        clearUndoExpiryTimer();
+        // Capture only the timer owner, never a card or a removed-entry array.
+        const owner = { id: null, sessionToken: routeSessionToken, dueAt };
+        undoExpiryTimer = owner;
+        performanceDiagnostics.undoRetention.schedules++;
+        owner.id = setTimeout(() => {
+            if (undoExpiryTimer !== owner) return;
+            undoExpiryTimer = null;
+            if (!isRouteSessionActive(owner.sessionToken)) return;
+            performanceDiagnostics.undoRetention.expiryCallbacks++;
+            pruneUndoEntries();
+        }, Math.max(0, dueAt - performance.now()));
+    }
+
+    function forgetUndoEntry(videoId) {
+        if (!recentRemovedMyListItems.delete(String(videoId))) return;
+        performanceDiagnostics.undoRetention.consumed++;
+        scheduleUndoExpiry();
+    }
+
     function pruneUndoEntries(now = performance.now()) {
+        let expired = 0, pendingFallbacksPreserved = 0;
         for (const [videoId, entry] of recentRemovedMyListItems.entries()) {
-            if (!entry || now - entry.removedAt > UNDO_ENTRY_TTL_MS) {
+            if (!Number.isFinite(entry?.removedAt) || now - entry.removedAt >= UNDO_ENTRY_TTL_MS) {
+                if (entry?.item && pendingMyListMutations.get(videoId)?.fallbackItem === entry.item) pendingFallbacksPreserved++;
+                // Drop this cache's ownership only. A queued Undo mutation may
+                // still own the same item and needs its snapshot to finish.
                 recentRemovedMyListItems.delete(videoId);
+                expired++;
             }
         }
+        performanceDiagnostics.undoRetention.expired += expired;
+        scheduleUndoExpiry();
+        if (expired) log(tLog('undoEntriesExpired'), { expired, remaining: recentRemovedMyListItems.size, pendingFallbacksPreserved });
     }
 
     function rememberUndoEntry(item, index) {
@@ -5143,6 +5197,8 @@
             title: normalizeNetflixUiText(item.ariaLabel || ''),
             removedAt: performance.now()
         });
+        performanceDiagnostics.undoRetention.remembered++;
+        scheduleUndoExpiry();
     }
 
     function describeMyListUndoClick(event) {
@@ -5541,7 +5597,7 @@
         sourceState.itemMap ||= new Map();
         sourceState.itemMap.set(key, item);
         releaseItemCardSnapshot(item);
-        recentRemovedMyListItems.delete(String(item.videoId));
+        forgetUndoEntry(item.videoId);
         waitingForNativeEmpty = false;
         sourceState.empty = false;
         grid.removeAttribute('data-tm-empty');
