@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.12
+// @version      1.3.13
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -81,6 +81,9 @@
     // Short, coalesced callback-gap samples; never a continuous FPS/paint monitor.
     const HOVER_FRAME_DIAGNOSTIC_LIMITS = Object.freeze({ routeFrames: 12000, windowFrames: 1800,
         intentMs: 600, preparationMs: 6000, replayMs: 2000, scrollMs: 1000 });
+    // One delayed presence check per sampled replay, cancelled by an earlier
+    // preview transfer or exit. This does not retry or alter native hover.
+    const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze({ delayMs: 900, routeReplays: 48, roots: 6 });
 
     const GRID_ID = 'tm-netflix-mylist-v15-grid';
     const STATUS_ID = 'tm-netflix-mylist-v15-status';
@@ -94,7 +97,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.12';
+    const SCRIPT_VERSION = '1.3.13';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -915,6 +918,7 @@
         hoverPreviewTransfer: { en: 'Hover positioning retained for matching preview', ja: '\u5bfe\u5fdc\u3059\u308b\u30d7\u30ec\u30d3\u30e5\u30fc\u306e\u30db\u30d0\u30fc\u4f4d\u7f6e\u3092\u4fdd\u6301' },
         hoverPreviewTransferRejected: { en: 'Hover preview transfer rejected', ja: '\u30db\u30d0\u30fc\u306e\u30d7\u30ec\u30d3\u30e5\u30fc\u79fb\u884c\u3092\u62d2\u5426' },
         hoverPreviewReleased: { en: 'Hover preview positioning released', ja: '\u30db\u30d0\u30fc\u306e\u30d7\u30ec\u30d3\u30e5\u30fc\u4f4d\u7f6e\u3092\u89e3\u9664' },
+        hoverPreviewPresence: { en: 'Hover preview presence observation', ja: '\u30db\u30d0\u30fc\u30d7\u30ec\u30d3\u30e5\u30fc\u306e\u5b58\u5728\u3092\u89b3\u6e2c' },
         legacyGridBuilt: { en: 'Legacy grid built', ja: '\u30b0\u30ea\u30c3\u30c9\u751f\u6210\u5b8c\u4e86' },
         responsiveStatusNote: { en: 'Responsive status note', ja: '\u30ec\u30b9\u30dd\u30f3\u30b7\u30d6\u72b6\u614b\u30e1\u30e2' },
         responsiveItemPageMappingRecalculatedWithoutNativeCarouselScan: { en: 'Responsive item-page mapping rebuilt from native first-page anchor', ja: '\u30ec\u30b9\u30dd\u30f3\u30b7\u30d6\u4f5c\u54c1\u30da\u30fc\u30b8\u5bfe\u5fdc\u3092\u7d14\u6b63\u5148\u982d\u30a2\u30f3\u30ab\u30fc\u57fa\u6e96\u3067\u518d\u69cb\u6210' },
@@ -1174,6 +1178,8 @@
             hoverTiming: { dwellSamples: 0, dwellTotalMs: 0, dwellMaxMs: 0,
                 queueSamples: 0, queueTotalMs: 0, queueMaxMs: 0,
                 moveSamples: 0, moveTotalMs: 0, moveMaxMs: 0,
+                acknowledgementSamples: 0, acknowledgementTotalMs: 0, acknowledgementMaxMs: 0,
+                settlementSamples: 0, settlementTotalMs: 0, settlementMaxMs: 0,
                 graftSamples: 0, graftTotalMs: 0, graftMaxMs: 0,
                 alignmentSamples: 0, alignmentTotalMs: 0, alignmentMaxMs: 0,
                 replaySamples: 0, replayTotalMs: 0, replayMaxMs: 0,
@@ -1184,6 +1190,13 @@
                 leavesWithin600ms: 0, stationaryLeaves: 0, leavesToPreviewHint: 0, diagnosticFailures: 0,
                 replacementPointerChecks: 0, replacementPointerAccepted: 0, replacementPointerRejected: 0,
                 replacementPointerUnavailable: 0 },
+            hoverPreview: { scope: 'bounded-preview-presence', delayMs: HOVER_PREVIEW_DIAGNOSTIC_LIMITS.delayMs,
+                routeReplayLimit: HOVER_PREVIEW_DIAGNOSTIC_LIMITS.routeReplays, rootLimit: HOVER_PREVIEW_DIAGNOSTIC_LIMITS.roots,
+                scheduled: 0, completed: 0, checks: 0, pointerChecks: 0, rootSearches: 0,
+                checkTotalMs: 0, checkMaxMs: 0,
+                matchedTransfers: 0, matchedAtPointer: 0, matchedElsewhere: 0, noPreviewRoot: 0,
+                unverifiedRoots: 0, earlyRelease: 0, invalidOwner: 0, hidden: 0, failed: 0,
+                skippedAtLimit: 0, lastResult: '' },
             hoverFrames: { scope: 'bounded-animation-callback-gaps', supported: false, active: false, stopReason: '',
                 routeFrameLimit: HOVER_FRAME_DIAGNOSTIC_LIMITS.routeFrames,
                 windowFrameLimit: HOVER_FRAME_DIAGNOSTIC_LIMITS.windowFrames,
@@ -1228,7 +1241,10 @@
     }
 
     function handleHoverDiagnosticVisibilityChange() {
-        if (document.visibilityState === 'hidden') stopHoverFrameDiagnostics('hidden');
+        if (document.visibilityState === 'hidden') {
+            stopHoverFrameDiagnostics('hidden');
+            finishNativePreviewDiagnostic(activeNativeHover, { result: 'hidden' });
+        }
     }
 
     function startHoverFrameDiagnostics(phase) {
@@ -7133,45 +7149,51 @@
 
                 assertRouteSession(sessionToken);
                 button.click();
-                if (profile.pageMode === 'logical') {
-                    const logicalMove = await waitLogicalPageChange(
-                        section,
-                        scroller,
-                        track,
-                        before,
-                        direction,
-                        beforeTransform,
-                        beforeSignature,
-                        PAGE_CHANGE_TIMEOUT_MS,
-                        sessionToken,
-                        token
-                    );
-                    after = logicalMove.page;
-                    afterTransform = logicalMove.transform;
-                    afterSignature = logicalMove.signature;
-                    settleObservedChange = logicalMove.changed;
-                } else {
-                    after = await waitPage(section, before, PAGE_CHANGE_TIMEOUT_MS, sessionToken, token);
-                }
-                assertRouteSession(sessionToken);
-                if (sharedFastMode) {
-                    // Logical moves already wait until Netflix exposes the new logical page.
-                    // The caller immediately runs waitStableCurrentPage(), so another frame
-                    // here duplicates that stabilization. Keep the frame for indicator mode,
-                    // whose waitPage() only observes the selected indicator.
-                    if (profile.pageMode !== 'logical') {
-                        await new Promise(resolve => requestAnimationFrame(resolve));
-                        assertRouteSession(sessionToken);
+                const acknowledgementStarted = hoverTiming ? performance.now() : 0;
+                try {
+                    if (profile.pageMode === 'logical') {
+                        const logicalMove = await waitLogicalPageChange(
+                            section,
+                            scroller,
+                            track,
+                            before,
+                            direction,
+                            beforeTransform,
+                            beforeSignature,
+                            PAGE_CHANGE_TIMEOUT_MS,
+                            sessionToken,
+                            token
+                        );
+                        after = logicalMove.page;
+                        afterTransform = logicalMove.transform;
+                        afterSignature = logicalMove.signature;
+                        settleObservedChange = logicalMove.changed;
+                    } else {
+                        after = await waitPage(section, before, PAGE_CHANGE_TIMEOUT_MS, sessionToken, token);
                     }
-                    afterTransform = track.style.getPropertyValue('transform') || getComputedStyle(track).transform;
-                    afterSignature = visibleSignature(currentPageSlots(scroller, track));
-                    settleObservedChange = settleObservedChange || after !== before;
-                } else {
-                    const settled = await waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken);
-                    afterTransform = settled.transform;
-                    afterSignature = settled.signature;
-                    settleObservedChange = settled.observedChange;
-                }
+                } finally { if (hoverTiming) recordHoverTiming(hoverTiming, 'acknowledgement', acknowledgementStarted); }
+                assertRouteSession(sessionToken);
+                const settlementStarted = hoverTiming ? performance.now() : 0;
+                try {
+                    if (sharedFastMode) {
+                        // Logical moves already wait until Netflix exposes the new logical page.
+                        // The caller immediately runs waitStableCurrentPage(), so another frame
+                        // here duplicates that stabilization. Keep the frame for indicator mode,
+                        // whose waitPage() only observes the selected indicator.
+                        if (profile.pageMode !== 'logical') {
+                            await new Promise(resolve => requestAnimationFrame(resolve));
+                            assertRouteSession(sessionToken);
+                        }
+                        afterTransform = track.style.getPropertyValue('transform') || getComputedStyle(track).transform;
+                        afterSignature = visibleSignature(currentPageSlots(scroller, track));
+                        settleObservedChange = settleObservedChange || after !== before;
+                    } else {
+                        const settled = await waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken);
+                        afterTransform = settled.transform;
+                        afterSignature = settled.signature;
+                        settleObservedChange = settled.observedChange;
+                    }
+                } finally { if (hoverTiming) recordHoverTiming(hoverTiming, 'settlement', settlementStarted); }
             } finally {
                 restoreMoveStyles();
                 unregisterActiveCarouselStyleCleanup(restoreMoveStyles);
@@ -10168,6 +10190,7 @@
         if (!owner) return;
         // Clear ownership first: native exit handlers can synchronously cause another cleanup.
         activeNativeHover = null;
+        finishNativePreviewDiagnostic(owner, { result: 'released-before-check', reason });
         clearNativePreviewTransfer(owner, reason);
         const { counters, timing, card, coordinates } = owner;
         const started = performance.now();
@@ -10206,6 +10229,114 @@
         return owner.card.isConnected && owner.sourceSlot.isConnected && Boolean(owner.videoId) &&
             owner.sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard) === owner.card &&
             videoIdFromHref(owner.card.href || owner.card.getAttribute('href') || '') === owner.videoId;
+    }
+
+    function finishNativePreviewDiagnostic(owner, details) {
+        const observation = owner?.previewDiagnostic;
+        if (!observation || observation.done) return;
+        observation.done = true;
+        // Clear retained DOM and timer ownership before logging or native exit.
+        const timer = observation.timer;
+        observation.timer = null;
+        observation.clone = null;
+        try {
+            if (timer !== null) clearTimeout(timer);
+            const counters = observation.counters;
+            if (performanceDiagnostics.hoverPreview !== counters) return;
+            counters.completed++;
+            counters.lastResult = details.result;
+            const field = { 'matching-preview-transfer': 'matchedTransfers', 'matching-preview-at-pointer': 'matchedAtPointer',
+                'matching-preview-elsewhere': 'matchedElsewhere', 'no-preview-root-found': 'noPreviewRoot',
+                'preview-roots-unverified': 'unverifiedRoots', 'released-before-check': 'earlyRelease',
+                'owner-invalid': 'invalidOwner', hidden: 'hidden', 'probe-failed': 'failed' }[details.result];
+            if (field) counters[field]++;
+            log(tLog('hoverPreviewPresence'), { seq: observation.seq, token: owner.token,
+                sinceReplayMs: Math.round(performance.now() - owner.replayedAt), ...details });
+        } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
+    }
+
+    function inspectNativePreviewDiagnostic(owner) {
+        const observation = owner?.previewDiagnostic;
+        if (!observation || observation.done) return;
+        const clone = observation.clone;
+        const counters = observation.counters;
+        let checkStarted = null;
+        try {
+            if (performanceDiagnostics.hoverPreview !== counters || activeNativeHover !== owner ||
+                owner.token !== hoverToken || !isRouteSessionActive(owner.sessionToken) || activeClone !== clone ||
+                activeVideoId !== owner.videoId || !gridOwnsClone(clone, sourceState?.grid) || !nativeHoverSourceMatches(owner)) {
+                finishNativePreviewDiagnostic(owner, { result: 'owner-invalid' });
+                return;
+            }
+            if (document.visibilityState === 'hidden') {
+                finishNativePreviewDiagnostic(owner, { result: 'hidden' });
+                return;
+            }
+            counters.checks++;
+            checkStarted = performance.now();
+            const physicalKnown = Number.isFinite(lastPointerX) && Number.isFinite(lastPointerY) &&
+                lastPointerX !== -1 && lastPointerY !== -1;
+            const x = physicalKnown ? lastPointerX : owner.coordinates.clientX;
+            const y = physicalKnown ? lastPointerY : owner.coordinates.clientY;
+            let hit = null;
+            let pointerTarget = 'unavailable';
+            if (Number.isFinite(x) && Number.isFinite(y) && typeof document.elementFromPoint === 'function') {
+                counters.pointerChecks++;
+                hit = document.elementFromPoint(x, y);
+                if (gridCloneFromPointerEvent({ target: hit }, sourceState.grid) === clone) pointerTarget = 'same-card';
+                else if (gridCloneFromPointerEvent({ target: hit }, sourceState.grid, true) === clone) pointerTarget = 'viewing-control';
+                else if (hit && !sourceState.grid.contains(hit) && !sourceState.scroller?.contains(hit) &&
+                    findNativeHoverPreview(hit, owner.videoId).root) pointerTarget = 'matching-preview';
+                else pointerTarget = hit ? 'elsewhere' : 'no-hit';
+            }
+            const details = { pointerTarget, physicalKnown, targetHovered: clone.matches(':hover'), rootsExamined: 0, truncated: false };
+            if (pointerTarget === 'matching-preview') {
+                finishNativePreviewDiagnostic(owner, { result: 'matching-preview-at-pointer', ...details });
+                return;
+            }
+            // Only an unconfirmed replay reaches this single bounded search.
+            // A connected matching root is presence evidence, not a visibility or
+            // paint measurement; it may be hidden or open elsewhere on the page.
+            counters.rootSearches++;
+            const roots = document.querySelectorAll('.previewModal--wrapper, .bob-container, .previewModal--container, .bob-card');
+            const limit = Math.min(roots.length, HOVER_PREVIEW_DIAGNOSTIC_LIMITS.roots);
+            details.truncated = roots.length > limit;
+            for (let index = 0; index < limit; index++) {
+                details.rootsExamined++;
+                if (sourceState.grid.contains(roots[index]) || sourceState.scroller?.contains(roots[index])) continue;
+                if (findNativeHoverPreview(roots[index], owner.videoId).root) {
+                    finishNativePreviewDiagnostic(owner, { result: 'matching-preview-elsewhere', ...details });
+                    return;
+                }
+            }
+            finishNativePreviewDiagnostic(owner, { result: roots.length ? 'preview-roots-unverified' : 'no-preview-root-found', ...details });
+        } catch (_) { finishNativePreviewDiagnostic(owner, { result: 'probe-failed' }); }
+        finally {
+            if (checkStarted !== null && performanceDiagnostics.hoverPreview === counters) {
+                const elapsed = Math.max(0, Math.round((performance.now() - checkStarted) * 10) / 10);
+                counters.checkTotalMs = Math.round((counters.checkTotalMs + elapsed) * 10) / 10;
+                counters.checkMaxMs = Math.max(counters.checkMaxMs, elapsed);
+            }
+        }
+    }
+
+    function scheduleNativePreviewDiagnostic(owner, clone) {
+        if (!owner || activeNativeHover !== owner || owner.previewDiagnostic) return;
+        const counters = performanceDiagnostics.hoverPreview;
+        if (counters.scheduled >= HOVER_PREVIEW_DIAGNOSTIC_LIMITS.routeReplays) {
+            counters.skippedAtLimit++;
+            return;
+        }
+        owner.previewDiagnostic = { counters, clone, timer: null, done: false, seq: ++counters.scheduled };
+        try {
+            if (document.visibilityState === 'hidden') {
+                finishNativePreviewDiagnostic(owner, { result: 'hidden' });
+            } else if (owner.previewRoot) {
+                finishNativePreviewDiagnostic(owner, { result: 'matching-preview-transfer' });
+            } else {
+                owner.previewDiagnostic.timer = setTimeout(() => inspectNativePreviewDiagnostic(owner), HOVER_PREVIEW_DIAGNOSTIC_LIMITS.delayMs);
+            }
+        } catch (_) { finishNativePreviewDiagnostic(owner, { result: 'probe-failed' }); }
     }
 
     function nativePreviewNodeVideoId(node) {
@@ -10264,6 +10395,7 @@
             owner.previewEnteredAt = performance.now();
             owner.counters.previewTransfers++;
             owner.counters.lastPreviewReason = candidate.reason;
+            finishNativePreviewDiagnostic(owner, { result: 'matching-preview-transfer' });
             try {
                 log(tLog('hoverPreviewTransfer'), { reason: candidate.reason,
                     sinceReplayMs: Math.round(performance.now() - owner.replayedAt) });
@@ -10479,6 +10611,7 @@
                 if (replayed) {
                     counters.replaysDispatched++;
                     startHoverFrameDiagnostics('replay');
+                    scheduleNativePreviewDiagnostic(activeNativeHover, clone);
                 } else counters.replayCancelled++;
                 if (replayed) trace(() => [tLog('nativeHoverReplayedFromLiveSource'), {
                     item: itemSummary(item),
@@ -12051,6 +12184,7 @@
 
     function stopTargetEventListeners() {
         stopHoverFrameDiagnostics();
+        finishNativePreviewDiagnostic(activeNativeHover, { result: 'released-before-check', reason: 'listeners-stopped' });
         if (activeNativeHover?.previewRoot) releaseNativePreview(activeNativeHover, 'listeners-stopped');
         if (!targetListenersActive && !targetDocumentObserver) return;
         targetListenersActive = false;

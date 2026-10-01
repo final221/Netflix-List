@@ -87,9 +87,11 @@ function environment(names, overrides = {}) {
         ...overrides
     });
     vm.runInContext(source.match(/^    const HOVER_FRAME_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
+    vm.runInContext(source.match(/^    const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     for (const name of ['createNativeReadScope', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'trace', 'gridOwnsClone',
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
+        'finishNativePreviewDiagnostic', 'inspectNativePreviewDiagnostic', 'scheduleNativePreviewDiagnostic',
         'nativePreviewNodeVideoId', 'decodeTrackingContext', 'findNativeHoverPreview', 'retainNativeHoverForPreview', 'clearNativePreviewTransfer',
         'releaseNativePreview', 'nativePreviewOwnerMatches', 'handleTargetPreviewPointerOut', 'gridHoverReplacementUnderPointer',
         'stopHoverFrameDiagnostics', 'handleHoverDiagnosticVisibilityChange',
@@ -165,6 +167,7 @@ function preparedHoverEnvironment(options = {}) {
         'scheduleNativeHoverReplay', 'replayHoverOnNativeSource', 'sleep'
     ], {
         NETFLIX_DOM_SELECTORS: { standardCard: 'card' }, PointerEvent: NativeEvent, MouseEvent: NativeEvent,
+        document: { visibilityState: 'visible', elementFromPoint: () => current?.hovered ? current : null, querySelectorAll: () => [] },
         ORDER_MISMATCH_POSITION_THRESHOLD: 10, mutationSourceRecoveryPending: false,
         selectedPage: () => 0, ensureLiveNativeBinding: () => {},
         currentPageSlots: () => [sourceSlot], visibleSignature: () => '123',
@@ -925,7 +928,8 @@ test('a fresh replacement still under the physical pointer replays on the first 
     assert.equal(e.events.length, 4);
     assert.equal(e.c.performanceDiagnostics.hoverInteraction.replacementPointerAccepted, 1);
     assert.equal(e.c.performanceDiagnostics.hoverLifecycle.replayCancelled, 0);
-    assert.equal(e.timers.size, 0, 'there is no 180 ms retry or second replacement');
+    assert.equal(e.timers.size, 1, 'only the delayed presence diagnostic remains; there is no hover retry');
+    assert.equal([...e.timers.values()][0].due, e.c.activeNativeHover.replayedAt + 900);
     assert.equal(e.c.gridHoverTargetActive(e.current(), 1, pointer(e.current())), false,
         'hit-test admission expires when preparation ends');
     assert.equal(points.length, 1);
@@ -1163,6 +1167,176 @@ test('dwell diagnostics distinguish cancelled intent and a target rejected when 
     assert.equal(e.c.performanceDiagnostics.hoverInteraction.dwellRejected, 1);
     assert.equal(e.c.performanceDiagnostics.hoverInteraction.dwellCompleted, 1);
     assert.equal(e.activations.length, 1);
+});
+
+async function diagnosedReplay() {
+    const e = preparedHoverEnvironment();
+    liveHoverGeometry(e);
+    const activation = e.start();
+    await e.flush(); await e.frame(); await activation;
+    return e;
+}
+
+test('an unconfirmed replay gets one delayed presence check without another replay or explicit rectangle/style reads', async () => {
+    const e = await diagnosedReplay();
+    const owner = e.c.activeNativeHover;
+    let hits = 0, searches = 0;
+    e.c.document.elementFromPoint = () => { hits++; return e.current(); };
+    e.c.document.querySelectorAll = () => { searches++; return []; };
+    e.current().getBoundingClientRect = () => { throw new Error('Probe read card geometry'); };
+    e.c.getComputedStyle = () => { throw new Error('Probe read computed style'); };
+    await e.advance(899);
+    assert.equal(hits, 0); assert.equal(searches, 0);
+    await e.advance(1);
+    const counters = e.c.performanceDiagnostics.hoverPreview;
+    assert.equal(counters.checks, 1);
+    assert.equal(counters.noPreviewRoot, 1);
+    assert.equal(hits, 1); assert.equal(searches, 1);
+    const observation = e.logs.find(entry => entry.name === 'hoverPreviewPresence').details;
+    assert.equal(observation.result, 'no-preview-root-found');
+    assert.equal(observation.pointerTarget, 'same-card');
+    assert.equal(observation.sinceReplayMs, 900);
+    assert.equal(owner.previewDiagnostic.clone, null);
+    assert.equal(owner.previewDiagnostic.timer, null);
+    assert.equal(e.events.length, 4);
+    assert.equal(e.c.activeNativeHover, owner);
+    await e.advance(10000);
+    assert.equal(hits, 1); assert.equal(searches, 1);
+});
+
+test('an identified preview transfer completes presence diagnostics before the delayed search', async () => {
+    const e = await openedPreview();
+    e.c.document.elementFromPoint = () => { throw new Error('Unneeded hit test'); };
+    e.c.document.querySelectorAll = () => { throw new Error('Unneeded preview search'); };
+    assert.equal(e.c.performanceDiagnostics.hoverPreview.matchedTransfers, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverPreview.checks, 0);
+    assert.equal(e.timers.size, 0);
+    await e.advance(3000);
+    assert.equal(e.c.performanceDiagnostics.hoverPreview.failed, 0);
+    assert.equal(e.logs.filter(entry => entry.name === 'hoverPreviewPresence').length, 1);
+});
+
+test('presence checking distinguishes a matching pointer target from a matching root elsewhere without changing hover ownership', async () => {
+    for (const atPointer of [true, false]) {
+        const e = await diagnosedReplay();
+        const owner = e.c.activeNativeHover;
+        const preview = matchingPreview(e);
+        let searches = 0;
+        preview.root.getBoundingClientRect = () => { throw new Error('Presence was treated as visible geometry'); };
+        e.c.document.elementFromPoint = () => atPointer ? preview.image : e.current();
+        e.c.document.querySelectorAll = () => { searches++; return [preview.root]; };
+        await e.advance(900);
+        const counters = e.c.performanceDiagnostics.hoverPreview;
+        assert.equal(counters.matchedAtPointer, atPointer ? 1 : 0);
+        assert.equal(counters.matchedElsewhere, atPointer ? 0 : 1);
+        assert.equal(searches, atPointer ? 0 : 1);
+        assert.equal(e.c.activeNativeHover, owner);
+        assert.equal(owner.previewRoot, undefined, 'a diagnostic observation cannot adopt a popup');
+        assert.equal(e.events.length, 4);
+    }
+});
+
+test('preview presence inspection caps root identity work and exports only scalar classifications', async () => {
+    const e = await diagnosedReplay();
+    const roots = Array.from({ length: 7 }, () => matchingPreview(e, '456').root);
+    roots[6].querySelectorAll = () => { throw new Error('Root budget exceeded'); };
+    e.c.document.querySelectorAll = () => roots;
+    await e.advance(900);
+    const observation = e.logs.find(entry => entry.name === 'hoverPreviewPresence').details;
+    assert.equal(observation.result, 'preview-roots-unverified');
+    assert.equal(observation.rootsExamined, 6);
+    assert.equal(observation.truncated, true);
+    assert.doesNotMatch(JSON.stringify(observation), /123|456|watch\/|previewModal|href|tracking/);
+    assert.ok(Object.values(observation).every(value => value === null || ['string', 'number', 'boolean'].includes(typeof value)));
+});
+
+test('grid and native source cards sharing preview classes cannot establish preview presence', async () => {
+    const e = await diagnosedReplay();
+    const clone = e.current();
+    clone.id = 'bob-card'; clone.href = '/watch/123'; clone.querySelectorAll = () => [];
+    const sourceRoot = new Element('bob-card', e.c.sourceState.scroller);
+    sourceRoot.href = '/watch/123'; sourceRoot.querySelectorAll = () => [];
+    e.c.document.elementFromPoint = () => clone;
+    e.c.document.querySelectorAll = () => [clone, sourceRoot];
+    await e.advance(900);
+    const observation = e.logs.find(entry => entry.name === 'hoverPreviewPresence').details;
+    assert.equal(observation.pointerTarget, 'same-card');
+    assert.equal(observation.result, 'preview-roots-unverified');
+    assert.equal(e.c.performanceDiagnostics.hoverPreview.matchedAtPointer, 0);
+    assert.equal(e.c.performanceDiagnostics.hoverPreview.matchedElsewhere, 0);
+});
+
+test('preview presence timers are cancelled on ordinary exits, route cleanup, hidden tabs and listener shutdown', async () => {
+    for (const action of ['scroll', 'resize', 'source', 'route', 'hidden', 'listeners']) {
+        const e = await diagnosedReplay();
+        const owner = e.c.activeNativeHover;
+        if (action === 'scroll') e.c.handleTargetScroll();
+        if (action === 'resize') e.c.cancelResizeHover();
+        if (action === 'source') e.c.clearSourceAlignment(undefined, 'source-release');
+        if (action === 'route') { e.c.isRouteSessionActive = () => false; e.c.clearSourceAlignment(undefined, 'route-leave'); }
+        if (action === 'hidden') { e.c.document.visibilityState = 'hidden'; e.c.handleHoverDiagnosticVisibilityChange(); }
+        if (action === 'listeners') {
+            Object.assign(e.c, { targetListenersActive: false, targetDocumentObserver: null });
+            vm.runInContext(declaration('stopTargetEventListeners'), e.c);
+            e.c.stopTargetEventListeners();
+        }
+        assert.equal(e.timers.size, 0, action);
+        assert.equal(owner.previewDiagnostic.clone, null, action);
+        assert.equal(owner.previewDiagnostic.done, true, action);
+        await e.advance(2000);
+        assert.equal(e.c.performanceDiagnostics.hoverPreview.checks, 0, action);
+    }
+});
+
+test('stale preview probe callbacks cannot inspect or mutate a newer hover or diagnostic route', async () => {
+    for (const change of ['owner', 'route-counters', 'identity']) {
+        const e = await diagnosedReplay();
+        const owner = e.c.activeNativeHover;
+        const callback = [...e.timers.values()][0].callback;
+        if (change === 'owner') {
+            e.c.replayHoverOnNativeSource(e.sourceSlot, pointer(e.current()));
+            e.c.scheduleNativePreviewDiagnostic(e.c.activeNativeHover, e.current());
+        }
+        if (change === 'route-counters') e.c.performanceDiagnostics = e.c.createPerformanceDiagnostics();
+        if (change === 'identity') e.card.href = '/watch/456';
+        e.c.document.elementFromPoint = () => { throw new Error('Stale probe hit tested'); };
+        const active = e.c.activeNativeHover;
+        const eventCount = e.events.length;
+        callback();
+        assert.equal(e.c.activeNativeHover, active, change);
+        assert.equal(e.events.length, eventCount, change);
+        assert.equal(owner.previewDiagnostic.clone, null, change);
+        assert.equal(e.c.performanceDiagnostics.hoverPreview.checks, 0, change);
+        if (change === 'route-counters') assert.equal(e.c.performanceDiagnostics.hoverPreview.completed, 0);
+    }
+});
+
+test('failed preview diagnostics leave native cleanup working and the route replay budget is finite', async () => {
+    for (const failure of ['search', 'logging']) {
+        const e = await diagnosedReplay();
+        if (failure === 'search') e.c.document.querySelectorAll = () => { throw new Error('Search unavailable'); };
+        else e.c.log = () => { throw new Error('Logging unavailable'); };
+        await e.advance(900);
+        if (failure === 'search') assert.equal(e.c.performanceDiagnostics.hoverPreview.failed, 1);
+        else assert.equal(e.c.performanceDiagnostics.hoverInteraction.diagnosticFailures, 1);
+        e.c.clearSourceAlignment();
+        assert.equal(e.events.length, 6, failure);
+        assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000, failure);
+    }
+
+    const bounded = await diagnosedReplay();
+    bounded.c.finishNativePreviewDiagnostic(bounded.c.activeNativeHover, { result: 'released-before-check', reason: 'test' });
+    for (let index = 1; index < 50; index++) {
+        const owner = { token: 1, replayedAt: 0 };
+        bounded.c.activeNativeHover = owner;
+        bounded.c.scheduleNativePreviewDiagnostic(owner, bounded.current());
+        bounded.c.finishNativePreviewDiagnostic(owner, { result: 'released-before-check', reason: 'test' });
+    }
+    const counters = bounded.c.performanceDiagnostics.hoverPreview;
+    assert.equal(counters.scheduled, 48);
+    assert.equal(counters.completed, 48);
+    assert.equal(counters.skippedAtLimit, 2);
+    assert.equal(bounded.timers.size, 0);
 });
 
 test('the actual dwell delay reports a late timer rather than only its configured 120 ms', async () => {
@@ -1476,6 +1650,7 @@ test('clicked moves remain serialized through native settlement and restore thei
     await e.flush();
     assert.equal(clicks, 1);
     assert.equal(classes.has('fast'), true);
+    await e.advance(40);
     settlement.resolve({ transform: 'after', signature: 'after', observedChange: true });
     await Promise.all([first, obsoleteQueued, latest]);
     assert.equal(clicks, 2);
@@ -1484,8 +1659,12 @@ test('clicked moves remain serialized through native settlement and restore thei
     assert.equal(properties.get('animation'), 'original');
     assert.equal(restorations, 4);
     assert.equal(e.c.performanceDiagnostics.hoverTiming.queueSamples, 3);
-    assert.equal(e.c.performanceDiagnostics.hoverTiming.queueMaxMs, 80);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.queueMaxMs, 120);
     assert.equal(e.c.performanceDiagnostics.hoverTiming.moveSamples, 2);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.acknowledgementSamples, 2);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.acknowledgementTotalMs, 80);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.settlementSamples, 2);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.settlementTotalMs, 40);
 });
 
 test('Hawkins logical hover navigation avoids boundary detours while legacy cyclic navigation keeps wrapping', async () => {
