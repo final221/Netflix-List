@@ -91,6 +91,7 @@ function environment(names, overrides = {}) {
     for (const name of ['createNativeReadScope', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'trace', 'gridOwnsClone',
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
+        'createLogicalMoveSignal',
         'finishNativePreviewDiagnostic', 'inspectNativePreviewDiagnostic', 'scheduleNativePreviewDiagnostic',
         'nativePreviewNodeVideoId', 'decodeTrackingContext', 'findNativeHoverPreview', 'retainNativeHoverForPreview', 'clearNativePreviewTransfer',
         'releaseNativePreview', 'nativePreviewOwnerMatches', 'handleTargetPreviewPointerOut', 'gridHoverReplacementUnderPointer',
@@ -401,6 +402,39 @@ test('only the latest physical target resumes after scrolling, and it must still
     await e.advance(300);
     assert.equal(e.activations.length, 0);
     assert.equal(e.c.hoverNeedsPointerMove, true);
+});
+
+test('main and watched preparation use the same hover path and report separate comparable timing', async () => {
+    for (const group of ['main', 'watched']) {
+        const e = preparedHoverEnvironment();
+        if (group === 'watched') {
+            const details = new Element('details', e.grid);
+            details.open = true;
+            const watched = new Element('watched', details);
+            watched.setAttribute('data-tm-watch-grid', 'true');
+            e.clone.parentElement = watched;
+        }
+        const activation = e.start();
+        await e.flush();
+        await e.frame();
+        await activation;
+        assert.equal(e.calls.preparations, 1);
+        assert.equal(e.calls.grafts, 1);
+        assert.equal(e.calls.alignments, 1);
+        assert.equal(e.events.length, 4);
+        const requested = e.logs.find(entry => entry.name === 'hoverRequestedNativePagePreparation');
+        const result = e.logs.find(entry => entry.name === 'hoverNativePagePreparationResult');
+        assert.equal(requested.details.group, group);
+        assert.equal(requested.details.directPageDistance, 0);
+        assert.equal(result.details.group, group);
+        assert.equal(result.details.success, true);
+        assert.equal(result.details.elapsedMs, 16);
+        const timing = e.c.performanceDiagnostics.hoverTiming;
+        assert.equal(timing[`${group}PreparationSamples`], 1);
+        assert.equal(timing[`${group}PreparationTotalMs`], 16);
+        assert.equal(timing[`${group}PreparationMaxMs`], 16);
+        assert.equal(timing[`${group === 'main' ? 'watched' : 'main'}PreparationSamples`], 0);
+    }
 });
 
 test('failed alignment follows the replacement card and retries once without another hover', async () => {
@@ -1567,6 +1601,216 @@ test('cancelled expected-page and recovery retries stop before native binding wo
     assert.equal(await e.c.prepareMountedPage(0, item, null, 1, 1), null);
 });
 
+function logicalMoveEnvironment(overrides = {}) {
+    let signature = 'before', reads = 0;
+    const observers = [], timeouts = [];
+    const runtime = { signatureToPage: new Map() };
+    const scroller = new Element('scroller');
+    const track = { style: { getPropertyValue: () => 'transform' } };
+    class Observer {
+        constructor(callback) { this.callback = callback; this.disconnects = 0; observers.push(this); }
+        observe(root, options) { this.root = root; this.options = options; }
+        disconnect() { this.disconnects++; }
+    }
+    const e = environment(['hoverPreparationCancelled', 'sleep', 'waitLogicalPageChange'], {
+        MutationObserver: Observer, PAGE_CHANGE_TIMEOUT_MS: 3000,
+        getCarouselDomRuntime: () => runtime,
+        currentPageSlots: () => { reads++; return []; }, visibleSignature: () => signature,
+        registerLogicalPageSignature: (_section, _signature, page) => page,
+        logOperationTimeout: (...args) => timeouts.push(args),
+        initializationTimeoutError: () => Object.assign(new Error('Logical move timeout'), { code: 'INITIALIZATION_TIMEOUT' }),
+        ...overrides
+    });
+    return {
+        ...e, runtime, scroller, track, observers, timeouts, reads: () => reads,
+        change: value => { signature = value; },
+        start: (timeout = 3000, token = 1) => e.c.waitLogicalPageChange({}, scroller, track, 0, 1, 'transform', 'before', timeout, 1, token)
+    };
+}
+
+test('logical hover waits inspect one initial frame and coalesce mutations without quiet-frame DOM reads', async () => {
+    const e = logicalMoveEnvironment();
+    const wait = e.start();
+    const observer = e.observers[0];
+    assert.equal(observer.root, e.scroller);
+    assert.equal(observer.options.childList, true);
+    assert.equal(observer.options.subtree, true);
+    assert.equal(observer.options.attributes, true);
+    assert.deepEqual(Array.from(observer.options.attributeFilter), ['href', 'style', 'class', 'tabindex']);
+    assert.equal(e.reads(), 0);
+    await e.frame(4);
+    assert.equal(e.reads(), 1);
+    for (let i = 0; i < 12; i++) await e.frame(4);
+    assert.equal(e.frames.size, 0);
+    assert.equal(e.reads(), 1, 'quiet high-refresh frames perform no native inspections');
+    e.change('after');
+    for (let i = 0; i < 5; i++) observer.callback([]);
+    assert.equal(e.reads(), 1, 'mutation callbacks only signal work');
+    assert.equal(e.frames.size, 1);
+    await e.frame(4);
+    assert.equal((await wait).page, 1);
+    assert.equal(e.runtime.currentPage, 1);
+    assert.equal(e.reads(), 2);
+    assert.equal(observer.disconnects, 1);
+    assert.equal(e.frames.size, 0);
+    assert.equal(e.timers.size, 0);
+    observer.callback([]);
+    assert.equal(e.frames.size, 0);
+    const counters = e.c.performanceDiagnostics.hoverLifecycle;
+    assert.equal(counters.logicalMoveReads, 2);
+    assert.equal(counters.logicalMoveObserverStarts, 1);
+    assert.equal(counters.logicalMoveNotifications, 5);
+    assert.equal(counters.logicalMoveSignalFrames, 2);
+    assert.equal(counters.logicalMoveFallbackWakes, 0);
+});
+
+test('logical move signals cover synchronous click changes and unobserved visibility changes', async () => {
+    for (const synchronous of [true, false]) {
+        const e = logicalMoveEnvironment();
+        if (synchronous) e.change('after');
+        const wait = e.start();
+        await e.frame();
+        if (!synchronous) {
+            e.change('after');
+            await e.advance(79);
+            assert.equal(e.reads(), 1);
+            await e.advance(1);
+        }
+        assert.equal((await wait).changed, true);
+        assert.equal(e.reads(), synchronous ? 1 : 2);
+        assert.equal(e.c.performanceDiagnostics.hoverLifecycle.logicalMoveFallbackWakes, synchronous ? 0 : 1);
+        assert.equal(e.observers[0].disconnects, 1);
+        assert.equal(e.timers.size, 0);
+    }
+});
+
+test('logical move observers preserve timeout reporting and always release signal resources', async () => {
+    const e = logicalMoveEnvironment();
+    const wait = e.start(96);
+    const rejected = assert.rejects(wait, { code: 'INITIALIZATION_TIMEOUT' });
+    await e.frame();
+    await e.advance(80);
+    await rejected;
+    assert.equal(e.reads(), 2);
+    assert.equal(e.timeouts.length, 1);
+    assert.equal(e.timeouts[0][0], 'logical-page-change');
+    assert.equal(e.timeouts[0][1], 96);
+    assert.equal(e.observers[0].disconnects, 1);
+    assert.equal(e.frames.size, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('unsupported and failed logical observers retain the original frame acknowledgement path', async () => {
+    for (const failure of ['unsupported', 'construct', 'observe', 'frame', 'timer']) {
+        const e = logicalMoveEnvironment();
+        if (failure === 'unsupported') e.c.MutationObserver = undefined;
+        if (failure === 'construct') e.c.MutationObserver = class { constructor() { throw new Error('constructor'); } };
+        if (failure === 'observe') e.c.MutationObserver = class {
+            constructor(callback) { this.callback = callback; this.disconnects = 0; e.observers.push(this); }
+            observe() { throw new Error('observe'); }
+            disconnect() { this.disconnects++; }
+        };
+        if (failure === 'frame' || failure === 'timer') {
+            const key = failure === 'frame' ? 'requestAnimationFrame' : 'setTimeout';
+            const original = e.c[key];
+            let failed = false;
+            e.c[key] = (...args) => {
+                if (!failed) { failed = true; throw new Error(key); }
+                return original(...args);
+            };
+        }
+        const wait = e.start();
+        await e.flush();
+        e.change('after');
+        await e.frame();
+        assert.equal((await wait).page, 1, failure);
+        assert.equal(e.reads(), 1, failure);
+        assert.equal(e.frames.size, 0, failure);
+        assert.equal(e.timers.size, 0, failure);
+        for (const observer of e.observers) assert.equal(observer.disconnects, 1, failure);
+        const counters = e.c.performanceDiagnostics.hoverLifecycle;
+        assert.equal(counters.logicalMoveObserverUnsupported, failure === 'unsupported' ? 1 : 0);
+        assert.equal(counters.logicalMoveObserverFailures, failure === 'unsupported' ? 0 : 1);
+    }
+});
+
+test('a cancelled signal waits for the clicked change at coarse cadence before releasing ownership', async () => {
+    const e = logicalMoveEnvironment();
+    const wait = e.start();
+    await e.frame();
+    e.c.hoverToken = 2;
+    e.observers[0].callback([]);
+    assert.equal(e.frames.size, 0, 'cancelled callbacks cannot schedule another inspection frame');
+    await e.advance(80);
+    assert.equal(e.reads(), 2);
+    assert.equal(e.observers[0].disconnects, 1);
+    e.change('after');
+    await e.advance(80);
+    assert.equal((await wait).page, 1);
+    assert.equal(e.reads(), 3);
+    assert.equal(e.timers.size, 0);
+});
+
+test('obsolete routes and closed signal callbacks cannot read or update replacement owners', async () => {
+    const e = logicalMoveEnvironment();
+    const wait = e.start();
+    const oldTimer = [...e.timers.values()][0].callback;
+    const oldFrame = [...e.frames.values()][0];
+    const oldCounters = e.c.performanceDiagnostics.hoverLifecycle;
+    e.c.isRouteSessionActive = () => false;
+    e.c.assertRouteSession = () => { throw new Error('Route cancelled'); };
+    const rejected = assert.rejects(wait, /Route cancelled/);
+    await e.frame();
+    await rejected;
+    assert.equal(e.reads(), 0);
+    assert.equal(e.observers[0].disconnects, 1);
+    assert.equal(e.frames.size, 0);
+    assert.equal(e.timers.size, 0);
+    const prior = { ...oldCounters };
+    e.c.performanceDiagnostics = e.c.createPerformanceDiagnostics();
+    oldTimer(); oldFrame(); e.observers[0].callback([]);
+    assert.deepEqual({ ...oldCounters }, prior);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.logicalMoveReads, 0);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.logicalMoveSignalFrames, 0);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.logicalMoveFallbackWakes, 0);
+    assert.equal(e.frames.size, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('logical signal cleanup failures cannot strand acknowledgement or overwrite a pending cleanup', async () => {
+    const e = logicalMoveEnvironment();
+    const signal = e.c.createLogicalMoveSignal(e.scroller, 1, 1);
+    const pending = signal.wait();
+    const oldTimer = [...e.timers.values()][0].callback;
+    const oldFrame = [...e.frames.values()][0];
+    const clearTimer = e.c.clearTimeout, clearFrame = e.c.cancelAnimationFrame;
+    e.c.clearTimeout = key => { clearTimer(key); throw new Error('timer cleanup'); };
+    e.c.cancelAnimationFrame = key => { clearFrame(key); throw new Error('frame cleanup'); };
+    e.observers[0].disconnect = () => { throw new Error('observer cleanup'); };
+    signal.close();
+    assert.equal(await pending, false);
+    assert.equal(await signal.wait(), false);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.logicalMoveObserverFailures, 3);
+    oldTimer(); oldFrame(); e.observers[0].callback([]); signal.close();
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.logicalMoveObserverFailures, 3);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.logicalMoveFallbackWakes, 0);
+    assert.equal(e.frames.size, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('non-hover collection retains frame polling without adding logical move observers', async () => {
+    const e = logicalMoveEnvironment();
+    const wait = e.start(3000, null);
+    await e.frame();
+    assert.equal(e.reads(), 1);
+    assert.equal(e.frames.size, 1);
+    e.change('after');
+    await e.frame();
+    assert.equal((await wait).page, 1);
+    assert.equal(e.observers.length, 0);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.logicalMoveReads, 0);
+});
+
 test('an obsolete clicked logical move uses coarse polling and still records native acknowledgement', async () => {
     let signature = 'before';
     const runtime = { signatureToPage: new Map() };
@@ -1665,6 +1909,87 @@ test('clicked moves remain serialized through native settlement and restore thei
     assert.equal(e.c.performanceDiagnostics.hoverTiming.acknowledgementTotalMs, 80);
     assert.equal(e.c.performanceDiagnostics.hoverTiming.settlementSamples, 2);
     assert.equal(e.c.performanceDiagnostics.hoverTiming.settlementTotalMs, 40);
+});
+
+test('signal-acknowledged clicks remain serialized through native settling after hover cancellation', async () => {
+    let clicks = 0, restorations = 0;
+    const classes = new Set();
+    const section = { classList: { contains: key => classes.has(key), add: key => classes.add(key), remove: key => classes.delete(key) } };
+    const settlement = deferred();
+    const e = logicalMoveEnvironment({
+        carouselMoveQueue: Promise.resolve(), pageMoveSequence: 0,
+        FAST_MOVE_CLASS: 'fast', SCRIPT_MOVE_SETTLE_TIMEOUT_MS: 260,
+        selectedPage: () => e.runtime.currentPage || 0, pageCount: () => 10,
+        carouselMoveButton: () => ({ button: { click: () => { clicks++; if (clicks === 2) e.change('second'); } } }),
+        carouselMoveButtonDisabled: () => false,
+        captureInlineStyleProperty: (node, key) => ({ value: node.style.getPropertyValue(key), priority: '' }),
+        restoreInlineStyleProperty: (node, key, saved) => { restorations++; node.style.setProperty(key, saved.value); },
+        registerActiveCarouselStyleCleanup: () => {}, unregisterActiveCarouselStyleCleanup: () => {},
+        waitForScriptMoveSettle: () => clicks === 1 ? settlement.promise : Promise.resolve({ transform: 'transform', signature: 'second', observedChange: true })
+    });
+    e.runtime.profile = { pageMode: 'logical' };
+    const properties = new Map([['transform', 'transform'], ['transition', 'original'], ['animation', 'original']]);
+    Object.assign(e.track, { isConnected: true, offsetWidth: 100, style: {
+        getPropertyValue: key => properties.get(key) || '', getPropertyPriority: () => '',
+        setProperty: (key, value) => properties.set(key, value)
+    } });
+    e.c.sourceState = { track: e.track };
+    vm.runInContext(declaration('moveOnePage'), e.c);
+    const first = e.c.moveOnePage(section, e.scroller, 1, 1, 1);
+    await e.flush();
+    assert.equal(clicks, 1);
+    e.c.hoverToken = 2;
+    const obsolete = e.c.moveOnePage(section, e.scroller, 1, 1, 1);
+    const latest = e.c.moveOnePage(section, e.scroller, 1, 2, 1);
+    e.change('first');
+    e.observers[0].callback([]);
+    await e.advance(80);
+    assert.equal(e.observers[0].disconnects, 1);
+    assert.equal(e.runtime.currentPage, 1);
+    assert.equal(clicks, 1, 'acknowledgement alone cannot release the move queue');
+    assert.equal(classes.has('fast'), true);
+    await e.advance(40);
+    settlement.resolve({ transform: 'transform', signature: 'first', observedChange: true });
+    await e.flush();
+    assert.equal(clicks, 2);
+    await e.frame();
+    await Promise.all([first, obsolete, latest]);
+    assert.equal(clicks, 2);
+    assert.equal(restorations, 4);
+    assert.equal(classes.has('fast'), false);
+    assert.equal(properties.get('transition'), 'original');
+    assert.equal(properties.get('animation'), 'original');
+    assert.equal(e.observers.length, 2);
+    assert.equal(e.observers[1].disconnects, 1);
+    assert.equal(e.timers.size, 0);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.queueMaxMs, 120);
+});
+
+test('page navigation avoids the duplicate selected-page read while retaining cancellation and loop guards', async () => {
+    for (const mode of ['normal', 'cancelled', 'guard']) {
+        let page = 0, reads = 0, moves = 0;
+        const logs = [];
+        const e = environment(['goToPage'], {
+            pageCount: () => 5, selectedPage: () => { reads++; return page; },
+            getCarouselDomRuntime: () => ({ profile: { navigationMode: 'hawkins', pageMode: 'logical' } }),
+            moveOnePage: async () => {
+                moves++;
+                page = mode === 'guard' ? (page === 0 ? 1 : 0) : page + 1;
+                return page;
+            },
+            log: (name, details) => logs.push({ name, details })
+        });
+        if (mode === 'cancelled') e.c.hoverToken = 2;
+        const result = await e.c.goToPage({}, {}, 3, 1, 1);
+        const count = mode === 'normal' ? 3 : mode === 'guard' ? 10 : 0;
+        assert.equal(moves, count, mode);
+        assert.equal(reads, count + 3, mode);
+        assert.equal(e.c.performanceDiagnostics.hoverLifecycle.duplicatePageReadsAvoided, count, mode);
+        assert.equal(result, mode === 'normal' ? 3 : 0, mode);
+        const logged = logs.find(entry => entry.name === 'pageMoveResult').details;
+        assert.equal(logged.cancelled, mode === 'cancelled');
+        assert.equal(logged.guardRemaining, mode === 'normal' ? 7 : mode === 'guard' ? -1 : 9);
+    }
 });
 
 test('Hawkins logical hover navigation avoids boundary detours while legacy cyclic navigation keeps wrapping', async () => {

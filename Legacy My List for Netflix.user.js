@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.13
+// @version      1.3.14
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -97,7 +97,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.13';
+    const SCRIPT_VERSION = '1.3.14';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -1174,12 +1174,17 @@
             hoverLifecycle: { replayAttempts: 0, replaysDispatched: 0, replayCancelled: 0, replayFailed: 0,
                 exitsDispatched: 0, exitSkipped: 0, exitFailed: 0, scrollBursts: 0, scrollExits: 0,
                 lastExitReason: '', boundaryDetoursAvoided: 0, duplicateAlignmentsAvoided: 0,
+                duplicatePageReadsAvoided: 0, logicalMoveReads: 0, logicalMoveObserverStarts: 0,
+                logicalMoveNotifications: 0, logicalMoveSignalFrames: 0, logicalMoveFallbackWakes: 0,
+                logicalMoveObserverUnsupported: 0, logicalMoveObserverFailures: 0,
                 previewTransfers: 0, previewReturns: 0, previewReleases: 0, previewRejected: 0, lastPreviewReason: '' },
             hoverTiming: { dwellSamples: 0, dwellTotalMs: 0, dwellMaxMs: 0,
                 queueSamples: 0, queueTotalMs: 0, queueMaxMs: 0,
                 moveSamples: 0, moveTotalMs: 0, moveMaxMs: 0,
                 acknowledgementSamples: 0, acknowledgementTotalMs: 0, acknowledgementMaxMs: 0,
                 settlementSamples: 0, settlementTotalMs: 0, settlementMaxMs: 0,
+                mainPreparationSamples: 0, mainPreparationTotalMs: 0, mainPreparationMaxMs: 0,
+                watchedPreparationSamples: 0, watchedPreparationTotalMs: 0, watchedPreparationMaxMs: 0,
                 graftSamples: 0, graftTotalMs: 0, graftMaxMs: 0,
                 alignmentSamples: 0, alignmentTotalMs: 0, alignmentMaxMs: 0,
                 replaySamples: 0, replayTotalMs: 0, replayMaxMs: 0,
@@ -6882,60 +6887,139 @@
             button.getAttribute('tabindex') === '-1';
     }
 
+    function createLogicalMoveSignal(scroller, token, sessionToken) {
+        const counters = performanceDiagnostics.hoverLifecycle;
+        const bump = field => { if (performanceDiagnostics.hoverLifecycle === counters) counters[field]++; };
+        if (typeof MutationObserver !== 'function') {
+            bump('logicalMoveObserverUnsupported');
+            return null;
+        }
+        let observer = null, frame = null, timer = null, pending = null;
+        let closed = false, dirty = true;
+        const wake = available => {
+            const oldTimer = timer, oldFrame = frame;
+            timer = null;
+            frame = null;
+            dirty = false;
+            const resolve = pending;
+            pending = null;
+            try { if (oldTimer !== null) clearTimeout(oldTimer); } catch (_) { bump('logicalMoveObserverFailures'); }
+            try { if (oldFrame !== null) cancelAnimationFrame(oldFrame); } catch (_) { bump('logicalMoveObserverFailures'); }
+            resolve?.(available);
+        };
+        const close = () => {
+            if (closed) return;
+            closed = true;
+            try { observer?.disconnect(); } catch (_) { bump('logicalMoveObserverFailures'); }
+            observer = null;
+            wake(false);
+        };
+        const queueFrame = () => {
+            if (closed || !pending || frame !== null || hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken)) return;
+            try {
+                frame = requestAnimationFrame(() => {
+                    frame = null;
+                    if (closed) return;
+                    bump('logicalMoveSignalFrames');
+                    wake(true);
+                });
+            } catch (_) { bump('logicalMoveObserverFailures'); close(); }
+        };
+        try {
+            observer = new MutationObserver(() => {
+                if (closed) return;
+                bump('logicalMoveNotifications');
+                dirty = true;
+                queueFrame();
+            });
+            observer.observe(scroller, { childList: true, subtree: true, attributes: true,
+                attributeFilter: ['href', 'style', 'class', 'tabindex'] });
+            bump('logicalMoveObserverStarts');
+            return { close, wait: () => new Promise(resolve => {
+                if (closed) { resolve(false); return; }
+                pending = resolve;
+                // One initial frame covers a synchronous click update. Later
+                // mutations coalesce into one frame; a coarse fallback covers
+                // computed visibility changes that produce no observed record.
+                timer = setTimeout(() => {
+                    if (closed) return;
+                    bump('logicalMoveFallbackWakes');
+                    wake(true);
+                }, CANCELLED_MOVE_POLL_MS);
+                if (dirty) queueFrame();
+            }) };
+        } catch (_) { bump('logicalMoveObserverFailures'); close(); return null; }
+    }
+
     async function waitLogicalPageChange(section, scroller, track, beforePage, direction, beforeTransform, beforeSignature, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
         const runtime = getCarouselDomRuntime(section);
         const started = performance.now();
         let lastTransform = beforeTransform;
         let lastSignature = beforeSignature;
-        while (performance.now() - started < timeout) {
-            // A click cannot be undone. Keep its acknowledgement serialized, but
-            // stop spending every animation frame on an obsolete hover request.
-            if (hoverPreparationCancelled(token)) await sleep(CANCELLED_MOVE_POLL_MS);
-            else await new Promise(resolve => requestAnimationFrame(resolve));
-            assertRouteSession(sessionToken);
-            const transform = track.style.getPropertyValue('transform') || getComputedStyle(track).transform;
-            const signature = visibleSignature(currentPageSlots(scroller, track));
-            const signatureChanged = Boolean(signature) && signature !== beforeSignature;
-            lastTransform = transform;
-            lastSignature = signature;
-            if (!signatureChanged) continue;
+        const counters = token === null ? null : performanceDiagnostics.hoverLifecycle;
+        let signal = token === null || hoverPreparationCancelled(token) ? null : createLogicalMoveSignal(scroller, token, sessionToken);
+        try {
+            while (performance.now() - started < timeout) {
+                // A click cannot be undone. Keep its acknowledgement serialized, but
+                // stop spending every animation frame on an obsolete hover request.
+                if (hoverPreparationCancelled(token)) {
+                    signal?.close(); signal = null;
+                    await sleep(CANCELLED_MOVE_POLL_MS);
+                } else {
+                    let signalled = false;
+                    try { if (signal) signalled = await signal.wait(); }
+                    catch (_) { if (performanceDiagnostics.hoverLifecycle === counters) counters.logicalMoveObserverFailures++; }
+                    if (!signalled) {
+                        signal?.close(); signal = null;
+                        await new Promise(resolve => requestAnimationFrame(resolve));
+                    }
+                }
+                assertRouteSession(sessionToken);
+                if (performanceDiagnostics.hoverLifecycle === counters) counters.logicalMoveReads++;
+                const transform = track.style.getPropertyValue('transform') || getComputedStyle(track).transform;
+                const signature = visibleSignature(currentPageSlots(scroller, track));
+                const signatureChanged = Boolean(signature) && signature !== beforeSignature;
+                lastTransform = transform;
+                lastSignature = signature;
+                if (!signatureChanged) continue;
 
-            const existingPage = runtime?.signatureToPage.get(signature);
-            const proposedPage = Math.max(0, beforePage + (direction < 0 ? -1 : 1));
-            const mapped = Number.isFinite(existingPage)
-                ? existingPage
-                : registerLogicalPageSignature(section, signature, proposedPage);
-            if (runtime) {
-                runtime.currentPage = mapped;
-                runtime.cycleDetected = Number.isFinite(existingPage) && existingPage !== beforePage;
+                const existingPage = runtime?.signatureToPage.get(signature);
+                const proposedPage = Math.max(0, beforePage + (direction < 0 ? -1 : 1));
+                const mapped = Number.isFinite(existingPage)
+                    ? existingPage
+                    : registerLogicalPageSignature(section, signature, proposedPage);
+                if (runtime) {
+                    runtime.currentPage = mapped;
+                    runtime.cycleDetected = Number.isFinite(existingPage) && existingPage !== beforePage;
+                }
+                return {
+                    page: mapped,
+                    changed: true,
+                    transform,
+                    signature,
+                    transformChanged: transform !== beforeTransform,
+                    signatureChanged: true,
+                    cycleDetected: Boolean(runtime?.cycleDetected)
+                };
             }
-            return {
-                page: mapped,
-                changed: true,
-                transform,
-                signature,
-                transformChanged: transform !== beforeTransform,
-                signatureChanged: true,
-                cycleDetected: Boolean(runtime?.cycleDetected)
+            assertRouteSession(sessionToken);
+            if (hoverPreparationCancelled(token)) {
+                return { page: beforePage, changed: false, transform: lastTransform, signature: lastSignature };
+            }
+            const details = {
+                direction: direction < 0 ? 'left' : 'right',
+                beforePage,
+                beforeTransform,
+                lastTransform,
+                beforeSignature,
+                lastSignature,
+                domGeneration: runtime?.profile?.generation || null,
+                navigationMode: runtime?.profile?.navigationMode || null,
+                pageMode: runtime?.profile?.pageMode || null
             };
-        }
-        assertRouteSession(sessionToken);
-        if (hoverPreparationCancelled(token)) {
-            return { page: beforePage, changed: false, transform: lastTransform, signature: lastSignature };
-        }
-        const details = {
-            direction: direction < 0 ? 'left' : 'right',
-            beforePage,
-            beforeTransform,
-            lastTransform,
-            beforeSignature,
-            lastSignature,
-            domGeneration: runtime?.profile?.generation || null,
-            navigationMode: runtime?.profile?.navigationMode || null,
-            pageMode: runtime?.profile?.pageMode || null
-        };
-        logOperationTimeout('logical-page-change', timeout, details);
-        throw initializationTimeoutError('logical-page-change', timeout, details);
+            logOperationTimeout('logical-page-change', timeout, details);
+            throw initializationTimeoutError('logical-page-change', timeout, details);
+        } finally { signal?.close(); }
     }
 
     async function waitPageByPolling(section, before, timeout, sessionToken = null, token = null) {
@@ -7248,13 +7332,15 @@
         let cancelled = false;
         let forcedDirection = null;
         let pageChangeRetryCount = 0;
-        while (selectedPage(section) !== target && guard-- > 0) {
+        while (true) {
+            const current = selectedPage(section);
+            if (current === target || guard-- <= 0) break;
             assertRouteSession(sessionToken);
             if (token !== null && token !== hoverToken) {
                 cancelled = true;
                 break;
             }
-            const current = selectedPage(section);
+            if (token !== null) performanceDiagnostics.hoverLifecycle.duplicatePageReadsAvoided++;
             let direction = forcedDirection ?? (current < target ? 1 : -1);
             if (forcedDirection === null && cyclicShortestUsed && total > 1) {
                 const rightDistance = (target - current + total) % total;
@@ -10990,6 +11076,8 @@
         if (!gridHoverTargetActive(clone, generation)) return;
         const seq = ++hoverSequence;
         const started = performance.now();
+        const timing = performanceDiagnostics.hoverTiming;
+        const group = clone.parentElement?.getAttribute('data-tm-watch-grid') === 'true' ? 'watched' : 'main';
 
         if (orderMismatchDialogOpen || orderMismatchReinitializing) {
             log(tLog('hoverCancelled'), {
@@ -11072,6 +11160,7 @@
                     activeClone = current;
                     log(tLog('hoverReusedImmediately'), {
                         seq,
+                        group,
                         item: itemSummary(item),
                         selectedPage: selected,
                         backedPage,
@@ -11085,6 +11174,8 @@
                 if (!reused) {
                     log(tLog('hoverRequestedNativePagePreparation'), {
                         seq,
+                        group,
+                        directPageDistance: Math.abs(selected - item.page),
                         item: itemSummary(item),
                         selectedPage: selected,
                         targetPage: item.page,
@@ -11099,8 +11190,10 @@
                     orderMismatchDialogOpen || orderMismatchReinitializing) break;
             }
             if (hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken)) return;
+            if (fresh) recordHoverTiming(timing, group === 'watched' ? 'watchedPreparation' : 'mainPreparation', started);
             log(tLog('hoverNativePagePreparationResult'), {
                 seq,
+                group,
                 item: itemSummary(item),
                 success: Boolean(fresh),
                 replayDispatched: Boolean(fresh),
