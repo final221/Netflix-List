@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.1
+// @version      1.4.2
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -101,7 +101,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.4.1';
+    const SCRIPT_VERSION = '1.4.2';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -1222,8 +1222,10 @@
             viewingGroups: { syncs: 0, fullSyncs: 0, cardsConsidered: 0, controlsUpdated: 0, categoryMoves: 0,
                 hoverPreserved: 0, hoverCancelled: 0, lastReason: '' },
             hoverPreparation: { calls: 0, slotsConsidered: 0, clonesRebuilt: 0, neighborsSkipped: 0 },
-            cachedHover: { mode: 'cached-details', opens: 0, cacheHits: 0, basicOpens: 0, updates: 0,
+            cachedHover: { mode: 'cached-details', presentation: 'netflix-card',
+                opens: 0, cacheHits: 0, basicOpens: 0, updates: 0,
                 closes: 0, scrollDismissals: 0, wheelOverPopup: 0,
+                layoutChecks: 0, clippedLayouts: 0, artworkOpens: 0, lastHeight: 0, lastContentHeight: 0,
                 renderTotalMs: 0, renderMaxMs: 0, lastCloseReason: '', failures: 0,
                 restored: 0, ready: 0, missing: 0, requests: 0, loading: false, failure: '',
                 storageFailures: 0, openLogs: 0, titleFields: 0, synopsisFields: 0, yearFields: 0,
@@ -2724,51 +2726,135 @@
                 top: 0;
                 left: 0;
                 z-index: 2147483000;
+                display: flex;
+                flex-direction: column;
                 box-sizing: border-box;
                 max-width: calc(100vw - 24px);
                 max-height: calc(100vh - 24px);
                 overflow: hidden;
-                border-radius: 9px;
+                border-radius: 6px;
                 background: #181818;
                 color: #fff;
-                box-shadow: 0 8px 30px rgba(0,0,0,.65);
-                font: 14px/1.45 system-ui, sans-serif;
+                box-shadow: 0 3px 10px rgba(0,0,0,.75);
+                font: 14px/1.4 'Netflix Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+                animation: tm-cached-hover-enter 120ms ease-out;
             }
+            @keyframes tm-cached-hover-enter { from { opacity: 0; } to { opacity: 1; } }
+            @media (prefers-reduced-motion: reduce) { #${CACHED_HOVER_ID} { animation: none; } }
             #${CACHED_HOVER_ID} [hidden] { display: none !important; }
+            #${CACHED_HOVER_ID} .tm-cached-media {
+                flex: 0 1 auto;
+                min-height: 0;
+                aspect-ratio: 16 / 9;
+                overflow: hidden;
+            }
             #${CACHED_HOVER_ID} .tm-cached-artwork {
                 display: block;
                 width: 100%;
-                aspect-ratio: 16 / 9;
+                height: 100%;
                 object-fit: cover;
             }
-            #${CACHED_HOVER_ID} .tm-cached-body { padding: 14px; }
-            #${CACHED_HOVER_ID} p { margin: 8px 0; }
-            #${CACHED_HOVER_ID} .tm-cached-title { margin: 0; font-size: 19px; line-height: 1.25; }
-            #${CACHED_HOVER_ID} .tm-cached-meta,
+            #${CACHED_HOVER_ID} .tm-cached-body {
+                flex: 0 0 auto;
+                min-width: 0;
+                padding: 16px;
+            }
+            #${CACHED_HOVER_ID} p { margin: 12px 0 0; }
+            #${CACHED_HOVER_ID} .tm-cached-title {
+                margin: 0 0 12px;
+                font-size: 18px;
+                line-height: 1.25;
+                overflow-wrap: anywhere;
+            }
+            #${CACHED_HOVER_ID} .tm-cached-meta {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 8px;
+                color: #bcbcbc;
+                font-size: 14px;
+            }
+            #${CACHED_HOVER_ID} .tm-cached-maturity {
+                border: 1px solid #808080;
+                padding: 0 6px;
+                line-height: 1.2;
+            }
+            #${CACHED_HOVER_ID} .tm-cached-genres { font-size: 14px; overflow-wrap: anywhere; }
             #${CACHED_HOVER_ID} .tm-cached-status { color: #bcbcbc; font-size: 12px; }
             #${CACHED_HOVER_ID} .tm-cached-synopsis {
                 display: -webkit-box;
-                -webkit-line-clamp: 5;
+                -webkit-line-clamp: 2;
                 -webkit-box-orient: vertical;
                 overflow: hidden;
+                color: #bcbcbc;
+                font-size: 13px;
             }
-            #${CACHED_HOVER_ID} .tm-cached-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
-            #${CACHED_HOVER_ID} button,
-            #${CACHED_HOVER_ID} a {
+            #${CACHED_HOVER_ID} .tm-cached-actions {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            #${CACHED_HOVER_ID} .tm-cached-action {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
                 box-sizing: border-box;
-                border: 1px solid #666;
-                border-radius: 5px;
-                padding: 7px 10px;
-                font: inherit;
-                font-size: 12px;
-                background: #303030;
+                width: 36px;
+                height: 36px;
+                flex: 0 0 36px;
+                border: 2px solid #808080;
+                border-radius: 50%;
+                background: #2a2a2a;
                 color: #fff;
                 text-decoration: none;
                 cursor: pointer;
             }
-            #${CACHED_HOVER_ID} .tm-cached-play { background: #fff; border-color: #fff; color: #111; }
+            #${CACHED_HOVER_ID} .tm-cached-play { background: #fff; border-color: #fff; color: #141414; }
+            #${CACHED_HOVER_ID} .tm-cached-info { margin-inline-start: auto; }
+            #${CACHED_HOVER_ID} .tm-cached-action:hover { border-color: #fff; }
+            #${CACHED_HOVER_ID} .tm-cached-icon { display: block; pointer-events: none; }
+            #${CACHED_HOVER_ID} .tm-cached-icon-play {
+                width: 0;
+                height: 0;
+                margin-inline-start: 3px;
+                border-top: 8px solid transparent;
+                border-bottom: 8px solid transparent;
+                border-left: 12px solid currentColor;
+            }
+            #${CACHED_HOVER_ID} .tm-cached-icon-info {
+                box-sizing: border-box;
+                width: 11px;
+                height: 11px;
+                margin-top: -5px;
+                border-right: 2px solid currentColor;
+                border-bottom: 2px solid currentColor;
+                transform: rotate(45deg);
+            }
+            #${CACHED_HOVER_ID} .tm-cached-viewing-actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px 12px;
+                margin-top: 12px;
+                padding-top: 10px;
+                border-top: 1px solid #333;
+            }
+            #${CACHED_HOVER_ID} .tm-cached-viewing-actions button {
+                margin: 0;
+                padding: 2px 0;
+                max-width: 100%;
+                border: 0;
+                background: transparent;
+                color: #bcbcbc;
+                font: inherit;
+                font-size: 12px;
+                line-height: 1.4;
+                text-align: start;
+                white-space: normal;
+                overflow-wrap: anywhere;
+                cursor: pointer;
+            }
+            #${CACHED_HOVER_ID} .tm-cached-viewing-actions button:hover { color: #fff; text-decoration: underline; }
             #${CACHED_HOVER_ID} :is(a, button):focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
-            #${CACHED_HOVER_ID} :is(a, button):hover { filter: brightness(1.2); }
             #${CACHED_HOVER_ID} button:disabled { opacity: .45; cursor: default; }
 
             #${GRID_ID} {
@@ -5181,7 +5267,7 @@
                 counters.missing = ids.length - records.size;
                 const owner = activeCachedHover;
                 if (owner?.details === details && batch.includes(String(owner.item.videoId))) {
-                    try { updateCachedHover(owner); counters.updates++; }
+                    try { updateCachedHover(owner); recordCachedHoverLayout(owner); counters.updates++; }
                     catch (_) { counters.failures++; closeCachedHover('update-failed'); }
                 }
                 await sleep(0);
@@ -5200,7 +5286,7 @@
             if (details.job) details.job.network.finishedAt = performance.now();
             writeTitleDetailsCache(state, details);
             if (activeCachedHover?.details === details) {
-                try { updateCachedHover(activeCachedHover); }
+                try { updateCachedHover(activeCachedHover); recordCachedHoverLayout(activeCachedHover); }
                 catch (_) { counters.failures++; closeCachedHover('update-failed'); }
             }
             try { log(tLog('titleDetailsCompleted'), { titles: state.items.length, ready: records.size,
@@ -5234,25 +5320,41 @@
             gridOwnsClone(owner.clone, owner.state.grid) && owner.root.isConnected;
     }
 
+    function formatCachedHoverDuration(runtime, locale) {
+        if (!Number.isFinite(runtime) || runtime <= 0 || runtime >= 86400) return '';
+        const minutes = Math.max(1, Math.round(runtime / 60));
+        try {
+            return [['hour', Math.floor(minutes / 60)], ['minute', minutes % 60]]
+                .filter(([, value]) => value > 0)
+                .map(([unit, value]) => new Intl.NumberFormat(locale, { style: 'unit', unit,
+                    unitDisplay: 'narrow' }).format(value)).join(' ');
+        } catch (_) { return ''; }
+    }
+
     function updateCachedHover(owner) {
         if (!cachedHoverOwnerActive(owner)) return;
         const record = owner.details.records.get(String(owner.item.videoId));
         const { ui } = owner;
         ui.title.textContent = record?.title || owner.item.ariaLabel || 'Netflix';
+        owner.root.setAttribute('aria-label', ui.title.textContent);
+        // The existing Netflix box art already supplies the title treatment.
+        // Avoid a second heading beneath it; keep a text fallback without art.
+        ui.title.hidden = !ui.image.hidden;
         ui.synopsis.textContent = record?.synopsis || '';
-        ui.synopsis.hidden = !record?.synopsis;
-        const meta = [];
-        if (record?.year) meta.push(String(record.year));
-        if (record?.runtime && record.type === 'movie') {
-            try { meta.push(new Intl.NumberFormat(owner.details.locale, { style: 'unit', unit: 'minute',
-                unitDisplay: 'short' }).format(Math.round(record.runtime / 60))); } catch (_) {}
-        }
-        if (record?.maturity) meta.push(record.maturity);
-        ui.meta.textContent = meta.join(' \u00b7 ');
-        ui.meta.hidden = !meta.length;
-        ui.genres.textContent = record?.genres.join(' \u00b7 ') || '';
+        ui.year.textContent = record?.year ? String(record.year) : '';
+        ui.year.hidden = !record?.year;
+        ui.duration.textContent = record?.type === 'movie'
+            ? formatCachedHoverDuration(record.runtime, owner.details.locale) : '';
+        ui.duration.hidden = !ui.duration.textContent;
+        ui.maturity.textContent = record?.maturity || '';
+        ui.maturity.hidden = !record?.maturity;
+        ui.meta.hidden = ui.year.hidden && ui.duration.hidden && ui.maturity.hidden;
+        ui.genres.textContent = record?.genres.slice(0, 3).join(' \u2022 ') || '';
         ui.genres.hidden = !record?.genres.length;
-        const useful = Boolean(record?.synopsis || meta.length || record?.genres.length);
+        // Netflix's compact hover card uses metadata and genres, leaving the
+        // full plot to More info. A synopsis is still a useful sparse-data fallback.
+        ui.synopsis.hidden = !record?.synopsis || !ui.meta.hidden || !ui.genres.hidden;
+        const useful = !ui.synopsis.hidden || !ui.meta.hidden || !ui.genres.hidden;
         ui.status.textContent = owner.details.loading ? tUi('hoverLoading') : tUi('hoverUnavailable');
         ui.status.hidden = useful;
         const type = record?.type || owner.state.watchStatus?.types?.get(String(owner.item.videoId)) ||
@@ -5271,6 +5373,20 @@
             ui.reset.textContent = controls.reset.textContent;
             ui.reset.disabled = controls.reset.disabled;
         }
+        ui.viewingActions.hidden = ui.toggle.hidden && ui.reset.hidden;
+    }
+
+    function recordCachedHoverLayout(owner) {
+        if (!cachedHoverOwnerActive(owner)) return null;
+        const height = owner.root.clientHeight, contentHeight = owner.root.scrollHeight;
+        const measured = Number.isFinite(height) && Number.isFinite(contentHeight);
+        const clipped = measured && contentHeight > height + 1;
+        const counters = owner.counters;
+        counters.layoutChecks++;
+        if (clipped) counters.clippedLayouts++;
+        counters.lastHeight = measured ? Math.round(height) : 0;
+        counters.lastContentHeight = measured ? Math.round(contentHeight) : 0;
+        return { measured, clipped };
     }
 
     function openCachedHover(item, clone, generation, focused = false) {
@@ -5297,30 +5413,42 @@
             parent.appendChild(node);
             return node;
         };
-        const image = make('img', 'tm-cached-artwork');
+        const media = make('div', 'tm-cached-media');
+        const image = make('img', 'tm-cached-artwork', media);
         image.alt = '';
         image.decoding = 'async';
         const existingImage = clone.querySelector('img');
         const imageUrl = existingImage?.currentSrc || existingImage?.src || '';
         if (/^https?:\/\//i.test(imageUrl)) image.src = imageUrl;
         else image.hidden = true;
+        media.hidden = image.hidden;
         const body = make('div', 'tm-cached-body');
         const title = make('h3', 'tm-cached-title', body);
-        const meta = make('p', 'tm-cached-meta', body);
-        const synopsis = make('p', 'tm-cached-synopsis', body);
-        const genres = make('p', 'tm-cached-meta', body);
-        const status = make('p', 'tm-cached-status', body);
         const actions = make('div', 'tm-cached-actions', body);
-        const play = make('a', 'tm-cached-play', actions);
-        play.textContent = tUi('hoverPlay');
+        const iconLink = (className, label, iconClass) => {
+            const link = make('a', 'tm-cached-action ' + className, actions);
+            link.setAttribute('aria-label', label);
+            link.setAttribute('title', label);
+            const icon = make('span', 'tm-cached-icon ' + iconClass, link);
+            icon.setAttribute('aria-hidden', 'true');
+            return link;
+        };
+        const play = iconLink('tm-cached-play', tUi('hoverPlay'), 'tm-cached-icon-play');
         play.href = location.origin + '/watch/' + encodeURIComponent(item.videoId);
-        const info = make('a', 'tm-cached-info', actions);
-        info.textContent = tUi('hoverMoreInfo');
+        const info = iconLink('tm-cached-info', tUi('hoverMoreInfo'), 'tm-cached-icon-info');
         info.href = location.origin + '/browse?jbv=' + encodeURIComponent(item.videoId);
-        const toggle = make('button', '', actions), reset = make('button', '', actions);
+        const meta = make('p', 'tm-cached-meta', body);
+        const maturity = make('span', 'tm-cached-maturity', meta);
+        const duration = make('span', '', meta), year = make('span', '', meta);
+        const synopsis = make('p', 'tm-cached-synopsis', body);
+        const genres = make('p', 'tm-cached-genres', body);
+        const status = make('p', 'tm-cached-status', body);
+        const viewingActions = make('div', 'tm-cached-viewing-actions', body);
+        const toggle = make('button', '', viewingActions), reset = make('button', '', viewingActions);
         toggle.type = reset.type = 'button';
         const owner = { state, details, item, clone, root, counters, focused,
-            ui: { title, meta, synopsis, genres, status, play, info, toggle, reset }, onKeyDown: null };
+            ui: { image, title, meta, maturity, duration, year, synopsis, genres, status,
+                play, info, viewingActions, toggle, reset }, onKeyDown: null };
         const dismiss = reason => {
             if (activeCachedHover !== owner) return;
             closeCachedHover(reason);
@@ -5358,18 +5486,20 @@
         clone.setAttribute('aria-describedby', CACHED_HOVER_ID);
         updateCachedHover(owner);
         const rect = clone.querySelector(NETFLIX_DOM_SELECTORS.standardCard)?.getBoundingClientRect() || clone.getBoundingClientRect();
-        const width = Math.min(Math.max(320, rect.width * 1.12), 420, window.innerWidth - 24);
+        const width = Math.max(1, Math.min(Math.max(300, rect.width * 1.5), 420, window.innerWidth - 24));
         root.style.width = width + 'px';
         root.style.left = Math.max(12, Math.min(rect.left - (width - rect.width) / 2, window.innerWidth - width - 12)) + 'px';
         // One placement read, never per-frame positioning or carousel work.
         const height = root.getBoundingClientRect().height;
         const top = Math.max(12, Math.min(rect.top, window.innerHeight - height - 12));
         root.style.top = top + 'px';
-        // Later enrichment may increase content height. Keep the artwork and
-        // pointer handoff in place, clipped to the remaining space.
+        // Let the artwork shrink before clipping the fixed-height controls.
+        // Keep the pointer handoff in place when details arrive later.
         root.style.maxHeight = Math.max(1, window.innerHeight - top - 12) + 'px';
+        const layout = recordCachedHoverLayout(owner);
         document.addEventListener('keydown', owner.onKeyDown, true);
         counters.opens++;
+        if (!image.hidden) counters.artworkOpens++;
         if (details.records.has(String(item.videoId))) counters.cacheHits++;
         else counters.basicOpens++;
         const elapsed = Math.max(0, Math.round(performance.now() - started));
@@ -5379,7 +5509,11 @@
             counters.openLogs++;
             try { log(tLog('cachedHoverOpened'), { cached: details.records.has(String(item.videoId)),
                 loading: details.loading, renderMs: elapsed, section: clone.parentElement === state.grid ? 'main' : 'watched',
-                focused, carouselRequired: false }); } catch (_) { counters.failures++; }
+                focused, carouselRequired: false, presentation: counters.presentation,
+                artwork: !image.hidden, artworkLoaded: Boolean(existingImage?.complete && existingImage.naturalWidth > 0),
+                metadata: !meta.hidden, genres: !genres.hidden,
+                synopsis: !synopsis.hidden, layoutMeasured: Boolean(layout?.measured),
+                clipped: Boolean(layout?.clipped) }); } catch (_) { counters.failures++; }
         }
     }
 

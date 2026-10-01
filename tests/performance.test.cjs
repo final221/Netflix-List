@@ -7780,7 +7780,8 @@ test('responsive settling stops before another native read when its source owner
 const cachedHoverFunctions = [
     'titleDetailText', 'normalizeTitleDetails', 'titleDetailsFromGraph', 'titleDetailsOwnerActive',
     'readTitleDetailsCache', 'writeTitleDetailsCache', 'stopTitleDetails', 'initializeTitleDetails',
-    'closeCachedHover', 'cachedHoverOwnerActive', 'updateCachedHover', 'openCachedHover',
+    'closeCachedHover', 'cachedHoverOwnerActive', 'formatCachedHoverDuration', 'updateCachedHover',
+    'recordCachedHoverLayout', 'openCachedHover',
     'activateClone', 'clearSourceAlignment', 'handleTargetPointerMove', 'handleTargetScroll',
     'handleHoverDiagnosticVisibilityChange', 'ensureGridHoverBehavior'
 ];
@@ -7869,7 +7870,9 @@ test('cached hover opens after the existing dwell without native reads, grafts, 
     assert.equal(e.c.activeCachedHover, owner, 'enrichment keeps the same popup and card');
     assert.equal(owner.ui.title.textContent, 'Title 2');
     assert.equal(owner.ui.synopsis.textContent, 'Synopsis 2');
-    assert.match(owner.ui.meta.textContent, /2020.*90.*16/);
+    assert.equal(owner.ui.year.textContent, '2020');
+    assert.equal(owner.ui.duration.textContent, '1h 30m');
+    assert.equal(owner.ui.maturity.textContent, '16');
     assert.equal(owner.ui.genres.textContent, 'Drama');
     assert.equal(e.c.performanceDiagnostics.cachedHover.updates, 1);
 });
@@ -8297,4 +8300,132 @@ test('mouse-away dismissal remains sufficient without an X in both list sections
         assert.equal(e.c.performanceDiagnostics.cachedHover.lastCloseReason, 'leave');
     }
     assert.equal(e.c.performanceDiagnostics.cachedHover.closes, 2);
+});
+
+test('compact cached cards expose named icon links and keep watched choices separate from native actions', async () => {
+    const e = await cachedHoverEnvironment();
+    const details = e.initialize();
+    await e.finishDetails(details);
+    details.records.get('2').genres = ['Mystery', 'Drama', 'Suspenseful', 'Fourth genre'];
+    const clone = e.clone('2');
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    const owner = e.c.activeCachedHover;
+    assert.equal(owner.ui.play.getAttribute('aria-label'), 'Play');
+    assert.equal(owner.ui.info.getAttribute('aria-label'), 'More info');
+    assert.equal(owner.ui.play.getAttribute('title'), 'Play');
+    assert.equal(owner.ui.info.children[0].getAttribute('aria-hidden'), 'true');
+    assert.match(owner.ui.play.children[0].className, /icon-play/);
+    assert.match(owner.ui.info.children[0].className, /icon-info/);
+    assert.equal(owner.ui.play.parentElement, owner.ui.info.parentElement);
+    assert.notEqual(owner.ui.toggle.parentElement, owner.ui.info.parentElement,
+        'a watched choice must not masquerade as Netflix list membership or rating');
+    assert.equal(owner.ui.toggle.parentElement, owner.ui.viewingActions);
+    assert.equal(owner.ui.viewingActions.hidden, false);
+    assert.deepEqual(owner.ui.meta.children, [owner.ui.maturity, owner.ui.duration, owner.ui.year]);
+    assert.equal(owner.ui.maturity.textContent, '16');
+    assert.equal(owner.ui.duration.textContent, '1h 30m');
+    assert.equal(owner.ui.genres.textContent, 'Mystery \u2022 Drama \u2022 Suspenseful');
+    assert.equal(owner.ui.title.hidden, true, 'avoid a duplicate heading below the existing title artwork');
+    assert.equal(owner.root.getAttribute('aria-label'), 'Title 2');
+    assert.equal(owner.ui.synopsis.hidden, true, 'rich compact cards leave the full plot to More info');
+    assert.equal(e.c.performanceDiagnostics.cachedHover.artworkOpens, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverPreparation.calls, 0);
+    assert.equal(e.c.activeNativeHover, null);
+    const log = e.logs.find(entry => entry.name === 'cachedHoverOpened');
+    assert.equal(log.details.presentation, 'netflix-card');
+    assert.equal(log.details.metadata, true);
+    assert.equal(log.details.synopsis, false);
+});
+
+test('missing artwork and sparse cached records retain a readable title and synopsis fallback', async () => {
+    const e = await cachedHoverEnvironment();
+    const details = e.initialize();
+    await e.finishDetails(details);
+    const clone = e.clone('2');
+    clone.querySelector('img').src = '';
+    details.records.set('2', { title: 'Sparse title', synopsis: 'Available plot', genres: [], type: 'movie' });
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    const owner = e.c.activeCachedHover;
+    assert.equal(owner.ui.image.hidden, true);
+    assert.equal(owner.ui.image.parentElement.hidden, true);
+    assert.equal(owner.ui.title.hidden, false);
+    assert.equal(owner.ui.title.textContent, 'Sparse title');
+    assert.equal(owner.ui.synopsis.hidden, false);
+    assert.equal(owner.ui.synopsis.textContent, 'Available plot');
+    assert.equal(owner.ui.meta.hidden, true);
+    assert.equal(owner.ui.genres.hidden, true);
+    assert.equal(owner.ui.status.hidden, true);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.artworkOpens, 0);
+    delete clone.__tmViewingControls;
+    details.records.delete('2');
+    e.c.updateCachedHover(owner);
+    assert.equal(owner.ui.title.textContent, 'Native 2');
+    assert.equal(owner.ui.status.hidden, false);
+    assert.equal(owner.ui.viewingActions.hidden, true);
+    assert.equal(owner.ui.play.href, 'https://www.netflix.com/watch/2');
+    assert.equal(owner.ui.info.href, 'https://www.netflix.com/browse?jbv=2');
+});
+
+test('cached duration formats localized hours and minutes without manufacturing invalid values', () => {
+    const e = environment(['formatCachedHoverDuration']);
+    assert.equal(e.c.formatCachedHoverDuration(6600, 'en'), '1h 50m');
+    assert.equal(e.c.formatCachedHoverDuration(3600, 'en'), '1h');
+    assert.equal(e.c.formatCachedHoverDuration(2700, 'en'), '45m');
+    assert.equal(e.c.formatCachedHoverDuration(1, 'en'), '1m');
+    for (const value of [null, undefined, NaN, Infinity, -1, 0, 86400, '6600']) {
+        assert.equal(e.c.formatCachedHoverDuration(value, 'en'), '');
+    }
+    assert.match(e.c.formatCachedHoverDuration(6600, 'de'), /1.*50/);
+    assert.equal(e.c.formatCachedHoverDuration(6600, 'invalid_locale'), '');
+});
+
+test('cached popup layout diagnostics report clipping with scalar counters and ignore obsolete owners', async () => {
+    const e = await cachedHoverEnvironment();
+    const details = e.initialize();
+    await e.finishDetails(details);
+    const clone = e.clone('2');
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    const owner = e.c.activeCachedHover, counters = e.c.performanceDiagnostics.cachedHover;
+    assert.equal(counters.layoutChecks, 1);
+    owner.root.clientHeight = 180;
+    owner.root.scrollHeight = 210;
+    const clipped = e.c.recordCachedHoverLayout(owner);
+    assert.equal(clipped.measured, true);
+    assert.equal(clipped.clipped, true);
+    assert.equal(counters.clippedLayouts, 1);
+    assert.equal(counters.lastHeight, 180);
+    assert.equal(counters.lastContentHeight, 210);
+    owner.root.scrollHeight = 180;
+    assert.equal(e.c.recordCachedHoverLayout(owner).clipped, false);
+    assert.equal(counters.layoutChecks, 3);
+    assert.equal(counters.clippedLayouts, 1);
+    e.c.closeCachedHover();
+    Object.defineProperty(owner.root, 'clientHeight', { get() { throw new Error('Stale layout read'); } });
+    assert.equal(e.c.recordCachedHoverLayout(owner), null);
+    assert.equal(counters.layoutChecks, 3);
+    assert.ok(Object.values(e.c.collectPerformanceDiagnostics().cachedHover)
+        .every(value => ['number', 'string', 'boolean'].includes(typeof value)));
+    assert.doesNotMatch(JSON.stringify(e.logs.filter(entry => entry.name === 'cachedHoverOpened')),
+        /profile|videoId|https|Title|Synopsis/);
+});
+
+test('series compact cards keep More info keyboard access without guessing playback or movie duration', async () => {
+    const e = await cachedHoverEnvironment();
+    const details = e.initialize();
+    await e.finishDetails(details);
+    e.state.watchStatus.filters.main = 'series';
+    e.c.syncWatchGroups(e.state);
+    const clone = e.clone('5'), card = clone.querySelector('card');
+    card.focus();
+    const owner = e.c.activeCachedHover;
+    assert.equal(owner.clone, clone);
+    assert.equal(owner.ui.play.hidden, true);
+    assert.equal(owner.ui.duration.hidden, true);
+    assert.equal(owner.ui.maturity.hidden, false);
+    assert.equal(owner.ui.info.href, 'https://www.netflix.com/browse?jbv=5');
+    let focused = 0, prevented = 0;
+    owner.ui.info.focus = () => { focused++; };
+    e.state.grid.listeners.get('keydown')({ key: 'Tab', target: card, preventDefault: () => prevented++ });
+    assert.equal(focused, 1);
+    assert.equal(prevented, 1);
 });
