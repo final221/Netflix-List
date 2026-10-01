@@ -85,11 +85,16 @@ function environment(names, overrides = {}) {
         ensureLiveNativeBinding: () => {},
         log: () => {}, warn: () => {}, tLog: value => value, itemSummary: item => item,
         initializeWatchGroups: () => {},
+        recordInitialCardResponse: () => {}, captureNativePopupShape: () => {},
+        collectNativePopupDiagnostics: () => ({ status: 'fixture' }),
         ...overrides
     });
     vm.runInContext(source.match(/^    const HOVER_FRAME_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_INTERRUPTION_LOG_LIMIT = \d+;/m)?.[0] || '', c);
+    vm.runInContext(source.match(/^    const NATIVE_POPUP_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
+    vm.runInContext(source.match(/^    const POPUP_FIELD_GROUPS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
+    vm.runInContext(source.match(/^    const POPUP_RESPONSE_FIELDS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_CANCELLATION_REASONS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     for (const name of ['createNativeReadScope', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'trace', 'gridOwnsClone',
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
@@ -7773,4 +7778,210 @@ test('responsive settling stops before another native read when its source owner
     await e.advance(80);
     await rejected;
     assert.equal(e.timers.size, 0);
+});
+
+const popupDiagnosticFunctions = [
+    'popupDiagnosticValue', 'popupDiagnosticKey', 'popupResponseField', 'surveyPopupResponseCard',
+    'recordInitialCardResponse', 'describeNativePopupChain', 'captureNativePopupShape', 'collectNativePopupDiagnostics'
+];
+function loadPopupDiagnostics(e) {
+    for (const name of popupDiagnosticFunctions) vm.runInContext(declaration(name), e.c);
+    return e;
+}
+function popupProbeFixture() {
+    const e = loadPopupDiagnostics(environment([]));
+    const card = new Element('native');
+    let calls = 0;
+    const context = { popup: { open(videoId, anchor) { calls++; return { videoId, anchor, preview: 'private-title' }; } } };
+    const props = { onPointerEnter(event) { calls++; return context.popup.open('private-video-id', event.currentTarget); },
+        title: 'private-title', authToken: 'private-auth', children: new Element('child') };
+    card.__reactFiber$test = { type: 'a', memoizedProps: props, pendingProps: props,
+        dependencies: { firstContext: { memoizedValue: context } },
+        return: { type: function NativeCard() {}, memoizedProps: { videoId: 'private-video-id' } } };
+    Object.assign(e.c, { sourceState: { grid: new Element('grid'), track: { querySelector: () => card } },
+        NETFLIX_DOM_SELECTORS: { standardCard: 'card' } });
+    return { ...e, card, props, context, calls: () => calls };
+}
+
+test('initial response diagnostics distinguish wrapped scalar metadata from absent or type-only fields without exporting values', () => {
+    const e = loadPopupDiagnostics(environment([]));
+    const node = { id: 'private-video-id', displayString: { __typename: 'Text', text: 'private-title' },
+        synopsis: { __typename: 'Text', text: null }, contextualArtwork: { url: 'https://private.test/image.jpg' },
+        runtime: 3600, releaseYear: 2024, maturity: { value: '18' }, genres: ['private-genre'],
+        seasons: null, preview: { url: 'https://private.test/preview' }, inMyList: false,
+        authToken: 'private-auth', profile: { synopsis: 'private-profile' } };
+    e.c.recordInitialCardResponse([{ node }]);
+    const report = e.c.performanceDiagnostics.popupInvestigation;
+    assert.equal(report.sampledCards, 1);
+    assert.equal(report.titleScalar, 1);
+    assert.equal(report.synopsisPresent, 1);
+    assert.equal(report.synopsisScalar, 0, '__typename alone is not a scalar metadata value');
+    assert.equal(report.artworkScalar, 1);
+    assert.equal(report.seasonsPresent, 1);
+    assert.equal(report.seasonsScalar, 0);
+    assert.equal(report.membershipScalar, 1, 'false is an actual value');
+    assert.equal(report.playbackPresent, 0);
+    assert.match(report.fieldPaths, /node.displayString.text/);
+    assert.doesNotMatch(JSON.stringify(report), /private-|https:|3600|2024|__typename|authToken|profile/);
+    assert.ok(Object.values(report).every(value => value === null || typeof value !== 'object'));
+});
+
+test('response surveys sample across each page and cap pages, paths, nodes, depth and arrays even with cycles', () => {
+    const e = loadPopupDiagnostics(environment([]));
+    const node = { genres: Array.from({ length: 10000 }, () => ({ text: 'private-genre' })) };
+    node.self = node;
+    for (let index = 0; index < 80; index++) node['field' + index] = { synopsis: { text: 'private-plot' } };
+    const edges = Array.from({ length: 75 }, () => ({ node: { id: 'private-id' } }));
+    edges[74] = { node: { synopsis: 'last-card-plot' } };
+    for (let index = 0; index < 12; index++) e.c.recordInitialCardResponse(edges);
+    const report = e.c.performanceDiagnostics.popupInvestigation;
+    assert.equal(report.responsePages, 8);
+    assert.equal(report.skippedPages, 4);
+    assert.equal(report.sampledCards, 32);
+    assert.equal(report.synopsisScalar, 8, 'the final card is sampled as well as the first');
+    assert.equal(report.identityScalar, 24);
+    const survey = e.c.surveyPopupResponseCard(node);
+    assert.ok(survey.nodes <= 48);
+    assert.ok(survey.paths.length <= 32);
+    assert.equal(survey.truncated, true);
+    let deep = { synopsis: 'deep-plot' };
+    for (let index = 0; index < 12; index++) deep = { wrapper: deep };
+    const deepSurvey = e.c.surveyPopupResponseCard(deep);
+    assert.equal(deepSurvey.truncated, true);
+    assert.equal(deepSurvey.scalar.size, 0);
+});
+
+test('response diagnostic failures and private getters cannot break collection', () => {
+    const e = loadPopupDiagnostics(environment([]));
+    let reads = 0;
+    const node = {};
+    Object.defineProperty(node, 'synopsis', { enumerable: true, get() { reads++; throw new Error('private-error'); } });
+    e.c.recordInitialCardResponse([{ node }]);
+    assert.equal(reads, 0);
+    assert.equal(e.c.performanceDiagnostics.popupInvestigation.synopsisScalar, 0);
+    const hostile = new Proxy({}, { ownKeys() { throw new Error('private-error'); } });
+    assert.doesNotThrow(() => e.c.recordInitialCardResponse([{ node: hostile }]));
+    assert.equal(e.c.performanceDiagnostics.popupInvestigation.failures, 1);
+    assert.doesNotMatch(JSON.stringify(e.c.performanceDiagnostics.popupInvestigation), /private-error/);
+});
+
+test('the actual CarouselPage response is surveyed without another request or altering its usable data', async () => {
+    const e = loadPopupDiagnostics(fetchEnvironment(2));
+    e.responses.push(e.page(2, ['1', '2']));
+    const page = await e.c.fetchMyListCarouselPage({ body: { variables: {} }, headers: {} }, null, null, 1);
+    assert.equal(e.requests.length, 1);
+    assert.equal(page.edges.length, 2);
+    assert.equal(page.edges[0].node.displayString, 'Title 1');
+    const report = e.c.performanceDiagnostics.popupInvestigation;
+    assert.equal(report.responsePages, 1);
+    assert.equal(report.sampledCards, 2);
+    assert.equal(report.titleScalar, 2);
+    assert.equal(report.artworkScalar, 2);
+    assert.equal(e.timers.size, 0);
+});
+
+test('an obsolete CarouselPage response cannot update the new route survey', async () => {
+    const e = loadPopupDiagnostics(fetchEnvironment(2));
+    const waiting = deferred();
+    e.responses.push({ ...e.page(2, ['1', '2']), waitBody: waiting });
+    const pending = e.c.fetchMyListCarouselPage({ body: { variables: {} }, headers: {} }, null, new AbortController().signal, 1);
+    const rejected = assert.rejects(pending, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+    await e.flush();
+    e.c.routeSessionToken = 2;
+    e.c.performanceDiagnostics = e.c.createPerformanceDiagnostics();
+    waiting.resolve();
+    await rejected;
+    assert.equal(e.c.performanceDiagnostics.popupInvestigation.responsePages, 0);
+});
+
+test('native source and context reports expose callback shapes without calling them or retaining their objects or source', () => {
+    const e = popupProbeFixture();
+    const report = e.c.collectNativePopupDiagnostics();
+    assert.equal(report.source.status, 'read-only-candidates');
+    assert.equal(report.source.components.length, 2);
+    assert.ok(report.source.functions.some(row => row.path.endsWith('.props.onPointerEnter') &&
+        row.arity === 1 && row.hints.includes('currentTarget')));
+    assert.ok(report.source.functions.some(row => row.path.endsWith('.context0.popup.open') && row.arity === 2));
+    assert.equal(e.calls(), 0);
+    assert.doesNotMatch(JSON.stringify(report), /private-|authToken|return \{|calls\+\+|function NativeCard/);
+    assert.equal(report.preview, null);
+    e.c.captureNativePopupShape(e.card);
+    const saved = e.c.performanceDiagnostics.popupInvestigation.previewShape;
+    e.card.__reactFiber$test.memoizedProps = null;
+    e.c.captureNativePopupShape(e.card);
+    assert.equal(e.c.performanceDiagnostics.popupInvestigation.previewCaptures, 1);
+    assert.equal(e.c.performanceDiagnostics.popupInvestigation.previewShape, saved);
+    assert.equal(e.c.collectNativePopupDiagnostics().preview.status, 'read-only-candidates');
+    assert.equal(e.calls(), 0);
+});
+
+test('native shape probes skip getters and custom toString, cap cyclic/wide graphs and inspect only a bounded function prefix', () => {
+    const e = popupProbeFixture();
+    let reads = 0;
+    Object.defineProperty(e.props, 'onMouseOver', { enumerable: true, get() { reads++; throw new Error('private-error'); } });
+    e.props.onPointerEnter.toString = () => { reads++; throw new Error('private-error'); };
+    e.context.self = e.context;
+    e.props.longHandler = Function('/*' + 'x'.repeat(5000) + '*/ return "preview";');
+    for (let index = 0; index < 80; index++) e.props['handler' + index] = () => { reads++; };
+    const report = e.c.describeNativePopupChain(e.card);
+    assert.equal(reads, 0);
+    assert.equal(report.accessorsSkipped, 1);
+    assert.ok(report.functions.length <= 24);
+    assert.ok(report.holders <= 32);
+    assert.ok(report.fields.length <= 32);
+    assert.equal(report.truncated, true);
+    const long = report.functions.find(row => row.path.endsWith('.longHandler'));
+    assert.equal(long.sourceTruncated, true);
+    assert.equal(long.hints.includes('preview'), false, 'hints after the bounded prefix are not inspected');
+});
+
+test('Copy Logs guards inactive routes and isolates private probe failures', () => {
+    const e = popupProbeFixture();
+    e.c.sourceState.track.querySelector = () => { throw new Error('private-error'); };
+    e.c.targetSessionActive = false;
+    assert.equal(e.c.collectNativePopupDiagnostics().status, 'inactive-route');
+    e.c.targetSessionActive = true;
+    assert.equal(e.c.collectNativePopupDiagnostics().status, 'probe-failed');
+    const hostile = new Proxy({}, { ownKeys() { throw new Error('private-error'); } });
+    assert.doesNotThrow(() => e.c.captureNativePopupShape(hostile));
+    assert.equal(JSON.parse(e.c.performanceDiagnostics.popupInvestigation.previewShape).status, 'partial-probe');
+    assert.doesNotMatch(e.c.performanceDiagnostics.popupInvestigation.previewShape, /private-error/);
+});
+
+test('preview shape capture follows admitted title/route ownership and survives normal native dismissal', async () => {
+    const e = loadPopupDiagnostics(preparedHoverEnvironment());
+    liveHoverGeometry(e);
+    const activation = e.start();
+    await e.flush(); await e.frame(); await activation;
+    const clone = e.current(), preview = matchingPreview(e);
+    preview.root.__reactFiber$test = { type: 'div', memoizedProps: { onPointerOut() {} } };
+    assert.equal(e.c.retainNativeHoverForPreview(clone, preview.root,
+        pointer(clone, { type: 'pointerout', isTrusted: false })), false);
+    assert.equal(e.c.performanceDiagnostics.popupInvestigation.previewCaptures, 0);
+    clone.hovered = false;
+    await e.advance(420);
+    assert.equal(e.c.retainNativeHoverForPreview(clone, preview.root, pointer(clone, { type: 'pointerout' })), true);
+    assert.equal(e.c.performanceDiagnostics.popupInvestigation.previewCaptures, 1);
+    const saved = e.c.performanceDiagnostics.popupInvestigation.previewShape;
+    e.c.releaseNativeHover('test');
+    assert.equal(e.c.activeNativeHover, null);
+    assert.equal(e.c.performanceDiagnostics.popupInvestigation.previewShape, saved);
+    assert.equal(e.events.length, 6, 'the diagnostic does not dispatch native hover or exit events');
+});
+
+test('a throwing preview diagnostic cannot reject an admitted native transfer', async () => {
+    const e = preparedHoverEnvironment();
+    liveHoverGeometry(e);
+    const activation = e.start();
+    await e.flush(); await e.frame(); await activation;
+    const preview = matchingPreview(e);
+    e.c.captureNativePopupShape = () => { throw new Error('private-error'); };
+    e.current().hovered = false;
+    await e.advance(420);
+    assert.equal(e.c.retainNativeHoverForPreview(e.current(), preview.root,
+        pointer(e.current(), { type: 'pointerout' })), true);
+    assert.equal(e.c.activeNativeHover.previewRoot, preview.root);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.previewRejected, 0);
+    assert.equal(e.c.performanceDiagnostics.hoverInteraction.diagnosticFailures, 1);
+    assert.equal(e.events.length, 4);
 });
