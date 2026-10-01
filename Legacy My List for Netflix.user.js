@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.5
+// @version      1.3.6
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -86,7 +86,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.5';
+    const SCRIPT_VERSION = '1.3.6';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -1153,7 +1153,8 @@
             hoverPreparation: { calls: 0, slotsConsidered: 0, clonesRebuilt: 0, neighborsSkipped: 0 },
             resize: { events: 0, checks: 0, unchanged: 0, refreshes: 0, hoverPreserved: 0, hoverCancelled: 0 },
             nativeRecovery: { attempts: 0, completed: 0, exhausted: 0, alignmentRestores: 0, alignmentRestoreFailures: 0 },
-            undoRetention: { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 }
+            undoRetention: { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 },
+            membershipReuse: { attempts: 0, reused: 0, rejected: 0, itemsCaptured: 0, requestsAvoided: 0 }
         };
     }
 
@@ -4918,6 +4919,21 @@
             let freshBootstrap = bootstrap;
             try {
                 assertRouteSession(sessionToken);
+                if (freshBootstrap?.source === 'mounted-single-page-fast-path') {
+                    const reuse = collectMountedSinglePageItems(freshBootstrap, totalCount, columns, sessionToken);
+                    const work = performanceDiagnostics.membershipReuse;
+                    work.attempts++;
+                    if (reuse.items) {
+                        work.reused++;
+                        work.itemsCaptured += reuse.items.length;
+                        work.requestsAvoided++;
+                        return { bootstrap: freshBootstrap, items: reuse.items, collectionSource: 'mounted-single-page' };
+                    }
+                    work.rejected++;
+                    log('Mounted single-page membership reuse rejected; using fresh collection', {
+                        collectionSource: 'mounted-single-page', reason: reuse.reason, totalCount
+                    });
+                }
                 if (!Array.isArray(freshBootstrap?.graphqlEdges)) {
                     freshBootstrap = await fetchFreshMyListBootstrapViaCarousel(sessionToken);
                 }
@@ -6917,6 +6933,55 @@
         };
     }
 
+    function readMountedSinglePageMembership(section, scroller, track) {
+        if (!section || !scroller || !track) return null;
+        return withNativeReadScope(() => {
+            const state = nativeCarouselReadiness(section, scroller, track);
+            const countState = nativeReactCarouselTotalCount(scroller, track);
+            const totalCount = countState.totalCount;
+            const slots = currentPageSlots(scroller, track);
+            const itemIndices = slots.map(netflixItemIndexFromSlot);
+            const videoIds = slots.map(nativeCardIdentity).filter(Boolean);
+            if (!state.connected || state.pageMode !== 'logical' || state.pages !== 1 ||
+                !Number.isSafeInteger(totalCount) || totalCount <= 0 || totalCount > state.columns ||
+                state.slots !== totalCount || state.cards !== totalCount || state.currentCards !== totalCount ||
+                countState.slots !== totalCount || countState.uniqueReadings.length !== 1 ||
+                countState.uniqueReadings[0] !== totalCount || itemIndices.length !== totalCount ||
+                !itemIndices.every((value, index) => value === index) || videoIds.length !== slots.length ||
+                new Set(videoIds).size !== videoIds.length) return null;
+            const signature = [totalCount, state.signature, itemIndices.join(','), videoIds.join('|')].join('||');
+            return { state, totalCount, slots, itemIndices, videoIds, signature };
+        });
+    }
+
+    function collectMountedSinglePageItems(bootstrap, totalCount, columns, sessionToken = null) {
+        assertRouteSession(sessionToken);
+        const proof = bootstrap.mountedSinglePageProof;
+        if (!proof || targetSessionEntryKind !== 'spa' || !targetSessionReason.startsWith('route:') ||
+            !isRouteSessionActive(proof.sessionToken) || proof.sessionToken !== routeSessionToken ||
+            bootstrap.totalCount !== totalCount || !Number.isSafeInteger(columns) || totalCount > columns) {
+            return { items: null, reason: 'proof-or-entry-no-longer-valid' };
+        }
+        const { section, scroller, track } = proof;
+        if (sourceState?.section !== section || sourceState.scroller !== scroller || sourceState.track !== track ||
+            findMyListSection() !== section || section.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller) !== scroller ||
+            netflixDom.findTrack(scroller) !== track) return { items: null, reason: 'native-source-replaced' };
+        return withNativeReadScope(() => {
+            const sample = readMountedSinglePageMembership(section, scroller, track);
+            if (!sample || sample.totalCount !== totalCount || sample.signature !== proof.signature) {
+                return { items: null, reason: 'native-membership-or-layout-changed' };
+            }
+            // Validate every identity before capturing native variants in the
+            // same synchronous sample. No navigation or await is needed here.
+            const items = sample.slots.map(slot => itemFromSlot(slot, 0, false));
+            if (!items.every((item, index) => item?.videoId === sample.videoIds[index])) {
+                return { items: null, reason: 'native-card-metadata-incomplete' };
+            }
+            items.forEach((item, index) => { item.snapshot = sample.slots[index].cloneNode(true); });
+            return { items, reason: null };
+        });
+    }
+
     async function tryMountedSinglePageFastBootstrap(section, scroller, track, sessionToken = null) {
         assertRouteSession(sessionToken);
 
@@ -6934,54 +6999,19 @@
         // A transient partial window from a larger list therefore cannot qualify.
         for (let sample = 0; sample < 2; sample++) {
             assertRouteSession(sessionToken);
-            const state = nativeCarouselReadiness(section, scroller, track);
-            const countState = nativeReactCarouselTotalCount(scroller, track);
-            const totalCount = countState.totalCount;
-            const slots = currentPageSlots(scroller, track);
-            const itemIndices = slots.map(netflixItemIndexFromSlot);
-            const videoIds = slots.map(nativeCardIdentity).filter(Boolean);
-            const expectedIndices = Number.isSafeInteger(totalCount)
-                ? Array.from({ length: totalCount }, (_, index) => index)
-                : [];
-            const indicesComplete =
-                itemIndices.length === expectedIndices.length &&
-                itemIndices.every((value, index) => value === expectedIndices[index]);
-            const identitiesComplete =
-                videoIds.length === slots.length &&
-                new Set(videoIds).size === videoIds.length;
-            const eligible =
-                state.connected &&
-                state.pageMode === 'logical' &&
-                state.pages === 1 &&
-                Number.isSafeInteger(totalCount) &&
-                totalCount > 0 &&
-                totalCount <= state.columns &&
-                state.slots === totalCount &&
-                state.cards === totalCount &&
-                state.currentCards === totalCount &&
-                countState.slots === totalCount &&
-                countState.uniqueReadings.length === 1 &&
-                countState.uniqueReadings[0] === totalCount &&
-                indicesComplete &&
-                identitiesComplete;
-
-            if (!eligible) return null;
-
-            const signature = [
-                totalCount,
-                state.signature,
-                itemIndices.join(','),
-                videoIds.join('|')
-            ].join('||');
+            const membership = readMountedSinglePageMembership(section, scroller, track);
+            if (!membership) return null;
+            const { state, totalCount, itemIndices, videoIds, signature } = membership;
             if (previousSignature && signature === previousSignature) {
                 const result = {
                     totalCount,
                     firstVideoId: videoIds[0] || null,
                     source: 'mounted-single-page-fast-path',
-                    elapsedMs: Math.round(performance.now() - started)
+                    elapsedMs: Math.round(performance.now() - started),
+                    mountedSinglePageProof: { section, scroller, track, signature, sessionToken: routeSessionToken }
                 };
                 log('Mounted single-page My List fast bootstrap confirmed', {
-                    ...result,
+                    totalCount, firstVideoId: result.firstVideoId, source: result.source, elapsedMs: result.elapsedMs,
                     slots: state.slots,
                     cards: state.cards,
                     currentCards: state.currentCards,
@@ -11392,7 +11422,8 @@
         let earlyTotalCount;
         let freshMyListBootstrap = null;
         let mountedSinglePageFastBootstrap = false;
-        let graphqlItems = null;
+        let fastItems = null;
+        let fastCollectionSource = 'graphql';
         let parallelReadinessPromise = null;
         let carouselProfileLoggedForReadiness = false;
         const startParallelReadiness = () => {
@@ -11659,15 +11690,19 @@
                 });
                 assertRouteSession(sessionToken);
                 freshMyListBootstrap = graphqlCollection.bootstrap;
-                graphqlItems = graphqlCollection.items;
+                fastItems = graphqlCollection.items;
+                fastCollectionSource = graphqlCollection.collectionSource || 'graphql';
                 if (graphqlCollection.error) throw graphqlCollection.error;
-                if (graphqlItems) {
+                if (fastItems) {
                     const runtime = getCarouselDomRuntime(section);
                     runtime.knownPageCount = Math.max(1, Math.ceil(earlyTotalCount / Math.max(1, graphqlLayout.columns)));
                     runtime.pageCountFinalized = true;
-                    log('GraphQL My List fast collection prepared', {
+                    log(fastCollectionSource === 'mounted-single-page'
+                        ? 'Mounted single-page My List fast collection prepared' : 'GraphQL My List fast collection prepared', {
+                        collectionSource: fastCollectionSource,
+                        avoidedMembershipRequests: fastCollectionSource === 'mounted-single-page' ? 1 : 0,
                         totalCount: earlyTotalCount,
-                        collected: graphqlItems.length,
+                        collected: fastItems.length,
                         graphqlPageCount: freshMyListBootstrap.graphqlPageCount || null,
                         columns: graphqlLayout.columns,
                         knownPageCount: runtime.knownPageCount
@@ -11732,15 +11767,17 @@
             status.style.width = `${initialStatusGeometry.width}px`;
             status.style.setProperty('--tm-row-gap', `${layout.rowGap}px`);
 
-            // The GraphQL fast path skips beginSourceScan(), but hover-driven native
+            // Fast collection skips beginSourceScan(), but hover-driven native
             // moves still need the track marker used by the animation suppression CSS.
             track.classList.add('tm-netflix-mylist-v15-track');
             waitingForNativeEmpty = false;
             sourceState = { section, scroller, track, layout, initializationStartedAt: initializationStarted, empty: false, collectedCount: 0, totalCount };
             let items;
-            if (graphqlItems?.length === totalCount) {
-                items = graphqlItems;
-                log('GraphQL My List fast collection used', {
+            if (fastItems?.length === totalCount) {
+                items = fastItems;
+                log(fastCollectionSource === 'mounted-single-page'
+                    ? 'Mounted single-page My List fast collection used' : 'GraphQL My List fast collection used', {
+                    collectionSource: fastCollectionSource,
                     collected: items.length,
                     totalCount,
                     pages: pageCount(section),

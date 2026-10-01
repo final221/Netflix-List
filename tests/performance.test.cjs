@@ -2284,6 +2284,176 @@ test('zero and complete single-page bootstraps avoid further fetches', async () 
     }
 });
 
+function mountedSinglePageEnvironment(count = 6) {
+    const e = fetchEnvironment(count);
+    Object.assign(e.c, {
+        targetSessionEntryKind: 'spa', targetSessionReason: 'route:popstate', mountedCount: count,
+        currentPageSlots: (_, track) => track.children,
+        nativeCarouselReadiness: (section, scroller, track) => ({
+            connected: section.isConnected && scroller.isConnected && track.isConnected,
+            pageMode: 'logical', pages: 1, columns: 6, slots: track.children.length,
+            cards: track.children.length, currentCards: track.children.length, signature: 'single-page'
+        }),
+        nativeReactCarouselTotalCount: (_, track) => ({ totalCount: e.c.mountedCount,
+            slots: track.children.length, uniqueReadings: [e.c.mountedCount] }),
+        requireNativeReactCarouselTotalCount: () => ({ totalCount: e.c.mountedCount }),
+        netflixItemIndexFromSlot: slot => slot.index,
+        netflixDom: { findTrack: () => e.track, directSlots: track => track.children, filledSlots: track => track.children }
+    });
+    for (const name of ['nativeCardIdentity', 'readMountedSinglePageMembership', 'collectMountedSinglePageItems',
+        'tryMountedSinglePageFastBootstrap']) vm.runInContext(declaration(name), e.c);
+    const slots = e.items(count).map((item, index) => {
+        const slot = item.snapshot;
+        slot.index = index;
+        slot.setAttribute('native-variant', String(index));
+        e.track.appendChild(slot);
+        return slot;
+    });
+    return { ...e, slots, async qualify() {
+        const pending = e.c.tryMountedSinglePageFastBootstrap(e.section, e.scroller, e.track, 1);
+        await e.flush();
+        await e.frame();
+        await e.frame();
+        return pending;
+    } };
+}
+
+test('verified mounted single-page reuse skips membership fetches and preserves native card variants', async () => {
+    const e = mountedSinglePageEnvironment();
+    const bootstrap = await e.qualify();
+    assert.equal(bootstrap.source, 'mounted-single-page-fast-path');
+    assert.equal(e.frames.size, 0);
+    e.responses.push(e.page(6, [1, 2, 3, 4, 5, 6]));
+    const clonesBefore = e.template.cloneCounter.count;
+    const result = await e.collect(bootstrap);
+    assert.equal(e.requests.length, 0, 'qualified complete membership needs no redundant CarouselPage request');
+    assert.equal(result.collectionSource, 'mounted-single-page');
+    assert.deepEqual(Array.from(result.items, item => item.videoId), ['1', '2', '3', '4', '5', '6']);
+    result.items.forEach((item, index) => {
+        assert.equal(item.snapshot.getAttribute('native-variant'), String(index));
+        assert.equal(item.snapshot.markup, `native-markup-${index + 1}`);
+        assert.equal(item.snapshot.querySelector('img').src, `native-${index + 1}.jpg`);
+    });
+    assert.equal(e.template.cloneCounter.count - clonesBefore, 6, 'only the accepted native cards are snapshotted');
+    const work = e.c.collectPerformanceDiagnostics().membershipReuse;
+    assert.equal(work.reused, 1);
+    assert.equal(work.requestsAvoided, 1);
+    assert.equal(work.itemsCaptured, 6);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('verified mounted single-page reuse is integrated into initialization without native navigation or membership requests', async () => {
+    const e = mountedSinglePageEnvironment();
+    e.responses.push(e.page(6, [1, 2, 3, 4, 5, 6]));
+    let scans = 0;
+    e.c.collectAllItems = async () => { scans++; return e.items(6); };
+    const completion = e.c.runScript(1);
+    await e.flush();
+    await e.frame();
+    await e.frame();
+    await e.drain();
+    await completion;
+    assert.equal(e.requests.length, 0);
+    assert.equal(scans, 0);
+    assert.equal(e.c.completedSection, e.section, e.warnings.map(row => row.details.error?.message).join(', '));
+    assert.equal(e.c.sourceState.items.length, 6);
+    assert.deepEqual(e.c.sourceState.grid.children.map(clone => clone.getAttribute('native-variant')),
+        ['0', '1', '2', '3', '4', '5']);
+    assert.ok(e.c.sourceState.items.every(item => item.snapshot === null));
+    assert.ok(e.logs.some(row => row.details.collectionSource === 'mounted-single-page'));
+    assert.equal(e.warnings.length, 0);
+});
+
+test('mounted single-page qualification rejects partial, duplicated, shifted and unstable native membership', async () => {
+    for (const scenario of ['partial', 'duplicate', 'shifted', 'changed', 'conflicting', 'indicator', 'disconnected']) {
+        const e = mountedSinglePageEnvironment();
+        if (scenario === 'partial') e.c.mountedCount = 7;
+        if (scenario === 'duplicate') e.slots[5].querySelector('card').href = e.slots[0].querySelector('card').href;
+        if (scenario === 'shifted') e.slots.forEach(slot => slot.index++);
+        if (scenario === 'conflicting') e.c.nativeReactCarouselTotalCount = () => ({ totalCount: 6, slots: 6, uniqueReadings: [6, 7] });
+        if (scenario === 'indicator') {
+            const readiness = e.c.nativeCarouselReadiness;
+            e.c.nativeCarouselReadiness = (...args) => ({ ...readiness(...args), pageMode: 'indicator' });
+        }
+        if (scenario === 'disconnected') e.track.isConnected = false;
+        const pending = e.c.tryMountedSinglePageFastBootstrap(e.section, e.scroller, e.track, 1);
+        await e.flush();
+        await e.frame();
+        if (scenario === 'changed') e.slots[5].querySelector('card').href = 'https://www.netflix.com/watch/99';
+        await e.frame();
+        // An unstable second sample is rejected after its bounded final frame waits.
+        await e.frame();
+        await e.frame();
+        assert.equal(await pending, null, scenario);
+        assert.equal(e.requests.length, 0);
+    }
+});
+
+test('mounted single-page reuse revalidates after readiness and fetches fresh data on stale proof', async () => {
+    for (const scenario of ['membership', 'index', 'count', 'source', 'manual', 'missing-proof', 'layout', 'card-metadata']) {
+        const e = mountedSinglePageEnvironment();
+        let bootstrap = await e.qualify();
+        if (scenario === 'membership') e.slots[5].querySelector('card').href = 'https://www.netflix.com/watch/99';
+        if (scenario === 'index') e.slots[5].index = 0;
+        if (scenario === 'count') e.c.mountedCount = 7;
+        if (scenario === 'source') e.c.netflixDom.findTrack = () => new ConstructionNode('replacement');
+        if (scenario === 'manual') e.c.targetSessionReason = 'order-mismatch-reinitialize';
+        if (scenario === 'missing-proof') bootstrap = { ...bootstrap, mountedSinglePageProof: null };
+        if (scenario === 'layout') {
+            const read = e.c.nativeCarouselReadiness;
+            e.c.nativeCarouselReadiness = (...args) => ({ ...read(...args), signature: 'changed-layout' });
+        }
+        if (scenario === 'card-metadata') {
+            const read = e.c.itemFromSlot;
+            e.c.itemFromSlot = (...args) => args[0] === e.slots[5] ? null : read(...args);
+        }
+        e.responses.push(e.page(6, [1, 2, 3, 4, 5, 6]));
+        const before = e.template.cloneCounter.count;
+        const result = await e.collect(bootstrap);
+        assert.equal(e.requests.length, 1, scenario);
+        assert.equal(result.items.length, 6);
+        assert.equal(e.template.cloneCounter.count - before, 1, 'rejected native membership is not snapshotted');
+        assert.equal(e.c.collectPerformanceDiagnostics().membershipReuse.rejected, 1);
+        assert.ok(e.logs.some(row => row.details.reason && row.details.collectionSource === 'mounted-single-page'));
+    }
+});
+
+test('initial, manual and order-mismatch entry retain the fresh membership request for single-page lists', async () => {
+    for (const reason of ['route:initial', 'manual-reinitialize', 'order-mismatch-reinitialize']) {
+        const e = mountedSinglePageEnvironment();
+        e.c.targetSessionReason = reason;
+        e.c.targetSessionEntryKind = reason === 'route:initial' ? 'initial' : 'spa';
+        e.responses.push(e.page(6, [1, 2, 3, 4, 5, 6]));
+        const completion = e.c.runScript(1);
+        await e.flush();
+        await e.drain();
+        await completion;
+        assert.equal(e.requests.length, 1, reason);
+        assert.equal(e.c.completedSection, e.section);
+        assert.equal(e.c.sourceState.items.length, 6);
+        assert.equal(e.c.collectPerformanceDiagnostics().membershipReuse.attempts, 0);
+        assert.ok(e.logs.some(row => row.details.collectionSource === 'graphql'));
+        assert.equal(e.warnings.length, 0);
+    }
+});
+
+test('manual and initial entry cannot qualify mounted reuse and a stale route cannot publish it', async () => {
+    for (const kind of ['initial', 'manual']) {
+        const e = mountedSinglePageEnvironment();
+        e.c.targetSessionEntryKind = kind;
+        assert.equal(await e.qualify(), null);
+    }
+    const e = mountedSinglePageEnvironment();
+    const bootstrap = await e.qualify();
+    const before = e.template.cloneCounter.count;
+    e.c.routeSessionToken = 2;
+    await assert.rejects(e.c.netflixGraphql.collectLogicalItems({ bootstrap, totalCount: 6, columns: 6,
+        templateSlot: e.template, sessionToken: 1 }), error => e.c.isRouteSessionCancelledError(error));
+    assert.equal(e.requests.length, 0);
+    assert.equal(e.template.cloneCounter.count, before);
+});
+
 test('logical collection rejects incomplete/duplicate membership and reconciled-count mismatches', async () => {
     for (const scenario of ['missing', 'duplicate', 'reconciled']) {
         const e = fetchEnvironment(4);
