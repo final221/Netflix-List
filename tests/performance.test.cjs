@@ -7918,14 +7918,20 @@ test('popup pointer handoff retains its owner and leaving or scrolling releases 
     assert.equal(e.c.activeCachedHover, owner);
     owner.root.listeners.get('pointerout')({ relatedTarget: clone });
     assert.equal(e.c.activeCachedHover, owner);
-    e.c.handleTargetScroll({ type: 'scroll', target: owner.root });
-    assert.equal(e.c.activeCachedHover, owner, 'overflow inside the popup remains usable');
-    e.c.handleTargetScroll({ type: 'wheel', target: clone });
+    e.c.handleTargetScroll({ type: 'wheel', target: owner.ui.synopsis,
+        preventDefault() { throw new Error('Wheel default must stay available'); },
+        stopPropagation() { throw new Error('Wheel propagation must stay available'); } });
     assert.equal(e.c.activeCachedHover, null);
     assert.equal(e.body.children.length, 0);
     assert.equal(e.listeners.has('keydown'), false);
     assert.equal(clone.getAttribute('aria-describedby'), null);
     assert.equal(e.c.performanceDiagnostics.cachedHover.closes, 1);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.scrollDismissals, 1);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.wheelOverPopup, 1);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.lastCloseReason, 'scroll');
+    assert.equal(e.c.performanceDiagnostics.hoverScroll.wheelEvents, 1);
+    e.c.handleTargetScroll({ type: 'scroll', target: e.c.document });
+    assert.equal(e.c.performanceDiagnostics.cachedHover.scrollDismissals, 1, 'following scroll does not dismiss twice');
     e.c.clearSourceAlignment();
     assert.equal(e.c.performanceDiagnostics.cachedHover.closes, 1);
 });
@@ -8147,7 +8153,7 @@ test('cached hover logs stay bounded and anonymous and every supported UI locale
     }
 });
 
-test('cached keyboard actions are reachable from their card and close restores focus without another open', async () => {
+test('cached popup has no close button and keyboard actions and Escape remain accessible', async () => {
     const e = await cachedHoverEnvironment();
     const details = e.initialize();
     await e.finishDetails(details);
@@ -8159,8 +8165,10 @@ test('cached keyboard actions are reachable from their card and close restores f
     e.state.grid.listeners.get('keydown')({ key: 'Tab', target: card, preventDefault: () => prevented++ });
     assert.equal(focused, 1);
     assert.equal(prevented, 1);
-    const close = owner.root.children.find(node => node.className === 'tm-cached-close');
-    close.listeners.get('click')();
+    assert.equal(owner.root.children.some(node => node.className === 'tm-cached-close'), false);
+    assert.deepEqual(owner.root.querySelectorAll('*').filter(node => node.type === 'button'),
+        [owner.ui.toggle, owner.ui.reset], 'only the requested watched-status actions remain');
+    e.listeners.get('keydown')({ key: 'Escape', preventDefault() {} });
     assert.equal(e.c.activeCachedHover, null);
     assert.equal(e.c.document.activeElement, card);
     assert.equal(e.c.performanceDiagnostics.cachedHover.opens, 1);
@@ -8238,4 +8246,55 @@ test('a newly added title starts the cached path when the original list had no d
     e.c.openCachedHover(added, clone, 1);
     assert.equal(e.c.activeCachedHover?.clone, clone);
     assert.equal(e.c.performanceDiagnostics.hoverPreparation.calls, 0);
+});
+
+test('wheel and page scroll dismiss cached popups even during an existing scroll burst without cancelling input', async () => {
+    for (const kind of ['wheel', 'scroll']) {
+        for (const overPopup of [true, false]) {
+            const e = await cachedHoverEnvironment();
+            const details = e.initialize();
+            await e.finishDetails(details);
+            const clone = e.clone('2');
+            e.c.handleTargetScroll({ type: 'wheel', target: clone });
+            e.c.openCachedHover(clone.__tmMyListItem, clone, 1, true);
+            const owner = e.c.activeCachedHover;
+            assert.ok(owner, 'keyboard focus can open during a scroll quiet period');
+            e.c.handleTargetScroll({ type: kind, target: overPopup ? owner.ui.toggle : clone,
+                preventDefault() { throw new Error('Scroll default cancelled'); },
+                stopPropagation() { throw new Error('Scroll propagation cancelled'); } });
+            assert.equal(e.c.activeCachedHover, null);
+            assert.equal(e.body.children.length, 0);
+            assert.equal(e.listeners.has('keydown'), false);
+            assert.equal(e.c.performanceDiagnostics.cachedHover.scrollDismissals, 1);
+            assert.equal(e.c.performanceDiagnostics.cachedHover.wheelOverPopup, kind === 'wheel' && overPopup ? 1 : 0);
+            assert.equal(e.c.performanceDiagnostics.hoverPreparation.calls, 0);
+            e.state.grid.listeners.get('pointerover')(pointer(clone));
+            await e.advance(500);
+            assert.equal(e.c.activeCachedHover, null, 'stationary scrolling cannot reopen the popup');
+        }
+    }
+    const popupCss = /#\$\{CACHED_HOVER_ID\}\s*\{([^}]+)\}/.exec(source)?.[1];
+    assert.ok(popupCss);
+    assert.doesNotMatch(popupCss, /overscroll-behavior\s*:\s*(contain|none)|overflow\s*:\s*(auto|scroll)/,
+        'the popup must not consume or contain user scrolling');
+});
+
+test('mouse-away dismissal remains sufficient without an X in both list sections', async () => {
+    const e = await cachedHoverEnvironment();
+    const details = e.initialize();
+    await e.finishDetails(details);
+    e.state.watchStatus.ui.details.open = true;
+    for (const id of ['2', '1']) {
+        const clone = e.clone(id);
+        e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+        const owner = e.c.activeCachedHover;
+        assert.ok(owner);
+        assert.equal(owner.root.querySelectorAll('*').some(node => node.className === 'tm-cached-close'), false);
+        owner.root.listeners.get('pointerout')({ relatedTarget: e.body });
+        assert.equal(e.c.activeCachedHover, null);
+        assert.equal(e.body.children.length, 0);
+        assert.equal(e.c.activeClone, null);
+        assert.equal(e.c.performanceDiagnostics.cachedHover.lastCloseReason, 'leave');
+    }
+    assert.equal(e.c.performanceDiagnostics.cachedHover.closes, 2);
 });

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.0
+// @version      1.4.1
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -101,7 +101,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.4.0';
+    const SCRIPT_VERSION = '1.4.1';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -1223,7 +1223,8 @@
                 hoverPreserved: 0, hoverCancelled: 0, lastReason: '' },
             hoverPreparation: { calls: 0, slotsConsidered: 0, clonesRebuilt: 0, neighborsSkipped: 0 },
             cachedHover: { mode: 'cached-details', opens: 0, cacheHits: 0, basicOpens: 0, updates: 0,
-                closes: 0, renderTotalMs: 0, renderMaxMs: 0, lastCloseReason: '', failures: 0,
+                closes: 0, scrollDismissals: 0, wheelOverPopup: 0,
+                renderTotalMs: 0, renderMaxMs: 0, lastCloseReason: '', failures: 0,
                 restored: 0, ready: 0, missing: 0, requests: 0, loading: false, failure: '',
                 storageFailures: 0, openLogs: 0, titleFields: 0, synopsisFields: 0, yearFields: 0,
                 runtimeFields: 0, maturityFields: 0, genresFields: 0,
@@ -2726,8 +2727,7 @@
                 box-sizing: border-box;
                 max-width: calc(100vw - 24px);
                 max-height: calc(100vh - 24px);
-                overflow: auto;
-                overscroll-behavior: contain;
+                overflow: hidden;
                 border-radius: 9px;
                 background: #181818;
                 color: #fff;
@@ -2767,17 +2767,6 @@
                 cursor: pointer;
             }
             #${CACHED_HOVER_ID} .tm-cached-play { background: #fff; border-color: #fff; color: #111; }
-            #${CACHED_HOVER_ID} .tm-cached-close {
-                position: absolute;
-                top: 8px;
-                inset-inline-end: 8px;
-                border-radius: 50%;
-                width: 30px;
-                height: 30px;
-                padding: 0;
-                font-size: 21px;
-                line-height: 1;
-            }
             #${CACHED_HOVER_ID} :is(a, button):focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
             #${CACHED_HOVER_ID} :is(a, button):hover { filter: brightness(1.2); }
             #${CACHED_HOVER_ID} button:disabled { opacity: .45; cursor: default; }
@@ -5315,10 +5304,6 @@
         const imageUrl = existingImage?.currentSrc || existingImage?.src || '';
         if (/^https?:\/\//i.test(imageUrl)) image.src = imageUrl;
         else image.hidden = true;
-        const close = make('button', 'tm-cached-close');
-        close.type = 'button';
-        close.textContent = '\u00d7';
-        close.setAttribute('aria-label', tUi('hoverClose'));
         const body = make('div', 'tm-cached-body');
         const title = make('h3', 'tm-cached-title', body);
         const meta = make('p', 'tm-cached-meta', body);
@@ -5350,7 +5335,6 @@
             event.preventDefault();
             dismiss('escape');
         };
-        close.addEventListener('click', () => dismiss('close'));
         for (const [button, action] of [[toggle, 'toggle'], [reset, 'reset']]) {
             button.addEventListener('click', event => {
                 event.preventDefault();
@@ -5382,7 +5366,7 @@
         const top = Math.max(12, Math.min(rect.top, window.innerHeight - height - 12));
         root.style.top = top + 'px';
         // Later enrichment may increase content height. Keep the artwork and
-        // pointer handoff in place, with overflow inside the remaining space.
+        // pointer handoff in place, clipped to the remaining space.
         root.style.maxHeight = Math.max(1, window.innerHeight - top - 12) + 'px';
         document.addEventListener('keydown', owner.onKeyDown, true);
         counters.opens++;
@@ -12719,7 +12703,16 @@
     }
 
     function handleTargetScroll(event = null) {
-        if (activeCachedHover?.root.contains(event?.target) && cachedHoverOwnerActive(activeCachedHover)) return;
+        // Wheel input belongs to the page even over popup content. Dismiss on
+        // every scroll, including an existing burst, without cancelling default
+        // scrolling or introducing a separate popup scroll area.
+        if (activeCachedHover) {
+            if (event?.type === 'wheel' && activeCachedHover.root.contains(event.target)) {
+                activeCachedHover.counters.wheelOverPopup++;
+            }
+            activeCachedHover.counters.scrollDismissals++;
+            closeCachedHover('scroll');
+        }
         const now = performance.now();
         const starting = now - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS;
         lastTargetScrollAt = now;
