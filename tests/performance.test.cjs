@@ -72,6 +72,7 @@ function environment(names, overrides = {}) {
         hoverToken: 1, hoverSequence: 0, pendingGridHoverClone: null,
         lastTargetScrollAt: -Infinity, hoverNeedsPointerMove: false, lastPointerX: -1, lastPointerY: -1,
         activeClone: null, activeVideoId: null, activePage: null, activeSourceSlot: null, activeGeometryProxy: null,
+        activeNativeHover: null,
         orderMismatchDialogOpen: false, orderMismatchReinitializing: false, responsiveRefreshPromise: null,
         routeSessionToken: 1, targetSessionActive: true,
         recentRemovedMyListItems: new Map(), undoExpiryTimer: null,
@@ -86,6 +87,7 @@ function environment(names, overrides = {}) {
     });
     for (const name of ['createNativeReadScope', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'trace', 'gridOwnsClone',
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
+        'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
         'startImageResourceDiagnostics', 'stopImageResourceDiagnostics', 'recordImageResourceEntries',
         'responsiveViewportSignature', 'responsiveLayoutMatches',
         'cancelResizeHover', 'handleTargetResize', 'recoverNativeInitialization', ...names]) {
@@ -226,7 +228,7 @@ test('intentional hover still reuses an already-mounted native card after the dw
     await e.advance(119);
     assert.equal(alignments, 0);
     await e.advance(1);
-    assert.equal(alignments, 1);
+    assert.equal(alignments, 0, 'alignment is deferred to the replay frame');
     assert.equal(replays, 1);
     assert.equal(e.c.activeClone, e.clone);
 });
@@ -403,6 +405,7 @@ test('failed alignment follows the replacement card and retries once without ano
     assert.equal(firstFresh.getAttribute('data-tm-preparing'), 'true');
     assert.equal(e.events.length, 0);
     assert.equal(e.calls.preparations, 1);
+    await e.frame();
     await e.advance(180);
     await e.frame();
     await activation;
@@ -412,14 +415,16 @@ test('failed alignment follows the replacement card and retries once without ano
     assert.equal(e.c.activeClone, e.current());
     assert.equal(e.current().getAttribute('data-tm-preparing'), null);
     assert.equal(e.logs.find(entry => entry.name === 'hoverNativePagePreparationResult').details.success, true);
-    assert.equal(e.warnings.length, 0);
+    assert.equal(e.warnings.filter(entry => entry.details?.reason === 'source-alignment-failed').length, 1);
 });
 
 test('permanent alignment failure is reported as failure and cannot create an automatic retry loop', async () => {
     const e = preparedHoverEnvironment({ align: () => false });
     const activation = e.start();
     await e.flush();
+    await e.frame();
     await e.advance(180);
+    await e.frame();
     await activation;
     assert.equal(e.calls.preparations, 2);
     assert.equal(e.events.length, 0);
@@ -459,6 +464,7 @@ test('scroll, resize, route leave, and target loss stop recovery on the replacem
         e.c.scheduleResponsiveRefresh = () => {};
         const activation = e.start();
         await e.flush();
+        await e.frame();
         if (action === 'scroll') e.c.handleTargetScroll();
         if (action === 'resize') e.c.handleTargetWindowResize();
         if (action === 'route') e.c.isRouteSessionActive = () => false;
@@ -534,7 +540,7 @@ test('source revalidation uses original geometry and restores the grid proxy bef
     e.clone.setAttribute('data-tm-backed-page', '0');
     const activation = e.start();
     await e.flush();
-    assert.equal(e.sourceSlot.getBoundingClientRect().left, 0);
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000, 'proxy is deferred until source revalidation in the replay frame');
     await e.frame();
     await activation;
     assert.equal(e.events.length, 4);
@@ -577,6 +583,219 @@ test('replay uses the latest physical coordinates, and synthetic motion cannot r
         assert.equal(event.screenY, 610);
     }
     e.c.cancelPendingGridHover();
+});
+
+function liveHoverGeometry(e) {
+    for (const name of ['pairDomTrees', 'makeClientRectList', 'restoreGeometryProxy', 'clearSourceAlignment', 'alignSourceSlotToClone']) {
+        vm.runInContext(declaration(name), e.c);
+    }
+    e.sourceSlot.getBoundingClientRect = () => ({ left: 1000, right: 1100, top: 0, bottom: 60, width: 100, height: 60 });
+}
+
+test('fresh and ready hovers align once in the replay frame and export separate phase measurements', async () => {
+    for (const ready of [false, true]) {
+        const e = preparedHoverEnvironment();
+        if (ready) {
+            e.clone.setAttribute('data-tm-hover-ready', 'true');
+            e.clone.setAttribute('data-tm-backed-page', '0');
+        }
+        const activation = e.start();
+        await e.flush();
+        assert.equal(e.calls.alignments, 0);
+        await e.frame();
+        await activation;
+        assert.equal(e.calls.alignments, 1);
+        assert.equal(e.calls.preparations, ready ? 0 : 1);
+        assert.equal(e.calls.grafts, ready ? 0 : 1);
+        const copy = e.c.collectPerformanceDiagnostics();
+        assert.equal(copy.hoverLifecycle.replaysDispatched, 1);
+        assert.equal(copy.hoverLifecycle.duplicateAlignmentsAvoided, 1);
+        assert.equal(copy.hoverTiming.alignmentSamples, 1);
+        assert.equal(copy.hoverTiming.replaySamples, 1);
+        assert.equal(copy.hoverTiming.graftSamples, ready ? 0 : 1);
+        assert.equal(e.events.length, 4);
+    }
+});
+
+test('scroll sends one native exit before restoring geometry and cannot restart a stationary hover', async () => {
+    const e = preparedHoverEnvironment();
+    liveHoverGeometry(e);
+    const exitPositions = [];
+    e.card.dispatchEvent = event => {
+        e.events.push(event);
+        if (event.type.endsWith('out')) {
+            exitPositions.push(e.sourceSlot.getBoundingClientRect().left);
+            assert.equal(e.c.activeNativeHover, null, 'ownership is cleared before native callbacks');
+            e.c.releaseNativeHover('nested-release');
+        }
+        return true;
+    };
+    const activation = e.start();
+    await e.flush(); await e.frame(); await activation;
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 0);
+    e.c.handleTargetScroll();
+    e.c.handleTargetScroll();
+    assert.deepEqual(e.events.slice(4).map(event => event.type), ['pointerout', 'mouseout']);
+    assert.deepEqual(exitPositions, [0, 0]);
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000);
+    assert.equal(e.c.activeGeometryProxy, null);
+    assert.equal(e.c.activeNativeHover, null);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.scrollBursts, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.scrollExits, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.exitSamples, 1);
+    await e.advance(200);
+    e.c.handleGridClonePointerOver(pointer(e.current()), e.current(), e.clone.__tmMyListItem);
+    await e.advance(1000); await e.frame();
+    assert.equal(e.calls.preparations, 1);
+    assert.equal(e.events.length, 6);
+    assert.equal(e.timers.size + e.frames.size, 0);
+});
+
+test('delegated card leave carries the actual popup destination into native exits', async () => {
+    const e = preparedHoverEnvironment();
+    liveHoverGeometry(e);
+    const handlers = new Map();
+    e.grid.addEventListener = (type, handler) => handlers.set(type, handler);
+    vm.runInContext(declaration('ensureGridHoverBehavior'), e.c);
+    e.c.ensureGridHoverBehavior(e.grid);
+    const activation = e.start();
+    await e.flush(); await e.frame(); await activation;
+    const popupControl = new Element('netflix-popup-control');
+    handlers.get('pointerout')({ target: e.current(), relatedTarget: popupControl });
+    assert.equal(e.events.length, 6);
+    assert.ok(e.events.slice(4).every(event => event.relatedTarget === popupControl));
+    assert.equal(e.c.activeNativeHover, null);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.lastExitReason, 'pointer-leave');
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000);
+});
+
+test('obsolete or recycled native sources receive no exit intended for an earlier title', async () => {
+    for (const change of ['identity', 'detached', 'replacement']) {
+        const e = preparedHoverEnvironment();
+        liveHoverGeometry(e);
+        const activation = e.start();
+        await e.flush(); await e.frame(); await activation;
+        if (change === 'identity') e.card.href = '/watch/456';
+        if (change === 'detached') e.card.isConnected = false;
+        if (change === 'replacement') e.sourceSlot.querySelector = () => new Element('replacement-card');
+        e.c.handleTargetScroll();
+        assert.equal(e.events.length, 4, change);
+        assert.equal(e.c.performanceDiagnostics.hoverLifecycle.exitSkipped, 1, change);
+        assert.equal(e.c.activeNativeHover, null);
+        assert.equal(e.c.activeGeometryProxy, null);
+        assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000);
+    }
+});
+
+test('failed native exits still restore geometry and are not retried on subsequent scroll events', async () => {
+    const e = preparedHoverEnvironment();
+    liveHoverGeometry(e);
+    const activation = e.start();
+    await e.flush(); await e.frame(); await activation;
+    e.card.dispatchEvent = () => { throw new Error('Private Netflix handler details'); };
+    e.c.handleTargetScroll(); e.c.handleTargetScroll();
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.exitFailed, 2);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.exitsDispatched, 0);
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000);
+    assert.equal(e.c.activeNativeHover, null);
+    assert.equal(e.c.activeGeometryProxy, null);
+    assert.doesNotMatch(JSON.stringify(e.c.collectPerformanceDiagnostics()), /Private Netflix/);
+});
+
+test('native source changes during exit stop remaining events from reaching a recycled card', async () => {
+    const e = preparedHoverEnvironment();
+    liveHoverGeometry(e);
+    const activation = e.start();
+    await e.flush(); await e.frame(); await activation;
+    e.card.dispatchEvent = event => {
+        e.events.push(event);
+        if (event.type === 'pointerout') e.card.href = '/watch/456';
+        return true;
+    };
+    e.c.handleTargetScroll();
+    assert.deepEqual(e.events.slice(4).map(event => event.type), ['pointerout']);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.exitSkipped, 1);
+    assert.equal(e.c.activeNativeHover, null);
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000);
+});
+
+test('native source changes during activation stop further enters for the obsolete title', async () => {
+    const e = preparedHoverEnvironment();
+    liveHoverGeometry(e);
+    e.card.dispatchEvent = event => {
+        e.events.push(event);
+        if (event.type === 'pointerover') {
+            e.card.href = '/watch/456';
+        }
+        return true;
+    };
+    const activation = e.start();
+    await e.flush(); await e.frame();
+    assert.deepEqual(e.events.map(event => event.type), ['pointerover']);
+    assert.equal(e.c.activeNativeHover, null);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.exitSkipped, 1);
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000);
+    await e.advance(180); await e.frame(); await activation;
+    assert.deepEqual(e.events.map(event => event.type), ['pointerover']);
+    assert.equal(e.calls.preparations, 2);
+    assert.equal(e.c.activeClone, null);
+});
+
+test('scroll during native activation stops the remaining enter events and cannot reopen that popup', async () => {
+    const e = preparedHoverEnvironment();
+    liveHoverGeometry(e);
+    e.card.dispatchEvent = event => {
+        e.events.push(event);
+        if (event.type === 'pointerover') e.c.handleTargetScroll();
+        return true;
+    };
+    const activation = e.start();
+    await e.flush(); await e.frame(); await activation;
+    assert.deepEqual(e.events.map(event => event.type), ['pointerover', 'pointerout', 'mouseout']);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.replayCancelled, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.replaysDispatched, 0);
+    assert.equal(e.c.activeNativeHover, null);
+    assert.equal(e.c.activeClone, null);
+    assert.equal(e.sourceSlot.getBoundingClientRect().left, 1000);
+    await e.advance(1000); await e.frame();
+    assert.equal(e.calls.preparations, 1);
+    assert.equal(e.events.length, 3);
+});
+
+test('rapid scroll and rehover establish a new owner that obsolete replay cleanup cannot release', async () => {
+    const e = preparedHoverEnvironment();
+    liveHoverGeometry(e);
+    const activation = e.start();
+    await e.flush(); await e.frame(); await activation;
+    const oldToken = e.c.hoverToken;
+    const oldReplay = e.c.scheduleNativeHoverReplay(e.sourceSlot, e.clone.__tmMyListItem, e.current(),
+        pointer(e.current()), 0, 'obsolete', oldToken, 1);
+    e.c.handleTargetScroll();
+    await e.advance(200);
+    e.c.handleTargetPointerMove(pointer(e.current(), { type: 'pointermove', clientX: 40, clientY: 30 }));
+    await e.advance(120);
+    await e.frame(); await e.flush();
+    assert.equal(await oldReplay, false);
+    assert.equal(e.c.activeNativeHover.card, e.card);
+    assert.notEqual(e.c.activeNativeHover.token, oldToken);
+    assert.equal(e.c.activeClone, e.current());
+    assert.deepEqual(e.events.map(event => event.type), ['pointerover', 'pointermove', 'mouseover', 'mousemove',
+        'pointerout', 'mouseout', 'pointerover', 'pointermove', 'mouseover', 'mousemove']);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.exitsDispatched, 1);
+    assert.equal(e.c.performanceDiagnostics.hoverLifecycle.replaysDispatched, 2);
+});
+
+test('hover phase timing cannot write into a new route diagnostic owner', async () => {
+    const e = preparedHoverEnvironment();
+    const old = e.c.performanceDiagnostics.hoverTiming;
+    await e.advance(125);
+    e.c.recordHoverTiming(old, 'queue', 0);
+    assert.equal(old.queueTotalMs, 125);
+    e.c.performanceDiagnostics = e.c.createPerformanceDiagnostics();
+    e.c.recordHoverTiming(old, 'move', 0);
+    assert.equal(old.moveSamples, 0);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.queueSamples, 0);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.moveSamples, 0);
 });
 
 test('a graft without React assignments is not marked ready for later clone reuse', async () => {
@@ -738,6 +957,7 @@ test('clicked moves remain serialized through native settlement and restore thei
     e.c.hoverToken = 2;
     const obsoleteQueued = e.c.moveOnePage(section, {}, 1, 1, 1);
     const latest = e.c.moveOnePage(section, {}, 1, 2, 1);
+    await e.advance(80);
     page = 1;
     acknowledgement.resolve({ page: 1, transform: 'after', signature: 'after', changed: true });
     await e.flush();
@@ -750,6 +970,28 @@ test('clicked moves remain serialized through native settlement and restore thei
     assert.equal(properties.get('transition'), 'original');
     assert.equal(properties.get('animation'), 'original');
     assert.equal(restorations, 4);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.queueSamples, 3);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.queueMaxMs, 80);
+    assert.equal(e.c.performanceDiagnostics.hoverTiming.moveSamples, 2);
+});
+
+test('Hawkins logical hover navigation avoids boundary detours while legacy cyclic navigation keeps wrapping', async () => {
+    for (const [start, target, hawkins, avoided] of [[0, 6, true, 1], [6, 0, true, 1], [1, 6, true, 1], [0, 1, true, 0], [0, 6, false, 0]]) {
+        let page = start;
+        const directions = [];
+        const e = environment(['goToPage'], {
+            getCarouselDomRuntime: () => ({ profile: { navigationMode: hawkins ? 'hawkins' : 'legacy', pageMode: hawkins ? 'logical' : 'indicator' } }),
+            pageCount: () => 7, selectedPage: () => page,
+            moveOnePage: async (_, __, direction) => {
+                directions.push(direction);
+                page = hawkins ? Math.max(0, Math.min(6, page + direction)) : (page + direction + 7) % 7;
+                return page;
+            }
+        });
+        assert.equal(await e.c.goToPage({}, {}, target, 1, 1, true), target);
+        assert.deepEqual(directions, hawkins ? Array(Math.abs(target - start)).fill(target > start ? 1 : -1) : [-1]);
+        assert.equal(e.c.performanceDiagnostics.hoverLifecycle.boundaryDetoursAvoided, avoided);
+    }
 });
 
 const observerFunctions = [

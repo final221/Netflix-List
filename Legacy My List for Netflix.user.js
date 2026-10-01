@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.9
+// @version      1.3.10
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -91,7 +91,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.9';
+    const SCRIPT_VERSION = '1.3.10';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -1097,6 +1097,7 @@
     let activeClone = null;
     let activeSourceSlot = null;
     let activeGeometryProxy = null;
+    let activeNativeHover = null;
     let responsiveRefreshTimer = null;
     let responsiveRefreshPromise = null;
     let responsiveRefreshing = false;
@@ -1157,6 +1158,15 @@
             viewingGroups: { syncs: 0, fullSyncs: 0, cardsConsidered: 0, controlsUpdated: 0, categoryMoves: 0,
                 hoverPreserved: 0, hoverCancelled: 0, lastReason: '' },
             hoverPreparation: { calls: 0, slotsConsidered: 0, clonesRebuilt: 0, neighborsSkipped: 0 },
+            hoverLifecycle: { replayAttempts: 0, replaysDispatched: 0, replayCancelled: 0, replayFailed: 0,
+                exitsDispatched: 0, exitSkipped: 0, exitFailed: 0, scrollBursts: 0, scrollExits: 0,
+                lastExitReason: '', boundaryDetoursAvoided: 0, duplicateAlignmentsAvoided: 0 },
+            hoverTiming: { queueSamples: 0, queueTotalMs: 0, queueMaxMs: 0,
+                moveSamples: 0, moveTotalMs: 0, moveMaxMs: 0,
+                graftSamples: 0, graftTotalMs: 0, graftMaxMs: 0,
+                alignmentSamples: 0, alignmentTotalMs: 0, alignmentMaxMs: 0,
+                replaySamples: 0, replayTotalMs: 0, replayMaxMs: 0,
+                exitSamples: 0, exitTotalMs: 0, exitMaxMs: 0 },
             resize: { events: 0, checks: 0, unchanged: 0, refreshes: 0, hoverPreserved: 0, hoverCancelled: 0 },
             nativeRecovery: { attempts: 0, completed: 0, exhausted: 0, alignmentRestores: 0, alignmentRestoreFailures: 0 },
             undoRetention: { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 },
@@ -1173,6 +1183,14 @@
 
     function collectPerformanceDiagnostics() {
         return Object.fromEntries(Object.entries(performanceDiagnostics).map(([key, counters]) => [key, { ...counters }]));
+    }
+
+    function recordHoverTiming(counters, phase, started) {
+        if (performanceDiagnostics.hoverTiming !== counters) return;
+        const elapsed = Math.max(0, Math.round((performance.now() - started) * 10) / 10);
+        counters[`${phase}Samples`]++;
+        counters[`${phase}TotalMs`] = Math.round((counters[`${phase}TotalMs`] + elapsed) * 10) / 10;
+        counters[`${phase}MaxMs`] = Math.max(counters[`${phase}MaxMs`], elapsed);
     }
 
     function stopImageResourceDiagnostics(reason = 'route-leave') {
@@ -1774,6 +1792,7 @@
             sourceScan: Boolean(scroller?.classList?.contains(SOURCE_SCAN_CLASS)),
             sourceParked: Boolean(scroller?.classList?.contains(SOURCE_PARKED_CLASS)),
             sourceGeometryProxy: Boolean(activeGeometryProxy),
+            nativeHoverOwned: Boolean(activeNativeHover),
             viewOriginalMyList,
             myListSyncMode: 'event-driven',
             pendingMyListMutations: [...pendingMyListMutations.values()].map(entry => ({
@@ -6846,12 +6865,16 @@
     }
 
     async function moveOnePage(section, scroller, direction, token = null, sessionToken = null) {
+        const hoverTiming = token === null ? null : performanceDiagnostics.hoverTiming;
+        const queueStarted = hoverTiming ? performance.now() : 0;
+        let moveStarted = null;
         const previousMove = carouselMoveQueue;
         let releaseMove;
         carouselMoveQueue = new Promise(resolve => { releaseMove = resolve; });
 
         try {
             await previousMove.catch(() => {});
+            if (hoverTiming) recordHoverTiming(hoverTiming, 'queue', queueStarted);
             assertRouteSession(sessionToken);
 
             if (token !== null && token !== hoverToken) {
@@ -6887,6 +6910,7 @@
             }
 
             const started = performance.now();
+            moveStarted = started;
             const beforeTransform = track.style.getPropertyValue('transform') || getComputedStyle(track).transform;
             const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
             const sharedFastMode = section.classList.contains(FAST_MOVE_CLASS);
@@ -6994,6 +7018,7 @@
             });
             return after;
         } finally {
+            if (hoverTiming && moveStarted !== null) recordHoverTiming(hoverTiming, 'move', moveStarted);
             releaseMove();
         }
     }
@@ -7003,9 +7028,19 @@
         const total = pageCount(section);
         target = Math.max(0, Math.min(total - 1, target));
         const startPage = selectedPage(section);
+        const profile = getCarouselDomRuntime(section)?.profile;
+        const cyclicShortestUsed = preferCyclicShortest &&
+            !(profile?.navigationMode === 'hawkins' && profile.pageMode === 'logical');
+        if (preferCyclicShortest && !cyclicShortestUsed && startPage !== target) {
+            const rightDistance = (target - startPage + total) % total;
+            const leftDistance = (startPage - target + total) % total;
+            if ((rightDistance <= leftDistance ? 1 : -1) !== (startPage < target ? 1 : -1)) {
+                performanceDiagnostics.hoverLifecycle.boundaryDetoursAvoided++;
+            }
+        }
 
         if (startPage !== target) {
-            log(tLog('pageMoveRequested'), { from: startPage, target, total, token, preferCyclicShortest });
+            log(tLog('pageMoveRequested'), { from: startPage, target, total, token, preferCyclicShortest, cyclicShortestUsed });
         }
 
         let guard = total + 5;
@@ -7020,7 +7055,7 @@
             }
             const current = selectedPage(section);
             let direction = forcedDirection ?? (current < target ? 1 : -1);
-            if (forcedDirection === null && preferCyclicShortest && total > 1) {
+            if (forcedDirection === null && cyclicShortestUsed && total > 1) {
                 const rightDistance = (target - current + total) % total;
                 const leftDistance = (current - target + total) % total;
                 if (rightDistance !== 0 || leftDistance !== 0) {
@@ -7051,11 +7086,9 @@
                 cancelled = true;
                 break;
             }
-            if (next === current && preferCyclicShortest && total > 1) {
-                // Hawkins logical pages stop at both ends; they do not wrap even
-                // when the shortest cyclic direction would cross a boundary.
-                // Retry once in the direct direction so the target page remains
-                // reachable from either edge.
+            if (next === current && cyclicShortestUsed && total > 1) {
+                // Preserve a direct fallback for other/unknown carousel profiles
+                // whose requested cyclic step turns out to stop at an edge.
                 const directDirection = current < target ? 1 : -1;
                 if (directDirection !== direction) {
                     log('Logical page boundary fallback', {
@@ -7095,6 +7128,7 @@
                 token,
                 hoverToken,
                 preferCyclicShortest,
+                cyclicShortestUsed,
                 guardRemaining: guard
             });
         }
@@ -9930,7 +9964,8 @@
         }
     }
 
-    function clearSourceAlignment(slot = activeSourceSlot) {
+    function clearSourceAlignment(slot = activeSourceSlot, reason = 'source-release', relatedTarget = null) {
+        releaseNativeHover(reason, relatedTarget);
         invalidateNativeReadScope();
         restoreGeometryProxy();
         if (slot?.hasAttribute?.('data-tm-source-aligned')) {
@@ -9947,6 +9982,50 @@
         const list = [rect];
         list.item = index => list[index] || null;
         return list;
+    }
+
+    function releaseNativeHover(reason = 'source-release', relatedTarget = null) {
+        const owner = activeNativeHover;
+        if (!owner) return;
+        // Clear ownership first: native exit handlers can synchronously cause another cleanup.
+        activeNativeHover = null;
+        const { counters, timing, card, coordinates } = owner;
+        const started = performance.now();
+        counters.lastExitReason = reason;
+        try {
+            if (!nativeHoverSourceMatches(owner)) {
+                counters.exitSkipped++;
+                return;
+            }
+            // React derives leave events from bubbling out events. Send them while
+            // the source still has grid geometry, before removing its coordinate proxy.
+            const common = { ...coordinates, relatedTarget };
+            let dispatched = false;
+            if (typeof PointerEvent === 'function') {
+                try {
+                    card.dispatchEvent(new PointerEvent('pointerout', { ...common,
+                        pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+                    dispatched = true;
+                } catch (_) { counters.exitFailed++; }
+            }
+            if (nativeHoverSourceMatches(owner) && activeNativeHover === null) {
+                try {
+                    card.dispatchEvent(new MouseEvent('mouseout', common));
+                    dispatched = true;
+                } catch (_) { counters.exitFailed++; }
+            } else counters.exitSkipped++;
+            if (dispatched) {
+                counters.exitsDispatched++;
+                if (reason === 'scroll') counters.scrollExits++;
+            }
+        } catch (_) { counters.exitFailed++; }
+        finally { recordHoverTiming(timing, 'exit', started); }
+    }
+
+    function nativeHoverSourceMatches(owner) {
+        return owner.card.isConnected && owner.sourceSlot.isConnected && Boolean(owner.videoId) &&
+            owner.sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard) === owner.card &&
+            videoIdFromHref(owner.card.href || owner.card.getAttribute('href') || '') === owner.videoId;
     }
 
     function alignSourceSlotToClone(sourceSlot, clone) {
@@ -10019,13 +10098,23 @@
             relatedTarget: null
         };
 
+        const owner = { card, sourceSlot, coordinates: common, token: hoverToken, sessionToken: routeSessionToken,
+            videoId: videoIdFromHref(card.href || card.getAttribute('href') || ''),
+            counters: performanceDiagnostics.hoverLifecycle, timing: performanceDiagnostics.hoverTiming };
+        releaseNativeHover('replaced');
+        activeNativeHover = owner;
+        const stillActive = () => activeNativeHover === owner && !hoverPreparationCancelled(owner.token) &&
+            isRouteSessionActive(owner.sessionToken) && nativeHoverSourceMatches(owner);
         try {
             card.dispatchEvent(new PointerEvent('pointerover', { ...common, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+            if (!stillActive()) return false;
             card.dispatchEvent(new PointerEvent('pointermove', { ...common, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
         } catch (_) {}
+        if (!stillActive()) return false;
         card.dispatchEvent(new MouseEvent('mouseover', common));
+        if (!stillActive()) return false;
         card.dispatchEvent(new MouseEvent('mousemove', common));
-        return true;
+        return stillActive();
     }
 
     function releaseFailedGridHover(clone, token) {
@@ -10039,6 +10128,8 @@
     function scheduleNativeHoverReplay(sourceSlot, item, clone, triggerEvent, actualPage, reason,
         token = hoverToken, sessionToken = routeSessionToken) {
         const generation = clone?.__tmHoverActivationGeneration;
+        const counters = performanceDiagnostics.hoverLifecycle;
+        const timing = performanceDiagnostics.hoverTiming;
         return new Promise(resolve => requestAnimationFrame(() => {
             const finish = success => {
                 if (!success) releaseFailedGridHover(clone, token);
@@ -10047,20 +10138,29 @@
             try {
                 if (hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) ||
                     !gridHoverTargetActive(clone, generation) ||
-                    activeClone !== clone || activeVideoId !== item.videoId) return finish(false);
-                if (!sourceSlot?.isConnected) return finish(false);
+                    activeClone !== clone || activeVideoId !== item.videoId) {
+                    counters.replayCancelled++;
+                    return finish(false);
+                }
+                counters.replayAttempts++;
+                if (!sourceSlot?.isConnected) { counters.replayFailed++; return finish(false); }
 
                 const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
                 const sourceVideoId = videoIdFromHref(card?.href || card?.getAttribute?.('href') || '');
                 // Native visibility/page reads need original source geometry, not
                 // the grid rectangles installed for Netflix's popup placement.
                 clearSourceAlignment();
-                const failureReason = withNativeReadScope(() => {
-                    if (!sourceVideoId || sourceVideoId !== item.videoId) return 'source-video-id-mismatch';
-                    if (findActiveSourceSlot(item) !== sourceSlot) return 'source-no-longer-active';
-                    return alignSourceSlotToClone(sourceSlot, clone) ? '' : 'source-alignment-failed';
-                });
+                const alignmentStarted = performance.now();
+                let failureReason;
+                try {
+                    failureReason = withNativeReadScope(() => {
+                        if (!sourceVideoId || sourceVideoId !== item.videoId) return 'source-video-id-mismatch';
+                        if (findActiveSourceSlot(item) !== sourceSlot) return 'source-no-longer-active';
+                        return alignSourceSlotToClone(sourceSlot, clone) ? '' : 'source-alignment-failed';
+                    });
+                } finally { recordHoverTiming(timing, 'alignment', alignmentStarted); }
                 if (failureReason) {
+                    counters.replayFailed++;
                     warn(tLog('nativeHoverReplayCancelled'), {
                         reason: failureReason,
                         targetVideoId: item.videoId,
@@ -10070,7 +10170,12 @@
                     return finish(false);
                 }
 
-                const replayed = replayHoverOnNativeSource(sourceSlot, triggerEvent);
+                const replayStarted = performance.now();
+                let replayed;
+                try { replayed = replayHoverOnNativeSource(sourceSlot, triggerEvent); }
+                finally { recordHoverTiming(timing, 'replay', replayStarted); }
+                if (replayed) counters.replaysDispatched++;
+                else counters.replayCancelled++;
                 if (replayed) trace(() => [tLog('nativeHoverReplayedFromLiveSource'), {
                     item: itemSummary(item),
                     actualPage,
@@ -10080,6 +10185,7 @@
                 }]);
                 finish(Boolean(replayed));
             } catch (error) {
+                counters.replayFailed++;
                 warn(tLog('nativeHoverReplayCancelled'), { reason: 'replay-failed', item: itemSummary(item), error });
                 finish(false);
             }
@@ -10113,6 +10219,7 @@
         assertRouteSession(sessionToken);
         if (hoverPreparationCancelled(token)) return null;
         performanceDiagnostics.hoverPreparation.calls++;
+        const hoverTiming = performanceDiagnostics.hoverTiming;
         ensureLiveNativeBinding('hover-prepare-start');
         const { section, scroller, track } = sourceState || {};
         if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
@@ -10365,7 +10472,10 @@
             const oldClone = findGridClone(pageItem);
             if (!oldClone?.isConnected) continue;
 
-            const { fresh, stats } = makeLiveClone(sourceSlot, pageItem, oldClone, actualPage);
+            const graftStarted = performance.now();
+            let fresh, stats;
+            try { ({ fresh, stats } = makeLiveClone(sourceSlot, pageItem, oldClone, actualPage)); }
+            finally { recordHoverTiming(hoverTiming, 'graft', graftStarted); }
             refreshedCount++;
             performanceDiagnostics.hoverPreparation.clonesRebuilt++;
             fiberAssignments += stats?.fiberAssignments || 0;
@@ -10405,15 +10515,8 @@
         }
 
         if (targetItem && freshTarget && targetSourceSlot) {
-            const aligned = alignSourceSlotToClone(targetSourceSlot, freshTarget);
-            trace(() => [tLog('hoverCoordinatesProxied'), {
-                item: itemSummary(targetItem),
-                actualPage,
-                aligned,
-                source: slotDescriptor(targetSourceSlot),
-                cloneRect: rectSummary(freshTarget.getBoundingClientRect())
-            }]);
-            if (!aligned) return null;
+            // Align once, in the replay frame after source identity/visibility is revalidated.
+            performanceDiagnostics.hoverLifecycle.duplicateAlignmentsAvoided++;
             activeVideoId = targetItem.videoId;
             activeClone = freshTarget;
 
@@ -10497,7 +10600,7 @@
                     current.getAttribute('data-tm-hover-token') !== String(token)) break;
 
                 clearSourceAlignment();
-                const { selected, backedPage, sourceSlot, aligned } = withNativeReadScope(() => {
+                const { selected, backedPage, sourceSlot } = withNativeReadScope(() => {
                     if (!attempt && current.getAttribute('data-tm-hover-ready') === 'true') {
                         ensureLiveNativeBinding('hover-reuse');
                     }
@@ -10505,8 +10608,7 @@
                     const backedPage = Number(current.getAttribute('data-tm-backed-page'));
                     const sourceSlot = !attempt && current.getAttribute('data-tm-hover-ready') === 'true' &&
                         Number.isFinite(backedPage) && selected === backedPage ? findActiveSourceSlot(item) : null;
-                    const aligned = sourceSlot ? alignSourceSlotToClone(sourceSlot, current) : false;
-                    return { selected, backedPage, sourceSlot, aligned };
+                    return { selected, backedPage, sourceSlot };
                 });
                 if (attempt) {
                     log('Retrying native page preparation after transient hydration', {
@@ -10518,7 +10620,8 @@
                 }
 
                 let reused = false;
-                if (!attempt && aligned) {
+                if (!attempt && sourceSlot) {
+                    performanceDiagnostics.hoverLifecycle.duplicateAlignmentsAvoided++;
                     reused = true;
                     activePage = selected;
                     activeVideoId = item.videoId;
@@ -10638,7 +10741,7 @@
         }, Math.max(HOVER_ACTIVATION_DELAY_MS, HOVER_SCROLL_QUIET_MS - (performance.now() - lastTargetScrollAt)));
     }
 
-    function handleGridClonePointerLeave(clone, item) {
+    function handleGridClonePointerLeave(clone, item, relatedTarget = null) {
         if (pendingGridHoverClone === clone) cancelPendingGridHover();
         clone.__tmHoverActivationGeneration = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
         if (clone.__tmHoverActivationTimer !== null && clone.__tmHoverActivationTimer !== undefined) {
@@ -10659,7 +10762,7 @@
             });
         }
         if (activeClone !== clone) return;
-        clearSourceAlignment();
+        clearSourceAlignment(undefined, 'pointer-leave', relatedTarget);
         activeVideoId = null;
         activeClone = null;
         activePage = null;
@@ -10682,14 +10785,14 @@
                 const controlClone = gridCloneFromPointerEvent(event, grid, true);
                 if (controlClone) {
                     controlClone.__tmViewingControlHovered = true;
-                    handleGridClonePointerLeave(controlClone, controlClone.__tmMyListItem);
+                    handleGridClonePointerLeave(controlClone, controlClone.__tmMyListItem, event.target);
                 } else cancelPendingGridHover();
             }
         }, { capture: true, passive: true });
         grid.addEventListener('pointerout', event => {
             const clone = gridCloneFromPointerEvent(event, grid);
             if (!clone || (event.relatedTarget && clone.contains(event.relatedTarget))) return;
-            handleGridClonePointerLeave(clone, clone.__tmMyListItem);
+            handleGridClonePointerLeave(clone, clone.__tmMyListItem, event.relatedTarget);
         }, { capture: true, passive: true });
     }
 
@@ -11370,8 +11473,9 @@
         hoverNeedsPointerMove = true;
         cancelPendingGridHover();
         if (!starting) return;
+        performanceDiagnostics.hoverLifecycle.scrollBursts++;
         hoverToken++;
-        clearSourceAlignment();
+        clearSourceAlignment(undefined, 'scroll');
         activeVideoId = null;
         activeClone = null;
         activePage = null;
