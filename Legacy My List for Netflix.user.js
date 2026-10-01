@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.3.16
+// @version      1.4.0
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -101,7 +101,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.3.16';
+    const SCRIPT_VERSION = '1.4.0';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -116,6 +116,10 @@
     const VIEWING_CHOICES_STORAGE_KEY = 'legacyMyListForNetflix.viewingChoices.v1.';
     const VIEWING_CACHE_STORAGE_KEY = 'legacyMyListForNetflix.viewingCache.v1.';
     const VIEWING_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+    const TITLE_DETAILS_STORAGE_KEY = 'legacyMyListForNetflix.titleDetails.v1.';
+    const TITLE_DETAILS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+    const TITLE_DETAILS_CACHE_LIMIT = 600;
+    const CACHED_HOVER_ID = 'tm-netflix-mylist-cached-hover';
     /*
      * Localization rules:
      * 1. Keep these rules in the source so future changes inherit them.
@@ -813,7 +817,47 @@
         keys.forEach((key, index) => { UI_MESSAGES[locale][key] = values[index]; });
     }
 
+    const CACHED_HOVER_UI_MESSAGES = {
+        en: ['Play', 'More info', 'Loading details...', 'More details are unavailable.', 'Close'],
+        da: ['Afspil', 'Flere oplysninger', 'Indl\u00e6ser oplysninger...', 'Flere oplysninger er ikke tilg\u00e6ngelige.', 'Luk'],
+        de: ['Abspielen', 'Mehr Infos', 'Details werden geladen...', 'Weitere Details sind nicht verf\u00fcgbar.', 'Schlie\u00dfen'],
+        es: ['Reproducir', 'M\u00e1s informaci\u00f3n', 'Cargando detalles...', 'No hay m\u00e1s detalles disponibles.', 'Cerrar'],
+        fil: ['I-play', 'Higit pang impormasyon', 'Naglo-load ng mga detalye...', 'Hindi available ang higit pang detalye.', 'Isara'],
+        fr: ['Lecture', 'Plus d\u2019infos', 'Chargement des d\u00e9tails...', 'Les autres d\u00e9tails sont indisponibles.', 'Fermer'],
+        hr: ['Reproduciraj', 'Vi\u0161e informacija', 'U\u010ditavanje detalja...', 'Dodatni detalji nisu dostupni.', 'Zatvori'],
+        id: ['Putar', 'Info selengkapnya', 'Memuat detail...', 'Detail lainnya tidak tersedia.', 'Tutup'],
+        it: ['Riproduci', 'Altre info', 'Caricamento dettagli...', 'Altri dettagli non disponibili.', 'Chiudi'],
+        hu: ['Lej\u00e1tsz\u00e1s', 'Tov\u00e1bbi inform\u00e1ci\u00f3', 'R\u00e9szletek bet\u00f6lt\u00e9se...', 'Tov\u00e1bbi r\u00e9szletek nem \u00e9rhet\u0151k el.', 'Bez\u00e1r\u00e1s'],
+        ms: ['Main', 'Maklumat lanjut', 'Memuatkan butiran...', 'Butiran lanjut tidak tersedia.', 'Tutup'],
+        nl: ['Afspelen', 'Meer informatie', 'Details laden...', 'Meer details zijn niet beschikbaar.', 'Sluiten'],
+        nb: ['Spill av', 'Mer informasjon', 'Laster detaljer...', 'Flere detaljer er ikke tilgjengelige.', 'Lukk'],
+        pl: ['Odtw\u00f3rz', 'Wi\u0119cej informacji', 'Wczytywanie szczeg\u00f3\u0142\u00f3w...', 'Dalsze szczeg\u00f3\u0142y s\u0105 niedost\u0119pne.', 'Zamknij'],
+        pt: ['Reproduzir', 'Mais informa\u00e7\u00f5es', 'A carregar detalhes...', 'Mais detalhes indispon\u00edveis.', 'Fechar'],
+        ro: ['Redare', 'Mai multe informa\u021bii', 'Se \u00eencarc\u0103 detaliile...', 'Alte detalii nu sunt disponibile.', '\u00cenchide'],
+        fi: ['Toista', 'Lis\u00e4tietoja', 'Ladataan tietoja...', 'Lis\u00e4tietoja ei ole saatavilla.', 'Sulje'],
+        sv: ['Spela upp', 'Mer information', 'Laddar detaljer...', 'Fler detaljer \u00e4r inte tillg\u00e4ngliga.', 'St\u00e4ng'],
+        vi: ['Ph\u00e1t', 'Th\u00eam th\u00f4ng tin', '\u0110ang t\u1ea3i chi ti\u1ebft...', 'Kh\u00f4ng c\u00f3 th\u00eam chi ti\u1ebft.', '\u0110\u00f3ng'],
+        tr: ['Oynat', 'Daha fazla bilgi', 'Ayr\u0131nt\u0131lar y\u00fckleniyor...', 'Daha fazla ayr\u0131nt\u0131 mevcut de\u011fil.', 'Kapat'],
+        cs: ['P\u0159ehr\u00e1t', 'Dal\u0161\u00ed informace', 'Na\u010d\u00edt\u00e1n\u00ed podrobnost\u00ed...', 'Dal\u0161\u00ed podrobnosti nejsou dostupn\u00e9.', 'Zav\u0159\u00edt'],
+        el: ['\u0391\u03bd\u03b1\u03c0\u03b1\u03c1\u03b1\u03b3\u03c9\u03b3\u03ae', '\u03a0\u03b5\u03c1\u03b9\u03c3\u03c3\u03cc\u03c4\u03b5\u03c1\u03b5\u03c2 \u03c0\u03bb\u03b7\u03c1\u03bf\u03c6\u03bf\u03c1\u03af\u03b5\u03c2', '\u03a6\u03cc\u03c1\u03c4\u03c9\u03c3\u03b7 \u03bb\u03b5\u03c0\u03c4\u03bf\u03bc\u03b5\u03c1\u03b5\u03b9\u03ce\u03bd...', '\u0394\u03b5\u03bd \u03b5\u03af\u03bd\u03b1\u03b9 \u03b4\u03b9\u03b1\u03b8\u03ad\u03c3\u03b9\u03bc\u03b5\u03c2 \u03ac\u03bb\u03bb\u03b5\u03c2 \u03bb\u03b5\u03c0\u03c4\u03bf\u03bc\u03ad\u03c1\u03b5\u03b9\u03b5\u03c2.', '\u039a\u03bb\u03b5\u03af\u03c3\u03b9\u03bc\u03bf'],
+        ru: ['\u0421\u043c\u043e\u0442\u0440\u0435\u0442\u044c', '\u041f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435', '\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0441\u0432\u0435\u0434\u0435\u043d\u0438\u0439...', '\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0441\u0432\u0435\u0434\u0435\u043d\u0438\u044f \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u044b.', '\u0417\u0430\u043a\u0440\u044b\u0442\u044c'],
+        uk: ['\u0414\u0438\u0432\u0438\u0442\u0438\u0441\u044f', '\u0414\u043e\u043a\u043b\u0430\u0434\u043d\u0456\u0448\u0435', '\u0417\u0430\u0432\u0430\u043d\u0442\u0430\u0436\u0435\u043d\u043d\u044f \u0432\u0456\u0434\u043e\u043c\u043e\u0441\u0442\u0435\u0439...', '\u0414\u043e\u0434\u0430\u0442\u043a\u043e\u0432\u0456 \u0432\u0456\u0434\u043e\u043c\u043e\u0441\u0442\u0456 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0456.', '\u0417\u0430\u043a\u0440\u0438\u0442\u0438'],
+        he: ['\u05d4\u05e4\u05e2\u05dc', '\u05de\u05d9\u05d3\u05e2 \u05e0\u05d5\u05e1\u05e3', '\u05d8\u05d5\u05e2\u05df \u05e4\u05e8\u05d8\u05d9\u05dd...', '\u05e4\u05e8\u05d8\u05d9\u05dd \u05e0\u05d5\u05e1\u05e4\u05d9\u05dd \u05d0\u05d9\u05e0\u05dd \u05d6\u05de\u05d9\u05e0\u05d9\u05dd.', '\u05e1\u05d2\u05d5\u05e8'],
+        ar: ['\u062a\u0634\u063a\u064a\u0644', '\u0627\u0644\u0645\u0632\u064a\u062f \u0645\u0646 \u0627\u0644\u0645\u0639\u0644\u0648\u0645\u0627\u062a', '\u062c\u0627\u0631\u064d \u062a\u062d\u0645\u064a\u0644 \u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644...', '\u0644\u0627 \u062a\u062a\u0648\u0641\u0631 \u062a\u0641\u0627\u0635\u064a\u0644 \u0625\u0636\u0627\u0641\u064a\u0629.', '\u0625\u063a\u0644\u0627\u0642'],
+        hi: ['\u091a\u0932\u093e\u090f\u0902', '\u0914\u0930 \u091c\u093e\u0928\u0915\u093e\u0930\u0940', '\u0935\u093f\u0935\u0930\u0923 \u0932\u094b\u0921 \u0939\u094b \u0930\u0939\u0947 \u0939\u0948\u0902...', '\u0905\u0927\u093f\u0915 \u0935\u093f\u0935\u0930\u0923 \u0909\u092a\u0932\u092c\u094d\u0927 \u0928\u0939\u0940\u0902 \u0939\u0948\u0964', '\u092c\u0902\u0926 \u0915\u0930\u0947\u0902'],
+        th: ['\u0e40\u0e25\u0e48\u0e19', '\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21', '\u0e01\u0e33\u0e25\u0e31\u0e07\u0e42\u0e2b\u0e25\u0e14\u0e23\u0e32\u0e22\u0e25\u0e30\u0e40\u0e2d\u0e35\u0e22\u0e14...', '\u0e44\u0e21\u0e48\u0e21\u0e35\u0e23\u0e32\u0e22\u0e25\u0e30\u0e40\u0e2d\u0e35\u0e22\u0e14\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21', '\u0e1b\u0e34\u0e14'],
+        zh: ['\u64ad\u653e', '\u66f4\u591a\u4fe1\u606f', '\u6b63\u5728\u52a0\u8f7d\u8be6\u60c5...', '\u6682\u65e0\u66f4\u591a\u8be6\u60c5\u3002', '\u5173\u95ed'],
+        ja: ['\u518d\u751f', '\u8a73\u7d30', '\u8a73\u7d30\u3092\u8aad\u307f\u8fbc\u307f\u4e2d...', '\u3053\u308c\u4ee5\u4e0a\u306e\u8a73\u7d30\u306f\u5229\u7528\u3067\u304d\u307e\u305b\u3093\u3002', '\u9589\u3058\u308b'],
+        ko: ['\uc7ac\uc0dd', '\uc0c1\uc138 \uc815\ubcf4', '\uc0c1\uc138 \uc815\ubcf4 \ub85c\ub529 \uc911...', '\ub354 \ub9ce\uc740 \uc0c1\uc138 \uc815\ubcf4\ub97c \uc0ac\uc6a9\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.', '\ub2eb\uae30']
+    };
+    for (const [locale, values] of Object.entries(CACHED_HOVER_UI_MESSAGES)) {
+        const keys = ['hoverPlay', 'hoverMoreInfo', 'hoverLoading', 'hoverUnavailable', 'hoverClose'];
+        keys.forEach((key, index) => { UI_MESSAGES[locale][key] = values[index]; });
+    }
+
     const LOG_MESSAGES = {
+        cachedHoverOpened: { en: 'Cached hover opened', ja: '\u30ad\u30e3\u30c3\u30b7\u30e5\u30db\u30d0\u30fc\u3092\u8868\u793a' },
+        titleDetailsCompleted: { en: 'Background title details completed', ja: '\u30bf\u30a4\u30c8\u30eb\u8a73\u7d30\u306e\u53d6\u5f97\u5b8c\u4e86' },
         viewingStatusStarted: { en: 'Viewing status collection started', ja: '\u8996\u8074\u72b6\u6cc1\u306e\u53d6\u5f97\u958b\u59cb' },
         viewingStatusCompleted: { en: 'Viewing status collection completed', ja: '\u8996\u8074\u72b6\u6cc1\u306e\u53d6\u5f97\u5b8c\u4e86' },
         viewingStatusUnavailable: { en: 'Viewing status unavailable; uncertain titles stay visible', ja: '\u8996\u8074\u72b6\u6cc1\u4e0d\u660e\u306e\u4f5c\u54c1\u306f\u8868\u793a\u3092\u7d99\u7d9a' },
@@ -942,7 +986,7 @@
         noNativeNetflixCardsCouldBeCollected: { en: 'No native Netflix cards could be collected.', ja: 'Netflix\u7d14\u6b63\u30ab\u30fc\u30c9\u3092\u53d6\u5f97\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002' },
         fullCollectionResultFinalized: { en: 'Full collection result finalized', ja: '\u5168\u4ef6\u53d6\u5f97\u7d50\u679c\u78ba\u5b9a' },
         nativeCarouselStandbyMode: { en: 'Native carousel standby mode', ja: '\u7d14\u6b63\u30ab\u30eb\u30fc\u30bb\u30eb\u5f85\u6a5f\u30e2\u30fc\u30c9' },
-        initialHoverPreparationDeferred: { en: 'Initial hover preparation deferred', ja: '\u521d\u671f\u30db\u30d0\u30fc\u6e96\u5099\u3092\u9045\u5ef6' },
+        cachedHoverActivated: { en: 'Cached hover activated without native traversal', ja: '\u7d14\u6b63\u79fb\u52d5\u306a\u3057\u306e\u30ad\u30e3\u30c3\u30b7\u30e5\u30db\u30d0\u30fc\u3092\u6709\u52b9\u5316' },
         collectedCountDoesNotMatchTotalCount: { en: 'Collected count does not match totalCount', ja: '\u53d6\u5f97\u4ef6\u6570\u304c\u5b9f\u6570\u3068\u4e00\u81f4\u3057\u307e\u305b\u3093' },
         initializationCompleted: { en: 'Initialization completed', ja: '\u521d\u671f\u5316\u5b8c\u4e86' },
         initializationCancelledByRouteChange: { en: 'Initialization cancelled by route change', ja: '\u30da\u30fc\u30b8\u9077\u79fb\u306b\u3088\u308a\u521d\u671f\u5316\u4e2d\u6b62' },
@@ -1114,6 +1158,7 @@
     let activeSourceSlot = null;
     let activeGeometryProxy = null;
     let activeNativeHover = null;
+    let activeCachedHover = null;
     let responsiveRefreshTimer = null;
     let responsiveRefreshPromise = null;
     let responsiveRefreshing = false;
@@ -1177,6 +1222,12 @@
             viewingGroups: { syncs: 0, fullSyncs: 0, cardsConsidered: 0, controlsUpdated: 0, categoryMoves: 0,
                 hoverPreserved: 0, hoverCancelled: 0, lastReason: '' },
             hoverPreparation: { calls: 0, slotsConsidered: 0, clonesRebuilt: 0, neighborsSkipped: 0 },
+            cachedHover: { mode: 'cached-details', opens: 0, cacheHits: 0, basicOpens: 0, updates: 0,
+                closes: 0, renderTotalMs: 0, renderMaxMs: 0, lastCloseReason: '', failures: 0,
+                restored: 0, ready: 0, missing: 0, requests: 0, loading: false, failure: '',
+                storageFailures: 0, openLogs: 0, titleFields: 0, synopsisFields: 0, yearFields: 0,
+                runtimeFields: 0, maturityFields: 0, genresFields: 0,
+                synopsisMissing: 0, synopsisErrors: 0, synopsisUnsupported: 0 },
             hoverLifecycle: { replayAttempts: 0, replaysDispatched: 0, replayCancelled: 0, replayFailed: 0,
                 exitsDispatched: 0, exitSkipped: 0, exitFailed: 0, scrollBursts: 0, scrollExits: 0,
                 lastExitReason: '', boundaryDetoursAvoided: 0, duplicateAlignmentsAvoided: 0,
@@ -1264,6 +1315,8 @@
 
     function handleHoverDiagnosticVisibilityChange() {
         if (document.visibilityState === 'hidden') {
+            closeCachedHover('hidden');
+            cancelPendingGridHover('other');
             stopHoverFrameDiagnostics('hidden');
             finishNativePreviewDiagnostic(activeNativeHover, { result: 'hidden' });
         }
@@ -1654,6 +1707,7 @@
     function resetDetachedTargetState() {
         if (completedSection?.isConnected && document.getElementById(GRID_ID)) return;
 
+        stopTitleDetails();
         clearSourceAlignment();
         restoreActiveCarouselStyles();
         advanceHoverToken('source');
@@ -1690,6 +1744,7 @@
     }
 
     function cleanupTargetSessionDom() {
+        stopTitleDetails();
         restoreActiveCarouselStyles();
         clearSourceAlignment();
         invalidateGridReact();
@@ -2062,6 +2117,7 @@
             sourceGeometryProxy: Boolean(activeGeometryProxy),
             nativeHoverOwned: Boolean(activeNativeHover),
             nativePreviewOwned: Boolean(activeNativeHover?.previewRoot),
+            cachedHoverOwned: Boolean(activeCachedHover),
             viewOriginalMyList,
             myListSyncMode: 'event-driven',
             pendingMyListMutations: [...pendingMyListMutations.values()].map(entry => ({
@@ -2661,6 +2717,70 @@
                 margin: 0;
                 font: inherit;
             }
+
+            #${CACHED_HOVER_ID} {
+                position: fixed;
+                top: 0;
+                left: 0;
+                z-index: 2147483000;
+                box-sizing: border-box;
+                max-width: calc(100vw - 24px);
+                max-height: calc(100vh - 24px);
+                overflow: auto;
+                overscroll-behavior: contain;
+                border-radius: 9px;
+                background: #181818;
+                color: #fff;
+                box-shadow: 0 8px 30px rgba(0,0,0,.65);
+                font: 14px/1.45 system-ui, sans-serif;
+            }
+            #${CACHED_HOVER_ID} [hidden] { display: none !important; }
+            #${CACHED_HOVER_ID} .tm-cached-artwork {
+                display: block;
+                width: 100%;
+                aspect-ratio: 16 / 9;
+                object-fit: cover;
+            }
+            #${CACHED_HOVER_ID} .tm-cached-body { padding: 14px; }
+            #${CACHED_HOVER_ID} p { margin: 8px 0; }
+            #${CACHED_HOVER_ID} .tm-cached-title { margin: 0; font-size: 19px; line-height: 1.25; }
+            #${CACHED_HOVER_ID} .tm-cached-meta,
+            #${CACHED_HOVER_ID} .tm-cached-status { color: #bcbcbc; font-size: 12px; }
+            #${CACHED_HOVER_ID} .tm-cached-synopsis {
+                display: -webkit-box;
+                -webkit-line-clamp: 5;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+            }
+            #${CACHED_HOVER_ID} .tm-cached-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+            #${CACHED_HOVER_ID} button,
+            #${CACHED_HOVER_ID} a {
+                box-sizing: border-box;
+                border: 1px solid #666;
+                border-radius: 5px;
+                padding: 7px 10px;
+                font: inherit;
+                font-size: 12px;
+                background: #303030;
+                color: #fff;
+                text-decoration: none;
+                cursor: pointer;
+            }
+            #${CACHED_HOVER_ID} .tm-cached-play { background: #fff; border-color: #fff; color: #111; }
+            #${CACHED_HOVER_ID} .tm-cached-close {
+                position: absolute;
+                top: 8px;
+                inset-inline-end: 8px;
+                border-radius: 50%;
+                width: 30px;
+                height: 30px;
+                padding: 0;
+                font-size: 21px;
+                line-height: 1;
+            }
+            #${CACHED_HOVER_ID} :is(a, button):focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+            #${CACHED_HOVER_ID} :is(a, button):hover { filter: brightness(1.2); }
+            #${CACHED_HOVER_ID} button:disabled { opacity: .45; cursor: default; }
 
             #${GRID_ID} {
                 --tm-cols: 5;
@@ -4928,6 +5048,357 @@
         return watch.promise;
     }
 
+    // Keep serializable details, never recycled native DOM/React handlers. The
+    // entire title queue is neutral; hovering cannot reorder or add requests.
+    function titleDetailText(value, limit = 240) {
+        return typeof value === 'string' ? value.trim().slice(0, limit) : '';
+    }
+
+    function normalizeTitleDetails(value) {
+        if (!value || typeof value !== 'object') return null;
+        const genres = Array.isArray(value.genres) ? value.genres.slice(0, 4)
+            .map(name => titleDetailText(name, 80)).filter(Boolean) : [];
+        const type = ['movie', 'show', 'series', 'tvshow'].includes(value.type) ? value.type : '';
+        const year = Number.isSafeInteger(value.year) && value.year >= 1880 && value.year <= 2200 ? value.year : null;
+        const runtime = Number.isFinite(value.runtime) && value.runtime > 0 && value.runtime < 86400 ? value.runtime : null;
+        const record = { title: titleDetailText(value.title), synopsis: titleDetailText(value.synopsis, 2000),
+            year, runtime, maturity: titleDetailText(value.maturity, 40), genres, type };
+        return record.title || record.synopsis || year || runtime || record.maturity || genres.length || type ? record : null;
+    }
+
+    function titleDetailsFromGraph(graph, id, counters = null) {
+        const field = key => readViewingGraph(graph, ['videos', id, key]);
+        const summary = field('summary');
+        const synopsis = field('synopsis');
+        if (counters && typeof synopsis !== 'string') {
+            const raw = readViewingGraph(graph, ['videos', id])?.synopsis;
+            if (raw?.$type === 'error') counters.synopsisErrors++;
+            else if (synopsis == null) counters.synopsisMissing++;
+            else counters.synopsisUnsupported++;
+        }
+        const maturity = field('maturity');
+        const genres = [];
+        for (let index = 0; index < 4; index++) {
+            const genre = readViewingGraph(graph, ['videos', id, 'genres', index]);
+            const name = typeof genre === 'string' ? genre : readViewingGraph(graph, ['videos', id, 'genres', index, 'name']);
+            if (typeof name === 'string') genres.push(name);
+        }
+        return normalizeTitleDetails({ title: field('title') || summary?.title,
+            synopsis, year: field('releaseYear'), runtime: field('runtime'),
+            maturity: typeof maturity === 'string' ? maturity : maturity?.rating?.value || maturity?.value,
+            genres, type: typeof summary?.type === 'string' ? summary.type.toLowerCase() : '' });
+    }
+
+    function titleDetailsOwnerActive(state, details) {
+        return sourceState === state && state.titleDetails === details && !details.cancelled &&
+            state.grid?.isConnected && isRouteSessionActive(details.sessionToken) &&
+            (netflixModelData('userInfo')?.userGuid || null) === details.profile && getUiLocale() === details.locale;
+    }
+
+    function readTitleDetailsCache(state, profile, locale) {
+        const records = new Map();
+        if (!profile) return records;
+        try {
+            const stored = GM_getValue(TITLE_DETAILS_STORAGE_KEY + encodeURIComponent(profile), null);
+            const age = Date.now() - stored?.savedAt;
+            if (stored?.version !== 1 || stored.locale !== locale || !Number.isFinite(age) ||
+                age < 0 || age > TITLE_DETAILS_CACHE_MAX_AGE_MS || !Array.isArray(stored.entries) ||
+                stored.entries.length > TITLE_DETAILS_CACHE_LIMIT) return records;
+            const ids = new Set(state.items.map(item => String(item.videoId)));
+            for (const entry of stored.entries) {
+                if (!Array.isArray(entry) || !ids.has(entry[0]) || !/^\d+$/.test(entry[0])) continue;
+                const record = normalizeTitleDetails(entry[1]);
+                if (record) records.set(entry[0], record);
+            }
+        } catch (_) { performanceDiagnostics.cachedHover.storageFailures++; }
+        return records;
+    }
+
+    function writeTitleDetailsCache(state, details) {
+        if (!titleDetailsOwnerActive(state, details) || !details.profile) return;
+        try {
+            const entries = [];
+            for (const item of state.items) {
+                const id = String(item.videoId), record = details.records.get(id);
+                if (record) entries.push([id, record]);
+                if (entries.length >= TITLE_DETAILS_CACHE_LIMIT) break;
+            }
+            GM_setValue(TITLE_DETAILS_STORAGE_KEY + encodeURIComponent(details.profile),
+                { version: 1, locale: details.locale, savedAt: Date.now(), entries });
+        } catch (_) { performanceDiagnostics.cachedHover.storageFailures++; }
+    }
+
+    function stopTitleDetails(state = sourceState) {
+        const details = state?.titleDetails;
+        if (!details) return;
+        if (activeCachedHover?.details === details) closeCachedHover('details-reset');
+        details.cancelled = true;
+        for (const controller of details.job?.controllers || []) controller.abort();
+        if (performanceDiagnostics.cachedHover === details.counters) details.counters.loading = false;
+    }
+
+    function initializeTitleDetails(state, sessionToken) {
+        stopTitleDetails(state);
+        const profile = netflixModelData('userInfo')?.userGuid || null;
+        const locale = getUiLocale();
+        const records = readTitleDetailsCache(state, profile, locale);
+        const counters = performanceDiagnostics.cachedHover;
+        const details = state.titleDetails = { profile, locale, records, sessionToken, counters,
+            cancelled: false, loading: true, failure: '', job: null, promise: null };
+        counters.restored = records.size;
+        counters.ready = records.size;
+        counters.missing = state.items.length - records.size;
+        counters.loading = true;
+        counters.failure = '';
+        // Do not compete with the existing two-request viewing scan or delay
+        // initial grid publication. One finite sweep, no periodic/hover retries.
+        details.promise = (async () => {
+            await state.watchStatus?.promise;
+            await sleep(0);
+            if (!titleDetailsOwnerActive(state, details)) return;
+            const context = viewingRequestContext();
+            if (!context) throw new Error('TITLE_DETAILS_CONTEXT');
+            const job = details.job = { state, watch: state.watchStatus, context, sessionToken,
+                requests: 0, passRequests: 0, passes: 1, deadline: performance.now() + VIEWING_TIMEOUT_MS,
+                controllers: new Set(), network: createViewingNetworkDiagnostics() };
+            job.network.concurrencyLimit = 1;
+            const ids = [...new Set(state.items.map(item => String(item.videoId)).filter(id => /^\d+$/.test(id)))];
+            for (let offset = 0; offset < ids.length; offset += VIEWING_TITLE_BATCH_SIZE) {
+                if (state.watchStatus?.loading) await state.watchStatus.promise;
+                if (!titleDetailsOwnerActive(state, details)) return;
+                const batch = ids.slice(offset, offset + VIEWING_TITLE_BATCH_SIZE);
+                const graph = await fetchViewingGraph([
+                    ['videos', batch, ['summary', 'title', 'synopsis', 'releaseYear', 'runtime', 'maturity']],
+                    ['videos', batch, 'genres', { from: 0, to: 3 }, ['name']]
+                ], job);
+                if (!titleDetailsOwnerActive(state, details)) return;
+                for (const id of batch) {
+                    const record = titleDetailsFromGraph(graph, id, counters);
+                    if (!record) continue;
+                    // Keep useful cached fields if the optional response omits
+                    // one. Completion status remains owned by the viewing scan.
+                    const old = records.get(id);
+                    if (old) {
+                        for (const key of ['title', 'synopsis', 'year', 'runtime', 'maturity', 'type']) record[key] ||= old[key];
+                        if (!record.genres.length) record.genres = old.genres;
+                    }
+                    records.set(id, record);
+                    for (const key of ['title', 'synopsis', 'year', 'runtime', 'maturity', 'genres']) {
+                        if (record[key] && (key !== 'genres' || record.genres.length)) counters[key + 'Fields']++;
+                    }
+                }
+                counters.requests = job.requests;
+                counters.ready = records.size;
+                counters.missing = ids.length - records.size;
+                const owner = activeCachedHover;
+                if (owner?.details === details && batch.includes(String(owner.item.videoId))) {
+                    try { updateCachedHover(owner); counters.updates++; }
+                    catch (_) { counters.failures++; closeCachedHover('update-failed'); }
+                }
+                await sleep(0);
+            }
+        })().catch(error => {
+            if (!titleDetailsOwnerActive(state, details)) return;
+            details.failure = /^VIEWING_STATUS_[A-Z0-9_]+$/.test(error?.message || '') ||
+                error?.message === 'TITLE_DETAILS_CONTEXT' ? error.message : 'TITLE_DETAILS_FAILED';
+            counters.failure = details.failure;
+        }).finally(() => {
+            if (state.titleDetails !== details || details.cancelled) return;
+            details.loading = false;
+            if (performanceDiagnostics.cachedHover === counters) counters.loading = false;
+            if (!titleDetailsOwnerActive(state, details)) return;
+            counters.requests = details.job?.requests || 0;
+            if (details.job) details.job.network.finishedAt = performance.now();
+            writeTitleDetailsCache(state, details);
+            if (activeCachedHover?.details === details) {
+                try { updateCachedHover(activeCachedHover); }
+                catch (_) { counters.failures++; closeCachedHover('update-failed'); }
+            }
+            try { log(tLog('titleDetailsCompleted'), { titles: state.items.length, ready: records.size,
+                missing: counters.missing, restored: counters.restored,
+                fields: Object.fromEntries(['title', 'synopsis', 'year', 'runtime', 'maturity', 'genres']
+                    .map(key => [key, counters[key + 'Fields']])),
+                failure: details.failure, network: collectViewingNetworkDiagnostics(details.job?.network) }); }
+            catch (_) { counters.failures++; }
+        });
+        return details;
+    }
+
+    function closeCachedHover(reason = 'leave') {
+        const owner = activeCachedHover;
+        if (!owner) return;
+        activeCachedHover = null;
+        document.removeEventListener('keydown', owner.onKeyDown, true);
+        owner.clone.removeAttribute('aria-describedby');
+        owner.root.remove();
+        if (activeClone === owner.clone) {
+            activeClone = null;
+            activeVideoId = null;
+            activePage = null;
+        }
+        owner.counters.closes++;
+        owner.counters.lastCloseReason = reason;
+    }
+
+    function cachedHoverOwnerActive(owner) {
+        return activeCachedHover === owner && titleDetailsOwnerActive(owner.state, owner.details) &&
+            gridOwnsClone(owner.clone, owner.state.grid) && owner.root.isConnected;
+    }
+
+    function updateCachedHover(owner) {
+        if (!cachedHoverOwnerActive(owner)) return;
+        const record = owner.details.records.get(String(owner.item.videoId));
+        const { ui } = owner;
+        ui.title.textContent = record?.title || owner.item.ariaLabel || 'Netflix';
+        ui.synopsis.textContent = record?.synopsis || '';
+        ui.synopsis.hidden = !record?.synopsis;
+        const meta = [];
+        if (record?.year) meta.push(String(record.year));
+        if (record?.runtime && record.type === 'movie') {
+            try { meta.push(new Intl.NumberFormat(owner.details.locale, { style: 'unit', unit: 'minute',
+                unitDisplay: 'short' }).format(Math.round(record.runtime / 60))); } catch (_) {}
+        }
+        if (record?.maturity) meta.push(record.maturity);
+        ui.meta.textContent = meta.join(' \u00b7 ');
+        ui.meta.hidden = !meta.length;
+        ui.genres.textContent = record?.genres.join(' \u00b7 ') || '';
+        ui.genres.hidden = !record?.genres.length;
+        const useful = Boolean(record?.synopsis || meta.length || record?.genres.length);
+        ui.status.textContent = owner.details.loading ? tUi('hoverLoading') : tUi('hoverUnavailable');
+        ui.status.hidden = useful;
+        const type = record?.type || owner.state.watchStatus?.types?.get(String(owner.item.videoId)) ||
+            owner.state.watchStatus?.cachedTypes?.get(String(owner.item.videoId));
+        // A series id is not a verified playable episode. Full info provides
+        // Netflix's own episode selection rather than guessing a /watch/ id.
+        ui.play.hidden = type !== 'movie';
+        const controls = owner.clone.__tmViewingControls;
+        ui.toggle.hidden = !controls?.toggle?.textContent;
+        if (controls?.toggle) {
+            ui.toggle.textContent = controls.toggle.textContent;
+            ui.toggle.disabled = controls.toggle.disabled;
+        }
+        ui.reset.hidden = !controls?.reset || controls.reset.hidden;
+        if (controls?.reset) {
+            ui.reset.textContent = controls.reset.textContent;
+            ui.reset.disabled = controls.reset.disabled;
+        }
+    }
+
+    function openCachedHover(item, clone, generation, focused = false) {
+        const state = sourceState;
+        let details = state?.titleDetails;
+        if (details && ((netflixModelData('userInfo')?.userGuid || null) !== details.profile || getUiLocale() !== details.locale)) {
+            details = initializeTitleDetails(state, routeSessionToken);
+        }
+        if (!details || !titleDetailsOwnerActive(state, details) ||
+            !gridOwnsClone(clone, state.grid) || !clone.isConnected ||
+            (!focused && !gridHoverTargetActive(clone, generation))) return;
+        if (activeCachedHover?.clone === clone) return;
+        const counters = performanceDiagnostics.cachedHover, started = performance.now();
+        closeCachedHover('superseded');
+        clearSourceAlignment();
+        const root = document.createElement('div');
+        root.id = CACHED_HOVER_ID;
+        root.setAttribute('role', 'dialog');
+        root.setAttribute('aria-label', item.ariaLabel || 'Netflix');
+        root.setAttribute('dir', document.documentElement.dir || 'ltr');
+        const make = (tag, className, parent = root) => {
+            const node = document.createElement(tag);
+            node.className = className;
+            parent.appendChild(node);
+            return node;
+        };
+        const image = make('img', 'tm-cached-artwork');
+        image.alt = '';
+        image.decoding = 'async';
+        const existingImage = clone.querySelector('img');
+        const imageUrl = existingImage?.currentSrc || existingImage?.src || '';
+        if (/^https?:\/\//i.test(imageUrl)) image.src = imageUrl;
+        else image.hidden = true;
+        const close = make('button', 'tm-cached-close');
+        close.type = 'button';
+        close.textContent = '\u00d7';
+        close.setAttribute('aria-label', tUi('hoverClose'));
+        const body = make('div', 'tm-cached-body');
+        const title = make('h3', 'tm-cached-title', body);
+        const meta = make('p', 'tm-cached-meta', body);
+        const synopsis = make('p', 'tm-cached-synopsis', body);
+        const genres = make('p', 'tm-cached-meta', body);
+        const status = make('p', 'tm-cached-status', body);
+        const actions = make('div', 'tm-cached-actions', body);
+        const play = make('a', 'tm-cached-play', actions);
+        play.textContent = tUi('hoverPlay');
+        play.href = location.origin + '/watch/' + encodeURIComponent(item.videoId);
+        const info = make('a', 'tm-cached-info', actions);
+        info.textContent = tUi('hoverMoreInfo');
+        info.href = location.origin + '/browse?jbv=' + encodeURIComponent(item.videoId);
+        const toggle = make('button', '', actions), reset = make('button', '', actions);
+        toggle.type = reset.type = 'button';
+        const owner = { state, details, item, clone, root, counters, focused,
+            ui: { title, meta, synopsis, genres, status, play, info, toggle, reset }, onKeyDown: null };
+        const dismiss = reason => {
+            if (activeCachedHover !== owner) return;
+            closeCachedHover(reason);
+            if (owner.focused) {
+                clone.__tmCachedHoverFocusReturning = true;
+                try { clone.querySelector(NETFLIX_DOM_SELECTORS.standardCard)?.focus({ preventScroll: true }); }
+                finally { clone.__tmCachedHoverFocusReturning = false; }
+            }
+        };
+        owner.onKeyDown = event => {
+            if (event.key !== 'Escape' || activeCachedHover !== owner) return;
+            event.preventDefault();
+            dismiss('escape');
+        };
+        close.addEventListener('click', () => dismiss('close'));
+        for (const [button, action] of [[toggle, 'toggle'], [reset, 'reset']]) {
+            button.addEventListener('click', event => {
+                event.preventDefault();
+                if (!cachedHoverOwnerActive(owner)) return;
+                owner.clone.__tmViewingControls?.[action]?.click();
+                if (activeCachedHover === owner) updateCachedHover(owner);
+            });
+        }
+        root.addEventListener('pointerout', event => {
+            if (root.contains(event.relatedTarget) || clone.contains(event.relatedTarget)) return;
+            if (!root.contains(document.activeElement)) closeCachedHover('leave');
+        }, { passive: true });
+        root.addEventListener('focusout', event => {
+            if (!root.contains(event.relatedTarget) && !clone.contains(event.relatedTarget)) closeCachedHover('blur');
+        });
+        root.addEventListener('focusin', () => { owner.focused = true; });
+        document.body.appendChild(root);
+        activeCachedHover = owner;
+        activeClone = clone;
+        activeVideoId = item.videoId;
+        clone.setAttribute('aria-describedby', CACHED_HOVER_ID);
+        updateCachedHover(owner);
+        const rect = clone.querySelector(NETFLIX_DOM_SELECTORS.standardCard)?.getBoundingClientRect() || clone.getBoundingClientRect();
+        const width = Math.min(Math.max(320, rect.width * 1.12), 420, window.innerWidth - 24);
+        root.style.width = width + 'px';
+        root.style.left = Math.max(12, Math.min(rect.left - (width - rect.width) / 2, window.innerWidth - width - 12)) + 'px';
+        // One placement read, never per-frame positioning or carousel work.
+        const height = root.getBoundingClientRect().height;
+        const top = Math.max(12, Math.min(rect.top, window.innerHeight - height - 12));
+        root.style.top = top + 'px';
+        // Later enrichment may increase content height. Keep the artwork and
+        // pointer handoff in place, with overflow inside the remaining space.
+        root.style.maxHeight = Math.max(1, window.innerHeight - top - 12) + 'px';
+        document.addEventListener('keydown', owner.onKeyDown, true);
+        counters.opens++;
+        if (details.records.has(String(item.videoId))) counters.cacheHits++;
+        else counters.basicOpens++;
+        const elapsed = Math.max(0, Math.round(performance.now() - started));
+        counters.renderTotalMs += elapsed;
+        counters.renderMaxMs = Math.max(counters.renderMaxMs, elapsed);
+        if (counters.openLogs < 48) {
+            counters.openLogs++;
+            try { log(tLog('cachedHoverOpened'), { cached: details.records.has(String(item.videoId)),
+                loading: details.loading, renderMs: elapsed, section: clone.parentElement === state.grid ? 'main' : 'watched',
+                focused, carouselRequired: false }); } catch (_) { counters.failures++; }
+        }
+    }
+
     function carouselArtworkVariables() {
         const standard = { width: 342, height: 192 };
         const standardHighRes = { width: 665, height: 375 };
@@ -6175,6 +6646,12 @@
         sourceState.empty = false;
         grid.removeAttribute('data-tm-empty');
         reindexLegacyItemsAfterDelta('mutation-reindex');
+        // A list that was initially empty has no initial detail job. Its first
+        // added card must use the same cached popup path as a populated entry.
+        if (!sourceState.titleDetails) {
+            if (!sourceState.watchStatus) initializeWatchGroups(sourceState, routeSessionToken);
+            initializeTitleDetails(sourceState, routeSessionToken);
+        }
         mutationSourceRecoveryPending = true;
         log(tLog('legacyItemAddedByDifferentialUpdate'), {
             reason,
@@ -10325,6 +10802,7 @@
     }
 
     function clearSourceAlignment(slot = activeSourceSlot, reason = 'source-release', relatedTarget = null) {
+        closeCachedHover(reason);
         releaseNativeHover(reason, relatedTarget);
         invalidateNativeReadScope();
         restoreGeometryProxy();
@@ -11147,6 +11625,14 @@
 
     async function activateClone(item, clone, triggerEvent = null, generation = clone?.__tmHoverActivationGeneration, intentDiagnostic = null) {
         if (!gridHoverTargetActive(clone, generation)) return;
+        if (sourceState?.titleDetails) {
+            try { openCachedHover(item, clone, generation); }
+            catch (_) {
+                performanceDiagnostics.cachedHover.failures++;
+                closeCachedHover('render-failed');
+            }
+            return;
+        }
         const seq = ++hoverSequence;
         const started = performance.now();
         const timing = performanceDiagnostics.hoverTiming;
@@ -11427,6 +11913,9 @@
     }
 
     function handleGridClonePointerLeave(clone, item, relatedTarget = null, event = null) {
+        const cached = activeCachedHover;
+        if (cached?.clone === clone && cachedHoverOwnerActive(cached) &&
+            (cached.root.contains(relatedTarget) || cached.root.contains(document.activeElement))) return;
         if (pendingGridHoverClone === clone || activeClone === clone ||
             clone.getAttribute('data-tm-hover-token') === String(hoverToken)) {
             recordGridHoverLeave(clone, relatedTarget, event);
@@ -11485,6 +11974,24 @@
             if (!clone || (event.relatedTarget && clone.contains(event.relatedTarget))) return;
             handleGridClonePointerLeave(clone, clone.__tmMyListItem, event.relatedTarget, event);
         }, { capture: true, passive: true });
+        grid.addEventListener('focusin', event => {
+            const clone = gridCloneFromPointerEvent(event, grid);
+            if (!clone || clone.__tmCachedHoverFocusReturning || !sourceState?.titleDetails) return;
+            cancelPendingGridHover('controls');
+            openCachedHover(clone.__tmMyListItem, clone, clone.__tmHoverActivationGeneration, true);
+        });
+        grid.addEventListener('focusout', event => {
+            const owner = activeCachedHover;
+            if (owner?.clone.contains(event.relatedTarget) || owner?.root.contains(event.relatedTarget)) return;
+            if (owner?.focused) closeCachedHover('blur');
+        });
+        grid.addEventListener('keydown', event => {
+            const owner = activeCachedHover;
+            if (event.key !== 'Tab' || event.shiftKey || !owner?.focused ||
+                gridCloneFromPointerEvent(event, grid) !== owner.clone) return;
+            event.preventDefault();
+            (owner.ui.play.hidden ? owner.ui.info : owner.ui.play).focus();
+        });
     }
 
     async function buildGrid(section, scroller, items, layout, totalCount, sessionToken = routeSessionToken) {
@@ -12183,6 +12690,14 @@
         }
         const grid = sourceState?.grid;
         if (!grid?.isConnected) return;
+        const cached = activeCachedHover;
+        if (cached && !cachedHoverOwnerActive(cached)) closeCachedHover('owner-invalid');
+        else if (cached?.root.contains(event.target)) {
+            cancelPendingGridHover('preview');
+            return;
+        } else if (cached && !cached.clone.contains(event.target) && !cached.root.contains(document.activeElement)) {
+            closeCachedHover('leave');
+        }
         const clone = gridCloneFromPointerEvent(event, grid);
         const owner = activeNativeHover;
         if (owner?.previewRoot) {
@@ -12204,6 +12719,7 @@
     }
 
     function handleTargetScroll(event = null) {
+        if (activeCachedHover?.root.contains(event?.target) && cachedHoverOwnerActive(activeCachedHover)) return;
         const now = performance.now();
         const starting = now - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS;
         lastTargetScrollAt = now;
@@ -12328,7 +12844,7 @@
 
     function isScriptOwnedMyListNode(node) {
         const element = node?.nodeType === 1 ? node : node?.parentElement;
-        return Boolean(element?.closest?.(`#${GRID_ID}, #${STATUS_ID}, #${LEGACY_EMPTY_STATE_ID}, #${ORDER_MISMATCH_DIALOG_ID}`));
+        return Boolean(element?.closest?.(`#${GRID_ID}, #${STATUS_ID}, #${LEGACY_EMPTY_STATE_ID}, #${ORDER_MISMATCH_DIALOG_ID}, #${CACHED_HOVER_ID}`));
     }
 
     function mutationOnlyChangesScriptUi(mutation) {
@@ -12356,6 +12872,7 @@
             handleRouteChange('MutationObserver-url');
         }
         if (!targetSessionActive || !isTargetPage() || !targetDocumentObserver) return;
+        if (activeCachedHover && !cachedHoverOwnerActive(activeCachedHover)) closeCachedHover('owner-invalid');
         if (activeNativeHover?.previewRoot && !activeNativeHover.previewRoot.isConnected) {
             releaseNativePreview(activeNativeHover, 'preview-removed');
         }
@@ -12424,6 +12941,7 @@
     }
 
     function stopTargetEventListeners() {
+        closeCachedHover('listeners-stopped');
         stopHoverFrameDiagnostics();
         finishNativePreviewDiagnostic(activeNativeHover, { result: 'released-before-check', reason: 'listeners-stopped' });
         if (activeNativeHover?.previewRoot) releaseNativePreview(activeNativeHover, 'listeners-stopped');
@@ -12984,12 +13502,6 @@
             sourceState.empty = false;
             applyOriginalMyListVisibility();
 
-            // Defer React-backed hover preparation until the first actual hover.
-            // The live native card is resolved on demand, keeping initialization off the hover path.
-            log(tLog('initialHoverPreparationDeferred'), {
-                selectedPage: selectedPage(section),
-                currentPageCards: currentPageSlots(scroller, track).length
-            });
             if (sourceState) { sourceState.collectedCount = items.length; sourceState.totalCount = totalCount; }
             completedSection = section;
             if (performanceDiagnostics.nativeRecovery.attempts > performanceDiagnostics.nativeRecovery.completed) {
@@ -13000,6 +13512,10 @@
             updateStatus(formatHeaderParts(items.length, totalCount, sourceState.initializationElapsedMs, true));
 
             initializeWatchGroups(sourceState, sessionToken);
+            initializeTitleDetails(sourceState, sessionToken);
+            log(tLog('cachedHoverActivated'), { activationDelayMs: HOVER_ACTIVATION_DELAY_MS,
+                backgroundPriority: 'equal', cachedTitles: sourceState.titleDetails?.records?.size || 0,
+                nativeTraversal: false });
 
             log(tLog('initializationCompleted'), {
                 collected: items.length,

@@ -73,7 +73,9 @@ function environment(names, overrides = {}) {
         pendingGridHoverDiagnostic: null, activeHoverPreparationDiagnostic: null,
         lastTargetScrollAt: -Infinity, hoverNeedsPointerMove: false, lastPointerX: -1, lastPointerY: -1,
         activeClone: null, activeVideoId: null, activePage: null, activeSourceSlot: null, activeGeometryProxy: null,
-        activeNativeHover: null,
+        activeNativeHover: null, activeCachedHover: null,
+        closeCachedHover: () => {}, stopTitleDetails: () => {},
+        CACHED_HOVER_ID: 'cached-hover',
         orderMismatchDialogOpen: false, orderMismatchReinitializing: false, responsiveRefreshPromise: null,
         routeSessionToken: 1, targetSessionActive: true,
         recentRemovedMyListItems: new Map(), undoExpiryTimer: null,
@@ -84,7 +86,7 @@ function environment(names, overrides = {}) {
         assertRouteSession: () => {}, isRouteSessionCancelledError: () => false,
         ensureLiveNativeBinding: () => {},
         log: () => {}, warn: () => {}, tLog: value => value, itemSummary: item => item,
-        initializeWatchGroups: () => {},
+        initializeWatchGroups: () => {}, initializeTitleDetails: () => {},
         ...overrides
     });
     vm.runInContext(source.match(/^    const HOVER_FRAME_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
@@ -3073,7 +3075,7 @@ test('chunked grid publishes its complete tree and maps once while preserving ca
     assert.equal(state.itemMap.size, 150);
     assert.equal(grid.children.length, 150);
     assert.equal(e.logs.filter(entry => entry.name === 'legacyGridBuilt').length, 1);
-    assert.deepEqual([...grid.listeners.keys()], ['pointerover', 'pointerout']);
+    assert.deepEqual([...grid.listeners.keys()], ['pointerover', 'pointerout', 'focusin', 'focusout', 'keydown']);
     grid.children.forEach((clone, index) => {
         assert.equal(clone.__tmMyListItem, items[index]);
         assert.equal(clone.getAttribute('data-tm-item-order'), String(index));
@@ -7773,4 +7775,467 @@ test('responsive settling stops before another native read when its source owner
     await e.advance(80);
     await rejected;
     assert.equal(e.timers.size, 0);
+});
+
+const cachedHoverFunctions = [
+    'titleDetailText', 'normalizeTitleDetails', 'titleDetailsFromGraph', 'titleDetailsOwnerActive',
+    'readTitleDetailsCache', 'writeTitleDetailsCache', 'stopTitleDetails', 'initializeTitleDetails',
+    'closeCachedHover', 'cachedHoverOwnerActive', 'updateCachedHover', 'openCachedHover',
+    'activateClone', 'clearSourceAlignment', 'handleTargetPointerMove', 'handleTargetScroll',
+    'handleHoverDiagnosticVisibilityChange', 'ensureGridHoverBehavior'
+];
+
+async function cachedHoverEnvironment(count = 7, storage = new Map()) {
+    const e = await viewingEnvironment(count, null, storage);
+    await e.start();
+    const body = new ConstructionNode('body');
+    body.setConnected(true);
+    const listeners = new Map();
+    let locale = 'en';
+    Object.assign(e.c, {
+        TITLE_DETAILS_STORAGE_KEY: 'test.titleDetails.', TITLE_DETAILS_CACHE_LIMIT: 600,
+        TITLE_DETAILS_CACHE_MAX_AGE_MS: 30 * 24 * 60 * 60 * 1000,
+        getUiLocale: () => locale, activeCachedHover: null,
+        window: { innerWidth: 1200, innerHeight: 800 },
+        restoreGeometryProxy() {},
+        invalidateGridReact() {},
+        gridHoverReplacementUnderPointer: () => false
+    });
+    Object.assign(e.c.document, {
+        body, documentElement: { dir: 'ltr' }, activeElement: null, visibilityState: 'visible',
+        addEventListener: (type, fn) => listeners.set(type, fn),
+        removeEventListener: (type, fn) => { if (listeners.get(type) === fn) listeners.delete(type); }
+    });
+    for (const name of cachedHoverFunctions) vm.runInContext(declaration(name), e.c);
+    const requests = [];
+    e.c.fetch = async (url, options) => {
+        const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
+        requests.push({ paths, options });
+        const videos = {}, genres = {};
+        for (const id of paths[0][1]) {
+            videos[id] = {
+                title: atom('Title ' + id), synopsis: atom('Synopsis ' + id),
+                releaseYear: atom(2020), runtime: atom(5400), maturity: atom({ rating: { value: '16' } }),
+                summary: atom({ type: id === '4' || id === '5' ? 'show' : 'movie' }),
+                genres: { 0: reference('genres', id) }
+            };
+            genres[id] = { name: atom('Drama') };
+        }
+        return { ok: true, status: 200, json: async () => ({ jsonGraph: { videos, genres } }) };
+    };
+    for (const [key, clone] of e.state.cloneMap) {
+        clone.__tmHoverActivationGeneration = 1;
+        clone.getBoundingClientRect = () => ({ left: 900, top: 650, width: 180, height: 102 });
+        const card = clone.querySelector('card');
+        card.getBoundingClientRect = clone.getBoundingClientRect;
+        card.focus = () => {
+            e.c.document.activeElement = card;
+            e.state.grid.listeners.get('focusin')({ target: card });
+        };
+        clone.querySelector('img').src = 'https://images.test/' + key + '.jpg';
+        clone.__tmViewingControls.toggle.click = () => clickManualViewing(e, clone.__tmMyListItem.videoId);
+        clone.__tmViewingControls.reset.click = () => clickManualViewing(e, clone.__tmMyListItem.videoId, 'reset');
+    }
+    return { ...e, body, listeners, detailRequests: requests, setLocale: value => { locale = value; },
+        initialize: () => e.c.initializeTitleDetails(e.state, 1),
+        clone: id => e.state.cloneMap.get('v:' + id),
+        async finishDetails(details) { await e.drain(); await details.promise; } };
+}
+
+test('cached hover opens after the existing dwell without native reads, grafts, moves or replay', async () => {
+    const e = await cachedHoverEnvironment();
+    let releaseScan;
+    e.state.watchStatus.promise = new Promise(resolve => { releaseScan = resolve; });
+    const details = e.initialize(), clone = e.clone('2');
+    for (const name of ['selectedPage', 'prepareMountedPage', 'ensureLiveNativeBinding', 'findActiveSourceSlot',
+        'alignSourceSlotToClone', 'replayHoverOnNativeSource']) {
+        e.c[name] = () => { throw new Error('Cached hovering must not call ' + name); };
+    }
+    e.state.grid.listeners.get('pointerover')(pointer(clone));
+    await e.advance(119);
+    assert.equal(e.c.activeCachedHover, null);
+    await e.advance(1);
+    const owner = e.c.activeCachedHover;
+    assert.equal(owner.clone, clone);
+    assert.equal(owner.ui.title.textContent, 'Native 2');
+    assert.equal(owner.ui.status.hidden, false);
+    assert.equal(e.c.activeNativeHover, null);
+    assert.equal(e.c.performanceDiagnostics.hoverPreparation.calls, 0);
+    assert.equal(e.detailRequests.length, 0, 'hover adds no request before the neutral queue wakes');
+    assert.ok(parseFloat(owner.root.style.left) >= 12);
+    assert.ok(parseFloat(owner.root.style.top) >= 12);
+    releaseScan();
+    await e.finishDetails(details);
+    assert.equal(e.c.activeCachedHover, owner, 'enrichment keeps the same popup and card');
+    assert.equal(owner.ui.title.textContent, 'Title 2');
+    assert.equal(owner.ui.synopsis.textContent, 'Synopsis 2');
+    assert.match(owner.ui.meta.textContent, /2020.*90.*16/);
+    assert.equal(owner.ui.genres.textContent, 'Drama');
+    assert.equal(e.c.performanceDiagnostics.cachedHover.updates, 1);
+});
+
+test('equal-priority detail queue covers hidden and watched titles once, regardless of hover or cache readiness', async () => {
+    const e = await cachedHoverEnvironment(120);
+    let release;
+    e.state.watchStatus.promise = new Promise(resolve => { release = resolve; });
+    const details = e.initialize();
+    details.records.set('120', { title: 'Cached last title', genres: [], type: 'movie' });
+    await e.flush();
+    await e.advance(0);
+    assert.equal(e.detailRequests.length, 0, 'details cannot overlap the viewing scan');
+    release();
+    await e.finishDetails(details);
+    assert.deepEqual(e.detailRequests.map(request => [...request.paths[0][1]]),
+        [Array.from({ length: 50 }, (_, index) => String(index + 1)),
+            Array.from({ length: 50 }, (_, index) => String(index + 51)),
+            Array.from({ length: 20 }, (_, index) => String(index + 101))]);
+    assert.ok(completedViewingIds(e).includes('1'));
+    assert.ok(e.detailRequests[0].paths[0][1].includes('1'), 'collapsed watched titles use the same queue');
+    assert.ok(e.clone('4').getAttribute('data-tm-type-hidden') === 'true');
+    assert.ok(e.detailRequests[0].paths[0][1].includes('4'), 'filtered series use the same queue');
+    assert.equal(details.records.size, 120);
+    const work = e.c.collectPerformanceDiagnostics().cachedHover;
+    assert.equal(work.requests, 3);
+    assert.equal(work.synopsisFields, 120);
+    const previous = e.detailRequests.length;
+    await e.advance(60000);
+    assert.equal(e.detailRequests.length, previous, 'completed loading does not poll');
+    assert.equal(e.timers.size, 0);
+});
+
+test('popup pointer handoff retains its owner and leaving or scrolling releases it once', async () => {
+    const e = await cachedHoverEnvironment();
+    const details = e.initialize();
+    await e.finishDetails(details);
+    const clone = e.clone('2');
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    const owner = e.c.activeCachedHover;
+    e.c.handleGridClonePointerLeave(clone, clone.__tmMyListItem, owner.ui.synopsis, pointer(clone));
+    assert.equal(e.c.activeCachedHover, owner);
+    e.c.handleTargetPointerMove(pointer(owner.ui.synopsis, { clientX: 44 }));
+    assert.equal(e.c.activeCachedHover, owner);
+    owner.root.listeners.get('pointerout')({ relatedTarget: owner.ui.toggle });
+    assert.equal(e.c.activeCachedHover, owner);
+    owner.root.listeners.get('pointerout')({ relatedTarget: clone });
+    assert.equal(e.c.activeCachedHover, owner);
+    e.c.handleTargetScroll({ type: 'scroll', target: owner.root });
+    assert.equal(e.c.activeCachedHover, owner, 'overflow inside the popup remains usable');
+    e.c.handleTargetScroll({ type: 'wheel', target: clone });
+    assert.equal(e.c.activeCachedHover, null);
+    assert.equal(e.body.children.length, 0);
+    assert.equal(e.listeners.has('keydown'), false);
+    assert.equal(clone.getAttribute('aria-describedby'), null);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.closes, 1);
+    e.c.clearSourceAlignment();
+    assert.equal(e.c.performanceDiagnostics.cachedHover.closes, 1);
+});
+
+test('cached hover preserves scroll guards and a real movement after scrolling can open it once', async () => {
+    const e = await cachedHoverEnvironment();
+    const details = e.initialize();
+    await e.finishDetails(details);
+    const clone = e.clone('2');
+    e.c.handleTargetScroll({ type: 'wheel', target: clone });
+    e.state.grid.listeners.get('pointerover')(pointer(clone));
+    await e.advance(500);
+    assert.equal(e.c.activeCachedHover, null, 'stationary scrolling cannot cause popups');
+    e.c.handleTargetPointerMove(pointer(clone, { clientX: 45 }));
+    await e.advance(120);
+    assert.equal(e.c.activeCachedHover?.clone, clone);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.opens, 1);
+});
+
+test('cached popup manual actions use the existing profile-scoped controls and grouping rules', async () => {
+    const e = await cachedHoverEnvironment();
+    const details = e.initialize();
+    await e.finishDetails(details);
+    const clone = e.clone('2');
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    const owner = e.c.activeCachedHover;
+    owner.ui.toggle.listeners.get('click')({ preventDefault() {} });
+    assert.ok(completedViewingIds(e).includes('2'));
+    assert.equal(e.storage.get('test.viewingChoices.active-profile').choices[2].status, 'complete');
+    assert.equal(e.c.activeCachedHover, null, 'moving the hovered card closes the owner');
+    e.state.watchStatus.ui.details.open = true;
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    assert.equal(e.c.activeCachedHover.ui.toggle.textContent, e.c.tUi('moveBackToMyList'));
+    e.c.activeCachedHover.ui.toggle.listeners.get('click')({ preventDefault() {} });
+    assert.ok(mainViewingIds(e).includes('2'));
+});
+
+test('warm detail cache opens immediately, remains usable during failure and does not leak across profiles or locales', async () => {
+    const first = await cachedHoverEnvironment();
+    const firstDetails = first.initialize();
+    await first.finishDetails(firstDetails);
+    const e = await cachedHoverEnvironment(7, first.storage);
+    const details = e.initialize(), clone = e.clone('2');
+    e.c.fetch = async () => ({ ok: false, status: 503 });
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    const owner = e.c.activeCachedHover;
+    assert.equal(owner.ui.synopsis.textContent, 'Synopsis 2');
+    await e.finishDetails(details);
+    assert.equal(e.c.activeCachedHover, owner);
+    assert.equal(details.failure, 'VIEWING_STATUS_HTTP_503');
+    assert.equal(e.c.performanceDiagnostics.cachedHover.requests, 1);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.restored, 7);
+    e.models.userInfo.userGuid = 'different-profile';
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    assert.notEqual(e.c.activeCachedHover, owner);
+    assert.equal(e.c.activeCachedHover.ui.synopsis.textContent, '');
+    assert.equal(e.state.titleDetails.records.size, 0);
+    e.c.stopTitleDetails();
+    e.models.userInfo.userGuid = 'active-profile';
+    e.setLocale('de');
+    const german = e.initialize();
+    assert.equal(german.records.size, 0, 'localized cache content is not borrowed from English');
+    e.c.stopTitleDetails();
+    await e.drain();
+});
+
+test('metadata failure is isolated from watched status and cannot start a carousel fallback or retry', async () => {
+    const e = await cachedHoverEnvironment();
+    const watched = [...e.state.watchStatus.results];
+    e.c.fetch = async () => ({ ok: false, status: 429 });
+    const details = e.initialize();
+    await e.finishDetails(details);
+    assert.deepEqual([...e.state.watchStatus.results], watched);
+    assert.equal(e.state.watchStatus.failure, null);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.requests, 1);
+    assert.equal(details.failure, 'VIEWING_STATUS_HTTP_429');
+    const clone = e.clone('2');
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    assert.equal(e.c.activeCachedHover.ui.status.textContent, e.c.tUi('hoverUnavailable'));
+    e.c.closeCachedHover();
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.requests, 1);
+});
+
+test('route cleanup aborts an in-flight details request and obsolete responses cannot publish or save data', async () => {
+    const e = await cachedHoverEnvironment();
+    let resolve, signal;
+    e.c.fetch = async (_, options) => {
+        signal = options.signal;
+        return new Promise(done => { resolve = done; });
+    };
+    const details = e.initialize();
+    await e.drain();
+    assert.equal(typeof resolve, 'function');
+    const clone = e.clone('2');
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    e.c.stopTitleDetails();
+    assert.equal(signal.aborted, true);
+    assert.equal(e.c.activeCachedHover, null);
+    e.c.sourceState = { grid: { isConnected: true } };
+    resolve({ ok: true, json: async () => ({ jsonGraph: { videos: { 2: { synopsis: atom('Obsolete') } } } }) });
+    await details.promise;
+    assert.equal(details.records.size, 0);
+    assert.equal(e.storage.has('test.titleDetails.active-profile'), false);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.timers.size, 0);
+    assert.equal(e.body.children.length, 0);
+});
+
+test('profile changes during metadata parsing reject the response before any cached data or popup update', async () => {
+    const e = await cachedHoverEnvironment();
+    e.c.fetch = async () => ({ ok: true, json: async () => {
+        e.models.userInfo.userGuid = 'other-profile';
+        return { jsonGraph: { videos: { 2: { synopsis: atom('Wrong profile') } } } };
+    } });
+    const details = e.initialize();
+    await e.finishDetails(details);
+    assert.equal(details.records.size, 0);
+    assert.equal(e.storage.has('test.titleDetails.active-profile'), false);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.loading, false);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+});
+
+test('keyboard focus opens a cached popup, Escape returns focus without reopening and hidden tabs release it', async () => {
+    const e = await cachedHoverEnvironment();
+    const details = e.initialize();
+    await e.finishDetails(details);
+    const clone = e.clone('2'), card = clone.querySelector('card');
+    clone.hovered = false;
+    card.focus();
+    assert.equal(e.c.activeCachedHover?.clone, clone, 'keyboard focus does not require CSS hover');
+    let prevented = 0;
+    e.listeners.get('keydown')({ key: 'Escape', preventDefault: () => prevented++ });
+    assert.equal(prevented, 1);
+    assert.equal(e.c.activeCachedHover, null);
+    assert.equal(e.c.document.activeElement, card);
+    card.focus();
+    assert.ok(e.c.activeCachedHover);
+    e.c.document.visibilityState = 'hidden';
+    e.c.handleHoverDiagnosticVisibilityChange();
+    assert.equal(e.c.activeCachedHover, null);
+    assert.equal(e.listeners.has('keydown'), false);
+});
+
+test('metadata is bounded, reference-aware and rendered as plain text with verified movie play links', async () => {
+    const e = await cachedHoverEnvironment();
+    const record = e.c.titleDetailsFromGraph({
+        videos: { 2: { title: atom('<img src=x onerror=evil()>'), synopsis: atom('x'.repeat(3000)),
+            releaseYear: atom(3000), runtime: atom(-1), maturity: atom({ rating: { value: '16' } }),
+            summary: atom({ type: 'movie' }), genres: { 0: reference('genres', 99), 1: reference('genres', 100) } } },
+        genres: { 99: { name: atom('<script>unsafe()</script>') }, 100: reference('genres', 100) }
+    }, '2');
+    assert.equal(record.synopsis.length, 2000);
+    assert.equal(record.year, null);
+    assert.equal(record.runtime, null);
+    assert.deepEqual([...record.genres], ['<script>unsafe()</script>']);
+    const details = e.initialize();
+    details.records.set('2', record);
+    const clone = e.clone('2');
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    const owner = e.c.activeCachedHover;
+    assert.equal(owner.ui.title.textContent, '<img src=x onerror=evil()>');
+    assert.equal(owner.ui.title.children.length, 0);
+    assert.equal(owner.ui.play.href, 'https://www.netflix.com/watch/2');
+    assert.equal(owner.ui.info.href, 'https://www.netflix.com/browse?jbv=2');
+    assert.equal(owner.ui.play.hidden, false);
+    details.records.set('2', { ...record, type: 'show' });
+    e.c.updateCachedHover(owner);
+    assert.equal(owner.ui.play.hidden, true, 'a show id cannot be guessed to be a playable episode');
+    e.c.stopTitleDetails();
+    await e.drain();
+});
+
+test('expired, oversized, malformed and unavailable stored details fail safely without blocking basic hover', async () => {
+    const e = await cachedHoverEnvironment();
+    const key = 'test.titleDetails.active-profile';
+    for (const stored of [
+        { version: 1, savedAt: -1, locale: 'en', entries: [['2', { synopsis: 'Too old' }]] },
+        { version: 1, savedAt: Date.now(), locale: 'en', entries: Array.from({ length: 601 }, () => ['2', {}]) },
+        { version: 1, savedAt: Date.now(), locale: 'en', entries: [['x', { synopsis: 'Foreign' }], ['999', { synopsis: 'Absent' }], ['2', null]] },
+        { version: 2, savedAt: Date.now(), locale: 'en', entries: [] }
+    ]) {
+        e.storage.set(key, stored);
+        assert.equal(e.c.readTitleDetailsCache(e.state, 'active-profile', 'en').size, 0);
+    }
+    e.c.GM_getValue = () => { throw new Error('Storage disabled'); };
+    const details = e.initialize();
+    const clone = e.clone('2');
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    assert.equal(e.c.activeCachedHover.ui.title.textContent, 'Native 2');
+    e.c.stopTitleDetails();
+    await e.drain();
+    assert.equal(details.records.size, 0);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.storageFailures, 1);
+});
+
+test('cached hover logs stay bounded and anonymous and every supported UI locale has its new labels', async () => {
+    const e = await cachedHoverEnvironment();
+    const details = e.initialize();
+    await e.finishDetails(details);
+    const clone = e.clone('2');
+    for (let index = 0; index < 60; index++) {
+        e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+        e.c.closeCachedHover();
+    }
+    const logs = e.logs.filter(entry => entry.name === 'cachedHoverOpened');
+    assert.equal(logs.length, 48);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.opens, 60);
+    assert.doesNotMatch(JSON.stringify(logs), /videoId|profile|auth|https|Title|Synopsis/);
+    const copy = e.c.collectPerformanceDiagnostics();
+    assert.ok(Object.values(copy.cachedHover).every(value => ['number', 'string', 'boolean'].includes(typeof value)));
+    copy.cachedHover.opens = 999;
+    assert.equal(e.c.performanceDiagnostics.cachedHover.opens, 60);
+    const locales = vm.runInContext('Object.keys(UI_MESSAGES)', e.c);
+    for (const locale of locales) {
+        for (const key of ['hoverPlay', 'hoverMoreInfo', 'hoverLoading', 'hoverUnavailable', 'hoverClose']) {
+            assert.equal(vm.runInContext('typeof UI_MESSAGES[' + JSON.stringify(locale) + '][' + JSON.stringify(key) + ']', e.c), 'string');
+        }
+    }
+});
+
+test('cached keyboard actions are reachable from their card and close restores focus without another open', async () => {
+    const e = await cachedHoverEnvironment();
+    const details = e.initialize();
+    await e.finishDetails(details);
+    const clone = e.clone('2'), card = clone.querySelector('card');
+    card.focus();
+    const owner = e.c.activeCachedHover;
+    let focused = 0, prevented = 0;
+    owner.ui.play.focus = () => { focused++; e.c.document.activeElement = owner.ui.play; };
+    e.state.grid.listeners.get('keydown')({ key: 'Tab', target: card, preventDefault: () => prevented++ });
+    assert.equal(focused, 1);
+    assert.equal(prevented, 1);
+    const close = owner.root.children.find(node => node.className === 'tm-cached-close');
+    close.listeners.get('click')();
+    assert.equal(e.c.activeCachedHover, null);
+    assert.equal(e.c.document.activeElement, card);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.opens, 1);
+});
+
+test('metadata omission and field errors preserve cached descriptions and explain the unsupported response shape', async () => {
+    const e = await cachedHoverEnvironment();
+    e.c.fetch = async () => ({ ok: true, json: async () => ({ jsonGraph: { videos: {
+        1: { synopsis: { $type: 'error', value: 'Private server payload' } },
+        2: { summary: atom({ type: 'movie' }), synopsis: atom({ unsupported: 'private data' }) },
+        3: { title: atom('Title three') }
+    } } }) });
+    const details = e.initialize();
+    details.records.set('1', { title: 'Old title', synopsis: 'Cached synopsis', genres: [], type: 'movie' });
+    await e.finishDetails(details);
+    assert.equal(details.records.get('1').synopsis, 'Cached synopsis');
+    const work = e.c.performanceDiagnostics.cachedHover;
+    assert.equal(work.synopsisErrors, 1);
+    assert.equal(work.synopsisUnsupported, 1);
+    assert.equal(work.synopsisMissing, 5);
+    assert.equal(work.requests, 1);
+    assert.equal(work.ready, 3);
+    assert.equal(work.missing, 4);
+    assert.doesNotMatch(JSON.stringify(e.logs.filter(entry => entry.name === 'titleDetailsCompleted')), /private|Private|Old title|Cached synopsis/);
+});
+
+test('details storage and logging failures leave the popup usable and do not reject the background job', async () => {
+    const e = await cachedHoverEnvironment();
+    e.c.GM_setValue = () => { throw new Error('Cannot persist'); };
+    e.c.log = () => { throw new Error('Cannot log'); };
+    const details = e.initialize();
+    await e.finishDetails(details);
+    const clone = e.clone('2');
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    assert.equal(e.c.activeCachedHover.ui.synopsis.textContent, 'Synopsis 2');
+    assert.equal(e.c.performanceDiagnostics.cachedHover.storageFailures, 1);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.failures, 2);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.performanceDiagnostics.cachedHover.loading, false);
+});
+
+test('listener shutdown removes a cached popup even when there are no remaining target listeners', async () => {
+    const e = await cachedHoverEnvironment();
+    const details = e.initialize();
+    await e.finishDetails(details);
+    vm.runInContext(declaration('stopTargetEventListeners'), e.c);
+    e.c.targetListenersActive = false;
+    e.c.targetDocumentObserver = null;
+    const clone = e.clone('2');
+    e.c.openCachedHover(clone.__tmMyListItem, clone, 1);
+    e.c.stopTargetEventListeners();
+    assert.equal(e.c.activeCachedHover, null);
+    assert.equal(e.listeners.has('keydown'), false);
+    assert.equal(e.body.children.length, 0);
+});
+
+test('a newly added title starts the cached path when the original list had no details state', async () => {
+    const e = await cachedHoverEnvironment();
+    assert.equal(e.state.titleDetails, undefined);
+    const snapshot = e.clone('2').cloneNode(true);
+    for (const clone of e.state.cloneMap.values()) clone.remove();
+    e.state.cloneMap.clear();
+    e.state.itemMap.clear();
+    e.state.items = [];
+    delete e.state.watchStatus;
+    const added = { videoId: '8', ariaLabel: 'New title', href: 'https://www.netflix.com/browse?jbv=8', snapshot };
+    assert.equal(e.c.applyLegacyAddition(added, 0), true);
+    const details = e.state.titleDetails;
+    assert.ok(details);
+    await e.state.watchStatus.promise;
+    await e.finishDetails(details);
+    assert.ok(e.detailRequests[0].paths[0][1].includes('8'));
+    const clone = e.clone('8');
+    clone.__tmHoverActivationGeneration = 1;
+    e.c.openCachedHover(added, clone, 1);
+    assert.equal(e.c.activeCachedHover?.clone, clone);
+    assert.equal(e.c.performanceDiagnostics.hoverPreparation.calls, 0);
 });
