@@ -13,15 +13,16 @@ import {
 } from './dom-names.js';
 import { createI18n } from './i18n/i18n.js';
 import { installStyles, removeStyles } from './grid/styles.js';
+import { createListData } from './netflix/list-data.js';
 
 // Transitional runtime; responsibilities move to their declared owners in P03-P20.
 export function startLegacy() {
     'use strict';
 
     const netflixContext = createNetflixContext({ window, document, navigator, location });
-    const { getHtmlLanguage, getNetflixLanguage, viewingRequestContext, readGraphqlBootstrap: graphqlData } = netflixContext;
+    const { getHtmlLanguage, getNetflixLanguage, viewingRequestContext } = netflixContext;
     const netflixDom = createNetflixPageDom({ document, Element, location,
-        readGraphqlIdentity: () => netflixGraphql.myListDomIdentity() });
+        readGraphqlIdentity: () => listData.myListDomIdentity() });
     const { findMyListSection, nativeCardIdentity, videoIdFromHref, decodeTrackingContext } = netflixDom;
     const cardMarkup = createCardMarkup({ location });
     const itemFromSlot = cardMarkup.capture;
@@ -56,8 +57,6 @@ export function startLegacy() {
     const LOGICAL_COLLECTION_TIMEOUT_MS = 120000;
     const TOTAL_COUNT_TIMEOUT_MS = 5000;
     const FRESH_MY_LIST_FETCH_TIMEOUT_MS = 10000;
-    const GRAPHQL_COLLECTION_PAGE_SIZE = 75;
-    const GRAPHQL_COLLECTION_MAX_PAGES = 8;
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
     const VIEWING_TITLE_BATCH_SIZE = 50;
@@ -108,6 +107,12 @@ export function startLegacy() {
             logLanguage: getLogLocale(), viewport: `${window.innerWidth}x${window.innerHeight}`, devicePixelRatio: window.devicePixelRatio }),
         readRuntime: () => collectRuntimeSnapshot(), readSeriesViewing: () => collectViewingSeriesDiagnostics(sourceState),
         readThumbnails: () => collectThumbnailDiagnostics(sourceState), readNativePopup: () => popupInspection.collect() });
+
+    const listData = createListData({ context: netflixContext, pageDom: netflixDom, location,
+        fetch: (...args) => fetch(...args), performance, assertCurrent: assertRouteSession,
+        isCancelled: isRouteSessionCancelledError, createError: initializationError,
+        beginRequest: createRouteFetch, finishRequest: finishRouteFetch, runChunks: runConstructionChunks,
+        inspection: popupInspection, log, warn, tLog, requestTimeoutMs: FRESH_MY_LIST_FETCH_TIMEOUT_MS });
 
     function formatInitializationErrorMeta(error, fallbackTotalCount = null) {
         const details = error?.details || {};
@@ -208,7 +213,6 @@ export function startLegacy() {
     let viewOriginalMenuId = null;
     let logFeedbackTimer = null;
     let missingSectionSince = 0;
-    let myListGraphqlKey = null;
     let pendingMyListMutations = new Map();
     let recentRemovedMyListItems = new Map();
     let undoExpiryTimer = null;
@@ -735,7 +739,7 @@ export function startLegacy() {
         document.getElementById(LEGACY_EMPTY_STATE_ID)?.remove();
         clearPendingMyListMutations();
         clearUndoEntries();
-        myListGraphqlKey = null;
+        listData.reset();
         waitingForNativeEmpty = false;
         cachedNativeEmptyContent = null;
         cachedNativeEmptyMessage = '';
@@ -815,7 +819,7 @@ export function startLegacy() {
         lastResponsiveSignature = '';
         lastPageShape = '';
         missingSectionSince = 0;
-        myListGraphqlKey = null;
+        listData.reset();
         waitingForNativeEmpty = false;
         cachedNativeEmptyContent = null;
         cachedNativeEmptyMessage = '';
@@ -1413,93 +1417,6 @@ export function startLegacy() {
         return values.length ? median(values) : Math.max(20, Math.min(56, window.innerWidth * 0.02));
     }
 
-    function isMyListGraphqlSection(value) {
-        if (!value || value.__typename !== 'PinotCarouselSection') return false;
-        const listeners = Array.isArray(value.eventListeners) ? value.eventListeners : [];
-        const types = new Set(listeners.map(listener => listener?.__typename).filter(Boolean));
-        const hasPlaylistMutationListeners = types.has('PinotAddToPlaylistEventListener') &&
-            types.has('PinotRemoveFromPlaylistEventListener');
-        const hasPlaylistNotification = listeners.some(listener =>
-            listener?.notificationMessageRegex === 'UPDATE_PLAYLIST'
-        );
-        return hasPlaylistMutationListeners || hasPlaylistNotification;
-    }
-
-    function graphqlCarouselCandidates(data) {
-        return Object.entries(data || {}).filter(([, value]) =>
-            value &&
-            value.__typename === 'PinotCarouselSection' &&
-            value.entities &&
-            Number.isFinite(Number(value.entities.totalCount))
-        );
-    }
-
-    function findMyListGraphqlEntry() {
-        const data = graphqlData();
-        if (!data) return null;
-
-        if (myListGraphqlKey) {
-            const cached = data[myListGraphqlKey];
-            if (cached && cached.__typename === 'PinotCarouselSection' &&
-                Number.isFinite(Number(cached.entities?.totalCount))) {
-                return { key: myListGraphqlKey, value: cached, reason: 'cached-key' };
-            }
-            myListGraphqlKey = null;
-        }
-
-        const candidates = graphqlCarouselCandidates(data);
-        for (const [key, value] of candidates) {
-            if (!isMyListGraphqlSection(value)) continue;
-            myListGraphqlKey = key;
-            return { key, value, reason: 'playlist-event-listeners' };
-        }
-
-        // Generation 2 fallback: match the live My List row to the GraphQL section.
-        // Do not rely on translated heading text or on the removed page indicators.
-        const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
-        const domSection = host?.querySelector?.(`:scope > ${NETFLIX_DOM_SELECTORS.carouselRowOneSection}`) || null;
-        const domSectionId = String(domSection?.id || '');
-        if (domSectionId) {
-            const matched = candidates.find(([, value]) => String(value?.id || '') === domSectionId);
-            if (matched) {
-                myListGraphqlKey = matched[0];
-                return { key: matched[0], value: matched[1], reason: 'native-section-id' };
-            }
-        }
-
-        if (domSection) {
-            const domIds = netflixDom.sectionVideoIds(domSection);
-            if (domIds.size) {
-                let best = null;
-                let bestOverlap = 0;
-                for (const [key, value] of candidates) {
-                    const ids = graphqlSectionVideoIds(value);
-                    let overlap = 0;
-                    for (const id of ids) if (domIds.has(id)) overlap++;
-                    if (overlap > bestOverlap) {
-                        bestOverlap = overlap;
-                        best = { key, value };
-                    }
-                }
-                if (best && bestOverlap >= Math.min(2, domIds.size)) {
-                    myListGraphqlKey = best.key;
-                    return { ...best, reason: 'native-card-overlap', overlap: bestOverlap };
-                }
-            }
-        }
-        return null;
-    }
-
-    function graphqlSectionVideoIds(value) {
-        const ids = new Set();
-        for (const edge of value?.entities?.edges || []) {
-            const ref = String(edge?.node?.__ref || '');
-            const match = ref.match(/(?:standardBoxshot_Video:|Video:)(\d+)/);
-            if (match) ids.add(match[1]);
-        }
-        return ids;
-    }
-
     function median(values) {
         const nums = values.filter(Number.isFinite).sort((a, b) => a - b);
         if (!nums.length) return 0;
@@ -1903,34 +1820,6 @@ export function startLegacy() {
             elapsedMs: Math.round(elapsedMs),
             layout: layoutSummary(layout)
         });
-    }
-
-    function extractFreshMyListBootstrap(html) {
-        const text = String(html || '');
-        const notificationMarker = '"notificationMessageRegex":"UPDATE_PLAYLIST"';
-        const sectionMarker = '"__typename":"PinotCarouselSection"';
-        let from = 0;
-
-        while (from < text.length) {
-            const notificationIndex = text.indexOf(notificationMarker, from);
-            if (notificationIndex < 0) break;
-            const sectionStart = text.lastIndexOf(sectionMarker, notificationIndex);
-            if (sectionStart >= 0 && notificationIndex - sectionStart <= 50000) {
-                const block = text.slice(sectionStart, notificationIndex + notificationMarker.length + 1024);
-                const totalMatch = block.match(/"entities":\{"totalCount":(\d+)/);
-                if (totalMatch) {
-                    const firstVideoMatch = block.match(/standardBoxshot_Video:(\d+)/);
-                    return {
-                        totalCount: Number(totalMatch[1]),
-                        firstVideoId: firstVideoMatch?.[1] || '',
-                        sectionStart,
-                        notificationIndex
-                    };
-                }
-            }
-            from = notificationIndex + notificationMarker.length;
-        }
-        return null;
     }
 
     // Viewing status is read separately from native card markup. A shared card
@@ -3206,178 +3095,6 @@ export function startLegacy() {
         return watch.promise;
     }
 
-    function carouselArtworkVariables() {
-        const standard = { width: 342, height: 192 };
-        const standardHighRes = { width: 665, height: 375 };
-        const formats = ['WEBP', 'JPG', 'PNG'];
-        const dir = document.querySelector('[data-uia="loc"]')?.getAttribute('dir') || document.documentElement.dir || 'ltr';
-        return {
-            imageParamsForStandardBoxart: {
-                artworkType: 'SDP',
-                dimension: standard,
-                features: { enableLockBadgeChecks: true, fallbackStrategy: 'STILL' }
-            },
-            imageParamsForStandardBoxartHighRes: {
-                artworkType: 'SDP',
-                dimension: standardHighRes,
-                features: { fallbackStrategy: 'STILL', enableLockBadgeChecks: true }
-            },
-            imageParamsForPodcastEpisodicStill: {
-                artworkType: 'SEGMENT_STILL',
-                dimension: { ...standard, scaleStrategy: 'COVER' },
-                features: { graybox: false }
-            },
-            imageParamsForPodcastEpisodicStillHighRes: {
-                artworkType: 'SEGMENT_STILL',
-                dimension: { ...standardHighRes, scaleStrategy: 'COVER' },
-                features: { graybox: false }
-            },
-            imageParamsForPodcastEpisodicLogo: {
-                artworkType: 'LOGO_HORIZONTAL_CROPPED',
-                dimension: { width: 800, height: 126, scaleStrategy: 'CONTAIN' },
-                features: { tone: 'LIGHT' }
-            },
-            imageParamsForRankedBoxart: {
-                artworkType: 'BOXSHOT',
-                dimension: { width: 426, height: 607 },
-                features: { fallbackStrategy: 'STILL', suppressTop10Badge: true }
-            },
-            imageParamsForContinueWatchingBoxart: {
-                artworkType: 'SDP',
-                dimension: standard,
-                features: { fallbackStrategy: 'STILL' }
-            },
-            imageParamsForContinueWatchingBoxartHighRes: {
-                artworkType: 'SDP',
-                dimension: standardHighRes,
-                features: { fallbackStrategy: 'STILL' }
-            },
-            imageParamsForCloudGameBoxart: {
-                artworkType: 'SDP',
-                dimension: standard,
-                features: { fallbackStrategy: 'STILL' }
-            },
-            imageParamsForCloudGameBoxartHighRes: {
-                artworkType: 'SDP',
-                dimension: standardHighRes,
-                features: { fallbackStrategy: 'STILL' }
-            },
-            imageParamsForMobileGameBoxart: {
-                artworkType: 'APP_ICON',
-                dimension: { width: 200, height: 200 },
-                formats
-            },
-            imageParamsForCharacterCircle: {
-                artworkType: 'SQUAREHEADSHOT_1000x1000',
-                dimension: { width: 200, height: 200 },
-                formats
-            },
-            imageParamsForChannel: {
-                artworkType: dir === 'rtl' ? 'CHANNEL_TILE_BACKGROUND_RTL' : 'CHANNEL_TILE_BACKGROUND',
-                dimension: standard,
-                formats
-            },
-            imageParamsForChannelLogo: {
-                artworkType: 'CHANNEL_LOGO_COLOR_CROPPED',
-                dimension: { height: 44 },
-                formats: ['WEBP', 'PNG']
-            },
-            imageParamsForEntryPointBackground: {
-                artworkType: dir === 'rtl' ? 'MLP_ENTRY_POINT_BACKGROUND_RTL' : 'MLP_ENTRY_POINT_BACKGROUND',
-                dimension: { width: 1024 },
-                features: { fallbackStrategy: 'STILL' }
-            },
-            imageParamsForEntryPointLogo: {
-                artworkType: 'LOGO_STACKED_CROPPED',
-                dimension: { height: 260 },
-                formats
-            }
-        };
-    }
-
-    function firstVideoIdFromCarouselNode(node) {
-        const first = node?.entities?.edges?.[0]?.node;
-        if (!first || typeof first !== 'object') return '';
-        const seen = new Set();
-        const stack = [first];
-        while (stack.length) {
-            const value = stack.pop();
-            if (!value || typeof value !== 'object' || seen.has(value)) continue;
-            seen.add(value);
-            const direct = value.videoId;
-            if (Number.isFinite(Number(direct)) && Number(direct) > 0) return String(direct);
-            const id = typeof value.id === 'string' ? value.id : '';
-            const match = id.match(/(?:standardBoxshot_)?Video:(\d+)/);
-            if (match) return match[1];
-            for (const child of Object.values(value)) {
-                if (child && typeof child === 'object') stack.push(child);
-            }
-        }
-        return '';
-    }
-
-    function videoIdFromGraphqlNode(node) {
-        if (!node || typeof node !== 'object') return '';
-        const seen = new Set();
-        const stack = [node];
-        while (stack.length) {
-            const value = stack.pop();
-            if (!value || typeof value !== 'object' || seen.has(value)) continue;
-            seen.add(value);
-            const direct = value.videoId;
-            if (Number.isFinite(Number(direct)) && Number(direct) > 0) return String(direct);
-            const id = typeof value.id === 'string' ? value.id : '';
-            const match = id.match(/(?:standardBoxshot_)?Video:(\d+)/);
-            if (match) return match[1];
-            for (const child of Object.values(value)) {
-                if (child && typeof child === 'object') stack.push(child);
-            }
-        }
-        return '';
-    }
-
-    function firstGraphqlText(value, depth = 0, seen = new Set()) {
-        if (depth > 5 || value === null || value === undefined) return '';
-        if (typeof value === 'string') {
-            const text = value.trim();
-            if (!text || /^https?:\/\//i.test(text) || text.length > 240) return '';
-            return text;
-        }
-        if (typeof value !== 'object' || seen.has(value)) return '';
-        seen.add(value);
-        for (const key of ['text', 'value', 'title', 'name', 'label', 'displayString']) {
-            const result = firstGraphqlText(value[key], depth + 1, seen);
-            if (result) return result;
-        }
-        for (const child of Object.values(value)) {
-            const result = firstGraphqlText(child, depth + 1, seen);
-            if (result) return result;
-        }
-        return '';
-    }
-
-    function firstGraphqlImageUrl(value, depth = 0, seen = new Set()) {
-        if (depth > 7 || value === null || value === undefined) return '';
-        if (typeof value === 'string') {
-            const text = value.trim();
-            if (/^https?:\/\//i.test(text) && (/(?:\.webp|\.jpe?g|\.png)(?:[?#]|$)/i.test(text) || /nflxso\.net|nflximg\.net/i.test(text))) {
-                return text;
-            }
-            return '';
-        }
-        if (typeof value !== 'object' || seen.has(value)) return '';
-        seen.add(value);
-        for (const key of ['url', 'imageUrl', 'artwork', 'image', 'src', 'uri']) {
-            const result = firstGraphqlImageUrl(value[key], depth + 1, seen);
-            if (result) return result;
-        }
-        for (const child of Object.values(value)) {
-            const result = firstGraphqlImageUrl(child, depth + 1, seen);
-            if (result) return result;
-        }
-        return '';
-    }
-
     async function runConstructionChunks(count, buildItem, assertActive) {
         assertActive();
         let chunkStarted = performance.now();
@@ -3399,32 +3116,22 @@ export function startLegacy() {
         return true;
     }
 
-    async function buildGraphqlMyListItems(edges, totalCount, columns, templateSlot, sessionToken = null) {
+    async function buildGraphqlMyListItems(records, totalCount, columns, template, sessionToken = null) {
         assertRouteSession(sessionToken);
-        if (!Array.isArray(edges) || !templateSlot || !Number.isFinite(totalCount)) return null;
-        // Netflix may recycle this live slot while we yield. Keep one detached
-        // template shared by compact items until the complete grid is published.
-        const template = cardMarkup.captureTemplate(templateSlot);
-        if (!template) return null;
+        if (!Array.isArray(records) || !template || !Number.isFinite(totalCount)) return null;
+        // Material was captured before asynchronous data work; no live slot is borrowed here.
         const items = [];
         const seen = new Set();
-        const complete = await runConstructionChunks(edges.length, index => {
-            const edge = edges[index];
-            const node = edge?.node;
-            const videoId = videoIdFromGraphqlNode(node);
+        const complete = await runConstructionChunks(records.length, index => {
+            const record = records[index];
+            const videoId = record?.videoId;
             if (!videoId || seen.has(videoId)) return;
-            const href = `${location.origin}/browse?jbv=${encodeURIComponent(videoId)}`;
-            const title = firstGraphqlText(node?.displayString) || firstGraphqlText(node) || `Netflix ${videoId}`;
-            const imageUrl = firstGraphqlImageUrl(node?.contextualArtwork) || firstGraphqlImageUrl(node);
             const itemIndex = items.length;
             items.push({
-                href,
-                videoId,
+                ...record,
                 page: Math.floor(itemIndex / Math.max(1, columns)),
                 logicalIndex: itemIndex,
-                ariaLabel: title,
                 cardTemplate: template,
-                imageUrl,
                 graphql: true
             });
             seen.add(videoId);
@@ -3433,372 +3140,37 @@ export function startLegacy() {
         return complete && items.length === totalCount ? items : null;
     }
 
-    async function fetchMyListCarouselPage(request, cursor, signal, sessionToken) {
-        assertRouteSession(sessionToken);
-        const body = { ...request.body, variables: { ...request.body.variables, carouselAfterCursor: cursor } };
-        const response = await fetch('https://web.prod.cloud.netflix.com/graphql', {
-            method: 'POST', credentials: 'include', cache: 'no-store', redirect: 'follow',
-            headers: request.headers, body: JSON.stringify(body), signal
-        });
-        assertRouteSession(sessionToken);
-        if (!response.ok) {
-            throw initializationError('FRESH_MY_LIST_CAROUSEL_HTTP_ERROR', 'fresh-my-list-carousel',
-                'Netflix CarouselPage returned HTTP ' + response.status,
-                { status: response.status, statusText: response.statusText, responseUrl: response.url });
-        }
-        const text = await response.text();
-        assertRouteSession(sessionToken);
-        let payload;
+    // Collection strategy remains here until P13; data results contain no wire fields or DOM.
+    async function collectLogicalListItems({ bootstrap, totalCount, columns, templateSlot, sessionToken = null }) {
+        let current = bootstrap;
         try {
-            payload = JSON.parse(text);
-        } catch (error) {
-            throw initializationError('FRESH_MY_LIST_CAROUSEL_PARSE_ERROR', 'fresh-my-list-carousel',
-                'Netflix CarouselPage returned invalid JSON',
-                { responseUrl: response.url, responseBytes: text.length, errorMessage: error?.message || String(error) });
-        }
-        const node = payload?.data?.node;
-        const countValue = node?.entities?.totalCount;
-        const totalCount = Number(countValue);
-        const countPresent = typeof countValue === 'number' ||
-            (typeof countValue === 'string' && countValue.trim() !== '');
-        if (node?.__typename !== 'PinotCarouselSection' || !countPresent ||
-            !Number.isSafeInteger(totalCount) || totalCount < 0) {
-            throw initializationError('FRESH_MY_LIST_CAROUSEL_TOTAL_COUNT_UNAVAILABLE', 'fresh-my-list-carousel',
-                'Could not read the current Netflix My List totalCount from CarouselPage', {
-                    responseUrl: response.url, responseBytes: text.length, typename: node?.__typename || null,
-                    graphqlErrors: Array.isArray(payload?.errors) ? payload.errors.map(item => item?.message || String(item)) : []
-                });
-        }
-        const edges = Array.isArray(node?.entities?.edges) ? node.entities.edges : [];
-        // Piggyback on the validated response; this neither fetches metadata nor
-        // publishes it into Netflix's rendering store.
-        popupInspection.recordResponse(edges, sessionToken);
-        return {
-            totalCount,
-            edges,
-            hasNextPage: Boolean(node?.entities?.pageInfo?.hasNextPage),
-            endCursor: node?.entities?.pageInfo?.endCursor || null,
-            responseUrl: response.url,
-            responseBytes: text.length
-        };
-    }
-
-    function carouselFetchError(error, sessionToken) {
-        // Route aborts must never become a timeout warning or start a fallback.
-        assertRouteSession(sessionToken);
-        if (isRouteSessionCancelledError(error) || (error?.code && error?.stage)) return error;
-        const aborted = error?.name === 'AbortError';
-        return initializationError(
-            aborted ? 'FRESH_MY_LIST_CAROUSEL_TIMEOUT' : 'FRESH_MY_LIST_CAROUSEL_FAILED',
-            'fresh-my-list-carousel',
-            aborted
-                ? 'Netflix CarouselPage timed out after ' + FRESH_MY_LIST_FETCH_TIMEOUT_MS + ' ms'
-                : 'Netflix CarouselPage failed: ' + (error?.message || error),
-            {
-                timeoutMs: aborted ? FRESH_MY_LIST_FETCH_TIMEOUT_MS : null,
-                errorName: error?.name || null,
-                errorMessage: error?.message || String(error || '')
-            }
-        );
-    }
-
-    async function fetchFreshMyListBootstrapViaCarousel(sessionToken = null) {
-        assertRouteSession(sessionToken);
-        const entry = findMyListGraphqlEntry();
-        const rowId = entry?.value?._id;
-        if (!rowId) {
-            throw initializationError('FRESH_MY_LIST_CAROUSEL_ID_UNAVAILABLE', 'fresh-my-list-carousel',
-                'Could not identify the current Netflix My List carousel id',
-                { graphqlKey: entry?.key || null, detectionReason: entry?.reason || null });
-        }
-        const request = {
-            body: {
-                operationName: 'CarouselPage',
-                variables: {
-                    rowId, ...carouselArtworkVariables(), carouselPageSize: GRAPHQL_COLLECTION_PAGE_SIZE,
-                    carouselAfterCursor: null, eddEnabled: false, fetchHighResCards: false
-                },
-                extensions: { persistedQuery: { id: 'a4ec8877-bccc-49bd-930b-34eaa1d3b7e0', version: 102 } }
-            },
-            headers: {
-                'content-type': 'application/json',
-                'x-netflix.context.ui-flavor': 'akira',
-                'x-netflix.context.operation-name': 'CarouselPage',
-                'X-Netflix.Request.Originating.Url': location.href
-            }
-        };
-        const { appVersion, locale } = netflixContext.listRequestContext();
-        if (appVersion) request.headers['x-netflix.context.app-version'] = String(appVersion);
-        if (locale) request.headers['x-netflix.context.locales'] = String(locale).toLowerCase();
-
-        const fetchState = createRouteFetch(sessionToken);
-        const started = performance.now();
-        try {
-            // Count and first-title bootstrap needs one page in every mode.
-            // Keep its continuation for logical collection after native readiness.
-            const page = await fetchMyListCarouselPage(request, null, fetchState.controller.signal, sessionToken);
             assertRouteSession(sessionToken);
-            const fresh = {
-                totalCount: page.totalCount,
-                firstVideoId: firstVideoIdFromCarouselNode({ entities: { edges: page.edges } }),
-                graphqlEdges: page.edges,
-                graphqlPageCount: 1,
-                graphqlHasNextPage: page.hasNextPage,
-                graphqlEndCursor: page.endCursor,
-                graphqlRequest: request
-            };
-            log('Fresh Netflix My List carousel bootstrap fetched', {
-                totalCount: fresh.totalCount, firstVideoId: fresh.firstVideoId || null,
-                graphqlKey: entry?.key || null, responseUrl: page.responseUrl,
-                responseBytes: page.responseBytes, elapsedMs: Math.round(performance.now() - started),
-                operationName: 'CarouselPage', carouselPageSize: GRAPHQL_COLLECTION_PAGE_SIZE,
-                graphqlPageCount: 1, graphqlEdgeCount: fresh.graphqlEdges.length,
-                hasNextPage: fresh.graphqlHasNextPage
-            });
-            return fresh;
-        } catch (error) {
-            throw carouselFetchError(error, sessionToken);
-        } finally {
-            finishRouteFetch(fetchState);
-        }
-    }
-
-    async function collectFreshMyListCarouselItems(bootstrap, sessionToken = null) {
-        assertRouteSession(sessionToken);
-        if (!bootstrap?.graphqlHasNextPage) return bootstrap;
-        const fetchState = createRouteFetch(sessionToken);
-        const started = performance.now();
-        try {
-            const edges = [...bootstrap.graphqlEdges];
-            const seenCursors = new Set();
-            let cursor = bootstrap.graphqlEndCursor;
-            let hasNextPage = true;
-            let graphqlPageCount = bootstrap.graphqlPageCount;
-            while (hasNextPage) {
-                assertRouteSession(sessionToken);
-                if (graphqlPageCount >= GRAPHQL_COLLECTION_MAX_PAGES) {
-                    throw initializationError('FRESH_MY_LIST_CAROUSEL_PAGE_LIMIT', 'fresh-my-list-carousel',
-                        'Netflix CarouselPage exceeded the configured GraphQL page limit',
-                        { totalCount: bootstrap.totalCount, graphqlPageCount, maxPages: GRAPHQL_COLLECTION_MAX_PAGES, edgeCount: edges.length });
+            if (bootstrap?.source === 'mounted-single-page-fast-path') {
+                const reuse = collectMountedSinglePageItems(bootstrap, totalCount, columns, sessionToken);
+                const work = performanceDiagnostics.membershipReuse;
+                work.attempts++;
+                if (reuse.items) {
+                    work.reused++; work.itemsCaptured += reuse.items.length; work.requestsAvoided++;
+                    return { bootstrap, items: reuse.items, collectionSource: 'mounted-single-page' };
                 }
-                if (!cursor || seenCursors.has(cursor)) {
-                    throw initializationError('FRESH_MY_LIST_CAROUSEL_CURSOR_INVALID', 'fresh-my-list-carousel',
-                        'Netflix CarouselPage returned a missing or repeated pagination cursor',
-                        { graphqlPageCount, edgeCount: edges.length });
-                }
-                seenCursors.add(cursor);
-                const page = await fetchMyListCarouselPage(bootstrap.graphqlRequest, cursor, fetchState.controller.signal, sessionToken);
-                if (page.totalCount !== bootstrap.totalCount) {
-                    throw initializationError('FRESH_MY_LIST_CAROUSEL_TOTAL_COUNT_UNAVAILABLE', 'fresh-my-list-carousel',
-                        'Netflix CarouselPage returned inconsistent My List pagination data',
-                        { responseUrl: page.responseUrl, totalCount: bootstrap.totalCount, nextTotalCount: page.totalCount });
-                }
-                edges.push(...page.edges);
-                graphqlPageCount++;
-                hasNextPage = page.hasNextPage;
-                cursor = page.endCursor;
+                work.rejected++;
+                log('Mounted single-page membership reuse rejected; using fresh collection', {
+                    collectionSource: 'mounted-single-page', reason: reuse.reason, totalCount });
             }
+            // One detached template survives pagination/normalization yields. Grid owns it after acceptance.
+            const template = templateSlot ? cardMarkup.captureTemplate(templateSlot) : null;
+            const data = await listData.collectRecords({ bootstrap, totalCount, sessionToken });
+            current = data.bootstrap;
             assertRouteSession(sessionToken);
-            log('Fresh Netflix My List logical collection fetched', {
-                totalCount: bootstrap.totalCount, graphqlPageCount, graphqlEdgeCount: edges.length,
-                elapsedMs: Math.round(performance.now() - started)
-            });
-            return {
-                ...bootstrap, graphqlEdges: edges, graphqlPageCount,
-                graphqlHasNextPage: false, graphqlEndCursor: cursor, graphqlRequest: null
-            };
-        } catch (error) {
-            throw carouselFetchError(error, sessionToken);
-        } finally {
-            finishRouteFetch(fetchState);
-        }
-    }
-
-    async function fetchFreshMyListBootstrapViaPage(sessionToken = null) {
-        assertRouteSession(sessionToken);
-        const requestUrl = new URL('/browse/my-list', location.origin);
-        requestUrl.searchParams.set('_tm_legacy_mylist_refresh', `${Date.now()}-${sessionToken ?? 0}`);
-        const fetchState = createRouteFetch(sessionToken);
-        const started = performance.now();
-
-        try {
-            const response = await fetch(requestUrl.href, {
-                method: 'GET',
-                credentials: 'include',
-                cache: 'no-store',
-                redirect: 'follow',
-                headers: {
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-                },
-                signal: fetchState.controller.signal
-            });
+            const items = await buildGraphqlMyListItems(data.records, totalCount, columns, template, sessionToken);
             assertRouteSession(sessionToken);
-            if (!response.ok) {
-                throw initializationError(
-                    'FRESH_MY_LIST_HTTP_ERROR',
-                    'fresh-my-list-fetch',
-                    `Netflix My List refresh returned HTTP ${response.status}`,
-                    { status: response.status, statusText: response.statusText, responseUrl: response.url }
-                );
-            }
-
-            const html = await response.text();
-            assertRouteSession(sessionToken);
-            const fresh = extractFreshMyListBootstrap(html);
-            if (!fresh || !Number.isFinite(fresh.totalCount) || fresh.totalCount < 0) {
-                throw initializationError(
-                    'FRESH_MY_LIST_TOTAL_COUNT_UNAVAILABLE',
-                    'fresh-my-list-parse',
-                    'Could not read the current Netflix My List totalCount from the fresh page response',
-                    { responseUrl: response.url, responseBytes: html.length }
-                );
-            }
-
-            log('Fresh Netflix My List bootstrap fetched', {
-                totalCount: fresh.totalCount,
-                firstVideoId: fresh.firstVideoId || null,
-                responseUrl: response.url,
-                responseBytes: html.length,
-                elapsedMs: Math.round(performance.now() - started),
-                cacheMode: 'no-store',
-                fallback: true
-            });
-            return fresh;
+            return { bootstrap: current, items, ...(data.error ? { error: data.error } : {}) };
         } catch (error) {
             assertRouteSession(sessionToken);
             if (isRouteSessionCancelledError(error)) throw error;
-            if (error?.code && error?.stage) throw error;
-            const aborted = error?.name === 'AbortError';
-            throw initializationError(
-                aborted ? 'FRESH_MY_LIST_FETCH_TIMEOUT' : 'FRESH_MY_LIST_FETCH_FAILED',
-                'fresh-my-list-fetch',
-                aborted
-                    ? `Netflix My List refresh timed out after ${FRESH_MY_LIST_FETCH_TIMEOUT_MS} ms`
-                    : `Netflix My List refresh failed: ${error?.message || error}`,
-                {
-                    timeoutMs: aborted ? FRESH_MY_LIST_FETCH_TIMEOUT_MS : null,
-                    errorName: error?.name || null,
-                    errorMessage: error?.message || String(error || '')
-                }
-            );
-        } finally {
-            finishRouteFetch(fetchState);
+            return { bootstrap: current, items: null, error };
         }
     }
-
-    async function fetchFreshMyListBootstrap(sessionToken = null) {
-        assertRouteSession(sessionToken);
-        try {
-            const fresh = await fetchFreshMyListBootstrapViaCarousel(sessionToken);
-            assertRouteSession(sessionToken);
-            return fresh;
-        } catch (error) {
-            assertRouteSession(sessionToken);
-            if (isRouteSessionCancelledError(error)) throw error;
-            warn('Fresh Netflix My List carousel fetch failed; falling back to page bootstrap', {
-                code: error?.code || null,
-                stage: error?.stage || null,
-                message: error?.message || String(error || '')
-            });
-            return fetchFreshMyListBootstrapViaPage(sessionToken);
-        }
-    }
-
-    // Owns Netflix cache reads, fresh bootstrap fallbacks, and response normalization.
-    const netflixGraphql = Object.freeze({
-        isAvailable() {
-            return Boolean(graphqlData());
-        },
-
-        myListDomIdentity() {
-            const entry = findMyListGraphqlEntry();
-            return {
-                sectionId: String(entry?.value?.id || ''),
-                videoIds: [...graphqlSectionVideoIds(entry?.value)]
-            };
-        },
-
-        readMyListTotalCount() {
-            try {
-                const count = Number(findMyListGraphqlEntry()?.value?.entities?.totalCount);
-                return Number.isFinite(count) && count >= 0 ? count : null;
-            } catch (_) {
-                return null;
-            }
-        },
-
-        detectMyListTotalCount() {
-            const entry = findMyListGraphqlEntry();
-            const count = Number(entry?.value?.entities?.totalCount);
-            if (!Number.isFinite(count) || count < 0) return null;
-            log(tLog('totalCountDetected'), {
-                totalCount: count,
-                graphqlKey: entry?.key || null,
-                detectionReason: entry?.reason || null
-            });
-            return count;
-        },
-
-        firstMyListVideoId() {
-            const entry = findMyListGraphqlEntry();
-            for (const edge of entry?.value?.entities?.edges || []) {
-                const ref = String(edge?.node?.__ref || '');
-                const match = ref.match(/(?:standardBoxshot_Video:|Video:)(\d+)/);
-                if (match) return match[1];
-            }
-            return '';
-        },
-
-        fetchBootstrap(sessionToken = null) {
-            return fetchFreshMyListBootstrap(sessionToken);
-        },
-
-        async collectLogicalItems({ bootstrap, totalCount, columns, templateSlot, sessionToken = null }) {
-            let freshBootstrap = bootstrap;
-            try {
-                assertRouteSession(sessionToken);
-                if (freshBootstrap?.source === 'mounted-single-page-fast-path') {
-                    const reuse = collectMountedSinglePageItems(freshBootstrap, totalCount, columns, sessionToken);
-                    const work = performanceDiagnostics.membershipReuse;
-                    work.attempts++;
-                    if (reuse.items) {
-                        work.reused++;
-                        work.itemsCaptured += reuse.items.length;
-                        work.requestsAvoided++;
-                        return { bootstrap: freshBootstrap, items: reuse.items, collectionSource: 'mounted-single-page' };
-                    }
-                    work.rejected++;
-                    log('Mounted single-page membership reuse rejected; using fresh collection', {
-                        collectionSource: 'mounted-single-page', reason: reuse.reason, totalCount
-                    });
-                }
-                if (!Array.isArray(freshBootstrap?.graphqlEdges)) {
-                    freshBootstrap = await fetchFreshMyListBootstrapViaCarousel(sessionToken);
-                }
-                assertRouteSession(sessionToken);
-                // The mounted count remains authoritative. A different fresh count
-                // must use the native scan, not publish a matching-length prefix.
-                if (freshBootstrap.totalCount !== totalCount) return { bootstrap: freshBootstrap, items: null };
-                freshBootstrap = await collectFreshMyListCarouselItems(freshBootstrap, sessionToken);
-                assertRouteSession(sessionToken);
-                const items = await buildGraphqlMyListItems(
-                    freshBootstrap?.graphqlEdges,
-                    totalCount,
-                    columns,
-                    templateSlot,
-                    sessionToken
-                );
-                assertRouteSession(sessionToken);
-                return { bootstrap: freshBootstrap, items };
-            } catch (error) {
-                assertRouteSession(sessionToken);
-                if (isRouteSessionCancelledError(error)) throw error;
-                // Optional item collection cannot discard the valid first-page
-                // count/anchor or trigger the page-HTML bootstrap fallback.
-                return { bootstrap: freshBootstrap, items: null, error };
-            }
-        }
-    });
 
     async function waitForMyListTotalCount(timeout = TOTAL_COUNT_TIMEOUT_MS, sessionToken = null) {
         assertRouteSession(sessionToken);
@@ -3806,15 +3178,15 @@ export function startLegacy() {
         let lastGraphqlAvailable = false;
         while (performance.now() - started < timeout) {
             assertRouteSession(sessionToken);
-            lastGraphqlAvailable = netflixGraphql.isAvailable();
-            const n = netflixGraphql.detectMyListTotalCount();
+            lastGraphqlAvailable = listData.isAvailable();
+            const n = listData.detectMyListTotalCount();
             if (Number.isFinite(n) && n >= 0) return n;
             await sleep(NATIVE_READY_POLL_MS);
         }
         assertRouteSession(sessionToken);
         const details = {
             graphqlAvailable: lastGraphqlAvailable,
-            graphqlKey: myListGraphqlKey,
+            graphqlKey: listData.diagnostics().graphqlKey,
             domGeneration: sourceState?.section ? detectCarouselDomProfile(sourceState.section).generation : null
         };
         logOperationTimeout('total-count-detection', timeout, details);
@@ -3825,7 +3197,7 @@ export function startLegacy() {
         if (!nativeReadScope) return withNativeReadScope(() => readNativeMyListDomState());
         const section = findMyListSection();
         if (!section) {
-            const graphqlCount = netflixGraphql.readMyListTotalCount();
+            const graphqlCount = listData.readMyListTotalCount();
             return {
                 section: null,
                 scroller: null,
@@ -3852,7 +3224,7 @@ export function startLegacy() {
         const pageTopologyKnown = profile.pageMode === 'indicator'
             ? profile.indicatorCount > 0
             : Boolean(runtime?.pageCountFinalized);
-        const graphqlCount = netflixGraphql.readMyListTotalCount();
+        const graphqlCount = listData.readMyListTotalCount();
 
         if (!scroller || !track) {
             return {
@@ -10726,7 +10098,7 @@ export function startLegacy() {
                 earlyTotalCount = await waitForMyListTotalCount(TOTAL_COUNT_TIMEOUT_MS, sessionToken);
                 freshMyListBootstrap = {
                     totalCount: earlyTotalCount,
-                    firstVideoId: netflixGraphql.firstMyListVideoId()
+                    firstVideoId: listData.firstMyListVideoId()
                 };
             } else {
                 const mountedFast = scroller && track
@@ -10749,7 +10121,7 @@ export function startLegacy() {
                     if (scroller && track && currentPageSlots(scroller, track).length > 0) {
                         startParallelReadiness();
                     }
-                    freshMyListBootstrap = await netflixGraphql.fetchBootstrap(sessionToken);
+                    freshMyListBootstrap = await listData.fetchBootstrap(sessionToken);
                     earlyTotalCount = freshMyListBootstrap.totalCount;
                     log(tLog('totalCountDetected'), {
                         totalCount: earlyTotalCount,
@@ -10968,7 +10340,7 @@ export function startLegacy() {
             try {
                 const graphqlLayout = measureVisibleLayout(section, scroller, track);
                 const templateSlot = currentPageSlots(scroller, track)[0] || netflixDom.filledSlots(track)[0];
-                const graphqlCollection = await netflixGraphql.collectLogicalItems({
+                const graphqlCollection = await collectLogicalListItems({
                     bootstrap: freshMyListBootstrap,
                     totalCount: earlyTotalCount,
                     columns: graphqlLayout.columns,
@@ -10990,7 +10362,7 @@ export function startLegacy() {
                         avoidedMembershipRequests: fastCollectionSource === 'mounted-single-page' ? 1 : 0,
                         totalCount: earlyTotalCount,
                         collected: fastItems.length,
-                        graphqlPageCount: freshMyListBootstrap.graphqlPageCount || null,
+                        graphqlPageCount: freshMyListBootstrap.pageCount || null,
                         columns: graphqlLayout.columns,
                         knownPageCount: runtime.knownPageCount
                     });
@@ -10998,8 +10370,8 @@ export function startLegacy() {
                     warn('GraphQL My List fast collection was incomplete; falling back to native scan', {
                         totalCount: earlyTotalCount,
                         bootstrapTotalCount: freshMyListBootstrap?.totalCount,
-                        graphqlEdgeCount: freshMyListBootstrap?.graphqlEdges?.length || 0,
-                        graphqlPageCount: freshMyListBootstrap?.graphqlPageCount || null,
+                        graphqlEdgeCount: freshMyListBootstrap?.edgeCount || 0,
+                        graphqlPageCount: freshMyListBootstrap?.pageCount || null,
                         columns: graphqlLayout.columns
                     });
                 }

@@ -11,6 +11,8 @@ const { createPopupInspection } = require('../src/netflix/popup-inspection.js');
 const { createNetflixContext } = require('../src/netflix/context.js');
 const { createNetflixPageDom } = require('../src/netflix/page-dom.js');
 const { createCardMarkup } = require('../src/netflix/card-markup.js');
+const { createListData } = require('../src/netflix/list-data.js');
+const { carouselPayload } = require('./helpers/fixtures.js');
 
 // Exercise residual authored functions without executing Netflix startup.
 // Generated-bundle startup and lifecycle are covered separately in bundle.test.js.
@@ -18,6 +20,21 @@ const { source, declaration } = require('./helpers/legacy-source.cjs');
 const migratedAdapterFunctions = new Set(['getHtmlLanguage', 'getNetflixLanguage', 'netflixModelData',
     'graphqlData', 'viewingRequestContext', 'nativeCardIdentity', 'videoIdFromHref', 'decodeTrackingContext',
     'videoIdFromToggleContext', 'findMyListSection', 'itemFromSlot']);
+for (const name of ['isMyListGraphqlSection', 'graphqlCarouselCandidates', 'findMyListGraphqlEntry', 'graphqlSectionVideoIds',
+    'extractFreshMyListBootstrap', 'carouselArtworkVariables', 'firstVideoIdFromCarouselNode', 'videoIdFromGraphqlNode',
+    'firstGraphqlText', 'firstGraphqlImageUrl', 'fetchMyListCarouselPage', 'carouselFetchError',
+    'fetchFreshMyListBootstrapViaCarousel', 'collectFreshMyListCarouselItems', 'fetchFreshMyListBootstrapViaPage',
+    'fetchFreshMyListBootstrap']) migratedAdapterFunctions.add(name);
+
+function fixtureListData(c) {
+    return createListData({ context: { ...c.netflixContext, readGraphqlBootstrap: () => c.fixtureGraphqlData || null,
+        pageDirection: () => 'ltr' }, pageDom: c.netflixDom, location: c.location,
+        fetch: (...args) => c.fetch(...args), performance: { now: () => c.performance.now() },
+        assertCurrent: token => c.assertRouteSession(token), isCancelled: error => c.isRouteSessionCancelledError(error),
+        createError: (...args) => c.initializationError(...args), beginRequest: token => c.createRouteFetch(token),
+        finishRequest: request => c.finishRouteFetch(request), runChunks: (...args) => c.runConstructionChunks(...args),
+        inspection: c.popupInspection, log: (...args) => c.log(...args), warn: (...args) => c.warn(...args), tLog: value => c.tLog(value) });
+}
 
 class Element {
     constructor(id = '', parent = null) {
@@ -114,7 +131,7 @@ function environment(names, overrides = {}) {
     c.netflixContext = createNetflixContext({ window: { netflix: { appContext: {
         getModelData: name => c.netflixModelData?.(name) } } }, document, navigator: c.navigator || {}, location });
     const pageDom = createNetflixPageDom({ document, Element, location,
-        readGraphqlIdentity: () => c.netflixGraphql?.myListDomIdentity?.() });
+        readGraphqlIdentity: () => c.listData?.myListDomIdentity?.() });
     c.netflixDom ||= pageDom;
     c.cardMarkup = createCardMarkup({ location });
     for (const [name, operation] of Object.entries({ getHtmlLanguage: c.netflixContext.getHtmlLanguage,
@@ -131,6 +148,7 @@ function environment(names, overrides = {}) {
         readSessionToken: () => c.routeSessionToken, isSourceMounted: () => Boolean(c.sourceState?.grid?.isConnected),
         readSourceCard: () => c.sourceState?.track?.querySelector(c.NETFLIX_DOM_SELECTORS?.standardCard) });
     c.performanceDiagnostics = c.createPerformanceDiagnostics();
+    c.listData ||= fixtureListData(c);
     async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
     return {
         c, timers, frames, flush,
@@ -2490,7 +2508,7 @@ function nativeReadEnvironment(mode = 'logical') {
             directSlots: () => slots
         },
         netflixReactCarousel: { readItemIndex: slot => { counts.indices++; return { value: slot.index }; } },
-        netflixGraphql: { readMyListTotalCount: () => 600 },
+        listData: { readMyListTotalCount: () => 600 },
         findMyListSection: () => section, nativeCardIdentity: slot => String(slot.index),
         logicalVisibleSignature: () => '', parseSlotLayoutFormula: () => ({ columns: 6 }),
         sourceState: { section, scroller, track, totalCount: 600, layout: { columns: 6 } }
@@ -2930,18 +2948,16 @@ function constructionEnvironment() {
         responsiveSignature: () => 'geometry', responsivePageShape: () => 'pages',
         resizeObserver: null, ResizeObserver: class { observe() {} disconnect() {} }, viewOriginalMyList: true,
         layoutSummary: value => value, scheduleResponsiveRefresh() {},
-        videoIdFromGraphqlNode: node => node?.id || '', firstGraphqlText: value => typeof value === 'string' ? value : '',
-        firstGraphqlImageUrl: value => typeof value === 'string' ? value : '',
         refreshNativeSectionAfterDelta: () => ({}), readNativeMyListDomState: () => ({}),
         netflixDom: { directSlots: track => track.children },
         currentPageSlots: (_, track) => track.children, findAnyStandardCardItemByVideoId: () => null,
         reindexLegacyItemsAfterDelta() {},
         log: (name, details) => logs.push({ name, details }), warn: (name, details) => warnings.push({ name, details })
     });
-    function edges(count) {
-        return Array.from({ length: count }, (_, index) => ({ node: {
-            id: String(index + 1), displayString: `Title ${index + 1}`, contextualArtwork: `https://images.test/${index + 1}.jpg`
-        } }));
+    function records(count) {
+        return Array.from({ length: count }, (_, index) => ({ videoId: String(index + 1),
+            href: `https://www.netflix.com/browse?jbv=${index + 1}`, ariaLabel: `Title ${index + 1}`,
+            imageUrl: `https://images.test/${index + 1}.jpg` }));
     }
     function items(count) {
         return Array.from({ length: count }, (_, index) => {
@@ -2967,7 +2983,7 @@ function constructionEnvironment() {
         await e.flush();
         return yields;
     }
-    return { ...e, section, scroller, track, status, oldGrid, layout, template, created, logs, warnings, edges, items, drain };
+    return { ...e, section, scroller, track, status, oldGrid, layout, template, created, logs, warnings, records, items, drain };
 }
 
 test('large construction uses task yields with bounded item batches; small builds avoid timers', async () => {
@@ -3000,9 +3016,9 @@ test('construction also yields for expensive individual cards before the count c
 
 test('compact GraphQL items preserve exact order, labels, artwork, pages, and frozen template markup', async () => {
     const e = constructionEnvironment();
-    const input = e.edges(150);
+    const input = e.records(150);
     input.splice(10, 0, {}, input[0]);
-    const completion = e.c.buildGraphqlMyListItems(input, 150, 6, e.template, 1);
+    const completion = e.c.buildGraphqlMyListItems(input, 150, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
     e.template.markup = 'recycled-live-template';
     await e.drain();
     const items = await completion;
@@ -3025,17 +3041,20 @@ test('compact GraphQL items preserve exact order, labels, artwork, pages, and fr
 
 test('invalid or incomplete snapshot inputs retain the native-scan fallback contract', async () => {
     const e = constructionEnvironment();
-    assert.equal(await e.c.buildGraphqlMyListItems([], 1, 6, e.template, 1), null);
-    assert.equal(await e.c.buildGraphqlMyListItems(null, 1, 6, e.template, 1), null);
-    assert.equal(await e.c.buildGraphqlMyListItems(e.edges(2), 2, 6, new ConstructionNode('no-card'), 1), null);
+    assert.equal(await e.c.buildGraphqlMyListItems([], 1, 6, e.c.cardMarkup.captureTemplate(e.template), 1), null);
+    assert.equal(await e.c.buildGraphqlMyListItems(null, 1, 6, e.c.cardMarkup.captureTemplate(e.template), 1), null);
+    assert.equal(await e.c.buildGraphqlMyListItems(e.records(2), 2, 6, e.c.cardMarkup.captureTemplate(new ConstructionNode('no-card')), 1), null);
     assert.equal(e.timers.size, 0);
 });
 
-test('snapshot construction cancels after a yield without reading more edges', async () => {
+test('snapshot construction cancels after a yield without reading more normalized records', async () => {
     const e = constructionEnvironment();
     let reads = 0;
-    e.c.videoIdFromGraphqlNode = node => { reads++; return node.id; };
-    const completion = e.c.buildGraphqlMyListItems(e.edges(600), 600, 6, e.template, 1);
+    const records = new Proxy(e.records(600), { get(target, key) {
+        if (/^\d+$/.test(String(key))) reads++;
+        return Reflect.get(target, key);
+    } });
+    const completion = e.c.buildGraphqlMyListItems(records, 600, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
     const rejection = assert.rejects(completion, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
     assert.equal(reads, 24);
     e.c.isRouteSessionActive = () => false;
@@ -3143,12 +3162,11 @@ test('queued add/remove deltas apply after complete publication and stay deferre
 
 function initializationEnvironment(count = 150) {
     const e = constructionEnvironment();
-    const bootstrap = { totalCount: count, graphqlEdges: e.edges(count), graphqlPageCount: 2, graphqlHasNextPage: false };
+    const bootstrap = { totalCount: count, source: 'graphql', pageCount: 2, edgeCount: count, hasMore: false };
     const runtime = { profile: { pageMode: 'logical' } };
-    const adapterStart = source.indexOf('    const netflixGraphql = Object.freeze({');
-    const adapterEnd = source.indexOf('\n    async function waitForMyListTotalCount(', adapterStart);
-    assert.ok(adapterStart >= 0 && adapterEnd > adapterStart);
-    vm.runInContext(source.slice(adapterStart, adapterEnd), e.c);
+    vm.runInContext(declaration('collectLogicalListItems'), e.c);
+    e.c.listData = { ...e.c.listData, firstMyListVideoId: () => '', fetchBootstrap: async () => bootstrap,
+        collectRecords: async () => ({ bootstrap, records: e.records(count) }) };
     Object.assign(e.c, {
         running: false, runningSessionToken: null, completedSection: null, initializationBlockedSessionToken: null,
         targetSessionEntryKind: 'initial', waitingForNativeEmpty: false, missingSectionSince: 0,
@@ -3158,8 +3176,6 @@ function initializationEnvironment(count = 150) {
         measureVisibleLayout: () => e.layout, measureNativeCarouselGap: () => 10,
         placeLegacyFrame: () => ({ grid: e.oldGrid, status: e.status }), applyOriginalMyListVisibility() {},
         waitForMyListTotalCount: async () => count,
-        findMyListGraphqlEntry: () => ({ value: { entities: { edges: [] } } }),
-        fetchFreshMyListBootstrapViaCarousel: async () => bootstrap,
         logCarouselDomProfile() {}, resetCarouselDomRuntime: () => runtime, getCarouselDomRuntime: () => runtime,
         waitForNativeCarouselReady: async () => ({ ready: true, empty: false }),
         requireNativeReactCarouselTotalCount: () => ({ totalCount: count }),
@@ -3253,7 +3269,7 @@ test('small builds revalidate cancellation before their awaited result can be pu
     for (const kind of ['snapshot', 'grid']) {
         const e = constructionEnvironment();
         const completion = kind === 'snapshot'
-            ? e.c.buildGraphqlMyListItems(e.edges(6), 6, 6, e.template, 1)
+            ? e.c.buildGraphqlMyListItems(e.records(6), 6, 6, e.c.cardMarkup.captureTemplate(e.template), 1)
             : e.c.buildGrid(e.section, e.scroller, e.items(6), e.layout, 6, 1);
         e.c.isRouteSessionActive = () => false;
         await assert.rejects(completion, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
@@ -3276,7 +3292,7 @@ function retainedCardTrees(state, undoEntries = new Map()) {
 test('GraphQL construction allocates one shared template and one displayed tree per title', async () => {
     for (const count of [30, 150, 600]) {
         const e = constructionEnvironment();
-        const collection = e.c.buildGraphqlMyListItems(e.edges(count), count, 6, e.template, 1);
+        const collection = e.c.buildGraphqlMyListItems(e.records(count), count, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
         await e.drain();
         const items = await collection;
         assert.equal(new Set(items.map(item => item.cardTemplate)).size, 1);
@@ -3334,9 +3350,9 @@ test('GraphQL template materialization preserves missing-artwork and missing-ima
         const e = constructionEnvironment();
         e.template.querySelector('img').src = 'native-image.jpg';
         if (missing === 'image') e.template.querySelector('img').remove();
-        const edges = e.edges(1);
-        if (missing === 'artwork') edges[0].node.contextualArtwork = '';
-        const items = await e.c.buildGraphqlMyListItems(edges, 1, 6, e.template, 1);
+        const edges = e.records(1);
+        if (missing === 'artwork') edges[0].imageUrl = '';
+        const items = await e.c.buildGraphqlMyListItems(edges, 1, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
         const grid = await e.c.buildGrid(e.section, e.scroller, items, e.layout, 1, 1);
         const image = grid.children[0].querySelector('img');
         if (missing === 'image') assert.equal(image, null);
@@ -3353,7 +3369,7 @@ test('a cancelled initial grid retains its native snapshots or shared template f
         const e = constructionEnvironment();
         let items = e.items(30);
         if (mode === 'graphql') {
-            const collection = e.c.buildGraphqlMyListItems(e.edges(30), 30, 6, e.template, 1);
+            const collection = e.c.buildGraphqlMyListItems(e.records(30), 30, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
             await e.drain();
             items = await collection;
         }
@@ -3403,7 +3419,7 @@ test('remove and Undo retain only the removed tree then restore membership, orde
     for (const mode of ['native', 'graphql']) {
         const e = constructionEnvironment();
         let items = e.items(6);
-        if (mode === 'graphql') items = await e.c.buildGraphqlMyListItems(e.edges(6), 6, 6, e.template, 1);
+        if (mode === 'graphql') items = await e.c.buildGraphqlMyListItems(e.records(6), 6, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
         const grid = await e.c.buildGrid(e.section, e.scroller, items, e.layout, 6, 1);
         const item = items[2], removed = grid.children[2];
         removed.appendChild(new ConstructionNode('button')).setAttribute('aria-label', 'Preserved action');
@@ -3790,14 +3806,14 @@ function abortableFetchResult(value, signal) {
 
 function fetchEnvironment(count = 150) {
     const e = initializationEnvironment(count);
-    e.c.netflixGraphql = vm.runInContext('netflixGraphql', e.c);
     const requests = [], responses = [];
     e.c.document.documentElement = { lang: 'en' };
     Object.assign(e.c, {
         AbortController, routeFetchControllers: new Map(),
         FRESH_MY_LIST_FETCH_TIMEOUT_MS: 10000, GRAPHQL_COLLECTION_PAGE_SIZE: 75, GRAPHQL_COLLECTION_MAX_PAGES: 8,
-        findMyListGraphqlEntry: () => ({ key: 'MyList', value: { _id: 'row-id', entities: { totalCount: count } } }),
-        netflixModelData: () => null, carouselArtworkVariables: () => ({}),
+        fixtureGraphqlData: { MyList: { __typename: 'PinotCarouselSection', _id: 'row-id',
+            entities: { totalCount: count }, eventListeners: [{ notificationMessageRegex: 'UPDATE_PLAYLIST' }] } },
+        netflixModelData: () => null,
         tryMountedSinglePageFastBootstrap: async () => null,
         measureEmptyLayout: () => e.layout,
         beginSourceScan() {}, ensureFreshIndicatorPageZeroAnchor: async () => {},
@@ -3818,20 +3834,12 @@ function fetchEnvironment(count = 150) {
             };
         }
     });
-    for (const name of ['isRouteSessionActive', 'createRouteFetch', 'finishRouteFetch', 'abortObsoleteRouteFetches',
-        'fetchMyListCarouselPage', 'carouselFetchError', 'fetchFreshMyListBootstrapViaCarousel',
-        'collectFreshMyListCarouselItems', 'fetchFreshMyListBootstrapViaPage', 'fetchFreshMyListBootstrap',
-        'firstVideoIdFromCarouselNode', 'extractFreshMyListBootstrap']) vm.runInContext(declaration(name), e.c);
-    function page(totalCount, ids, hasNextPage = false, endCursor = null) {
-        return { payload: { data: { node: {
-            __typename: 'PinotCarouselSection',
-            entities: { totalCount, edges: ids.map(id => ({ node: {
-                id: String(id), videoId: String(id), displayString: `Title ${id}`, contextualArtwork: `https://images.test/${id}.jpg`
-            } })), pageInfo: { hasNextPage, endCursor } }
-        } } } };
-    }
+    for (const name of ['isRouteSessionActive', 'createRouteFetch', 'finishRouteFetch', 'abortObsoleteRouteFetches'])
+        vm.runInContext(declaration(name), e.c);
+    e.c.listData = fixtureListData(e.c);
+    function page(...args) { return { payload: carouselPayload(...args) }; }
     function collect(bootstrap, totalCount = count) {
-        return e.c.netflixGraphql.collectLogicalItems({ bootstrap, totalCount, columns: 6, templateSlot: e.template, sessionToken: e.c.routeSessionToken });
+        return e.c.collectLogicalListItems({ bootstrap, totalCount, columns: 6, templateSlot: e.template, sessionToken: e.c.routeSessionToken });
     }
     function routeLifecycle() {
         Object.assign(e.c, {
@@ -3871,118 +3879,6 @@ test('SPA indicator and not-yet-mounted modes bootstrap one page without optiona
     }
 });
 
-test('logical collection resumes the bootstrap cursor once and preserves complete membership/order', async () => {
-    const e = fetchEnvironment(150);
-    e.responses.push(e.page(150, Array.from({ length: 75 }, (_, index) => index + 1), true, 'cursor-75'));
-    const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
-    assert.equal(e.requests.length, 1);
-    assert.equal(bootstrap.totalCount, 150);
-    assert.equal(bootstrap.firstVideoId, '1');
-    assert.equal(bootstrap.graphqlHasNextPage, true);
-    e.c.findMyListGraphqlEntry = () => ({ value: { _id: 'recycled-row' } });
-    e.responses.push(e.page(150, Array.from({ length: 75 }, (_, index) => index + 76)));
-    const completion = e.collect(bootstrap);
-    await e.flush();
-    await e.drain();
-    const result = await completion;
-    assert.equal(e.requests.length, 2);
-    assert.equal(e.requests[1].body.variables.carouselAfterCursor, 'cursor-75');
-    assert.equal(e.requests[1].body.variables.rowId, 'row-id', 'all pages belong to the original fresh row');
-    assert.equal(result.bootstrap.graphqlPageCount, 2);
-    assert.equal(result.bootstrap.graphqlHasNextPage, false);
-    assert.equal(result.bootstrap.graphqlRequest, null);
-    assert.equal(bootstrap.graphqlEdges.length, 75, 'pagination never mutates the retained first page');
-    assert.deepEqual(Array.from(result.items, item => item.videoId), Array.from({ length: 150 }, (_, index) => String(index + 1)));
-    assert.equal(e.c.routeFetchControllers.size, 0);
-    assert.equal(e.timers.size, 0);
-});
-
-test('optional pagination HTTP, parse, count, cursor, and page-limit failures preserve valid bootstrap', async () => {
-    for (const failure of ['http', 'parse', 'count', 'cursor', 'repeated-cursor', 'limit']) {
-        const e = fetchEnvironment(4);
-        e.responses.push(e.page(4, [1, 2], true, failure === 'cursor' ? null : 'next'));
-        const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
-        if (failure === 'http') e.responses.push({ status: 503 });
-        if (failure === 'parse') e.responses.push({ raw: '{bad json' });
-        if (failure === 'count') e.responses.push(e.page(5, [3, 4]));
-        if (failure === 'repeated-cursor') e.responses.push(e.page(4, [3], true, 'next'));
-        if (failure === 'limit') e.c.GRAPHQL_COLLECTION_MAX_PAGES = 1;
-        const result = await e.collect(bootstrap);
-        assert.equal(result.bootstrap, bootstrap);
-        assert.equal(result.bootstrap.totalCount, 4);
-        assert.equal(result.bootstrap.firstVideoId, '1');
-        assert.equal(result.bootstrap.graphqlEdges.length, 2);
-        assert.equal(result.items, null);
-        assert.ok(result.error?.code, failure);
-        assert.equal(e.requests.every(request => request.options.method === 'POST'), true, 'optional failure cannot fetch page HTML');
-        assert.ok(e.requests.length <= 2);
-        assert.equal(e.c.routeFetchControllers.size, 0);
-        assert.equal(e.timers.size, 0);
-    }
-});
-
-test('optional pagination timeout retains bootstrap while count-fetch timeout still uses fresh HTML fallback', async () => {
-    const e = fetchEnvironment(4);
-    e.responses.push(e.page(4, [1, 2], true, 'next'));
-    const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
-    e.responses.push({ ...e.page(4, [3, 4]), waitFetch: fetchDeferred() });
-    const completion = e.collect(bootstrap);
-    await e.flush();
-    await e.advance(10000);
-    const result = await completion;
-    assert.equal(result.bootstrap, bootstrap);
-    assert.equal(result.items, null);
-    assert.equal(result.error.code, 'FRESH_MY_LIST_CAROUSEL_TIMEOUT');
-    assert.equal(e.requests.length, 2);
-    assert.equal(e.c.routeFetchControllers.size, 0);
-
-    const f = fetchEnvironment(4);
-    f.responses.push({ ...f.page(4, [1, 2]), waitFetch: fetchDeferred() }, {
-        raw: '"__typename":"PinotCarouselSection","entities":{"totalCount":4,"node":"standardBoxshot_Video:1"},"notificationMessageRegex":"UPDATE_PLAYLIST"'
-    });
-    const fallback = f.c.netflixGraphql.fetchBootstrap(1);
-    await f.advance(10000);
-    const fresh = await fallback;
-    assert.equal(fresh.totalCount, 4);
-    assert.equal(fresh.firstVideoId, '1');
-    assert.deepEqual(f.requests.map(request => request.options.method), ['POST', 'GET']);
-    assert.equal(f.warnings.length, 1);
-    assert.equal(f.warnings[0].details.code, 'FRESH_MY_LIST_CAROUSEL_TIMEOUT');
-    assert.equal(f.c.routeFetchControllers.size, 0);
-    assert.equal(f.timers.size, 0);
-});
-
-test('invalid first-page counts and responses use the HTML fallback rather than a false empty list', async () => {
-    for (const failure of [null, undefined, '', false, -1, 1.5, 'http', 'parse']) {
-        const e = fetchEnvironment(4);
-        const first = failure === 'http' ? { status: 500 }
-            : failure === 'parse' ? { raw: 'bad json' } : e.page(failure, [1]);
-        e.responses.push(first, {
-            raw: '"__typename":"PinotCarouselSection","entities":{"totalCount":4,"node":"standardBoxshot_Video:7"},"notificationMessageRegex":"UPDATE_PLAYLIST"'
-        });
-        const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
-        assert.equal(bootstrap.totalCount, 4);
-        assert.equal(bootstrap.firstVideoId, '7');
-        assert.deepEqual(e.requests.map(request => request.options.method), ['POST', 'GET']);
-        assert.equal(e.c.routeFetchControllers.size, 0);
-        assert.equal(e.timers.size, 0);
-    }
-});
-
-test('zero and complete single-page bootstraps avoid further fetches', async () => {
-    for (const count of [0, 6]) {
-        const e = fetchEnvironment(count);
-        e.responses.push(e.page(count, Array.from({ length: count }, (_, index) => index + 1)));
-        const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
-        const result = await e.collect(bootstrap);
-        assert.equal(bootstrap.totalCount, count);
-        assert.equal(bootstrap.firstVideoId, count ? '1' : '');
-        assert.equal(e.requests.length, 1);
-        assert.equal(result.items.length, count);
-        assert.equal(e.c.routeFetchControllers.size, 0);
-    }
-});
-
 function mountedSinglePageEnvironment(count = 6) {
     const e = fetchEnvironment(count);
     Object.assign(e.c, {
@@ -4016,6 +3912,40 @@ function mountedSinglePageEnvironment(count = 6) {
         return pending;
     } };
 }
+
+test('data normalization keeps one captured template stable while Netflix recycles the mounted slot', async () => {
+    const e = fetchEnvironment(30);
+    e.responses.push(e.page(30, Array.from({ length: 30 }, (_, index) => index + 1)));
+    const bootstrap = await e.c.listData.fetchBootstrap(1);
+    const completion = e.collect(bootstrap);
+    await e.flush();
+    assert.equal(e.timers.size, 1);
+    e.template.markup = 'recycled-during-normalization';
+    await e.drain();
+    const result = await completion;
+    assert.equal(result.items[0].cardTemplate.markup, 'original-template');
+    assert.equal(e.template.cloneCounter.count, 1);
+});
+
+test('route cancellation stops data normalization at its existing construction quantum', async () => {
+    const e = fetchEnvironment(600);
+    e.responses.push(e.page(600, Array.from({ length: 600 }, (_, index) => index + 1)));
+    const bootstrap = await e.c.listData.fetchBootstrap(1);
+    const runChunks = e.c.runConstructionChunks;
+    let normalized = 0;
+    e.c.runConstructionChunks = (length, build, active) => runChunks(length, index => { normalized++; return build(index); }, active);
+    const completion = e.collect(bootstrap);
+    const rejected = assert.rejects(completion, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+    await e.flush();
+    assert.equal(normalized, 24);
+    e.c.isRouteSessionActive = () => false;
+    await e.drain();
+    await rejected;
+    assert.equal(normalized, 24);
+    assert.equal(e.created.length, 0);
+    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.requests.length, 1);
+});
 
 test('verified mounted single-page reuse skips membership fetches and preserves native card variants', async () => {
     const e = mountedSinglePageEnvironment();
@@ -4147,7 +4077,7 @@ test('manual and initial entry cannot qualify mounted reuse and a stale route ca
     const bootstrap = await e.qualify();
     const before = e.template.cloneCounter.count;
     e.c.routeSessionToken = 2;
-    await assert.rejects(e.c.netflixGraphql.collectLogicalItems({ bootstrap, totalCount: 6, columns: 6,
+    await assert.rejects(e.c.collectLogicalListItems({ bootstrap, totalCount: 6, columns: 6,
         templateSlot: e.template, sessionToken: 1 }), error => e.c.isRouteSessionCancelledError(error));
     assert.equal(e.requests.length, 0);
     assert.equal(e.template.cloneCounter.count, before);
@@ -4158,7 +4088,7 @@ test('logical collection rejects incomplete/duplicate membership and reconciled-
         const e = fetchEnvironment(4);
         const ids = scenario === 'missing' ? [1, 2, 3] : scenario === 'duplicate' ? [1, 2, 3, 3] : [1, 2, 3, 4];
         e.responses.push(e.page(scenario === 'reconciled' ? 5 : 4, ids, scenario === 'reconciled', 'next'));
-        const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
+        const bootstrap = await e.c.listData.fetchBootstrap(1);
         const result = await e.collect(bootstrap, 4);
         assert.equal(result.items, null);
         assert.equal(result.bootstrap, bootstrap);
@@ -4195,7 +4125,7 @@ test('route suspension aborts GraphQL and HTML fetches, including their response
             const waiting = kind === 'html' ? { raw: 'HTML' } : e.page(4, [1, 2]);
             waiting[phase === 'headers' ? 'waitFetch' : 'waitBody'] = fetchDeferred();
             e.responses.push(waiting);
-            const completion = e.c.netflixGraphql.fetchBootstrap(1);
+            const completion = e.c.listData.fetchBootstrap(1);
             const rejection = assert.rejects(completion, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
             await e.flush();
             const request = e.requests.at(-1);
@@ -4217,7 +4147,7 @@ test('route change during optional pagination rejects instead of returning retai
     const e = fetchEnvironment(4);
     e.routeLifecycle();
     e.responses.push(e.page(4, [1, 2], true, 'next'));
-    const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
+    const bootstrap = await e.c.listData.fetchBootstrap(1);
     e.responses.push({ ...e.page(4, [3, 4]), waitBody: fetchDeferred() });
     const completion = e.collect(bootstrap);
     const rejection = assert.rejects(completion, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
@@ -4234,13 +4164,13 @@ test('a new route session aborts old requests and old cleanup cannot remove its 
     const e = fetchEnvironment(4);
     e.routeLifecycle();
     e.responses.push({ ...e.page(4, [1, 2]), waitFetch: fetchDeferred() });
-    const old = e.c.netflixGraphql.fetchBootstrap(1);
+    const old = e.c.listData.fetchBootstrap(1);
     const rejection = assert.rejects(old, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
     e.c.startTargetSession('route:test');
     const currentToken = e.c.routeSessionToken;
     const release = fetchDeferred();
     e.responses.push({ ...e.page(4, [3, 4]), waitFetch: release });
-    const current = e.c.netflixGraphql.fetchBootstrap(currentToken);
+    const current = e.c.listData.fetchBootstrap(currentToken);
     await rejection;
     assert.equal(e.requests[0].options.signal.aborted, true);
     assert.equal(e.requests[1].options.signal.aborted, false);
@@ -4251,19 +4181,6 @@ test('a new route session aborts old requests and old cleanup cannot remove its 
     assert.equal(e.c.routeFetchControllers.size, 0);
     assert.equal(e.timers.size, 0);
     assert.equal(e.warnings.length, 0);
-});
-
-test('the eight-page limit remains bounded and failed pagination never publishes a partial list', async () => {
-    const e = fetchEnvironment(9);
-    e.responses.push(e.page(9, [1], true, 'cursor-1'));
-    for (let page = 2; page <= 8; page++) e.responses.push(e.page(9, [page], true, `cursor-${page}`));
-    const bootstrap = await e.c.netflixGraphql.fetchBootstrap(1);
-    const result = await e.collect(bootstrap, 9);
-    assert.equal(e.requests.length, 8);
-    assert.equal(result.bootstrap, bootstrap);
-    assert.equal(result.items, null);
-    assert.equal(result.error.code, 'FRESH_MY_LIST_CAROUSEL_PAGE_LIMIT');
-    assert.equal(e.c.routeFetchControllers.size, 0);
 });
 
 test('logical SPA initialization waits for mode confirmation before continuing pagination and publishes the full grid', async () => {
@@ -4312,7 +4229,8 @@ test('a count result from an obsolete session cannot publish an empty grid or cl
 test('HTTP failure cleanup aborts the unread response body and releases its controller and timeout', async () => {
     const e = fetchEnvironment(4);
     e.responses.push({ status: 503, waitBody: fetchDeferred() });
-    await assert.rejects(e.c.fetchFreshMyListBootstrapViaCarousel(1), { code: 'FRESH_MY_LIST_CAROUSEL_HTTP_ERROR' });
+    const result = await e.c.listData.collectRecords({ bootstrap: {}, totalCount: 4, sessionToken: 1 });
+    assert.equal(result.error.code, 'FRESH_MY_LIST_CAROUSEL_HTTP_ERROR');
     assert.equal(e.requests[0].bodyRead, undefined);
     assert.equal(e.requests[0].options.signal.aborted, true);
     assert.equal(e.c.routeFetchControllers.size, 0);
@@ -7302,7 +7220,7 @@ function configureInitializationRecovery(e) {
     e.c.LEGACY_EMPTY_STATE_ID = 'empty';
     e.c.ORDER_MISMATCH_DIALOG_ID = 'dialog';
     e.c.tryMountedSinglePageFastBootstrap = async () => null;
-    for (const name of ['cancelPendingGridHover', 'initializationTimeoutError', 'fetchFreshMyListBootstrap']) {
+    for (const name of ['cancelPendingGridHover', 'initializationTimeoutError']) {
         vm.runInContext(declaration(name), e.c);
     }
     return scheduled;
@@ -7855,35 +7773,6 @@ test('responsive settling stops before another native read when its source owner
     await e.advance(80);
     await rejected;
     assert.equal(e.timers.size, 0);
-});
-
-test('the actual CarouselPage response is surveyed without another request or altering its usable data', async () => {
-    const e = fetchEnvironment(2);
-    e.responses.push(e.page(2, ['1', '2']));
-    const page = await e.c.fetchMyListCarouselPage({ body: { variables: {} }, headers: {} }, null, null, 1);
-    assert.equal(e.requests.length, 1);
-    assert.equal(page.edges.length, 2);
-    assert.equal(page.edges[0].node.displayString, 'Title 1');
-    const report = e.c.popupInspection.diagnostics();
-    assert.equal(report.responsePages, 1);
-    assert.equal(report.sampledCards, 2);
-    assert.equal(report.titleScalar, 2);
-    assert.equal(report.artworkScalar, 2);
-    assert.equal(e.timers.size, 0);
-});
-
-test('an obsolete CarouselPage response cannot update the new route survey', async () => {
-    const e = fetchEnvironment(2);
-    const waiting = deferred();
-    e.responses.push({ ...e.page(2, ['1', '2']), waitBody: waiting });
-    const pending = e.c.fetchMyListCarouselPage({ body: { variables: {} }, headers: {} }, null, new AbortController().signal, 1);
-    const rejected = assert.rejects(pending, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
-    await e.flush();
-    e.c.routeSessionToken = 2;
-    e.c.performanceDiagnostics = e.c.createPerformanceDiagnostics();
-    waiting.resolve();
-    await rejected;
-    assert.equal(e.c.popupInspection.diagnostics().responsePages, 0);
 });
 
 test('preview shape capture follows admitted title/route ownership and survives normal native dismissal', async () => {

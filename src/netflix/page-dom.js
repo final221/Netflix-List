@@ -271,6 +271,14 @@ export function createNetflixPageDom({ document, Element, location, readGraphqlI
         }
     });
 
-    return Object.freeze({ ...netflixDom, findMyListSection, nativeCardIdentity, videoIdFromHref,
+    function readMyListAnchor() {
+        const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
+        const section = host?.querySelector?.(`:scope > ${NETFLIX_DOM_SELECTORS.carouselRowOneSection}`) || null;
+        let videoIds;
+        // A section-ID match needs no card scan. Cache the fallback facts for this one read.
+        return { sectionId: String(section?.id || ''),
+            get videoIds() { return videoIds ||= [...netflixDom.sectionVideoIds(section)]; } };
+    }
+    return Object.freeze({ ...netflixDom, findMyListSection, readMyListAnchor, nativeCardIdentity, videoIdFromHref,
         decodeTrackingContext, describeMembershipClick });
 }

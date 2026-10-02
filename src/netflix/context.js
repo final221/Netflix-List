@@ -89,10 +89,13 @@ export function createNetflixContext({ window, document, navigator, location }) 
     }
 
     function activeProfile() { return netflixModelData('userInfo')?.userGuid; }
+    function pageDirection() {
+        return document.querySelector('[data-uia="loc"]')?.getAttribute('dir') || document.documentElement.dir || 'ltr';
+    }
     function listRequestContext() {
         return { appVersion: netflixModelData('serverDefs')?.BUILD_IDENTIFIER,
             locale: netflixModelData('geo')?.locale?.id || document.documentElement.lang };
     }
-    return Object.freeze({ getHtmlLanguage, getNetflixLanguage, activeProfile, viewingRequestContext,
+    return Object.freeze({ getHtmlLanguage, getNetflixLanguage, activeProfile, pageDirection, viewingRequestContext,
         readGraphqlBootstrap: graphqlData, listRequestContext });
 }
