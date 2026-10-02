@@ -8,7 +8,7 @@ The baseline is `Legacy My List for Netflix.user.js` version **1.4.5**, revision
 
 The architectural goal is to make a behavior understandable and changeable through its owning capability, with explicit dependencies and lifetimes. File length alone does not establish a boundary. The number of past discussions, reported issues, or entries in `context.md` and `findings.md` does not give a feature architectural priority. Existing preferences and findings constrain behavior that the migration must preserve; boundaries are justified by current responsibilities, shared state, resource lifetimes, and call paths.
 
-Migration.md owns the target design, its rationale, contracts, and the acceptance conditions for increments. `findings.md` owns selected work and migration progress. `AGENTS.md` owns repository workflow. `context.md` retains durable knowledge and preferences. The planned `docs/architecture.md` will describe implemented architecture as the migration progresses; it must distinguish implemented portions from this target design and reference this document for the destination.
+Migration.md owns the target design, its rationale, contracts, and the acceptance conditions for increments. [MigrationPlan.md](MigrationPlan.md) turns those increments into bounded implementation steps with dependencies and completion evidence for separate prompts. `findings.md` owns selected work and migration progress. `AGENTS.md` owns repository workflow. `context.md` retains durable knowledge and preferences. The planned `docs/architecture.md` will describe implemented architecture as the migration progresses; it must distinguish implemented portions from this target design and reference this document for the destination.
 
 ## Architectural pressure in the current source
 
@@ -34,6 +34,7 @@ Netflix List/
 |-- context.md                        Durable knowledge and user preferences
 |-- findings.md                       Selected work, findings and migration progress
 |-- Migration.md                      Target architecture, contracts and increments
+|-- MigrationPlan.md                  Ordered implementation steps and completion evidence
 |-- README.md                         Installation, development and release commands
 |-- docs/
 |   `-- architecture.md               Implemented architecture and links to the target
@@ -281,6 +282,8 @@ If preparation needs fresh markup, native popup requests replacement through gri
 
 Replacement is one synchronous structural operation: validate the expected handle, release borrowed native state for that handle, prepare presentation/controls, commit the DOM/registry/group-index change, then publish the replacement handle. There is no await between retirement and registration. Failure leaves a consistent retained card or an explicit unprepared state, not a registry entry pointing to an obsolete tree. Native attachment/cleanup is restricted to its own properties and markers.
 
+An intentional replacement requested by the current admitted preparation transfers that attempt to the returned card handle through its owning hover policy. It invalidates the old handle without cancelling the very attempt performing the replacement. Other retirement/replacement cancels affected obsolete attempts. The handoff validates the expected item/card and current attempt; a matching title ID is not permission for a stale attempt to adopt an arbitrary replacement. Test this through the composed grid/native/hover path, not just isolated helpers.
+
 Filter/group operations retire or invalidate affected card interactions through the same path. When a preceding card moves, only the current protected hover targets need a before/after geometry comparison; preserve the existing bound instead of inspecting all cards. A purely cosmetic no-op publication does not reset an unrelated stationary hover.
 
 Ready grafted-card tracking and the active native interaction belong to the native integration. Grid notifies it before affected card retirement. Merely changing registry ownership does not add a full-grid React invalidation pass or prepare sibling cards.
@@ -291,7 +294,7 @@ Ready grafted-card tracking and the active native interaction belong to the nati
 
 The page session coordinates when membership reconciliation must be deferred during initialization, recovery or a real responsive refresh. `list.deferReconciliation(reason)` returns an owner-specific, idempotently releasable ticket. List retains intents and their existing admission/timeout behavior while tickets are active; final release resumes them only against a valid current source. Disposing the session drops obsolete tickets/intents. Completion of an old refresh cannot release another ticket or drain changes against a stale binding.
 
-Native card resolution waits for an admitted responsive refresh through the collaborator supplied by the page session, then revalidates target/session ownership before reading the source. The Netflix adapter does not import application refresh code. Preserve current ordering/concurrency; a deferral ticket does not introduce a universal queue serializing unrelated network, rendering and native operations.
+Hover-facing card resolution is wrapped by the page session: it waits for an admitted responsive refresh, then revalidates target/session ownership before asking carousel for the source. The refresh's own ready/collect/remapping calls use carousel directly and do not wait on that same refresh transaction. This prevents a self-wait while keeping application refresh code out of Netflix adapters. Preserve current ordering/concurrency; a deferral ticket does not introduce a universal queue serializing unrelated network, rendering and native operations.
 
 ### Original-source preference
 
@@ -393,6 +396,8 @@ Follow `AGENTS.md` release rules on every pushed distributable change. Architect
 ## Incremental route to the destination
 
 Current selection and completion status are recorded only in `findings.md`. Every increment must leave a working, reviewable repository and a usable generated userscript.
+
+The eight rows below are architectural milestones. Execute their prompt-sized steps from MigrationPlan.md; do not treat an entire row as the default scope of one prompt. The step plan preserves this destination and explicitly describes temporary callers and their removal.
 
 | Increment | Concrete result | Acceptance condition |
 | --- | --- | --- |

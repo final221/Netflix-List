@@ -6,7 +6,7 @@ This repository maintains a Tampermonkey userscript for Netflix My List. The scr
 
 - Read `context.md` for durable repository knowledge and user preferences.
 - Read `findings.md` when continuing the code-review findings or their follow-up plan.
-- Read `Migration.md` before discussing or implementing the modular-source migration.
+- Read `Migration.md` and `MigrationPlan.md` before discussing or implementing the modular-source migration.
 - Inspect the userscript and its current version before making code changes.
 
 ## Document ownership
@@ -15,6 +15,7 @@ This repository maintains a Tampermonkey userscript for Netflix My List. The scr
 - `context.md` contains compact durable knowledge and user preferences. Follow its protected maintenance instructions; keep current findings and project status out of it.
 - `findings.md` is the working record for current review findings, decisions, and the ordered follow-up plan, including completed and deferred points. Update it as a selected step is completed or its status changes; do not duplicate its current status in `context.md`.
 - `Migration.md` defines the proposed modular-source destination, ownership contracts, rationale, and increment acceptance conditions. It does not describe an already implemented layout or authorize all increments. Keep migration selection/progress in `findings.md`; explain target-design changes in `Migration.md` before applying the affected step.
+- `MigrationPlan.md` defines ordered implementation steps, dependencies, bounded scope and completion evidence for that destination. Each prompt selects a step; plan creation does not authorize executing the whole plan. Keep step selection/progress in `findings.md`.
 
 ## Userscript versioning
 

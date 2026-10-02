@@ -819,15 +819,42 @@ The user selects preserving the architectural proposal as [Migration.md](Migrati
 
 The documentation step is complete. Runtime remains **1.4.5**; no build/source migration increment is selected or implemented by this request. `AGENTS.md` identifies the new design document and its boundary, and the editable context records the user's durable architectural-review preference. The native-popup investigation remains held, with no change to previously selected/deferred performance work.
 
-| Migration increment | Status |
-| --- | --- |
-| 1. Establish the build | Awaiting selection |
-| 2. Extract resources and logging | Awaiting selection |
-| 3. Establish Netflix boundaries | Awaiting selection |
-| 4. Own the native carousel | Awaiting selection |
-| 5. Separate membership and presentation | Awaiting selection |
-| 6. Separate viewing and presentation | Awaiting selection |
-| 7. Own interaction and responsive workflows | Awaiting selection |
-| 8. Finish composition | Awaiting selection |
+Detailed implementation selection/progress is tracked by the step IDs in the next section. Architectural milestone definitions and acceptance conditions remain in Migration.md.
 
 Review and implementation should use `Migration.md` for target design/acceptance conditions and this section for selections, results and remaining work. Creating/reviewing the design document does not select increment 1 or resume another investigation.
+
+## Migration plan and final readiness check
+
+The user selects a final readiness review and creation of a plan executable across separate prompts. [MigrationPlan.md](MigrationPlan.md) divides the eight architectural increments into 21 bounded steps, each specifying outcome, test-first verification, implementation/caller cutover, evidence, dependencies and module depth. It defines one-step prompts, common completion/release gates, temporary bridge/removal rules, staged import checks and recovery behavior. It preserves the target responsibilities rather than choosing boundaries from the prominence of earlier discussion.
+
+The readiness review finds no blocking design decision for beginning P01. The current **1.4.5** source passes `node --check "Legacy My List for Netflix.user.js"`; `node --test tests/performance.test.cjs` passes **326 tests**, with zero failed, cancelled or skipped cases. These are current baseline checks, not evidence that future modular releases are already compatible with live Netflix.
+
+The final design review makes two coordination contracts explicit in Migration.md and the relevant steps: an intentional card replacement transfers only its admitted current hover attempt, and hover-facing resolution waits for responsive stability while refresh-internal carousel operations avoid waiting on their own transaction. The final audit also distinguishes import-graph enforcement from the separate audit of state ownership and cross-owner writes.
+
+Plan/document consistency and whitespace checks pass: all 21 steps have the required fields, ordered dependencies and matching progress entries. Context, runtime source, regression tests and version remain unchanged. No build dependency or migrated implementation is created in this request. All implementation steps await selection. The next ready step is P01; each future prompt selects one step and its completed evidence is recorded here.
+
+| Step | Outcome | Status |
+| --- | --- | --- |
+| P01 | Reproducible build and transitional test entry | Awaiting selection |
+| P02 | CI and output/dependency checks | Awaiting selection |
+| P03 | Localization, DOM names and styling | Awaiting selection |
+| P04 | Logging/reporting and bounded popup inspection | Awaiting selection |
+| P05 | Context, page DOM and card markup adapters | Awaiting selection |
+| P06 | My List data adapter | Awaiting selection |
+| P07 | Viewing data adapter | Awaiting selection |
+| P08 | Session scopes and native binding/page model | Awaiting selection |
+| P09 | Navigation queue and restoration | Awaiting selection |
+| P10 | Native collection and carousel facade | Awaiting selection |
+| P11 | Frame/card registry and resources | Awaiting selection |
+| P12 | Groups, filters and controls | Awaiting selection |
+| P13 | Membership/order and collection strategy | Awaiting selection |
+| P14 | Mutation queue, deferral and Undo | Awaiting selection |
+| P15 | Viewing rules, choices and cache | Awaiting selection |
+| P16 | Viewing scan and facade | Awaiting selection |
+| P17 | Native-popup integration | Awaiting selection |
+| P18 | Hover policy and timing | Awaiting selection |
+| P19 | Responsive transactions and image instrumentation | Awaiting selection |
+| P20 | Application/session composition and settings | Awaiting selection |
+| P21 | Legacy removal and final architecture audit | Awaiting selection |
+
+For a completed step, replace its status with its actual result/commit, retain evidence and state any bridges/live checks still outstanding. Do not mark a step complete solely because code moved or test totals matched. A later user-owned live failure belongs to the affected step's follow-up record and must be assessed before dependent work proceeds.
