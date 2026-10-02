@@ -839,8 +839,8 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | --- | --- | --- |
 | P01 | Reproducible build and transitional test entry | Complete — 1.4.6; commit ffb31df |
 | P02 | CI and output/dependency checks | Complete — 3ccca0e; CI repair 0a8113b verified |
-| P03 | Localization, DOM names and styling | Next ready — authorized goal |
-| P04 | Logging/reporting and bounded popup inspection | Planned — authorized goal |
+| P03 | Localization, DOM names and styling | Complete — 1.4.7; release checkpoint below |
+| P04 | Logging/reporting and bounded popup inspection | Next ready — authorized goal |
 | P05 | Context, page DOM and card markup adapters | Planned — authorized goal |
 | P06 | My List data adapter | Planned — authorized goal |
 | P07 | Viewing data adapter | Planned — authorized goal |
@@ -892,5 +892,20 @@ The corrected [hosted run 37061083374](https://github.com/final221/Netflix-List/
 | Exact edge | Current caller/reason | Removal step |
 | --- | --- | --- |
 | src/main.js → src/legacy.js | One transitional runtime startup, established in P01 | P20, when main starts application |
+| src/legacy.js → src/dom-names.js | Remaining runtime consumers use the shared DOM contract catalog | P20, when remaining consumers leave legacy |
+| src/legacy.js → src/i18n/i18n.js | Create localization once and call its explicit display operations | P20, when composition injects localization into remaining owners |
+| src/legacy.js → src/grid/styles.js | Preserve current route installation/cleanup points | P11, when grid frame owns stylesheet lifetime |
 
 Before adding a bridge during a later extraction, record its exact caller/target, justification and removal step here and in the checker. Remove the edge/exception together on cutover. No other exception is currently allowed; the temporary source/test-loader/residual suite still have their planned P20/P21 retirement.
+
+### P03 — Localization, DOM names and stylesheet ownership
+
+Transferred live resources to the five planned source files: src/dom-names.js, src/i18n/i18n.js, ui-messages.js, log-messages.js and src/grid/styles.js. Legacy imports and invokes these owners; it contains no second message table, shared DOM catalog, stylesheet or moved localization implementation. The i18n factory exposes eight display operations, keeping base-language parsing/interpolation private. The stylesheet exposes explicit idempotent installation/removal, with unchanged route timing and CSS text. Resource imports add no startup listeners, requests or observers.
+
+The narrow locale-reader bridge calls the existing legacy getNetflixLanguage reader; P05 transfers that page interpretation to netflix/context.js. Mixed header/error assembly remains with presentation because it reads sourceState, while its count/time/number formatting now uses i18n. The exact production import exceptions above are checked; stylesheet lifetime moves to grid in P11 and final residual resource consumers leave legacy in P20. No writable legacy state bag crosses a new boundary.
+
+Before extraction, the existing locale coverage and full-initialization scenarios passed. Seven new interface/resource scenarios failed on missing modules, then passed after caller transfer. The one baseline locale-coverage case moved out of performance.test.cjs into i18n.test.js with all original 17 viewing-control keys retained for all 31 locales; additional cases cover lazy regional language selection, English/Japanese diagnostics, plurals, missing/own tokens, numeric/time presentation and unavailable Intl constructors. Residual viewing fixtures call the real localization capability. Grid scenarios cover single installation, selector hooks, idempotent cleanup/reinstallation and inert imports. A new bundle case exercises German menu startup, subsequent English menu refresh and real route stylesheet cleanup/reentry. The positive graph fixture retains already-migrated real modules rather than overwriting them with placeholders.
+
+Baseline comparison against the pre-step authored source confirms equality of every UI/log resource, the 31-locale set, all 19 named DOM contracts, exact interpolated stylesheet text and translation/plural/number/count/time results for every supported locale plus unsupported/regional inputs. All 366 remaining function bodies match the pre-step source except the two intended stylesheet caller changes in runScript and cleanupTargetSessionDom. Functional detection still uses DOM/state contracts, independent of localized text. The published package version was verified as 1.4.6 before creating maintenance release **1.4.7**; package, lockfile, metadata and internal version agree.
+
+Local evidence: **346 passing tests**, zero failures/cancellations/skips; deterministic build/read-only dependency and output check, distributable syntax and whitespace verification pass. Authored/generated diffs are reviewed together. Live Netflix visual/native-popup compatibility remains the user-owned release check; offline checks do not establish it. P04 is next under the authorized full migration goal; P04–P21 remain required.

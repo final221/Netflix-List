@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile, mkdtemp, mkdir, cp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdtemp, mkdir, cp, rm, access } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
@@ -12,9 +12,10 @@ const distribution = 'Legacy My List for Netflix.user.js';
 const shipped = (await readFile(path.join(root, distribution), 'utf8')).replace(/\r\n/g, '\n');
 const releaseVersion = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
 
-function browser({ pathname = '/browse', grants = true, visualViewport = true, storage = true } = {}) {
+function browser({ pathname = '/browse', grants = true, visualViewport = true, storage = true, language = 'en' } = {}) {
     const scheduler = createScheduler();
     const document = createDocument();
+    document.documentElement.setAttribute('lang', language);
     const window = new EventTarget();
     Object.assign(window, { innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1 });
     if (visualViewport) window.visualViewport = new EventTarget();
@@ -97,6 +98,34 @@ test('generated route entry, exit and reentry own one listener/observer set', as
     await b.navigate('/browse/my-list');
     assert.equal(b.document.listenerCount('pointermove'), 1);
     assert.equal(b.menus.size, 1);
+});
+
+test('generated runtime localizes live menu commands and releases stylesheet on route exit', async () => {
+    const b = browser({ language: 'de-DE' });
+    b.mountMyList();
+    b.start();
+    assert.equal([...b.menus.values()][0].label, 'Originale Meine Liste ausblenden');
+    assert.equal(b.logs.filter(args => args.includes('Script started')).length, 1);
+    await b.navigate('/browse/my-list');
+    await b.scheduler.advance();
+    const first = b.document.head.querySelector('style');
+    assert.ok(first);
+    assert.equal(b.document.head.querySelectorAll('style').length, 1);
+    assert.ok(first.textContent.includes('tm-netflix-mylist-v15-grid'));
+    b.document.documentElement.setAttribute('lang', 'en-US');
+    [...b.menus.values()][0].callback();
+    assert.equal(b.menus.size, 1);
+    assert.equal([...b.menus.values()][0].label, 'Show original My List');
+    await b.navigate('/browse');
+    assert.equal(b.document.head.querySelectorAll('style').length, 0);
+    await b.navigate('/browse/my-list');
+    await b.scheduler.advance();
+    const replacement = b.document.head.querySelector('style');
+    assert.ok(replacement);
+    assert.notEqual(replacement, first);
+    assert.equal(replacement.textContent, first.textContent);
+    assert.equal(b.document.head.querySelectorAll('style').length, 1);
+    await b.navigate('/browse');
 });
 
 test('generated startup retains optional grants, storage and viewport fallbacks', async () => {
@@ -293,6 +322,9 @@ test('production graph accepts public composition and private capability depende
         };
         for (const [name, code] of Object.entries(files)) {
             const file = path.join(directory, 'src', name);
+            // Keep real capabilities already migrated; scaffold only absent future owners.
+            try { await access(file); continue; }
+            catch (error) { if (error.code !== 'ENOENT') throw error; }
             await mkdir(path.dirname(file), { recursive: true });
             await writeFile(file, code);
         }

@@ -7,7 +7,10 @@ import { distributionName, generateUserscript, repositoryRoot } from './build.mj
 
 // Each temporary edge is exact, justified in findings.md and removed at its named step.
 const legacyImports = new Map([
-    ['src/main.js -> src/legacy.js', 'P20: replace the transitional startup entry']
+    ['src/main.js -> src/legacy.js', 'P20: replace the transitional startup entry'],
+    ['src/legacy.js -> src/dom-names.js', 'P20: move remaining runtime consumers to application composition'],
+    ['src/legacy.js -> src/i18n/i18n.js', 'P20: inject localization into the remaining consumers'],
+    ['src/legacy.js -> src/grid/styles.js', 'P11: grid frame assumes stylesheet lifetime']
 ]);
 const publicFeatures = new Set(['src/list/list.js', 'src/viewing/viewing.js', 'src/grid/grid.js', 'src/hover/hover.js']);
 const netflixEntries = new Set(['context', 'page-dom', 'list-data', 'viewing-data', 'card-markup', 'native-popup', 'popup-inspection']

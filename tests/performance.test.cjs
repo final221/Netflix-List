@@ -3,6 +3,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
+const { createI18n } = require('../src/i18n/i18n.js');
+const { removeStyles } = require('../src/grid/styles.js');
 
 // Exercise residual authored functions without executing Netflix startup.
 // Generated-bundle startup and lifecycle are covered separately in bundle.test.js.
@@ -2768,7 +2770,7 @@ test('removal and route cleanup release tracked metadata even if the grid is det
         clearSourceAlignment: () => {}, restoreActiveCarouselStyles: () => {},
         GRID_ID: 'grid', STATUS_ID: 'status', LEGACY_EMPTY_STATE_ID: 'empty',
         ORDER_MISMATCH_DIALOG_ID: 'dialog', STYLE_ID: 'style', SYNTHETIC_SECTION_ID: 'synthetic',
-        document: { getElementById: () => null }
+        document: { getElementById: () => null }, removeStyles
     });
     const removed = e.add('123');
     removed.remove = () => { removed.isConnected = false; };
@@ -3156,7 +3158,7 @@ function initializationEnvironment(count = 150) {
         targetSessionEntryKind: 'initial', waitingForNativeEmpty: false, missingSectionSince: 0,
         TOTAL_COUNT_TIMEOUT_MS: 5000, NATIVE_READY_TIMEOUT_MS: 8000,
         SOURCE_PARKED_CLASS: 'parked',
-        findMyListSection: () => e.section, cleanupOldArtifacts() {}, addStyle() {}, markOriginalHeader() {},
+        findMyListSection: () => e.section, cleanupOldArtifacts() {}, installStyles() {}, markOriginalHeader() {},
         measureVisibleLayout: () => e.layout, measureNativeCarouselGap: () => 10,
         placeLegacyFrame: () => ({ grid: e.oldGrid, status: e.status }), applyOriginalMyListVisibility() {},
         waitForMyListTotalCount: async () => count,
@@ -4336,7 +4338,7 @@ const viewingFunctions = [
     'gridOwnsClone', 'createWatchTypeFilter', 'syncWatchTypeFilter', 'ensureWatchGroupUi', 'syncWatchChildOrder', 'syncWatchGroups',
     'initializeWatchGroups', 'refreshViewingStatus', 'createRouteFetch', 'finishRouteFetch',
     'abortObsoleteRouteFetches', 'gridCloneFromPointerEvent', 'gridHoverTargetActive', 'gridHoverSuppressed', 'cancelPendingGridHover',
-    'formatHeaderParts', 'tUi', 'tUiPlural', 'formatItemCount', 'formatMessage'
+    'formatHeaderParts'
 ];
 const atom = value => ({ $type: 'atom', value });
 const reference = (kind, id) => ({ $type: 'ref', value: [kind, String(id)] });
@@ -4414,9 +4416,8 @@ async function viewingEnvironment(count = 7, existing = null, storage = new Map(
             return { ok: true, status: 200, json: async () => ({ jsonGraph: graph }) };
         }
     });
-    const uiStart = source.indexOf('    const UI_MESSAGES = {');
-    const uiEnd = source.indexOf('    const LOG_MESSAGES = {', uiStart);
-    vm.runInContext(source.slice(uiStart, uiEnd), e.c);
+    const i18n = createI18n({ readLanguage: () => e.c.getUiLocale() });
+    Object.assign(e.c, { tUi: i18n.tUi, tUiPlural: i18n.tUiPlural, formatItemCount: i18n.formatItemCount });
     for (const name of viewingFunctions) vm.runInContext(declaration(name), e.c);
     return { ...e, models, requests, storage, storageCalls, items, state: e.c.sourceState,
         fixtures: () => fixtures, setFixtures: value => { fixtures = value; },
@@ -5091,25 +5092,6 @@ test('simultaneous manual refreshes share the current viewing scan', async () =>
     await Promise.all([e.state.watchStatus.promise, second]);
     assert.equal(calls, 1);
     assert.equal(e.state.watchStatus.ui.refresh.disabled, false);
-});
-
-test('new viewing controls have translations for every supported Netflix UI locale', async () => {
-    const e = await viewingEnvironment();
-    const locales = vm.runInContext('Object.keys(UI_MESSAGES)', e.c);
-    const keys = ['watchedCaughtUp', 'refreshViewingStatus', 'checkingViewingStatus', 'unknownViewingStatus', 'caughtUpMessage',
-        'filterFilms', 'filterSeries', 'filterAll', 'titleTypeFilter', 'noMatchingTitles', 'unknownTitleTypes',
-        'markWatched', 'markCaughtUp', 'moveBackToMyList', 'manualViewingChoice', 'manualViewingChoiceDescription',
-        'viewingChoiceStorageFailed'];
-    for (const locale of locales) {
-        e.c.getUiLocale = () => locale;
-        for (const key of keys) {
-            assert.equal(vm.runInContext('typeof UI_MESSAGES[' + JSON.stringify(locale) + '][' +
-                JSON.stringify(key) + ']', e.c), 'string', locale + ': ' + key);
-            assert.ok(e.c.tUi(key, { count: 3 }), locale + ': ' + key);
-        }
-    }
-    e.c.getUiLocale = () => 'unsupported';
-    assert.equal(e.c.tUi('watchedCaughtUp'), 'Watched / Caught up');
 });
 
 test('full Netflix initialization publishes the ordinary grid before optional viewing collection finishes', async () => {
