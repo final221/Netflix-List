@@ -1,3 +1,6 @@
+import { createNetflixContext } from './netflix/context.js';
+import { createNetflixPageDom, NETFLIX_DOM_SELECTORS } from './netflix/page-dom.js';
+import { createCardMarkup } from './netflix/card-markup.js';
 import { createLogger } from './diagnostics/logger.js';
 import { createReport } from './diagnostics/report.js';
 import { createPopupInspection } from './netflix/popup-inspection.js';
@@ -15,26 +18,17 @@ import { installStyles, removeStyles } from './grid/styles.js';
 export function startLegacy() {
     'use strict';
 
-    // Language interpretation moves to netflix/context.js in P05.
-    const {
-        getUiLocale, getLogLocale, tUi, tUiPlural, tLog,
-        formatUiNumber, formatItemCount, formatInitializationTime
-    } = createI18n({ readLanguage: getNetflixLanguage });
+    const netflixContext = createNetflixContext({ window, document, navigator, location });
+    const { getHtmlLanguage, getNetflixLanguage, viewingRequestContext, readGraphqlBootstrap: graphqlData } = netflixContext;
+    const netflixDom = createNetflixPageDom({ document, Element, location,
+        readGraphqlIdentity: () => netflixGraphql.myListDomIdentity() });
+    const { findMyListSection, nativeCardIdentity, videoIdFromHref, decodeTrackingContext } = netflixDom;
+    const cardMarkup = createCardMarkup({ location });
+    const itemFromSlot = cardMarkup.capture;
+    const { getUiLocale, getLogLocale, tUi, tUiPlural, tLog,
+        formatUiNumber, formatItemCount, formatInitializationTime } = createI18n({ readLanguage: getNetflixLanguage });
 
     const TARGET_PATH = '/browse/my-list';
-    // Netflix-owned selectors used by discovery and card handling live here.
-    const NETFLIX_DOM_SELECTORS = Object.freeze({
-        browseSections: '[data-uia="browse-page-sections"]',
-        progressCard: '[data-uia="progress-card"]',
-        carouselRowZero: 'carousel-row-section-0',
-        carouselRowOne: 'carousel-row-section-1',
-        carouselRowOneSection: 'section[data-uia="carousel-row-section-1"]',
-        emptyCarouselSection: 'empty-carousel-section',
-        carouselScroller: '[data-uia="carousel-scroller"]',
-        standardCard: 'a[data-uia="standard-card"]',
-        standardCardWithHref: 'a[data-uia="standard-card"][href]',
-        virtualSlot: '[data-virtual-slot]'
-    });
     // Hawkins controls can apply a virtual-page transform after several paint
     // cycles when the source row is under load. Keep the observation window
     // longer than that deferred update so a legitimate move is not retried
@@ -115,14 +109,6 @@ export function startLegacy() {
         readRuntime: () => collectRuntimeSnapshot(), readSeriesViewing: () => collectViewingSeriesDiagnostics(sourceState),
         readThumbnails: () => collectThumbnailDiagnostics(sourceState), readNativePopup: () => popupInspection.collect() });
 
-    function getHtmlLanguage() {
-        return (document.documentElement?.getAttribute('lang') || '').trim();
-    }
-
-    function getNetflixLanguage() {
-        return getHtmlLanguage() || navigator.language || '';
-    }
-
     function formatInitializationErrorMeta(error, fallbackTotalCount = null) {
         const details = error?.details || {};
         const rawCollected = Number(
@@ -147,7 +133,6 @@ export function startLegacy() {
         const missingText = tUiPlural('itemCount', missing, { count: formatUiNumber(missing) });
         return `${itemText} ${tUi('errorCount', { count: missingText })}`;
     }
-
 
     function formatHeaderParts(current, total, elapsedMs = null, finalized = false) {
         if (finalized && sourceState?.watchStatus && current === sourceState.items?.length && total === current) {
@@ -1400,7 +1385,6 @@ export function startLegacy() {
         }
     }
 
-
     function measureNativeCarouselGap(section) {
         if (!section) return Math.max(20, Math.min(56, window.innerWidth * 0.02));
         const values = [];
@@ -1427,22 +1411,6 @@ export function startLegacy() {
         const ownMargin = Number.parseFloat(getComputedStyle(section).marginBottom || '0');
         if (ownMargin >= 8 && ownMargin <= 180) values.push(ownMargin);
         return values.length ? median(values) : Math.max(20, Math.min(56, window.innerWidth * 0.02));
-    }
-
-    function graphqlData() {
-        const candidates = [
-            window,
-            window?.wrappedJSObject,
-            document.defaultView,
-            document.defaultView?.wrappedJSObject
-        ];
-        for (const root of candidates) {
-            try {
-                const data = root?.netflix?.reactContext?.models?.graphql?.data;
-                if (data && typeof data === 'object') return data;
-            } catch (_) {}
-        }
-        return null;
     }
 
     function isMyListGraphqlSection(value) {
@@ -1532,186 +1500,19 @@ export function startLegacy() {
         return ids;
     }
 
-    // This adapter owns Netflix's browse-row and virtual-carousel DOM contracts.
-    const netflixDom = Object.freeze({
-        selectors: NETFLIX_DOM_SELECTORS,
-
-        sectionVideoIds(section) {
-            const ids = new Set();
-            for (const card of section?.querySelectorAll?.(this.selectors.standardCardWithHref) || []) {
-                const id = videoIdFromHref(card.getAttribute('href') || card.href || '');
-                if (id) ids.add(String(id));
-            }
-            return ids;
-        },
-
-        isSyntheticSection(section) {
-            return !section ||
-                section.id === SYNTHETIC_SECTION_ID ||
-                section.getAttribute('data-tm-synthetic-mylist') === 'true';
-        },
-
-        nativeSections(host) {
-            if (!host) return [];
-            return [...host.querySelectorAll(':scope > section')].filter(section => !this.isSyntheticSection(section));
-        },
-
-        nextNativeSection(section, host) {
-            if (!section || !host) return null;
-            let node = section.nextElementSibling;
-            while (node) {
-                if (node.matches?.('section') && !this.isSyntheticSection(node)) return node;
-                node = node.nextElementSibling;
-            }
-            return null;
-        },
-
-        findContinueWatchingSection(host) {
-            const sections = this.nativeSections(host);
-            if (!sections.length) return null;
-
-            // Non-empty Continue Watching has progress cards. Its row index is also
-            // exposed as a language-neutral Uia. When the row is empty Netflix uses
-            // the generic empty-carousel-section Uia, so the first native section on
-            // /browse/my-list remains the structural anchor.
-            const progressSection = sections.find(section => section.querySelector(this.selectors.progressCard));
-            if (progressSection) return progressSection;
-
-            const rowZero = sections.find(section => section.getAttribute('data-uia') === this.selectors.carouselRowZero);
-            if (rowZero) return rowZero;
-
-            const first = sections[0];
-            if (first?.getAttribute('data-uia') === this.selectors.emptyCarouselSection) return first;
-            return null;
-        },
-
-        findStructuralMyListSection(host) {
-            if (!host) return null;
-            const nativeSections = this.nativeSections(host);
-            const alreadyBound = nativeSections.find(section => section.getAttribute(SECTION_ATTR) === 'true');
-            if (alreadyBound) return alreadyBound;
-
-            // On /browse/my-list Netflix assigns the native My List carousel row the
-            // language-neutral structural Uia for row 1. This remains available even
-            // when Continue Watching is empty, which has no progress-card elements.
-            const indexedMyList = nativeSections.find(section =>
-                section.getAttribute('data-uia') === this.selectors.carouselRowOne
-            );
-            if (indexedMyList) return indexedMyList;
-
-            // Empty My List has the generic empty-carousel-section Uia. In that case
-            // use the page structure: My List immediately follows Continue Watching.
-            // nextNativeSection() deliberately skips our synthetic placeholder.
-            const continueWatching = this.findContinueWatchingSection(host);
-            const adjacent = this.nextNativeSection(continueWatching, host);
-            if (adjacent) return adjacent;
-
-            return null;
-        },
-
-        findSectionByGraphqlIdentity(host, graphqlIdentity) {
-            if (!host || !graphqlIdentity) return null;
-            const graphqlSectionId = graphqlIdentity.sectionId;
-            const byGraphqlId = graphqlSectionId ? document.getElementById(graphqlSectionId) : null;
-            if (byGraphqlId?.matches?.('section') && byGraphqlId.parentElement === host &&
-                !this.isSyntheticSection(byGraphqlId)) {
-                return byGraphqlId;
-            }
-
-            const expectedIds = new Set(graphqlIdentity.videoIds);
-            if (expectedIds.size) {
-                let bestSection = null;
-                let bestOverlap = 0;
-                for (const section of nativeSections) {
-                    const ids = this.sectionVideoIds(section);
-                    let overlap = 0;
-                    for (const id of ids) if (expectedIds.has(id)) overlap++;
-                    if (overlap > bestOverlap) {
-                        bestOverlap = overlap;
-                        bestSection = section;
-                    }
-                }
-                if (bestSection && bestOverlap >= Math.min(2, expectedIds.size)) return bestSection;
-            }
-
-            return null;
-        },
-
-        findTrack(scroller) {
-            if (!scroller) return null;
-            for (const div of scroller.querySelectorAll('div')) {
-                if (div.querySelector(`:scope > ${this.selectors.virtualSlot}`)) return div;
-            }
-            return null;
-        },
-
-        directSlots(track) {
-            return track ? [...track.querySelectorAll(`:scope > ${this.selectors.virtualSlot}`)] : [];
-        },
-
-        filledSlots(track) {
-            return this.directSlots(track).filter(slot => slot.querySelector(this.selectors.standardCard));
-        },
-
-        positionSyntheticSection(section, host) {
-            if (!section || !host) return;
-
-            // On the My List browse page Netflix places the My List rail immediately
-            // after Continue Watching. A synthetic empty/loading rail must occupy that
-            // same slot; prepending it to the sections host makes it jump above all
-            // native rows while Netflix is still building the page.
-            const continueWatching = this.findContinueWatchingSection(host);
-            if (continueWatching) {
-                if (continueWatching.nextElementSibling !== section) {
-                    continueWatching.insertAdjacentElement('afterend', section);
-                }
-                return;
-            }
-
-            const firstNativeSection = [...host.querySelectorAll(':scope > section')].find(node => node !== section);
-            if (firstNativeSection) {
-                if (firstNativeSection.nextElementSibling !== section) {
-                    firstNativeSection.insertAdjacentElement('afterend', section);
-                }
-                return;
-            }
-
-            if (section.parentElement !== host) host.appendChild(section);
-        },
-
-        ensureSyntheticMyListSection() {
-            const host = document.querySelector(this.selectors.browseSections);
-            if (!host) return null;
-
-            let section = document.getElementById(SYNTHETIC_SECTION_ID);
-            const nativeSections = [...host.querySelectorAll(':scope > section')].filter(node => node !== section);
-            // Do not guess a position before Netflix has rendered at least one native row.
-            // The MutationObserver/poll will call us again as soon as the row stack exists.
-            if (!nativeSections.length) return null;
-
-            if (!section) {
-                section = document.createElement('section');
-                section.id = SYNTHETIC_SECTION_ID;
-                section.setAttribute('data-tm-synthetic-mylist', 'true');
-            }
-            this.positionSyntheticSection(section, host);
-            return section;
-        }
-    });
-
-    // Joins structural DOM discovery with GraphQL identity as the last fallback.
-    function findMyListSection() {
-        const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
-        if (!host) return null;
-        return netflixDom.findStructuralMyListSection(host) ||
-            netflixDom.findSectionByGraphqlIdentity(host, netflixGraphql.myListDomIdentity());
-    }
-
     function median(values) {
         const nums = values.filter(Number.isFinite).sort((a, b) => a - b);
         if (!nums.length) return 0;
         const mid = Math.floor(nums.length / 2);
         return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
+    }
+
+    function describeMyListToggleClick(event) {
+        const decoded = netflixDom.describeMembershipClick(event, { activeVideoId });
+        if (!decoded) return null;
+        // Current membership owns the action; Netflix's Undo UI can advertise remove on an add.
+        const wasInLegacy = Boolean(sourceState?.itemMap?.has(`v:${decoded.videoId}`));
+        return { ...decoded, action: wasInLegacy ? 'remove' : 'add', wasInLegacy };
     }
 
     function parseSlotLayoutFormula(track) {
@@ -2132,29 +1933,6 @@ export function startLegacy() {
         return null;
     }
 
-    function netflixModelData(name) {
-        const roots = [
-            window,
-            window?.wrappedJSObject,
-            document.defaultView,
-            document.defaultView?.wrappedJSObject
-        ];
-        for (const root of roots) {
-            try {
-                const appContext = root?.netflix?.appContext;
-                if (appContext && typeof appContext.getModelData === 'function') {
-                    const value = appContext.getModelData(name);
-                    if (value != null) return value;
-                }
-            } catch (_) {}
-            try {
-                const value = root?.netflix?.reactContext?.models?.[name]?.data;
-                if (value != null) return value;
-            } catch (_) {}
-        }
-        return null;
-    }
-
     // Viewing status is read separately from native card markup. A shared card
     // template or membership in Continue Watching cannot establish completion.
     function unwrapViewingAtom(value) {
@@ -2348,50 +2126,10 @@ export function startLegacy() {
         return classifyViewingSeries(plan);
     }
 
-    function viewingRequestContext() {
-        const user = netflixModelData('userInfo');
-        // guid is the account owner's profile; userGuid is the active profile.
-        const profileGuid = user?.userGuid;
-        const authURL = user?.authURL;
-        const services = netflixModelData('services');
-        const build = netflixModelData('serverDefs')?.BUILD_IDENTIFIER;
-        let base = services?.memberapi;
-        let endpointType = 'string';
-        if (base == null || base === '') {
-            base = typeof build === 'string' && build ? '/api/shakti/' + encodeURIComponent(build) : '';
-            endpointType = 'build';
-        } else if (typeof base === 'object') {
-            // Netflix also exposes memberapi as a URL descriptor. Stringifying
-            // that object sends requests to /[object Object]/pathEvaluator.
-            const { protocol, hostname, path } = base;
-            if (typeof protocol !== 'string' || !/^https:?$/i.test(protocol) ||
-                typeof hostname !== 'string' || !hostname ||
-                !Array.isArray(path) || !path.length ||
-                !path.every(part => typeof part === 'string' && part.length > 0)) return null;
-            base = protocol.replace(/:$/, '') + '://' + hostname + '/' + path.join('/').replace(/^\/+/, '');
-            endpointType = 'descriptor';
-        }
-        if (typeof profileGuid !== 'string' || !profileGuid || typeof authURL !== 'string' || !authURL ||
-            typeof base !== 'string' || !base) return null;
-        try {
-            const url = new URL(base, location.origin);
-            if (url.origin !== location.origin || url.protocol !== 'https:' ||
-                url.username || url.password || url.search || url.hash || url.pathname === '/') return null;
-            url.pathname = url.pathname.replace(/\/+$/, '') + '/pathEvaluator';
-            url.searchParams.set('falcor_server', '0.1.0');
-            url.searchParams.set('withSize', 'false');
-            url.searchParams.set('materialize', 'false');
-            url.searchParams.set('original_path', '/shakti/mre/pathEvaluator');
-            return { profileGuid, authURL, url: url.href, endpointType, endpointPath: url.pathname };
-        } catch (_) {
-            return null;
-        }
-    }
-
     function assertViewingJob(job) {
         assertRouteSession(job.sessionToken);
         if (sourceState !== job.state || job.state.watchStatus !== job.watch ||
-            !job.state.grid?.isConnected || netflixModelData('userInfo')?.userGuid !== job.context.profileGuid) {
+            !job.state.grid?.isConnected || netflixContext.activeProfile() !== job.context.profileGuid) {
             throw createRouteSessionCancelledError();
         }
     }
@@ -2882,7 +2620,7 @@ export function startLegacy() {
     }
 
     function syncManualViewingProfile(watch) {
-        const profile = netflixModelData('userInfo')?.userGuid;
+        const profile = netflixContext.activeProfile();
         const active = typeof profile === 'string' && profile ? profile : null;
         if (watch.manualProfileGuid === active) return false;
         if (watch.manualProfileGuid !== undefined) {
@@ -2903,7 +2641,7 @@ export function startLegacy() {
 
     function saveManualViewingChoices(watch, changes, conditional = false) {
         try {
-            if (!watch.manualProfileGuid || netflixModelData('userInfo')?.userGuid !== watch.manualProfileGuid) throw new Error('storage-unavailable');
+            if (!watch.manualProfileGuid || netflixContext.activeProfile() !== watch.manualProfileGuid) throw new Error('storage-unavailable');
             // Apply only this action's changes to the newest saved map, so an
             // older tab does not erase unrelated corrections from another tab.
             const choices = readManualViewingChoices(watch.manualProfileGuid);
@@ -3034,7 +2772,7 @@ export function startLegacy() {
             if (!clone || !gridOwnsClone(clone, grid) || state.cloneMap.get(itemKey(clone.__tmMyListItem)) !== clone) return;
             if (clone.__tmViewingControls?.toggle !== button) return;
             const watch = state.watchStatus;
-            if (netflixModelData('userInfo')?.userGuid !== watch.manualProfileGuid) {
+            if (netflixContext.activeProfile() !== watch.manualProfileGuid) {
                 syncWatchGroups(state);
                 return;
             }
@@ -3337,7 +3075,7 @@ export function startLegacy() {
     }
 
     function initializeWatchGroups(state, sessionToken) {
-        const active = netflixModelData('userInfo')?.userGuid;
+        const active = netflixContext.activeProfile();
         const profile = typeof active === 'string' && active ? active : null;
         const cached = readViewingCache(state, profile);
         state.watchStatus = {
@@ -3430,7 +3168,7 @@ export function startLegacy() {
             }
             job.network.finishedAt = performance.now();
             if (sourceState !== state || state.watchStatus !== watch || !isRouteSessionActive(job.sessionToken)) return;
-            if (netflixModelData('userInfo')?.userGuid !== context.profileGuid) {
+            if (netflixContext.activeProfile() !== context.profileGuid) {
                 job.results.clear();
                 job.types.clear();
                 job.seriesDetails.clear();
@@ -3666,8 +3404,8 @@ export function startLegacy() {
         if (!Array.isArray(edges) || !templateSlot || !Number.isFinite(totalCount)) return null;
         // Netflix may recycle this live slot while we yield. Keep one detached
         // template shared by compact items until the complete grid is published.
-        const template = templateSlot.cloneNode(true);
-        if (!template.querySelector(NETFLIX_DOM_SELECTORS.standardCard)) return null;
+        const template = cardMarkup.captureTemplate(templateSlot);
+        if (!template) return null;
         const items = [];
         const seen = new Set();
         const complete = await runConstructionChunks(edges.length, index => {
@@ -3789,9 +3527,8 @@ export function startLegacy() {
                 'X-Netflix.Request.Originating.Url': location.href
             }
         };
-        const appVersion = netflixModelData('serverDefs')?.BUILD_IDENTIFIER;
+        const { appVersion, locale } = netflixContext.listRequestContext();
         if (appVersion) request.headers['x-netflix.context.app-version'] = String(appVersion);
-        const locale = netflixModelData('geo')?.locale?.id || document.documentElement.lang;
         if (locale) request.headers['x-netflix.context.locales'] = String(locale).toLowerCase();
 
         const fetchState = createRouteFetch(sessionToken);
@@ -4084,13 +3821,6 @@ export function startLegacy() {
         throw initializationTimeoutError('total-count-detection', timeout, details);
     }
 
-    function nativeCardIdentity(slot) {
-        const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard);
-        if (!card) return '';
-        const href = card.href || card.getAttribute('href') || '';
-        return videoIdFromHref(href) || href || card.getAttribute('aria-label') || '';
-    }
-
     function readNativeMyListDomState() {
         if (!nativeReadScope) return withNativeReadScope(() => readNativeMyListDomState());
         const section = findMyListSection();
@@ -4171,73 +3901,6 @@ export function startLegacy() {
             exactCount,
             fingerprint: `${pages}|${page}|${uniqueIdentities.length}|${sourceSlots}|${sourceCards}|${pageSignature}|${Number.isFinite(graphqlCount) ? graphqlCount : 'x'}`
         };
-    }
-
-    function decodeTrackingContext(node) {
-        const raw = node?.getAttribute?.('data-ui-tracking-context') || '';
-        if (!raw) return null;
-        for (const candidate of [raw, (() => {
-            try { return decodeURIComponent(raw); } catch (_) { return raw; }
-        })()]) {
-            try {
-                const parsed = JSON.parse(candidate);
-                if (parsed && typeof parsed === 'object') return parsed;
-            } catch (_) {}
-        }
-        return null;
-    }
-
-    function videoIdFromToggleContext(button, trackingContext) {
-        const direct = trackingContext?.video_id ?? trackingContext?.videoId;
-        if (direct !== undefined && direct !== null && String(direct)) return String(direct);
-        const unified = String(trackingContext?.unifiedEntityId || '');
-        const unifiedMatch = unified.match(/Video:(\d+)/i);
-        if (unifiedMatch) return unifiedMatch[1];
-
-        const slot = button?.closest?.(NETFLIX_DOM_SELECTORS.virtualSlot);
-        if (slot) {
-            for (const anchor of slot.querySelectorAll('a[href]')) {
-                const videoId = videoIdFromHref(anchor.href || anchor.getAttribute('href') || '');
-                if (videoId) return videoId;
-            }
-        }
-
-        const modal = button?.closest?.('[role="dialog"], .previewModal--container, .previewModal--wrapper');
-        if (modal) {
-            for (const anchor of modal.querySelectorAll('a[href]')) {
-                const videoId = videoIdFromHref(anchor.href || anchor.getAttribute('href') || '');
-                if (videoId) return videoId;
-            }
-            if (activeVideoId) return String(activeVideoId);
-        }
-        return '';
-    }
-
-    function describeMyListToggleClick(event) {
-        const target = event.target instanceof Element ? event.target : null;
-        const button = target?.closest?.('button');
-        if (!button) return null;
-
-        const uia = button.getAttribute('data-uia') || '';
-        const tracker = button.closest('.ptrack-content[data-ui-tracking-context]');
-        const trackingContext = decodeTrackingContext(tracker);
-        const trackedAsMyList = trackingContext?.appView === 'addToMyListButton';
-        const uiaIsMyList = /(?:^|-)add-to-my-list|remove-from-my-list/i.test(uia);
-        if (!trackedAsMyList && !uiaIsMyList) return null;
-
-        const videoId = videoIdFromToggleContext(button, trackingContext);
-        if (!videoId) return null;
-
-        // Netflix can expose remove-from-my-list-with-undo even on a click that
-        // results in an add. The legacy list is synchronized at initialization,
-        // so its current membership is the reliable pre-click state.
-        const wasInLegacy = Boolean(sourceState?.itemMap?.has(`v:${videoId}`));
-        const action = wasInLegacy ? 'remove' : 'add';
-        const uiaAction = /remove-from-my-list/i.test(uia)
-            ? 'remove'
-            : (/add-to-my-list/i.test(uia) ? 'add' : 'unknown');
-
-        return { button, videoId, action, uiaAction, wasInLegacy, uia, trackingContext };
     }
 
     function normalizeNetflixUiText(value) {
@@ -6471,32 +6134,10 @@ export function startLegacy() {
         return best;
     }
 
-    function videoIdFromHref(href) {
-        try {
-            const url = new URL(href, location.href);
-            const jbv = url.searchParams.get('jbv');
-            if (jbv) return jbv;
-            const m = url.pathname.match(/\/title\/(\d+)/);
-            return m ? m[1] : '';
-        } catch (_) {
-            return '';
-        }
-    }
-
-    function itemFromSlot(slot, page, captureSnapshot = true) {
-        const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-        if (!card) return null;
-
-        const href = card.href || card.getAttribute('href') || '';
-        if (!href) return null;
-
-        return {
-            href,
-            videoId: videoIdFromHref(href),
-            page,
-            ariaLabel: card.getAttribute('aria-label') || '',
-            snapshot: captureSnapshot ? slot.cloneNode(true) : null
-        };
+    function createItemClone(item) {
+        const source = cardSourceForItem(item);
+        if (!source) throw new Error(`No card markup available for ${itemKey(item)}`);
+        return cardMarkup.createClone(source, item, source === item.cardTemplate);
     }
 
     function cardSourceForItem(item) {
@@ -6510,29 +6151,6 @@ export function startLegacy() {
             if (clone) return clone;
         }
         return item.cardTemplate || null;
-    }
-
-    function createItemClone(item) {
-        const source = cardSourceForItem(item);
-        if (!source) throw new Error(`No card markup available for ${itemKey(item)}`);
-        const clone = source.cloneNode(true);
-        if (source === item.cardTemplate) {
-            const card = clone.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-            card.setAttribute('href', item.href);
-            card.href = item.href;
-            card.setAttribute('aria-label', item.ariaLabel);
-            const image = clone.querySelector('img');
-            if (item.imageUrl && image) {
-                image.src = item.imageUrl;
-                image.removeAttribute('srcset');
-                image.setAttribute('data-tm-graphql-image', 'true');
-            }
-        }
-        // cloneNode copies attributes, but not grafted React properties or the
-        // activation state. Rebuild/Undo must prepare its own fresh live source.
-        for (const name of ['data-tm-hover-ready', 'data-tm-backed-page', 'data-tm-react-grafted',
-            'data-tm-preparing', 'data-tm-hover-token']) clone.removeAttribute(name);
-        return clone;
     }
 
     function releaseItemCardSnapshot(item) {
@@ -8200,27 +7818,8 @@ export function startLegacy() {
     }
 
     function normalizeClone(slot) {
-        slot.style.removeProperty('flex');
-        slot.style.removeProperty('width');
-        slot.style.removeProperty('min-width');
-        slot.style.removeProperty('max-width');
-        slot.style.removeProperty('transform');
-        slot.style.removeProperty('translate');
-        slot.style.removeProperty('opacity');
-        slot.style.removeProperty('visibility');
-        slot.style.removeProperty('pointer-events');
-
-        const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-        if (card) {
-            card.tabIndex = 0;
-            card.setAttribute('data-tm-clone-card', 'true');
-        }
-
-        for (const image of slot.querySelectorAll('img')) {
-            image.loading = 'lazy';
-            image.decoding = 'async';
-        }
-        // Allocate the small action row inside the existing construction chunks.
+        cardMarkup.normalize(slot);
+        // Group controls remain with presentation until P11/P12.
         ensureManualViewingControls(slot);
     }
 

@@ -69,10 +69,14 @@ export class Element extends EventTarget {
         return selector.split(',').some(part => {
             const simple = part.trim();
             if (simple.startsWith('#')) return this.id === simple.slice(1);
-            if (simple.startsWith('.')) return this.classList.contains(simple.slice(1));
-            const attribute = /^(\w+)?\[([\w-]+)(?:="([^"]*)")?\]$/.exec(simple);
-            if (attribute) return (!attribute[1] || this.tagName.toLowerCase() === attribute[1]) &&
-                this.attributes.has(attribute[2]) && (attribute[3] === undefined || this.getAttribute(attribute[2]) === attribute[3]);
+            if (/^\.[\w-]+$/.test(simple)) return this.classList.contains(simple.slice(1));
+            const compound = /^(\w+)?((?:\.[\w-]+)*)(\[[\w-]+(?:="[^"]*")?\](?:\[[\w-]+(?:="[^"]*")?\])*)$/.exec(simple);
+            if (compound) {
+                if (compound[1] && this.tagName.toLowerCase() !== compound[1]) return false;
+                if (compound[2].split('.').filter(Boolean).some(name => !this.classList.contains(name))) return false;
+                return [...compound[3].matchAll(/\[([\w-]+)(?:="([^"]*)")?\]/g)].every(([, name, value]) =>
+                    this.attributes.has(name) && (value === undefined || this.getAttribute(name) === value));
+            }
             return this.tagName.toLowerCase() === simple;
         });
     }
@@ -90,6 +94,16 @@ export class Element extends EventTarget {
         return [...found];
     }
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+    cloneNode(deep = false) {
+        const clone = new Element(this.tagName);
+        clone.attributes = new Map(this.attributes);
+        clone.textContent = this.textContent;
+        for (const name of ['href', 'src', 'loading', 'decoding', 'tabIndex']) {
+            if (Object.hasOwn(this, name)) clone[name] = this[name];
+        }
+        if (deep) this.children.forEach(child => clone.appendChild(child.cloneNode(true)));
+        return clone;
+    }
     getBoundingClientRect() { return { left: 0, top: 0, right: 1200, bottom: 100, width: 1200, height: 100 }; }
 }
 

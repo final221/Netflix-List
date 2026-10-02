@@ -13,7 +13,10 @@ const legacyImports = new Map([
     ['src/legacy.js -> src/grid/styles.js', 'P11: grid frame assumes stylesheet lifetime'],
     ['src/legacy.js -> src/diagnostics/logger.js', 'P20: application owns logger composition'],
     ['src/legacy.js -> src/diagnostics/report.js', 'P20: application wires explicit summary providers'],
-    ['src/legacy.js -> src/netflix/popup-inspection.js', 'P20: application wires inspection lifetime and native consumers']
+    ['src/legacy.js -> src/netflix/popup-inspection.js', 'P20: application wires inspection lifetime and native consumers'],
+    ['src/legacy.js -> src/netflix/context.js', 'P20: application injects current page context'],
+    ['src/legacy.js -> src/netflix/page-dom.js', 'P20: application composes remaining DOM consumers'],
+    ['src/legacy.js -> src/netflix/card-markup.js', 'P11: grid assumes markup capture/create collaborators']
 ]);
 const publicFeatures = new Set(['src/list/list.js', 'src/viewing/viewing.js', 'src/grid/grid.js', 'src/hover/hover.js']);
 const netflixEntries = new Set(['context', 'page-dom', 'list-data', 'viewing-data', 'card-markup', 'native-popup', 'popup-inspection']

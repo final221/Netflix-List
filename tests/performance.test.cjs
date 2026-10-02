@@ -8,10 +8,16 @@ const { removeStyles } = require('../src/grid/styles.js');
 const { createLogger } = require('../src/diagnostics/logger.js');
 const { createReport } = require('../src/diagnostics/report.js');
 const { createPopupInspection } = require('../src/netflix/popup-inspection.js');
+const { createNetflixContext } = require('../src/netflix/context.js');
+const { createNetflixPageDom } = require('../src/netflix/page-dom.js');
+const { createCardMarkup } = require('../src/netflix/card-markup.js');
 
 // Exercise residual authored functions without executing Netflix startup.
 // Generated-bundle startup and lifecycle are covered separately in bundle.test.js.
 const { source, declaration } = require('./helpers/legacy-source.cjs');
+const migratedAdapterFunctions = new Set(['getHtmlLanguage', 'getNetflixLanguage', 'netflixModelData',
+    'graphqlData', 'viewingRequestContext', 'nativeCardIdentity', 'videoIdFromHref', 'decodeTrackingContext',
+    'videoIdFromToggleContext', 'findMyListSection', 'itemFromSlot']);
 
 class Element {
     constructor(id = '', parent = null) {
@@ -100,8 +106,22 @@ function environment(names, overrides = {}) {
         'startImageResourceDiagnostics', 'stopImageResourceDiagnostics', 'recordImageResourceEntries',
         'responsiveViewportSignature', 'responsiveLayoutMatches',
         'cancelResizeHover', 'handleTargetResize', 'recoverNativeInitialization', ...names]) {
-        vm.runInContext(declaration(name), c);
+        if (!migratedAdapterFunctions.has(name)) vm.runInContext(declaration(name), c);
     }
+    const location = c.location || { origin: 'https://www.netflix.com', href: 'https://www.netflix.com/browse/my-list' };
+    const document = c.document || {};
+    // Models remain fixture data; the real adapter reads them lazily, including profile changes.
+    c.netflixContext = createNetflixContext({ window: { netflix: { appContext: {
+        getModelData: name => c.netflixModelData?.(name) } } }, document, navigator: c.navigator || {}, location });
+    const pageDom = createNetflixPageDom({ document, Element, location,
+        readGraphqlIdentity: () => c.netflixGraphql?.myListDomIdentity?.() });
+    c.netflixDom ||= pageDom;
+    c.cardMarkup = createCardMarkup({ location });
+    for (const [name, operation] of Object.entries({ getHtmlLanguage: c.netflixContext.getHtmlLanguage,
+        getNetflixLanguage: c.netflixContext.getNetflixLanguage, viewingRequestContext: c.netflixContext.viewingRequestContext,
+        graphqlData: c.netflixContext.readGraphqlBootstrap, nativeCardIdentity: pageDom.nativeCardIdentity,
+        videoIdFromHref: pageDom.videoIdFromHref, decodeTrackingContext: pageDom.decodeTrackingContext,
+        findMyListSection: pageDom.findMyListSection, itemFromSlot: c.cardMarkup.capture })) c[name] ||= operation;
     c.logger = createLogger({ name: 'My List for Netflix', version: 'test', Element,
         isTraceEnabled: () => c.VERBOSE_INTERACTION_LOGS,
         console: { log: (_prefix, ...args) => c.log(...args), warn: (_prefix, ...args) => c.warn(...args) } });
@@ -1410,7 +1430,7 @@ test('a series preview can identify its series while its play link points to an 
     const e = preparedHoverEnvironment();
     e.c.URL = URL;
     e.c.location = { href: 'https://www.netflix.com/browse/my-list' };
-    vm.runInContext(declaration('videoIdFromHref'), e.c);
+    e.c.videoIdFromHref = createNetflixPageDom({ location: e.c.location }).videoIdFromHref;
     const preview = matchingPreview(e);
     preview.anchor.href = '/watch/456';
     const detail = new Element('details', preview.root);
@@ -2836,12 +2856,17 @@ class ConstructionNode extends Element {
         this.setConnected(false);
     }
     querySelector(selector) {
-        return this.querySelectorAll('*').find(node => node.id === selector) || null;
+        return this.querySelectorAll(selector)[0] || null;
     }
     querySelectorAll(selector) {
         if (selector.startsWith(':scope')) return this.children;
         const all = this.children.flatMap(child => [child, ...child.querySelectorAll('*')]);
-        return selector === '*' ? all : all.filter(node => node.id === selector);
+        return selector === '*' ? all : all.filter(node => {
+            if (node.id === selector) return true;
+            const match = /^([\w-]+)?\[([\w-]+)(?:="([^"]*)")?\]$/.exec(selector);
+            return Boolean(match && (!match[1] || node.tagName === match[1].toUpperCase()) &&
+                (match[3] === undefined ? node.getAttribute(match[2]) !== null : node.getAttribute(match[2]) === match[3]));
+        });
     }
     addEventListener(type, callback) { this.listeners.set(type, callback); }
     replaceWith(fresh) {
@@ -2854,7 +2879,7 @@ class ConstructionNode extends Element {
         const clone = new ConstructionNode(this.id);
         clone.cloneCounter = this.cloneCounter;
         clone.attributes = new Map(this.attributes);
-        for (const key of ['href', 'src', 'markup']) clone[key] = this[key];
+        for (const key of ['href', 'src', 'markup', 'tagName']) clone[key] = this[key];
         for (const child of this.children) clone.appendChild(child.cloneNode(true));
         return clone;
     }
@@ -2871,7 +2896,9 @@ function constructionEnvironment() {
     const template = new ConstructionNode('slot');
     template.cloneCounter = { count: 0 };
     template.markup = 'original-template';
-    template.appendChild(new ConstructionNode('card'));
+    const templateCard = template.appendChild(new ConstructionNode('card'));
+    templateCard.tagName = 'A';
+    templateCard.setAttribute('data-uia', 'standard-card');
     const image = template.appendChild(new ConstructionNode('img'));
     image.setAttribute('srcset', 'native-srcset');
     const layout = { columns: 6, rowGap: 10 };
@@ -3972,7 +3999,7 @@ function mountedSinglePageEnvironment(count = 6) {
         netflixItemIndexFromSlot: slot => slot.index,
         netflixDom: { findTrack: () => e.track, directSlots: track => track.children, filledSlots: track => track.children }
     });
-    for (const name of ['nativeCardIdentity', 'readMountedSinglePageMembership', 'collectMountedSinglePageItems',
+    for (const name of ['readMountedSinglePageMembership', 'collectMountedSinglePageItems',
         'tryMountedSinglePageFastBootstrap']) vm.runInContext(declaration(name), e.c);
     const slots = e.items(count).map((item, index) => {
         const slot = item.snapshot;
@@ -4387,7 +4414,7 @@ async function viewingEnvironment(count = 7, existing = null, storage = new Map(
     });
     const i18n = createI18n({ readLanguage: () => e.c.getUiLocale() });
     Object.assign(e.c, { tUi: i18n.tUi, tUiPlural: i18n.tUiPlural, formatItemCount: i18n.formatItemCount });
-    for (const name of viewingFunctions) vm.runInContext(declaration(name), e.c);
+    for (const name of viewingFunctions) if (!migratedAdapterFunctions.has(name)) vm.runInContext(declaration(name), e.c);
     return { ...e, models, requests, storage, storageCalls, items, state: e.c.sourceState,
         fixtures: () => fixtures, setFixtures: value => { fixtures = value; },
         setCacheTime: value => { cacheTime = value; },

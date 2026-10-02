@@ -12,7 +12,7 @@ This document describes what exists now. [Migration.md](../Migration.md) defines
 
 The checker enforces Migration.md's production import directions and public entries using esbuild's dependency metadata. Private files are accessible within their owning capability; carousel internals are a separate capability inside Netflix. Back-dependencies on application coordination, direct access to another feature's internals, cycles, external inputs and dormant production files fail verification. Completion policy cannot import Netflix integration. These graph checks do not prove state ownership, import-time purity or runtime behavior; the migration still audits those contracts through actual caller transitions and capability scenarios.
 
-Legacy imports have no blanket exemption. Exact exceptions currently allow main to start legacy (removed in P20), legacy to compose DOM names/localization/logger/report/popup inspection (removed in P20), and legacy to install/remove grid styles (removed in P11). The checker and findings.md record each caller/reason/removal step; obsolete exceptions fail verification rather than silently remaining after cutover.
+Legacy imports have no blanket exemption. Exact exceptions currently allow main to start legacy (removed in P20), legacy to compose DOM names/localization/logger/report/popup inspection/context/page-DOM (removed in P20), and legacy to install/remove grid styles and use card markup (removed in P11). The checker and findings.md record each caller/reason/removal step; obsolete exceptions fail verification rather than silently remaining after cutover.
 
 `.github/workflows/check.yml` runs the normal verification commands on Windows and Linux with the exact Node version from package.json and locked dependencies. Checkout includes HEAD's parent so commit whitespace checks inspect the actual change. It verifies the committed bundle before any write-producing build, then runs regression tests, rebuilds, repeats the read-only check, checks syntax/commit whitespace and rejects tracked build changes. Runtime output/version is unchanged by adding this enforcement.
 
@@ -28,20 +28,23 @@ src/main.js
      -> src/diagnostics/logger.js: application-lifetime retained logging
      -> src/diagnostics/report.js: explicit summary providers and clipboard export
      -> src/netflix/popup-inspection.js: bounded response/component investigation
+     -> src/netflix/context.js: lazy page/profile/locale/request context
+     -> src/netflix/page-dom.js: native discovery and membership identity facts
+     -> src/netflix/card-markup.js: capture, clone and sanitize card material
      -> existing settings, SPA hooks and route-session runtime
 ```
 
-Main invokes the legacy entry once. Importing legacy alone does not activate listeners, requests or settings. It retains the remaining runtime orchestration, mutable feature state and lifecycle, with its internal SCRIPT_VERSION injected by the build. Localization, DOM names, stylesheet content, retained logging, report export and popup inspection now have separate owners and live callers. No parallel implementation or public legacy state bag is introduced.
+Main invokes the legacy entry once. Importing legacy alone does not activate listeners, requests or settings. It retains the remaining runtime orchestration, mutable feature state and lifecycle, with its internal SCRIPT_VERSION injected by the build. Resources, diagnostics, page context/DOM interpretation and card markup now have separate owners and live callers. No parallel implementation or public legacy state bag is introduced.
 
 The temporary runtime entry is replaced by application composition in P20, then removed in P21. The exact source responsibility transfers follow MigrationPlan.md; this document is updated as those capabilities become real.
 
 ## Resources and localization
 
-`src/dom-names.js` declares shared script-owned IDs/classes/attributes and prior-version cleanup IDs. Feature-private markers remain with their existing callers; Netflix-owned selectors remain in legacy until P05. DOM detection does not use translated display text.
+`src/dom-names.js` declares shared script-owned IDs/classes/attributes and prior-version cleanup IDs. Feature-private markers remain with their existing callers; the shared Netflix-owned selector catalog lives in netflix/page-dom.js. DOM detection does not use translated display text.
 
 `src/i18n/i18n.js` creates a localization capability with a narrow `readLanguage` callback. It reads language lazily, normalizes regional forms, chooses supported UI locales and limits diagnostic text to English/Japanese. Its public operations translate UI/log messages and format numbers, counts and initialization time. Message interpolation and base-language parsing remain private. The two neighboring message files own all existing literal translations; neither tables nor implementations remain duplicated in legacy.
 
-The locale reader still uses the existing document/navigator interpretation in legacy until P05 transfers it to netflix/context.js. Header/error assembly stays with its current presentation callers because it reads list/viewing state; localization owns only the display formatting it consumes. Final dependency injection replaces the residual consumers in P20.
+The locale reader uses netflix/context.js's lazy document/navigator interpretation. Header/error assembly stays with its current presentation callers because it reads list/viewing state; localization owns only the display formatting it consumes. Final dependency injection replaces the residual consumers in P20.
 
 `src/grid/styles.js` owns the existing stylesheet and imports shared selectors from dom-names.js. `installStyles(document)` creates one style element or returns the existing one; `removeStyles(document)` removes it idempotently. Importing the module only assembles literal CSS. Legacy invokes installation/cleanup at the same route points until grid frame ownership transfers in P11. This step adds no listener, observer or request.
 
@@ -57,6 +60,14 @@ Inspection receives current-session checks, a current-token reader, a mounted-gr
 
 All other counters, hover preview presence timers, frame samples and image-resource measurements remain in legacy until their planned feature transfers. Performance snapshots merge the inspection's copied counters at the original report field. Legacy composes these capabilities through exact temporary imports until P20 moves composition into app; upcoming data/native owners receive their declared operations through injected collaborators.
 
+## Netflix page and markup boundaries
+
+`src/netflix/context.js` reads HTML/browser language, the current active userGuid, wrapped/app/react model fallbacks, raw page GraphQL bootstrap and request context on demand. Viewing context retains same-origin HTTPS endpoint validation, descriptor/string/build variants and transient authorization; list context returns only build/locale header facts. The raw bootstrap is consumed by residual protocol interpretation until P06; viewing wire requests move in P07. The adapter has no stored profile, feature state, request or observer. Existing publication/storage guards use its current profile reader.
+
+`src/netflix/page-dom.js` owns the shared Netflix selector catalog, section/empty-placeholder placement, native identity/URL/tracking parsing and membership-click decoding. Discovery uses structural anchors before GraphQL section ID/card overlap, skipping synthetic rows. Click decoding returns UI/identity facts; the current list logic still decides add/remove from membership because Netflix's Undo UI can advertise remove during an add. The overlap fallback now iterates the current native sections, correcting its previous undefined-variable error. Source/mutation observers retain their current lifetime owners until P08/P14; explicit DOM operations create no listeners or polling.
+
+`src/netflix/card-markup.js` captures native items or one shared template, builds from an explicitly supplied source/record, clears inherited preparation attributes and normalizes cloned card/image markup. It shares page-DOM's URL interpretation and owns no registry or retained material. Legacy selects source markup, releases startup snapshots and adds group controls through narrow wrappers until P11/P12. Cloning preserves complete native trees without copying JavaScript React graft properties. Collection/build chunking, snapshot release and Undo retention remain with their existing owners.
+
 ## Verification boundary
 
 `tests/performance.test.cjs` retains residual baseline regression scenarios. Its temporary `tests/helpers/legacy-source.cjs` loader reads remaining declarations from authored `src/legacy.js`; bundler indentation/function spelling is not its input. Viewing fixtures now consume the real localization capability instead of extracted tables/helpers. The baseline locale coverage case moved to `tests/i18n.test.js`, alongside normalization, fallback, plural and number/time scenarios. `tests/grid.test.js` checks stylesheet installation/removal/reuse and inert resource imports. Further capability migrations move cases to public-interface suites, removing the loader and residual suite by P21.
@@ -66,5 +77,7 @@ All other counters, hover preview presence timers, frame samples and image-resou
 The bundle suite also checks reproducible generation, metadata and version agreement, absence of external imports, read-only rejection of stale source/output and altered installation settings, and side-effect-free legacy import. `tests/helpers/dom.js` and `scheduler.js` provide mock DOM/timer behavior; they contain no duplicated production policy. Temporary build fixtures are created under a unique ignored workspace path, validated and removed after use.
 
 `tests/diagnostics.test.js` exercises the new public logger/report/inspection boundaries, including the eight baseline logging and pure probe scenarios transferred from the residual suite. It adds formatter fidelity, private snapshot ownership/current-session rejection and clipboard success/failure cleanup checks. Residual collection, viewing-report and native-preview cases invoke the actual capabilities with their existing feature fixtures; their feature mechanics move in later steps. A bundle case clicks the generated CopyLogs control, checks export without requests and verifies retained history across route reentry.
+
+`tests/netflix-data.test.js` exercises the real context/page-DOM/markup interfaces: lazy profile/model fallbacks, endpoint safety, structural/GraphQL discovery including disconnected sections, tracking/modal identity and cloned preparation cleanup. Residual profile, request, chunked construction, registry/Undo and preview integration cases use the same adapters with fixture collaborators; those complete workflows move with their feature owners in later steps. DOM helper additions model compound attribute selectors and cloneNode without copying arbitrary JavaScript properties.
 
 These tests prove offline control flow and build consistency. They do not establish Netflix DOM/private React compatibility, real browser frame times or a faster runtime.
