@@ -838,8 +838,8 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | Step | Outcome | Status |
 | --- | --- | --- |
 | P01 | Reproducible build and transitional test entry | Complete — 1.4.6; commit ffb31df |
-| P02 | CI and output/dependency checks | Complete — tooling only; evidence below |
-| P03 | Localization, DOM names and styling | Next ready — authorized goal |
+| P02 | CI and output/dependency checks | Local checks complete — hosted CI repair/recheck |
+| P03 | Localization, DOM names and styling | Next after P02 hosted CI — authorized goal |
 | P04 | Logging/reporting and bounded popup inspection | Planned — authorized goal |
 | P05 | Context, page DOM and card markup adapters | Planned — authorized goal |
 | P06 | My List data adapter | Planned — authorized goal |
@@ -882,6 +882,8 @@ Created .github/workflows/check.yml for Windows and Linux. The workflow reads th
 Four additional bundle cases use real esbuild dependency metadata from isolated fixtures. The three negative cases fail before graph enforcement and then prove rejection of forbidden/private imports, cycles, dormant modules and unlisted legacy imports. A positive composed fixture exercises allowed application/public-feature/Netflix/support imports and private neighbors. These checks catch empty imported modules even when their code is absent from the emitted bundle. P01's stale-source scenario retains its existing imports so it continues specifically exercising output inconsistency after graph enforcement.
 
 Evidence: fresh `npm ci`, check-before-build, **339 passing tests**, build, repeated check, distributable syntax and whitespace checks pass. No failed/cancelled/skipped cases. Review confirms the userscript, authored runtime, package/lock and **1.4.6** version are unchanged by P02. The workflow uses locally verified commands; its first hosted execution becomes observable after pushing this checkpoint. Graph enforcement complements the later ownership/purity/caller audits; it does not prove them by itself.
+
+The first hosted run for commit **3ccca0e** passes dependencies, committed-output checks, all 339 cases, reproducible generation and syntax on Linux, then fails its whitespace step. With checkout's default depth of one, `git show --check HEAD` treats HEAD as a root commit and checks the entire historical tree, including existing whitespace in protected context.md. The workflow is corrected to fetch depth two so HEAD's actual diff is checked. This changes no runtime file or protected context; the corrected hosted run must be checked before proceeding to P03.
 
 #### Temporary production import exceptions
 
