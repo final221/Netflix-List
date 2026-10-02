@@ -8,6 +8,7 @@ import { createListData } from '../src/netflix/list-data.js';
 import { createViewingData } from '../src/netflix/viewing-data.js';
 import { createPopupInspection } from '../src/netflix/popup-inspection.js';
 import { createScheduler } from './helpers/scheduler.js';
+import { createSessionScope } from '../src/app/session-scope.js';
 import { carouselEdge, carouselPayload, pageBootstrapHtml, atom, reference, viewingVideo } from './helpers/fixtures.js';
 
 function environment() {
@@ -175,36 +176,24 @@ test('markup capture and shared-template cloning preserve identity and clear inh
 function dataEnvironment(count = 4, overrides = {}) {
     const e = environment();
     const scheduler = createScheduler();
-    const requests = [], responses = [], logs = [], warnings = [], controllers = new Set();
-    let currentToken = 1;
+    const requests = [], responses = [], logs = [], warnings = [];
+    const scope = createSessionScope({ isTargetPage: () => true, AbortController,
+        setTimeout: scheduler.setTimeout, clearTimeout: scheduler.clearTimeout });
+    scope.begin();
     const graph = { MyList: { __typename: 'PinotCarouselSection', _id: 'row-id', id: 'list-section',
         entities: { totalCount: count, edges: [{ node: { __ref: 'standardBoxshot_Video:1' } }] },
         eventListeners: [{ notificationMessageRegex: 'UPDATE_PLAYLIST' }] } };
     e.window.netflix.reactContext = { models: { graphql: { data: graph } } };
-    const assertCurrent = token => {
-        if (token !== null && token !== undefined && token !== currentToken) {
-            throw Object.assign(new Error('Cancelled'), { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
-        }
-    };
+    const assertCurrent = scope.assertCurrent;
     const inspection = createPopupInspection({ Element, now: () => scheduler.performance.now(),
-        isCurrentSession: token => token === currentToken, readSessionToken: () => currentToken,
+        isCurrentSession: token => token === scope.token, readSessionToken: () => scope.token,
         isSourceMounted: () => false, readSourceCard: () => null });
     const adapter = createListData({ context: e.context, pageDom: e.dom, location: e.location,
         performance: scheduler.performance, now: () => 1000, assertCurrent,
         isCancelled: error => error?.code === 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED',
         createError: (code, stage, message, details) => Object.assign(new Error(message), { code, stage, details }),
         log: (name, details) => logs.push({ name, details }), warn: (name, details) => warnings.push({ name, details }), tLog: value => value,
-        beginRequest: token => {
-            assertCurrent(token);
-            const controller = new AbortController();
-            controllers.add(controller);
-            return { controller, timeoutId: scheduler.setTimeout(() => controller.abort(), 10000) };
-        },
-        finishRequest: request => {
-            scheduler.clearTimeout(request.timeoutId);
-            request.controller.abort();
-            controllers.delete(request.controller);
-        },
+        beginRequest: scope.beginRequest, finishRequest: scope.finishRequest,
         runChunks: async (length, build, active) => {
             for (let index = 0; index < length; index++) { active(); build(index); }
             active(); return true;
@@ -224,9 +213,9 @@ function dataEnvironment(count = 4, overrides = {}) {
                 } };
         }, ...overrides });
     const page = (...args) => ({ payload: carouselPayload(...args) });
-    const collect = bootstrap => adapter.collectRecords({ bootstrap, totalCount: count, sessionToken: currentToken });
-    return { ...e, scheduler, adapter, graph, requests, responses, logs, warnings, controllers, inspection,
-        page, collect, setToken: value => { currentToken = value; }, assertCurrent };
+    const collect = bootstrap => adapter.collectRecords({ bootstrap, totalCount: count, sessionToken: scope.token });
+    return { ...e, scheduler, adapter, graph, requests, responses, logs, warnings, scope, inspection,
+        page, collect, setToken: value => { while (scope.token < value) scope.begin(); }, assertCurrent };
 }
 
 test('list data hides wire responses and continuation while resuming the original row once', async () => {
@@ -244,7 +233,7 @@ test('list data hides wire responses and continuation while resuming the origina
     assert.equal(bootstrap.edgeCount, 75);
     assert.deepEqual(result.records.map(record => record.videoId), Array.from({ length: 150 }, (_, index) => String(index + 1)));
     assert.deepEqual(Object.keys(result.records[0]).sort(), ['ariaLabel', 'href', 'imageUrl', 'videoId']);
-    assert.equal(e.controllers.size, 0);
+    assert.equal(e.scope.requestCount(), 0);
     assert.equal(e.scheduler.timers.size, 0);
 });
 
@@ -299,7 +288,7 @@ test('list data rejects stale bodies before surveying or initiating fallback req
     assert.equal(e.requests.length, 1);
     assert.equal(e.warnings.length, 0);
     assert.equal(e.inspection.diagnostics().responsePages, 0);
-    assert.equal(e.controllers.size, 0);
+    assert.equal(e.scope.requestCount(), 0);
     assert.equal(e.scheduler.timers.size, 0);
 });
 
@@ -321,7 +310,7 @@ test('optional pagination HTTP, parse, count and cursor failures preserve the va
         assert.ok(result.error?.code, failure);
         assert.ok(e.requests.every(request => request.options.method === 'POST'));
         assert.ok(e.requests.length <= 2);
-        assert.equal(e.controllers.size, 0);
+        assert.equal(e.scope.requestCount(), 0);
         assert.equal(e.scheduler.timers.size, 0);
     }
 });
@@ -342,7 +331,7 @@ test('optional pagination timeout retains bootstrap while count timeout uses fre
     assert.equal(result.records, null);
     assert.equal(result.error.code, 'FRESH_MY_LIST_CAROUSEL_TIMEOUT');
     assert.equal(e.requests.length, 2);
-    assert.equal(e.controllers.size, 0);
+    assert.equal(e.scope.requestCount(), 0);
     assert.equal(e.scheduler.timers.size, 0);
     const f = dataEnvironment();
     f.responses.push({ ...f.page(4, [1, 2]), waitFetch: waitForAbort }, { raw: pageBootstrapHtml(4) });
@@ -354,7 +343,7 @@ test('optional pagination timeout retains bootstrap while count timeout uses fre
     assert.deepEqual(f.requests.map(request => request.options.method), ['POST', 'GET']);
     assert.equal(f.warnings.length, 1);
     assert.equal(f.warnings[0].details.code, 'FRESH_MY_LIST_CAROUSEL_TIMEOUT');
-    assert.equal(f.controllers.size, 0);
+    assert.equal(f.scope.requestCount(), 0);
     assert.equal(f.scheduler.timers.size, 0);
 });
 
@@ -368,7 +357,7 @@ test('invalid first-page counts and responses use HTML rather than a false empty
         assert.equal(bootstrap.totalCount, 4);
         assert.equal(bootstrap.firstVideoId, '7');
         assert.deepEqual(e.requests.map(request => request.options.method), ['POST', 'GET']);
-        assert.equal(e.controllers.size, 0);
+        assert.equal(e.scope.requestCount(), 0);
         assert.equal(e.scheduler.timers.size, 0);
     }
 });
@@ -383,7 +372,7 @@ test('zero and complete single-page data avoid further requests', async () => {
         assert.equal(bootstrap.firstVideoId, count ? '1' : '');
         assert.equal(e.requests.length, 1);
         assert.equal(result.records.length, count);
-        assert.equal(e.controllers.size, 0);
+        assert.equal(e.scope.requestCount(), 0);
     }
 });
 
@@ -397,7 +386,7 @@ test('the eight-page limit never publishes a partial data collection', async () 
     assert.equal(result.bootstrap, bootstrap);
     assert.equal(result.records, null);
     assert.equal(result.error.code, 'FRESH_MY_LIST_CAROUSEL_PAGE_LIMIT');
-    assert.equal(e.controllers.size, 0);
+    assert.equal(e.scope.requestCount(), 0);
     assert.equal(e.scheduler.timers.size, 0);
 });
 
@@ -423,7 +412,7 @@ test('a retained continuation cannot be borrowed by another route session', asyn
     e.setToken(2);
     await assert.rejects(e.collect(bootstrap), { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
     assert.equal(e.requests.length, 1);
-    assert.equal(e.controllers.size, 0);
+    assert.equal(e.scope.requestCount(), 0);
 });
 
 test('normalization keeps native order and metadata while skipping malformed and duplicate nodes', async () => {

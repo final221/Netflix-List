@@ -15,6 +15,7 @@ import { createI18n } from './i18n/i18n.js';
 import { installStyles, removeStyles } from './grid/styles.js';
 import { createListData } from './netflix/list-data.js';
 import { createViewingData } from './netflix/viewing-data.js';
+import { createSessionScope } from './app/session-scope.js';
 
 // Transitional runtime; responsibilities move to their declared owners in P03-P20.
 export function startLegacy() {
@@ -60,6 +61,8 @@ export function startLegacy() {
     const LOGICAL_COLLECTION_TIMEOUT_MS = 120000;
     const TOTAL_COUNT_TIMEOUT_MS = 5000;
     const FRESH_MY_LIST_FETCH_TIMEOUT_MS = 10000;
+    const sessionScope = createSessionScope({ isTargetPage, AbortController, setTimeout, clearTimeout,
+        requestTimeoutMs: FRESH_MY_LIST_FETCH_TIMEOUT_MS });
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
     const VIEWING_TITLE_BATCH_SIZE = viewingData.limits.titleBatch;
@@ -102,7 +105,7 @@ export function startLegacy() {
     const { log, warn, trace } = logger;
     const popupInspection = createPopupInspection({ Element, now: () => performance.now(),
         isCurrentSession: token => targetSessionActive && isRouteSessionActive(token),
-        readSessionToken: () => routeSessionToken, isSourceMounted: () => Boolean(sourceState?.grid?.isConnected),
+        readSessionToken: () => sessionScope.token, isSourceMounted: () => Boolean(sourceState?.grid?.isConnected),
         readSourceCard: () => sourceState.track?.querySelector(NETFLIX_DOM_SELECTORS.standardCard) });
     const diagnosticReport = createReport({ logger, version: SCRIPT_VERSION, document, navigator, tLog,
         readEnvironment: () => ({ url: location.href, userAgent: navigator.userAgent, browserLanguage: navigator.language || '',
@@ -199,8 +202,6 @@ export function startLegacy() {
     let lastResponsiveReason = '';
     let lastObservedUrl = location.href;
     let routeChangeSequence = 0;
-    let routeSessionToken = 0;
-    const routeFetchControllers = new Map();
     let targetSessionActive = false;
     let targetSessionEntryKind = 'initial';
     let targetSessionReason = 'route:initial';
@@ -332,7 +333,7 @@ export function startLegacy() {
         const counters = performanceDiagnostics.hoverFrames;
         try {
             if (!Object.hasOwn(HOVER_FRAME_DIAGNOSTIC_LIMITS, `${phase}Ms`)) return;
-            if (!isRouteSessionActive(routeSessionToken)) return;
+            if (!isRouteSessionActive(sessionScope.token)) return;
             if (hoverFrameDiagnosticOwner && hoverFrameDiagnosticOwner.counters !== counters) {
                 stopHoverFrameDiagnostics('owner-replaced');
             }
@@ -347,7 +348,7 @@ export function startLegacy() {
             const now = performance.now();
             let owner = hoverFrameDiagnosticOwner;
             if (!owner) {
-                owner = { counters, sessionToken: routeSessionToken, frame: null, previousAt: now, mixedPhase: false };
+                owner = { counters, sessionToken: sessionScope.token, frame: null, previousAt: now, mixedPhase: false };
                 hoverFrameDiagnosticOwner = owner;
             }
             // Preserve an outstanding callback's baseline across phase changes:
@@ -447,7 +448,7 @@ export function startLegacy() {
         const counters = performanceDiagnostics.hoverInteraction;
         try {
             const replay = activeClone === clone ? activeNativeHover : null;
-            const afterReplay = Boolean(replay && replay.sessionToken === routeSessionToken);
+            const afterReplay = Boolean(replay && replay.sessionToken === sessionScope.token);
             const sinceReplayMs = afterReplay ? Math.max(0, Math.round(performance.now() - replay.replayedAt)) : null;
             const coordinatesKnown = Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY);
             const pointerDeltaPx = afterReplay && coordinatesKnown ? Math.round(Math.hypot(
@@ -585,17 +586,15 @@ export function startLegacy() {
     }
 
     function isRouteSessionActive(sessionToken) {
-        return sessionToken === routeSessionToken && targetSessionActive && isTargetPage();
+        return sessionScope.isCurrent(sessionToken);
     }
 
     function createRouteSessionCancelledError() {
-        const error = new Error('Target route session cancelled');
-        error.code = 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED';
-        return error;
+        return sessionScope.cancelledError();
     }
 
     function isRouteSessionCancelledError(error) {
-        return error?.code === 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED';
+        return sessionScope.isCancelled(error);
     }
 
     function assertRouteSession(sessionToken) {
@@ -605,32 +604,11 @@ export function startLegacy() {
 
     function createRouteFetch(sessionToken) {
         assertRouteSession(sessionToken);
-        const controller = new AbortController();
-        if (sessionToken !== null && sessionToken !== undefined) {
-            let controllers = routeFetchControllers.get(sessionToken);
-            if (!controllers) routeFetchControllers.set(sessionToken, controllers = new Set());
-            controllers.add(controller);
-        }
-        const timeoutId = setTimeout(() => controller.abort(), FRESH_MY_LIST_FETCH_TIMEOUT_MS);
-        return { controller, timeoutId, sessionToken };
+        return sessionScope.beginRequest(sessionToken);
     }
 
     function finishRouteFetch(request) {
-        clearTimeout(request.timeoutId);
-        // An HTTP failure can leave its response body unread. Close it along
-        // with the request scope; completed/previously aborted requests are safe.
-        request.controller.abort();
-        const controllers = routeFetchControllers.get(request.sessionToken);
-        controllers?.delete(request.controller);
-        if (controllers?.size === 0) routeFetchControllers.delete(request.sessionToken);
-    }
-
-    function abortObsoleteRouteFetches() {
-        for (const [sessionToken, controllers] of routeFetchControllers) {
-            if (isRouteSessionActive(sessionToken)) continue;
-            routeFetchControllers.delete(sessionToken);
-            for (const controller of controllers) controller.abort();
-        }
+        sessionScope.finishRequest(request);
     }
 
     function hoverPreparationCancelled(token) {
@@ -781,10 +759,9 @@ export function startLegacy() {
 
     function suspendTargetSession(reason = 'route-leave') {
         const hadSession = targetSessionActive || running || sourceState || completedSection || scheduled;
-        const previousToken = routeSessionToken;
-        routeSessionToken++;
+        const previousToken = sessionScope.token;
+        sessionScope.dispose();
         targetSessionActive = false;
-        abortObsoleteRouteFetches();
         stopImageResourceDiagnostics();
         stopHoverFrameDiagnostics();
 
@@ -836,24 +813,23 @@ export function startLegacy() {
             log(tLog('targetSessionSuspended'), {
                 reason,
                 previousToken,
-                nextToken: routeSessionToken,
+                nextToken: sessionScope.token,
                 url: location.href
             });
         }
     }
 
     function startTargetSession(reason = 'route-enter') {
-        routeSessionToken++;
+        sessionScope.begin();
         targetSessionActive = true;
-        abortObsoleteRouteFetches();
         initializationBlockedSessionToken = null;
         nativeInitializationFailure = null;
         performanceDiagnostics = createPerformanceDiagnostics();
         popupInspection.reset();
-        startImageResourceDiagnostics(routeSessionToken);
+        startImageResourceDiagnostics(sessionScope.token);
         targetSessionEntryKind = reason === 'route:initial' ? 'initial' : 'spa';
         targetSessionReason = reason;
-        const sessionToken = routeSessionToken;
+        const sessionToken = sessionScope.token;
         resetDetachedTargetState();
         startTargetEventListeners();
         log(tLog('targetSessionStarted'), {
@@ -893,7 +869,7 @@ export function startLegacy() {
         }
 
         resetDetachedTargetState();
-        scheduleRun(0, routeSessionToken);
+        scheduleRun(0, sessionScope.token);
     }
 
     function installSpaNavigationHooks() {
@@ -1020,7 +996,7 @@ export function startLegacy() {
             running,
             runningSessionToken,
             targetSessionActive,
-            routeSessionToken,
+            routeSessionToken: sessionScope.token,
             completed: Boolean(completedSection && completedSection.isConnected),
             selectedPage: section ? selectedPage(section) : null,
             pageCount: section ? pageCount(section) : null,
@@ -1084,7 +1060,7 @@ export function startLegacy() {
     function collectThumbnailDiagnostics(state = sourceState) {
         const grid = state?.grid;
         if (!state || state !== sourceState || !grid?.isConnected || !(state.cloneMap instanceof Map) ||
-            !isRouteSessionActive(routeSessionToken)) return { available: false, reason: 'no-current-grid' };
+            !isRouteSessionActive(sessionScope.token)) return { available: false, reason: 'no-current-grid' };
         const started = performance.now();
         const report = {
             available: true, scope: 'first-image-per-owned-card', limits: { ...THUMBNAIL_DIAGNOSTIC_LIMITS },
@@ -1949,8 +1925,7 @@ export function startLegacy() {
         network.inFlight++;
         network.peakInFlight = Math.max(network.peakInFlight, network.inFlight);
         let succeeded = false;
-        clearTimeout(request.timeoutId);
-        request.timeoutId = setTimeout(() => request.controller.abort(), Math.min(8000, remaining));
+        sessionScope.setRequestTimeout(request, Math.min(8000, remaining));
         try {
             // The scan owns quota, deadline and resource accounting; the adapter owns HTTP/wire data.
             const result = await readBatch({ signal: request.controller.signal, assertCurrent: () => assertViewingJob(job) });
@@ -3151,14 +3126,14 @@ export function startLegacy() {
         for (const entry of recentRemovedMyListItems.values()) {
             if (Number.isFinite(entry?.removedAt)) dueAt = Math.min(dueAt, entry.removedAt + UNDO_ENTRY_TTL_MS);
         }
-        if (!Number.isFinite(dueAt) || !isRouteSessionActive(routeSessionToken)) {
+        if (!Number.isFinite(dueAt) || !isRouteSessionActive(sessionScope.token)) {
             clearUndoExpiryTimer();
             return;
         }
-        if (undoExpiryTimer?.dueAt === dueAt && undoExpiryTimer.sessionToken === routeSessionToken) return;
+        if (undoExpiryTimer?.dueAt === dueAt && undoExpiryTimer.sessionToken === sessionScope.token) return;
         clearUndoExpiryTimer();
         // Capture only the timer owner, never a card or a removed-entry array.
-        const owner = { id: null, sessionToken: routeSessionToken, dueAt };
+        const owner = { id: null, sessionToken: sessionScope.token, dueAt };
         undoExpiryTimer = owner;
         performanceDiagnostics.undoRetention.schedules++;
         owner.id = setTimeout(() => {
@@ -3744,7 +3719,7 @@ export function startLegacy() {
             visibleItems: visibleItems.length
         });
 
-        const sessionToken = routeSessionToken;
+        const sessionToken = sessionScope.token;
         cleanupTargetSessionDom();
         resizeObserver?.disconnect();
         resizeObserver = null;
@@ -3859,8 +3834,8 @@ export function startLegacy() {
     function tryApplyMyListMutation(mutation, reason = 'event') {
         if (!mutation || pendingMyListMutations.get(mutation.videoId) !== mutation) return false;
         if (!sourceState || !isTargetPage()) return false;
-        if (running || responsiveRefreshing || (nativeInitializationFailure?.sessionToken === routeSessionToken &&
-            initializationBlockedSessionToken === routeSessionToken)) {
+        if (running || responsiveRefreshing || (nativeInitializationFailure?.sessionToken === sessionScope.token &&
+            initializationBlockedSessionToken === sessionScope.token)) {
             mutation.deferredWhileBusy = true;
             return false;
         }
@@ -4037,7 +4012,7 @@ export function startLegacy() {
 
     async function reinitializeAfterOrderMismatch() {
         if (orderMismatchReinitializing || running || !isTargetPage() || !targetSessionActive) return;
-        const sessionToken = routeSessionToken;
+        const sessionToken = sessionScope.token;
         orderMismatchReinitializing = true;
         orderMismatchDismissed = true;
         hideOrderMismatchDialog();
@@ -5052,7 +5027,7 @@ export function startLegacy() {
         assertRouteSession(sessionToken);
         const proof = bootstrap.mountedSinglePageProof;
         if (!proof || targetSessionEntryKind !== 'spa' || !targetSessionReason.startsWith('route:') ||
-            !isRouteSessionActive(proof.sessionToken) || proof.sessionToken !== routeSessionToken ||
+            !isRouteSessionActive(proof.sessionToken) || proof.sessionToken !== sessionScope.token ||
             bootstrap.totalCount !== totalCount || !Number.isSafeInteger(columns) || totalCount > columns) {
             return { items: null, reason: 'proof-or-entry-no-longer-valid' };
         }
@@ -5102,7 +5077,7 @@ export function startLegacy() {
                     firstVideoId: videoIds[0] || null,
                     source: 'mounted-single-page-fast-path',
                     elapsedMs: Math.round(performance.now() - started),
-                    mountedSinglePageProof: { section, scroller, track, signature, sessionToken: routeSessionToken }
+                    mountedSinglePageProof: { section, scroller, track, signature, sessionToken: sessionScope.token }
                 };
                 log('Mounted single-page My List fast bootstrap confirmed', {
                     totalCount, firstVideoId: result.firstVideoId, source: result.source, elapsedMs: result.elapsedMs,
@@ -8056,7 +8031,7 @@ export function startLegacy() {
             relatedTarget: null
         };
 
-        const owner = { card, sourceSlot, coordinates: common, token: hoverToken, sessionToken: routeSessionToken,
+        const owner = { card, sourceSlot, coordinates: common, token: hoverToken, sessionToken: sessionScope.token,
             videoId: videoIdFromHref(card.href || card.getAttribute('href') || ''),
             counters: performanceDiagnostics.hoverLifecycle, timing: performanceDiagnostics.hoverTiming,
             replayedAt: performance.now() };
@@ -8085,7 +8060,7 @@ export function startLegacy() {
     }
 
     function scheduleNativeHoverReplay(sourceSlot, item, clone, triggerEvent, actualPage, reason,
-        token = hoverToken, sessionToken = routeSessionToken) {
+        token = hoverToken, sessionToken = sessionScope.token) {
         const generation = clone?.__tmHoverActivationGeneration;
         const counters = performanceDiagnostics.hoverLifecycle;
         const timing = performanceDiagnostics.hoverTiming;
@@ -8557,7 +8532,7 @@ export function startLegacy() {
         }
 
         const token = advanceHoverToken('superseded');
-        const sessionToken = routeSessionToken;
+        const sessionToken = sessionScope.token;
         startHoverFrameDiagnostics('preparation');
         clone.setAttribute('data-tm-hover-token', String(token));
         clone.setAttribute('data-tm-preparing', 'true');
@@ -8857,7 +8832,7 @@ export function startLegacy() {
         }, { capture: true, passive: true });
     }
 
-    async function buildGrid(section, scroller, items, layout, totalCount, sessionToken = routeSessionToken) {
+    async function buildGrid(section, scroller, items, layout, totalCount, sessionToken = sessionScope.token) {
         const buildState = sourceState;
         const track = buildState?.track;
         const assertBuildActive = () => {
@@ -9093,7 +9068,7 @@ export function startLegacy() {
         return wasAtCompatibleTail ? info : null;
     }
 
-    async function rebuildLogicalPageModelFromNativePosition(layout, reason = 'responsive-remap', sessionToken = routeSessionToken) {
+    async function rebuildLogicalPageModelFromNativePosition(layout, reason = 'responsive-remap', sessionToken = sessionScope.token) {
         assertRouteSession(sessionToken);
         const live = ensureLiveNativeBinding('logical-page-model-rebuild-start') || sourceState;
         const section = live?.section || sourceState?.section;
@@ -9246,7 +9221,7 @@ export function startLegacy() {
         }
     }
 
-    async function remapItemsByOrder(layout, sessionToken = routeSessionToken) {
+    async function remapItemsByOrder(layout, sessionToken = sessionScope.token) {
         const { section, items, cloneMap } = sourceState;
         const columns = Math.max(1, layout.columns);
         const runtime = getCarouselDomRuntime(section);
@@ -9283,7 +9258,7 @@ export function startLegacy() {
         return changed;
     }
 
-    async function refreshResponsiveLayout(sessionToken = routeSessionToken) {
+    async function refreshResponsiveLayout(sessionToken = sessionScope.token) {
         if (!isRouteSessionActive(sessionToken) || !sourceState?.grid?.isConnected || responsiveRefreshing) return;
         const state = sourceState;
         const { section, scroller, track } = state;
@@ -9406,7 +9381,7 @@ export function startLegacy() {
     }
 
     function scheduleResponsiveRefresh(delay = 140, reason = 'unknown') {
-        const sessionToken = routeSessionToken;
+        const sessionToken = sessionScope.token;
         if (!isRouteSessionActive(sessionToken) || !sourceState?.grid?.isConnected) return;
         const state = sourceState;
         lastResponsiveReason = reason;
@@ -9681,7 +9656,7 @@ export function startLegacy() {
     function handleRelevantTargetDocumentMutation() {
         if (completedSection || (waitingForNativeEmpty && sourceState?.empty)) {
             if (targetMutationFrame !== null) return;
-            const sessionToken = routeSessionToken;
+            const sessionToken = sessionScope.token;
             targetMutationFrame = requestAnimationFrame(() => {
                 targetMutationFrame = null;
                 if (!isRouteSessionActive(sessionToken)) return;
@@ -9693,7 +9668,7 @@ export function startLegacy() {
             });
             return;
         }
-        scheduleRun(40, routeSessionToken);
+        scheduleRun(40, sessionScope.token);
     }
 
     function isScriptOwnedMyListNode(node) {
@@ -9729,9 +9704,9 @@ export function startLegacy() {
         if (activeNativeHover?.previewRoot && !activeNativeHover.previewRoot.isConnected) {
             releaseNativePreview(activeNativeHover, 'preview-removed');
         }
-        if (initializationBlockedSessionToken === routeSessionToken) {
+        if (initializationBlockedSessionToken === sessionScope.token) {
             if (mutations.some(mutation => !mutationOnlyChangesScriptUi(mutation))) {
-                recoverNativeInitialization(routeSessionToken, 'document-mutation');
+                recoverNativeInitialization(sessionScope.token, 'document-mutation');
             }
             return;
         }
@@ -9868,7 +9843,7 @@ export function startLegacy() {
         return true;
     }
 
-    async function runScript(sessionToken = routeSessionToken) {
+    async function runScript(sessionToken = sessionScope.token) {
         if (!isRouteSessionActive(sessionToken)) return;
         if (initializationBlockedSessionToken === sessionToken) {
             recoverNativeInitialization(sessionToken, 'run');
@@ -10412,7 +10387,7 @@ export function startLegacy() {
         }
     }
 
-    function scheduleRun(delayMs = 40, sessionToken = routeSessionToken) {
+    function scheduleRun(delayMs = 40, sessionToken = sessionScope.token) {
         if (!isRouteSessionActive(sessionToken)) return;
         if (initializationBlockedSessionToken === sessionToken) return;
 

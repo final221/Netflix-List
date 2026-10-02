@@ -13,6 +13,7 @@ const { createNetflixPageDom } = require('../src/netflix/page-dom.js');
 const { createCardMarkup } = require('../src/netflix/card-markup.js');
 const { createListData } = require('../src/netflix/list-data.js');
 const { createViewingData } = require('../src/netflix/viewing-data.js');
+const { createSessionScope } = require('../src/app/session-scope.js');
 const { carouselPayload, atom, reference, viewingVideo } = require('./helpers/fixtures.js');
 
 // Exercise residual authored functions without executing Netflix startup.
@@ -112,6 +113,10 @@ function environment(names, overrides = {}) {
         initializeWatchGroups: () => {},
         ...overrides
     });
+    c.sessionScope = createSessionScope({ isTargetPage: () => c.targetSessionActive && c.isTargetPage(), AbortController,
+        setTimeout: (...args) => c.setTimeout(...args), clearTimeout: key => c.clearTimeout(key) });
+    c.sessionScope.begin();
+    Object.defineProperty(c, 'routeSessionToken', { get: () => c.sessionScope.token, configurable: true });
     vm.runInContext(source.match(/^    const HOVER_FRAME_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_INTERRUPTION_LOG_LIMIT = \d+;/m)?.[0] || '', c);
@@ -3815,7 +3820,7 @@ function fetchEnvironment(count = 150) {
     const requests = [], responses = [];
     e.c.document.documentElement = { lang: 'en' };
     Object.assign(e.c, {
-        AbortController, routeFetchControllers: new Map(),
+        AbortController,
         FRESH_MY_LIST_FETCH_TIMEOUT_MS: 10000, GRAPHQL_COLLECTION_PAGE_SIZE: 75, GRAPHQL_COLLECTION_MAX_PAGES: 8,
         fixtureGraphqlData: { MyList: { __typename: 'PinotCarouselSection', _id: 'row-id',
             entities: { totalCount: count }, eventListeners: [{ notificationMessageRegex: 'UPDATE_PLAYLIST' }] } },
@@ -3840,7 +3845,7 @@ function fetchEnvironment(count = 150) {
             };
         }
     });
-    for (const name of ['isRouteSessionActive', 'createRouteFetch', 'finishRouteFetch', 'abortObsoleteRouteFetches'])
+    for (const name of ['isRouteSessionActive', 'createRouteFetch', 'finishRouteFetch'])
         vm.runInContext(declaration(name), e.c);
     e.c.listData = fixtureListData(e.c);
     function page(...args) { return { payload: carouselPayload(...args) }; }
@@ -3881,7 +3886,7 @@ test('SPA indicator and not-yet-mounted modes bootstrap one page without optiona
         assert.equal(anchor, '1');
         assert.equal(e.c.sourceState.items.length, 150);
         assert.equal(e.c.completedSection, e.section, e.warnings.map(entry => entry.details.error?.message).join(', '));
-        assert.equal(e.c.routeFetchControllers.size, 0);
+        assert.equal(e.c.sessionScope.requestCount(), 0);
     }
 });
 
@@ -3949,7 +3954,7 @@ test('route cancellation stops data normalization at its existing construction q
     await rejected;
     assert.equal(normalized, 24);
     assert.equal(e.created.length, 0);
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.requests.length, 1);
 });
 
@@ -3974,7 +3979,7 @@ test('verified mounted single-page reuse skips membership fetches and preserves 
     assert.equal(work.reused, 1);
     assert.equal(work.requestsAvoided, 1);
     assert.equal(work.itemsCaptured, 6);
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
 
@@ -4082,7 +4087,7 @@ test('manual and initial entry cannot qualify mounted reuse and a stale route ca
     const e = mountedSinglePageEnvironment();
     const bootstrap = await e.qualify();
     const before = e.template.cloneCounter.count;
-    e.c.routeSessionToken = 2;
+    e.c.sessionScope.begin();
     await assert.rejects(e.c.collectLogicalListItems({ bootstrap, totalCount: 6, columns: 6,
         templateSlot: e.template, sessionToken: 1 }), error => e.c.isRouteSessionCancelledError(error));
     assert.equal(e.requests.length, 0);
@@ -4119,7 +4124,7 @@ test('full initialization uses native collection after optional pagination failu
     assert.equal(e.requests.length, 2);
     assert.equal(e.requests.every(request => request.options.method === 'POST'), true);
     assert.equal(e.warnings.some(entry => /fast collection failed/.test(entry.name)), true);
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
 });
 
 test('route suspension aborts GraphQL and HTML fetches, including their response bodies, without fallback warnings', async () => {
@@ -4136,14 +4141,14 @@ test('route suspension aborts GraphQL and HTML fetches, including their response
             await e.flush();
             const request = e.requests.at(-1);
             assert.equal(request.options.method, kind === 'html' ? 'GET' : 'POST');
-            assert.equal(e.c.routeFetchControllers.get(1).size, 1);
+            assert.equal(e.c.sessionScope.requestCount(1), 1);
             const warnings = e.warnings.length;
             e.c.suspendTargetSession('test-leave');
             assert.equal(request.options.signal.aborted, true, 'abort occurs synchronously on route suspension');
             await rejection;
             assert.equal(e.warnings.length, warnings, 'route abort adds no timeout/fallback warning');
             assert.equal(e.requests.length, kind === 'html' ? 2 : 1);
-            assert.equal(e.c.routeFetchControllers.size, 0);
+            assert.equal(e.c.sessionScope.requestCount(), 0);
             assert.equal(e.timers.size, 0);
         }
     }
@@ -4161,7 +4166,7 @@ test('route change during optional pagination rejects instead of returning retai
     e.c.suspendTargetSession('test-leave');
     await rejection;
     assert.equal(e.requests[1].options.signal.aborted, true);
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.warnings.length, 0);
     assert.equal(e.timers.size, 0);
 });
@@ -4180,11 +4185,11 @@ test('a new route session aborts old requests and old cleanup cannot remove its 
     await rejection;
     assert.equal(e.requests[0].options.signal.aborted, true);
     assert.equal(e.requests[1].options.signal.aborted, false);
-    assert.equal(e.c.routeFetchControllers.get(currentToken).size, 1);
+    assert.equal(e.c.sessionScope.requestCount(currentToken), 1);
     release.resolve();
     const bootstrap = await current;
     assert.equal(bootstrap.firstVideoId, '3');
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
     assert.equal(e.warnings.length, 0);
 });
@@ -4210,7 +4215,7 @@ test('logical SPA initialization waits for mode confirmation before continuing p
     assert.equal(e.requests.length, 2);
     assert.equal(e.c.sourceState.items.length, 150);
     assert.equal(e.c.completedSection, e.section, e.warnings.map(entry => entry.details.error?.message).join(', '));
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.c.running, false);
 });
 
@@ -4239,7 +4244,7 @@ test('HTTP failure cleanup aborts the unread response body and releases its cont
     assert.equal(result.error.code, 'FRESH_MY_LIST_CAROUSEL_HTTP_ERROR');
     assert.equal(e.requests[0].bodyRead, undefined);
     assert.equal(e.requests[0].options.signal.aborted, true);
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
 
@@ -4257,7 +4262,7 @@ const viewingFunctions = [
     'handleGridClonePointerOver', 'handleGridClonePointerLeave',
     'gridOwnsClone', 'createWatchTypeFilter', 'syncWatchTypeFilter', 'ensureWatchGroupUi', 'syncWatchChildOrder', 'syncWatchGroups',
     'initializeWatchGroups', 'refreshViewingStatus', 'createRouteFetch', 'finishRouteFetch',
-    'abortObsoleteRouteFetches', 'gridCloneFromPointerEvent', 'gridHoverTargetActive', 'gridHoverSuppressed', 'cancelPendingGridHover',
+    'gridCloneFromPointerEvent', 'gridHoverTargetActive', 'gridHoverSuppressed', 'cancelPendingGridHover',
     'formatHeaderParts'
 ];
 function viewingFixtures(extraEpisode = false) {
@@ -4319,7 +4324,7 @@ async function viewingEnvironment(count = 7, existing = null, storage = new Map(
             else storageCalls.writes++;
             storage.set(key, structuredClone(value));
         },
-        routeFetchControllers: new Map(), netflixModelData: name => models[name],
+        netflixModelData: name => models[name],
         getUiLocale: () => 'en', formatUiNumber: value => String(value), formatInitializationTime: () => 'time',
         fetch: async (url, options) => {
             const body = new URLSearchParams(options.body);
@@ -4448,7 +4453,7 @@ test('viewing overlap publishes a later title batch promptly and preserves nativ
     await e.state.watchStatus.promise;
     assert.deepEqual(completedViewingIds(e), Array.from({ length: 150 }, (_, index) => String(index + 1)));
     assert.equal(e.storageCalls.cacheWrites, 1);
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
 
@@ -4526,7 +4531,7 @@ test('viewing overlap keeps series dependencies ordered and drains valid partial
     assert.equal(network.peakInFlight, 2);
     assert.equal(e.requests.length, 6);
     assert.equal(e.storageCalls.cacheWrites, 1);
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
 
@@ -4538,12 +4543,11 @@ test('viewing overlap aborts both owned reads after route or profile cancellatio
         e.c.initializeWatchGroups(e.state, 1);
         await e.flush();
         assert.equal(pending.length, 2);
-        const unrelated = new AbortController();
+        const unrelated = reason === 'profile' ? e.c.createRouteFetch(1) : null;
         if (reason === 'route') {
             e.c.isRouteSessionActive = () => false;
-            e.c.abortObsoleteRouteFetches();
+            e.c.sessionScope.dispose();
         } else {
-            e.c.routeFetchControllers.get(1).add(unrelated);
             e.models.userInfo.userGuid = 'other-profile';
             pending[0].release();
         }
@@ -4552,14 +4556,12 @@ test('viewing overlap aborts both owned reads after route or profile cancellatio
         assert.equal(e.state.watchStatus.network.aborted, reason === 'route' ? 2 : 1,
             'transport aborts remain visible even when their session is obsolete');
         if (reason === 'profile') {
-            assert.equal(unrelated.signal.aborted, false, 'a viewing-job cancellation leaves unrelated route requests owned');
-            const controllers = e.c.routeFetchControllers.get(1);
-            controllers.delete(unrelated);
-            if (!controllers.size) e.c.routeFetchControllers.delete(1);
+            assert.equal(unrelated.controller.signal.aborted, false, 'a viewing-job cancellation leaves unrelated route requests owned');
+            e.c.finishRouteFetch(unrelated);
         }
         assert.equal(e.storageCalls.cacheWrites, 0);
         assert.equal(completedViewingIds(e).length, 0);
-        assert.equal(e.c.routeFetchControllers.size, 0);
+        assert.equal(e.c.sessionScope.requestCount(), 0);
         assert.equal(e.timers.size, 0);
         assert.equal(e.warnings.length, 0);
         if (reason === 'profile') assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_PROFILE_CHANGED');
@@ -4585,7 +4587,7 @@ test('viewing overlap stops allocating after a failed wave and shares the finite
         assert.equal(e.requests.length, fail ? 2 : 3);
         assert.equal(completedViewingIds(e).length, fail ? 50 : 150);
         assert.equal(e.state.watchStatus.failure, fail ? 'VIEWING_STATUS_HTTP_503' : 'VIEWING_STATUS_BUDGET');
-        assert.equal(e.c.routeFetchControllers.size, 0);
+        assert.equal(e.c.sessionScope.requestCount(), 0);
         assert.equal(e.timers.size, 0);
     }
 });
@@ -4614,7 +4616,7 @@ test('viewing overlap does not start a peer finale after a known metadata failur
     assert.ok(e.requests.every(request => request.paths[0][0] !== 'seasons'));
     assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
     assert.equal(completedViewingIds(e).length, 0);
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
 
@@ -4634,7 +4636,7 @@ test('viewing overlap honors request timeouts and the combined deadline without 
         assert.equal(e.state.watchStatus.network.aborted, 2);
         assert.equal(e.state.watchStatus.network.failed, 2);
         assert.equal(e.state.watchStatus.network.inFlight, 0);
-        assert.equal(e.c.routeFetchControllers.size, 0);
+        assert.equal(e.c.sessionScope.requestCount(), 0);
         assert.equal(e.timers.size, 0);
         await e.advance(120000);
         assert.equal(e.requests.length, 2);
@@ -4694,7 +4696,7 @@ test('background viewing collection groups finished movies and complete series w
         assert.ok(request.paths.every(path => ['videos', 'seasons'].includes(path[0])));
         assert.equal(new URL(request.url).origin, 'https://www.netflix.com');
     }
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
     assert.ok(!JSON.stringify([...e.logs, ...e.warnings]).includes('test-auth-token'));
 });
@@ -4816,7 +4818,7 @@ test('viewing HTTP/JSON failures preserve the grid and never turn absent data in
         assert.equal(completedViewingIds(e).length, 0);
         assert.equal(e.state.watchStatus.loading, false);
         assert.ok(e.state.watchStatus.failure);
-        assert.equal(e.c.routeFetchControllers.size, 0);
+        assert.equal(e.c.sessionScope.requestCount(), 0);
         assert.equal(e.timers.size, 0);
         assert.equal(e.state.grid.isConnected, true);
     }
@@ -4883,7 +4885,7 @@ test('viewing request budget preserves confirmed movies and leaves unverified se
     assert.deepEqual(completedViewingIds(e), ['1']);
     assert.ok(mainViewingIds(e).includes('4'));
     assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_BUDGET');
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
 });
 
 test('a large short-series list is fully covered within the original single-pass request budget', async () => {
@@ -4901,7 +4903,7 @@ test('a large short-series list is fully covered within the original single-pass
         missingEpisodeRefs: 0, pending: 0 });
     assert.equal(e.state.totalCount, 500);
     assert.equal(e.state.cloneMap.size, 500);
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
 
@@ -4917,7 +4919,7 @@ test('completed series results survive a budget limit inside the current episode
     assert.deepEqual(completedViewingIds(e), ['1']);
     assert.deepEqual(mainViewingIds(e), ['2']);
     assert.equal(e.state.watchStatus.unknownCount, 1);
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
 
@@ -4939,7 +4941,7 @@ test('a later series-group HTTP failure preserves fully verified series results'
     assert.deepEqual(completedViewingIds(e), Array.from({ length: 50 }, (_, index) => String(index + 1)));
     assert.deepEqual(mainViewingIds(e), ['51']);
     assert.equal(e.state.watchStatus.unknownCount, 1);
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
 
@@ -4955,12 +4957,12 @@ test('route leave aborts viewing requests and stale completion cannot update a n
     const newer = { grid: { isConnected: true }, watchStatus: { marker: 'new' } };
     e.c.sourceState = newer;
     e.c.isRouteSessionActive = token => token === 2;
-    e.c.abortObsoleteRouteFetches();
+    e.c.sessionScope.dispose();
     await promise;
     assert.equal(signal.aborted, true);
     assert.equal(e.c.sourceState, newer);
     assert.equal(newer.watchStatus.marker, 'new');
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
     assert.equal(e.warnings.length, 0);
 });
@@ -5182,7 +5184,7 @@ test('rejected viewing batches are attempted once and stop subsequent requests w
     assert.equal(start.details.endpointPath, '/nq/website/memberapi/release/pathEvaluator');
     assert.ok(!JSON.stringify([...e.logs, ...e.warnings]).includes('test-auth-token'));
     assert.ok(!JSON.stringify([...e.logs, ...e.warnings]).includes('active-profile'));
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
     e.c.syncWatchGroups(e.state);
     await e.advance(60000);
@@ -5484,7 +5486,7 @@ test('bounded additional passes continue the same queue without reloading title 
     assert.equal(e.requests.filter(request => Array.isArray(request.paths[0][2])).length, 1);
     const episodePaths = e.requests.filter(request => request.paths[0][0] === 'seasons').flatMap(request => request.paths);
     assert.equal(new Set(episodePaths.map(path => JSON.stringify(path))).size, episodePaths.length);
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
 
@@ -5653,7 +5655,7 @@ test('route and profile cancellation stop an additional pass without changing a 
         if (mode === 'route') {
             e.c.sourceState = { grid: { isConnected: true }, watchStatus: { newer: true } };
             e.c.isRouteSessionActive = token => token === 2;
-            e.c.abortObsoleteRouteFetches();
+            e.c.sessionScope.dispose();
         } else {
             e.models.userInfo.userGuid = 'other-profile';
             release();
@@ -5666,7 +5668,7 @@ test('route and profile cancellation stop an additional pass without changing a 
             assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_PROFILE_CHANGED');
         }
         assert.equal(signal.aborted, true);
-        assert.equal(e.c.routeFetchControllers.size, 0);
+        assert.equal(e.c.sessionScope.requestCount(), 0);
         assert.equal(e.timers.size, 0);
     }
 });
@@ -5831,7 +5833,7 @@ test('a failed direct request retains known watched titles and never retries the
     assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
     assert.equal(e.requests.length, 4);
     assert.equal(e.logs.find(entry => entry.details?.recheck)?.details.recheck.requests, 1);
-    assert.equal(e.c.routeFetchControllers.size, 0);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
 
@@ -6206,7 +6208,7 @@ test('profile and route changes cancel direct episode reads and discard profile-
         else {
             e.c.sourceState = { watchStatus: { newer: true } };
             e.c.isRouteSessionActive = token => token === 2;
-            e.c.abortObsoleteRouteFetches();
+            e.c.sessionScope.dispose();
         }
         await promise;
         if (mode === 'profile') {
@@ -6215,7 +6217,7 @@ test('profile and route changes cancel direct episode reads and discard profile-
             assert.equal(completedViewingIds(e).length, 0);
         } else assert.equal(e.c.sourceState.watchStatus.newer, true);
         assert.equal(signal.aborted, true);
-        assert.equal(e.c.routeFetchControllers.size, 0);
+        assert.equal(e.c.sessionScope.requestCount(), 0);
         assert.equal(e.timers.size, 0);
     }
 });
@@ -7007,7 +7009,7 @@ test('cache reuse is isolated by the active profile and a cancelled response can
             assert.equal(next.state.watchStatus.cachedResults.size, 0);
             assert.equal(next.state.watchStatus.failure, 'VIEWING_STATUS_PROFILE_CHANGED');
         } else assert.equal(next.c.sourceState.watchStatus.newer, true);
-        assert.equal(next.c.routeFetchControllers.size, 0);
+        assert.equal(next.c.sessionScope.requestCount(), 0);
         assert.equal(next.timers.size, 0);
     }
 });

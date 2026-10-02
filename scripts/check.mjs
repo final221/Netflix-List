@@ -18,7 +18,8 @@ const legacyImports = new Map([
     ['src/legacy.js -> src/netflix/page-dom.js', 'P20: application composes remaining DOM consumers'],
     ['src/legacy.js -> src/netflix/card-markup.js', 'P11: grid assumes markup capture/create collaborators'],
     ['src/legacy.js -> src/netflix/list-data.js', 'P20: application injects list data into collection and count consumers'],
-    ['src/legacy.js -> src/netflix/viewing-data.js', 'P20: application injects typed viewing data into the scan']
+    ['src/legacy.js -> src/netflix/viewing-data.js', 'P20: application injects typed viewing data into the scan'],
+    ['src/legacy.js -> src/app/session-scope.js', 'P20: application composes the session scope']
 ]);
 const publicFeatures = new Set(['src/list/list.js', 'src/viewing/viewing.js', 'src/grid/grid.js', 'src/hover/hover.js']);
 const netflixEntries = new Set(['context', 'page-dom', 'list-data', 'viewing-data', 'card-markup', 'native-popup', 'popup-inspection']

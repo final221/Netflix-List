@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.11
+// @version      1.4.12
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -3158,6 +3158,98 @@
     return Object.freeze({ limits, beginRead, readTitles, readSeasons, readEpisodes, readDirectEpisodes });
   }
 
+  // src/app/session-scope.js
+  function createSessionScope({
+    isTargetPage,
+    AbortController: AbortController2,
+    setTimeout: setTimeout2,
+    clearTimeout: clearTimeout2,
+    requestTimeoutMs = 1e4
+  }) {
+    let token = 0;
+    let active = false;
+    const requests = /* @__PURE__ */ new Set();
+    const requestState = /* @__PURE__ */ new WeakMap();
+    function cancelledError() {
+      const error = new Error("Target route session cancelled");
+      error.code = "LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED";
+      return error;
+    }
+    function isCurrent(expectedToken) {
+      return expectedToken === token && active && isTargetPage();
+    }
+    function assertCurrent(expectedToken) {
+      if (expectedToken === null || expectedToken === void 0) return;
+      if (!isCurrent(expectedToken)) throw cancelledError();
+    }
+    function finishRequest(request) {
+      const state = requestState.get(request);
+      if (!state || state.finished) return false;
+      state.finished = true;
+      clearTimeout2(state.timeout?.id);
+      state.timeout = null;
+      requests.delete(request);
+      request.controller.abort();
+      return true;
+    }
+    function abortObsoleteRequests() {
+      for (const request of requests.keys()) {
+        if (!isCurrent(request.sessionToken)) finishRequest(request);
+      }
+    }
+    function setRequestTimeout(request, delayMs) {
+      const state = requestState.get(request);
+      if (!state || state.finished) return false;
+      clearTimeout2(state.timeout?.id);
+      const timeout = { id: null };
+      state.timeout = timeout;
+      timeout.id = setTimeout2(() => {
+        if (state.finished || state.timeout !== timeout) return;
+        state.timeout = null;
+        request.controller.abort();
+      }, delayMs);
+      return true;
+    }
+    function beginRequest(expectedToken) {
+      assertCurrent(expectedToken);
+      const request = Object.freeze({ controller: new AbortController2(), sessionToken: expectedToken });
+      requestState.set(request, { timeout: null, finished: false });
+      if (expectedToken !== null && expectedToken !== void 0) requests.add(request);
+      setRequestTimeout(request, requestTimeoutMs);
+      return request;
+    }
+    return Object.freeze({
+      get token() {
+        return token;
+      },
+      begin() {
+        token++;
+        active = true;
+        abortObsoleteRequests();
+        return token;
+      },
+      dispose() {
+        token++;
+        active = false;
+        abortObsoleteRequests();
+      },
+      isCurrent,
+      assertCurrent,
+      cancelledError,
+      isCancelled: (error) => error?.code === "LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED",
+      beginRequest,
+      setRequestTimeout,
+      finishRequest,
+      abortObsoleteRequests,
+      requestCount(expectedToken) {
+        if (expectedToken === void 0) return requests.size;
+        let count = 0;
+        for (const request of requests.keys()) if (request.sessionToken === expectedToken) count++;
+        return count;
+      }
+    });
+  }
+
   // src/legacy.js
   function startLegacy() {
     "use strict";
@@ -3211,6 +3303,13 @@
     const LOGICAL_COLLECTION_TIMEOUT_MS = 12e4;
     const TOTAL_COUNT_TIMEOUT_MS = 5e3;
     const FRESH_MY_LIST_FETCH_TIMEOUT_MS = 1e4;
+    const sessionScope = createSessionScope({
+      isTargetPage,
+      AbortController,
+      setTimeout,
+      clearTimeout,
+      requestTimeoutMs: FRESH_MY_LIST_FETCH_TIMEOUT_MS
+    });
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
     const VIEWING_TITLE_BATCH_SIZE = viewingData.limits.titleBatch;
@@ -3252,7 +3351,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.11";
+    const SCRIPT_VERSION = "1.4.12";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -3270,7 +3369,7 @@
       Element,
       now: () => performance.now(),
       isCurrentSession: (token) => targetSessionActive && isRouteSessionActive(token),
-      readSessionToken: () => routeSessionToken,
+      readSessionToken: () => sessionScope.token,
       isSourceMounted: () => Boolean(sourceState?.grid?.isConnected),
       readSourceCard: () => sourceState.track?.querySelector(NETFLIX_DOM_SELECTORS.standardCard)
     });
@@ -3386,8 +3485,6 @@
     let lastResponsiveReason = "";
     let lastObservedUrl = location.href;
     let routeChangeSequence = 0;
-    let routeSessionToken = 0;
-    const routeFetchControllers = /* @__PURE__ */ new Map();
     let targetSessionActive = false;
     let targetSessionEntryKind = "initial";
     let targetSessionReason = "route:initial";
@@ -3665,7 +3762,7 @@
       const counters = performanceDiagnostics.hoverFrames;
       try {
         if (!Object.hasOwn(HOVER_FRAME_DIAGNOSTIC_LIMITS, `${phase}Ms`)) return;
-        if (!isRouteSessionActive(routeSessionToken)) return;
+        if (!isRouteSessionActive(sessionScope.token)) return;
         if (hoverFrameDiagnosticOwner && hoverFrameDiagnosticOwner.counters !== counters) {
           stopHoverFrameDiagnostics("owner-replaced");
         }
@@ -3686,7 +3783,7 @@
         const now = performance.now();
         let owner = hoverFrameDiagnosticOwner;
         if (!owner) {
-          owner = { counters, sessionToken: routeSessionToken, frame: null, previousAt: now, mixedPhase: false };
+          owner = { counters, sessionToken: sessionScope.token, frame: null, previousAt: now, mixedPhase: false };
           hoverFrameDiagnosticOwner = owner;
         }
         if (owner.phase !== phase && now > owner.previousAt) owner.mixedPhase = true;
@@ -3802,7 +3899,7 @@
       const counters = performanceDiagnostics.hoverInteraction;
       try {
         const replay = activeClone === clone ? activeNativeHover : null;
-        const afterReplay = Boolean(replay && replay.sessionToken === routeSessionToken);
+        const afterReplay = Boolean(replay && replay.sessionToken === sessionScope.token);
         const sinceReplayMs = afterReplay ? Math.max(0, Math.round(performance.now() - replay.replayedAt)) : null;
         const coordinatesKnown = Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY);
         const pointerDeltaPx = afterReplay && coordinatesKnown ? Math.round(Math.hypot(
@@ -3953,15 +4050,13 @@
       return location.origin === "https://www.netflix.com" && location.pathname === TARGET_PATH;
     }
     function isRouteSessionActive(sessionToken) {
-      return sessionToken === routeSessionToken && targetSessionActive && isTargetPage();
+      return sessionScope.isCurrent(sessionToken);
     }
     function createRouteSessionCancelledError() {
-      const error = new Error("Target route session cancelled");
-      error.code = "LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED";
-      return error;
+      return sessionScope.cancelledError();
     }
     function isRouteSessionCancelledError(error) {
-      return error?.code === "LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED";
+      return sessionScope.isCancelled(error);
     }
     function assertRouteSession(sessionToken) {
       if (sessionToken === null || sessionToken === void 0) return;
@@ -3969,28 +4064,10 @@
     }
     function createRouteFetch(sessionToken) {
       assertRouteSession(sessionToken);
-      const controller = new AbortController();
-      if (sessionToken !== null && sessionToken !== void 0) {
-        let controllers = routeFetchControllers.get(sessionToken);
-        if (!controllers) routeFetchControllers.set(sessionToken, controllers = /* @__PURE__ */ new Set());
-        controllers.add(controller);
-      }
-      const timeoutId = setTimeout(() => controller.abort(), FRESH_MY_LIST_FETCH_TIMEOUT_MS);
-      return { controller, timeoutId, sessionToken };
+      return sessionScope.beginRequest(sessionToken);
     }
     function finishRouteFetch(request) {
-      clearTimeout(request.timeoutId);
-      request.controller.abort();
-      const controllers = routeFetchControllers.get(request.sessionToken);
-      controllers?.delete(request.controller);
-      if (controllers?.size === 0) routeFetchControllers.delete(request.sessionToken);
-    }
-    function abortObsoleteRouteFetches() {
-      for (const [sessionToken, controllers] of routeFetchControllers) {
-        if (isRouteSessionActive(sessionToken)) continue;
-        routeFetchControllers.delete(sessionToken);
-        for (const controller of controllers) controller.abort();
-      }
+      sessionScope.finishRequest(request);
     }
     function hoverPreparationCancelled(token) {
       return token !== null && token !== void 0 && token !== hoverToken;
@@ -4143,10 +4220,9 @@
     }
     function suspendTargetSession(reason = "route-leave") {
       const hadSession = targetSessionActive || running || sourceState || completedSection || scheduled;
-      const previousToken = routeSessionToken;
-      routeSessionToken++;
+      const previousToken = sessionScope.token;
+      sessionScope.dispose();
       targetSessionActive = false;
-      abortObsoleteRouteFetches();
       stopImageResourceDiagnostics();
       stopHoverFrameDiagnostics();
       if (scheduledRunTimer !== null) clearTimeout(scheduledRunTimer);
@@ -4194,23 +4270,22 @@
         log(tLog("targetSessionSuspended"), {
           reason,
           previousToken,
-          nextToken: routeSessionToken,
+          nextToken: sessionScope.token,
           url: location.href
         });
       }
     }
     function startTargetSession(reason = "route-enter") {
-      routeSessionToken++;
+      sessionScope.begin();
       targetSessionActive = true;
-      abortObsoleteRouteFetches();
       initializationBlockedSessionToken = null;
       nativeInitializationFailure = null;
       performanceDiagnostics = createPerformanceDiagnostics();
       popupInspection.reset();
-      startImageResourceDiagnostics(routeSessionToken);
+      startImageResourceDiagnostics(sessionScope.token);
       targetSessionEntryKind = reason === "route:initial" ? "initial" : "spa";
       targetSessionReason = reason;
-      const sessionToken = routeSessionToken;
+      const sessionToken = sessionScope.token;
       resetDetachedTargetState();
       startTargetEventListeners();
       log(tLog("targetSessionStarted"), {
@@ -4244,7 +4319,7 @@
         return;
       }
       resetDetachedTargetState();
-      scheduleRun(0, routeSessionToken);
+      scheduleRun(0, sessionScope.token);
     }
     function installSpaNavigationHooks() {
       for (const methodName of ["pushState", "replaceState"]) {
@@ -4358,7 +4433,7 @@
         running,
         runningSessionToken,
         targetSessionActive,
-        routeSessionToken,
+        routeSessionToken: sessionScope.token,
         completed: Boolean(completedSection && completedSection.isConnected),
         selectedPage: section ? selectedPage(section) : null,
         pageCount: section ? pageCount(section) : null,
@@ -4423,7 +4498,7 @@
     }
     function collectThumbnailDiagnostics(state = sourceState) {
       const grid = state?.grid;
-      if (!state || state !== sourceState || !grid?.isConnected || !(state.cloneMap instanceof Map) || !isRouteSessionActive(routeSessionToken)) return { available: false, reason: "no-current-grid" };
+      if (!state || state !== sourceState || !grid?.isConnected || !(state.cloneMap instanceof Map) || !isRouteSessionActive(sessionScope.token)) return { available: false, reason: "no-current-grid" };
       const started = performance.now();
       const report = {
         available: true,
@@ -5255,8 +5330,7 @@
       network.inFlight++;
       network.peakInFlight = Math.max(network.peakInFlight, network.inFlight);
       let succeeded = false;
-      clearTimeout(request.timeoutId);
-      request.timeoutId = setTimeout(() => request.controller.abort(), Math.min(8e3, remaining));
+      sessionScope.setRequestTimeout(request, Math.min(8e3, remaining));
       try {
         const result = await readBatch({ signal: request.controller.signal, assertCurrent: () => assertViewingJob(job) });
         assertViewingJob(job);
@@ -6479,13 +6553,13 @@
       for (const entry of recentRemovedMyListItems.values()) {
         if (Number.isFinite(entry?.removedAt)) dueAt = Math.min(dueAt, entry.removedAt + UNDO_ENTRY_TTL_MS);
       }
-      if (!Number.isFinite(dueAt) || !isRouteSessionActive(routeSessionToken)) {
+      if (!Number.isFinite(dueAt) || !isRouteSessionActive(sessionScope.token)) {
         clearUndoExpiryTimer();
         return;
       }
-      if (undoExpiryTimer?.dueAt === dueAt && undoExpiryTimer.sessionToken === routeSessionToken) return;
+      if (undoExpiryTimer?.dueAt === dueAt && undoExpiryTimer.sessionToken === sessionScope.token) return;
       clearUndoExpiryTimer();
-      const owner = { id: null, sessionToken: routeSessionToken, dueAt };
+      const owner = { id: null, sessionToken: sessionScope.token, dueAt };
       undoExpiryTimer = owner;
       performanceDiagnostics.undoRetention.schedules++;
       owner.id = setTimeout(() => {
@@ -6991,7 +7065,7 @@
         selectedPage: live.selectedPage,
         visibleItems: visibleItems.length
       });
-      const sessionToken = routeSessionToken;
+      const sessionToken = sessionScope.token;
       cleanupTargetSessionDom();
       resizeObserver?.disconnect();
       resizeObserver = null;
@@ -7077,7 +7151,7 @@
     function tryApplyMyListMutation(mutation, reason = "event") {
       if (!mutation || pendingMyListMutations.get(mutation.videoId) !== mutation) return false;
       if (!sourceState || !isTargetPage()) return false;
-      if (running || responsiveRefreshing || nativeInitializationFailure?.sessionToken === routeSessionToken && initializationBlockedSessionToken === routeSessionToken) {
+      if (running || responsiveRefreshing || nativeInitializationFailure?.sessionToken === sessionScope.token && initializationBlockedSessionToken === sessionScope.token) {
         mutation.deferredWhileBusy = true;
         return false;
       }
@@ -7222,7 +7296,7 @@
     }
     async function reinitializeAfterOrderMismatch() {
       if (orderMismatchReinitializing || running || !isTargetPage() || !targetSessionActive) return;
-      const sessionToken = routeSessionToken;
+      const sessionToken = sessionScope.token;
       orderMismatchReinitializing = true;
       orderMismatchDismissed = true;
       hideOrderMismatchDialog();
@@ -8138,7 +8212,7 @@
     function collectMountedSinglePageItems(bootstrap, totalCount, columns, sessionToken = null) {
       assertRouteSession(sessionToken);
       const proof = bootstrap.mountedSinglePageProof;
-      if (!proof || targetSessionEntryKind !== "spa" || !targetSessionReason.startsWith("route:") || !isRouteSessionActive(proof.sessionToken) || proof.sessionToken !== routeSessionToken || bootstrap.totalCount !== totalCount || !Number.isSafeInteger(columns) || totalCount > columns) {
+      if (!proof || targetSessionEntryKind !== "spa" || !targetSessionReason.startsWith("route:") || !isRouteSessionActive(proof.sessionToken) || proof.sessionToken !== sessionScope.token || bootstrap.totalCount !== totalCount || !Number.isSafeInteger(columns) || totalCount > columns) {
         return { items: null, reason: "proof-or-entry-no-longer-valid" };
       }
       const { section, scroller, track } = proof;
@@ -8175,7 +8249,7 @@
             firstVideoId: videoIds[0] || null,
             source: "mounted-single-page-fast-path",
             elapsedMs: Math.round(performance.now() - started),
-            mountedSinglePageProof: { section, scroller, track, signature, sessionToken: routeSessionToken }
+            mountedSinglePageProof: { section, scroller, track, signature, sessionToken: sessionScope.token }
           };
           log("Mounted single-page My List fast bootstrap confirmed", {
             totalCount,
@@ -10814,7 +10888,7 @@
         sourceSlot,
         coordinates: common,
         token: hoverToken,
-        sessionToken: routeSessionToken,
+        sessionToken: sessionScope.token,
         videoId: videoIdFromHref(card.href || card.getAttribute("href") || ""),
         counters: performanceDiagnostics.hoverLifecycle,
         timing: performanceDiagnostics.hoverTiming,
@@ -10842,7 +10916,7 @@
       activeClone = null;
       activePage = null;
     }
-    function scheduleNativeHoverReplay(sourceSlot, item, clone, triggerEvent, actualPage, reason, token = hoverToken, sessionToken = routeSessionToken) {
+    function scheduleNativeHoverReplay(sourceSlot, item, clone, triggerEvent, actualPage, reason, token = hoverToken, sessionToken = sessionScope.token) {
       const generation = clone?.__tmHoverActivationGeneration;
       const counters = performanceDiagnostics.hoverLifecycle;
       const timing = performanceDiagnostics.hoverTiming;
@@ -11273,7 +11347,7 @@
         }
       }
       const token = advanceHoverToken("superseded");
-      const sessionToken = routeSessionToken;
+      const sessionToken = sessionScope.token;
       startHoverFrameDiagnostics("preparation");
       clone.setAttribute("data-tm-hover-token", String(token));
       clone.setAttribute("data-tm-preparing", "true");
@@ -11558,7 +11632,7 @@
         handleGridClonePointerLeave(clone, clone.__tmMyListItem, event.relatedTarget, event);
       }, { capture: true, passive: true });
     }
-    async function buildGrid(section, scroller, items, layout, totalCount, sessionToken = routeSessionToken) {
+    async function buildGrid(section, scroller, items, layout, totalCount, sessionToken = sessionScope.token) {
       const buildState = sourceState;
       const track = buildState?.track;
       const assertBuildActive = () => {
@@ -11768,7 +11842,7 @@
       const wasAtCompatibleTail = previousCurrentPage === info.page || previousKnownPageCount !== null && previousCurrentPage === previousKnownPageCount - 1 && (previousKnownPageCount === pages || previousKnownPageCount === pages + 1);
       return wasAtCompatibleTail ? info : null;
     }
-    async function rebuildLogicalPageModelFromNativePosition(layout, reason = "responsive-remap", sessionToken = routeSessionToken) {
+    async function rebuildLogicalPageModelFromNativePosition(layout, reason = "responsive-remap", sessionToken = sessionScope.token) {
       assertRouteSession(sessionToken);
       const live = ensureLiveNativeBinding("logical-page-model-rebuild-start") || sourceState;
       const section = live?.section || sourceState?.section;
@@ -11904,7 +11978,7 @@
         unregisterActiveCarouselStyleCleanup(restoreFastStyles);
       }
     }
-    async function remapItemsByOrder(layout, sessionToken = routeSessionToken) {
+    async function remapItemsByOrder(layout, sessionToken = sessionScope.token) {
       const { section, items, cloneMap } = sourceState;
       const columns = Math.max(1, layout.columns);
       const runtime = getCarouselDomRuntime(section);
@@ -11935,7 +12009,7 @@
       });
       return changed;
     }
-    async function refreshResponsiveLayout(sessionToken = routeSessionToken) {
+    async function refreshResponsiveLayout(sessionToken = sessionScope.token) {
       if (!isRouteSessionActive(sessionToken) || !sourceState?.grid?.isConnected || responsiveRefreshing) return;
       const state = sourceState;
       const { section, scroller, track } = state;
@@ -12048,7 +12122,7 @@
       }
     }
     function scheduleResponsiveRefresh(delay = 140, reason = "unknown") {
-      const sessionToken = routeSessionToken;
+      const sessionToken = sessionScope.token;
       if (!isRouteSessionActive(sessionToken) || !sourceState?.grid?.isConnected) return;
       const state = sourceState;
       lastResponsiveReason = reason;
@@ -12275,7 +12349,7 @@
     function handleRelevantTargetDocumentMutation() {
       if (completedSection || waitingForNativeEmpty && sourceState?.empty) {
         if (targetMutationFrame !== null) return;
-        const sessionToken = routeSessionToken;
+        const sessionToken = sessionScope.token;
         targetMutationFrame = requestAnimationFrame(() => {
           targetMutationFrame = null;
           if (!isRouteSessionActive(sessionToken)) return;
@@ -12287,7 +12361,7 @@
         });
         return;
       }
-      scheduleRun(40, routeSessionToken);
+      scheduleRun(40, sessionScope.token);
     }
     function isScriptOwnedMyListNode(node) {
       const element = node?.nodeType === 1 ? node : node?.parentElement;
@@ -12315,9 +12389,9 @@
       if (activeNativeHover?.previewRoot && !activeNativeHover.previewRoot.isConnected) {
         releaseNativePreview(activeNativeHover, "preview-removed");
       }
-      if (initializationBlockedSessionToken === routeSessionToken) {
+      if (initializationBlockedSessionToken === sessionScope.token) {
         if (mutations.some((mutation) => !mutationOnlyChangesScriptUi(mutation))) {
-          recoverNativeInitialization(routeSessionToken, "document-mutation");
+          recoverNativeInitialization(sessionScope.token, "document-mutation");
         }
         return;
       }
@@ -12439,7 +12513,7 @@
       scheduleRun(40, sessionToken);
       return true;
     }
-    async function runScript(sessionToken = routeSessionToken) {
+    async function runScript(sessionToken = sessionScope.token) {
       if (!isRouteSessionActive(sessionToken)) return;
       if (initializationBlockedSessionToken === sessionToken) {
         recoverNativeInitialization(sessionToken, "run");
@@ -12933,7 +13007,7 @@
         if (retryGridBuild && isRouteSessionActive(sessionToken)) runScript(sessionToken);
       }
     }
-    function scheduleRun(delayMs = 40, sessionToken = routeSessionToken) {
+    function scheduleRun(delayMs = 40, sessionToken = sessionScope.token) {
       if (!isRouteSessionActive(sessionToken)) return;
       if (initializationBlockedSessionToken === sessionToken) return;
       const normalizedDelay = Math.max(0, delayMs);
