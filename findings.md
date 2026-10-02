@@ -840,7 +840,7 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | P01 | Reproducible build and transitional test entry | Complete — 1.4.6; commit ffb31df |
 | P02 | CI and output/dependency checks | Complete — 3ccca0e; CI repair 0a8113b verified |
 | P03 | Localization, DOM names and styling | Complete — 1.4.7; d4fa053; Windows/Linux CI verified |
-| P04 | Logging/reporting and bounded popup inspection | Complete — 1.4.8; release checkpoint below |
+| P04 | Logging/reporting and bounded popup inspection | Complete — 1.4.8; 3626cea / bfed675; Windows/Linux CI verified |
 | P05 | Context, page DOM and card markup adapters | Next ready — authorized goal |
 | P06 | My List data adapter | Planned — authorized goal |
 | P07 | Viewing data adapter | Planned — authorized goal |
@@ -928,3 +928,5 @@ Before extraction, the selected logging/survey/private-shape/collection/native-t
 Baseline comparison against the pre-step source proves identical retained log entries, capped 12-page response/capture summaries and exact copied-report bytes for the same inputs. All 349 remaining function bodies match except the six intended ownership/caller changes: createPerformanceDiagnostics, collectPerformanceDiagnostics, startTargetSession, handleLogClick, fetchMyListCarouselPage and retainNativeHoverForPreview. Seventeen moved declarations have one production implementation in their new owner; there is no legacy table/buffer/probe/report duplicate.
 
 Local evidence: **351 passing tests**, no failed/cancelled/skipped cases; build, read-only output/dependency checks, distributable syntax and whitespace verification pass. Package/lockfile/metadata/internal version agree on maintenance release **1.4.8**, above the verified published 1.4.7. Authored and generated changes are reviewed together. Import-only startup still activates no browser work. Live Netflix compatibility remains user-owned. P05 is next; P05–P21 remain required under the active full migration goal.
+
+Release checkpoint **3626cea** is committed and pushed; [hosted run 37065256425](https://github.com/final221/Netflix-List/actions/runs/37065256425) succeeds on Windows and Linux. Final review also catches a test-only assumption that a local timestamp retains UTC's minute value. The formatter assertion fails under Asia/Kathmandu (+05:45), then passes after checking ISO shape and the represented instant instead. Portability correction **bfed675** changes no runtime/output/version; [hosted run 37065387748](https://github.com/final221/Netflix-List/actions/runs/37065387748) again passes both matrix jobs, including the complete regression suite, committed-output check, reproducible build/dependency checks, syntax, whitespace and unchanged tracked output. P04 is complete, and the full migration goal remains active.
