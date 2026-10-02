@@ -2,20 +2,11 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const vm = require('node:vm');
 
-// Exercise the shipped functions without executing Netflix startup or using a
-// browser. DOM and scheduling mocks model the relevant lifecycle boundaries.
-const source = fs.readFileSync(path.join(__dirname, '..', 'Legacy My List for Netflix.user.js'), 'utf8');
-function declaration(name) {
-    const match = new RegExp('^    (?:async )?function ' + name + '\\(', 'm').exec(source);
-    assert.ok(match, `Missing userscript function ${name}`);
-    const rest = source.slice(match.index);
-    const next = /\n    (?:(?:async )?function\s|(?:const|let)\s)/.exec(rest);
-    return next ? rest.slice(0, next.index) : rest;
-}
+// Exercise residual authored functions without executing Netflix startup.
+// Generated-bundle startup and lifecycle are covered separately in bundle.test.js.
+const { source, declaration } = require('./helpers/legacy-source.cjs');
 
 class Element {
     constructor(id = '', parent = null) {

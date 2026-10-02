@@ -1,0 +1,219 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile, writeFile, mkdtemp, cp, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
+import { EventTarget, Element, createDocument } from './helpers/dom.js';
+import { createScheduler } from './helpers/scheduler.js';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+const distribution = 'Legacy My List for Netflix.user.js';
+const shipped = (await readFile(path.join(root, distribution), 'utf8')).replace(/\r\n/g, '\n');
+const releaseVersion = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
+
+function browser({ pathname = '/browse', grants = true, visualViewport = true, storage = true } = {}) {
+    const scheduler = createScheduler();
+    const document = createDocument();
+    const window = new EventTarget();
+    Object.assign(window, { innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1 });
+    if (visualViewport) window.visualViewport = new EventTarget();
+    const location = { origin: 'https://www.netflix.com', pathname, href: 'https://www.netflix.com' + pathname };
+    const logs = [], menus = new Map(), observers = [], requests = [];
+    class MutationObserver {
+        constructor(callback) { this.callback = callback; this.active = false; observers.push(this); }
+        observe() { this.active = true; }
+        disconnect() { this.active = false; }
+    }
+    const history = {};
+    for (const method of ['pushState', 'replaceState']) {
+        history[method] = (_state, _title, url) => {
+            const next = new URL(url, location.href);
+            Object.assign(location, { origin: next.origin, pathname: next.pathname, href: next.href });
+        };
+    }
+    const context = vm.createContext({
+        window, document, location, history, Element, HTMLElement: Element, MutationObserver, URL, AbortController,
+        navigator: { userAgent: 'offline-bundle-test', language: 'en' },
+        localStorage: storage ? { getItem: () => null, setItem() {} } : { getItem() { throw new Error('denied'); } },
+        console: { log: (...args) => logs.push(args), warn: (...args) => logs.push(args) },
+        performance: scheduler.performance,
+        setTimeout: scheduler.setTimeout, clearTimeout: scheduler.clearTimeout,
+        requestAnimationFrame: scheduler.requestAnimationFrame, cancelAnimationFrame: scheduler.cancelAnimationFrame,
+        queueMicrotask,
+        getComputedStyle: () => ({ gap: '8px', rowGap: '8px', paddingLeft: '0', paddingRight: '0',
+            fontSize: '16px', fontFamily: 'sans-serif', fontWeight: '400', lineHeight: '20px', color: 'white',
+            getPropertyValue(name) { return this[name] || ''; } }),
+        fetch: (url, options) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }))
+    });
+    if (grants) Object.assign(context, {
+        GM_registerMenuCommand: (label, callback) => { const id = menus.size + 1; menus.set(id, { label, callback }); return id; },
+        GM_unregisterMenuCommand: id => menus.delete(id)
+    });
+    // In raw mode the browser's page globals and window refer to the same environment.
+    window.netflix = {};
+    return { context, scheduler, document, window, history, location, logs, menus, observers, requests,
+        start: () => vm.runInContext(shipped, context, { filename: distribution, timeout: 1000 }),
+        async navigate(url, method = 'pushState') { history[method](null, '', url); await scheduler.flush(); },
+        mountMyList() {
+            const host = document.body.appendChild(new Element('main'));
+            host.setAttribute('data-uia', 'browse-page-sections');
+            const section = host.appendChild(new Element('section'));
+            section.setAttribute('data-uia', 'carousel-row-section-1');
+            section.appendChild(new Element('h2'));
+            return section;
+        }
+    };
+}
+
+test('generated userscript starts exactly once and hooks the existing page environment', async () => {
+    const b = browser();
+    b.start();
+    assert.equal(b.menus.size, 1);
+    assert.equal(b.window.listenerCount('popstate'), 1);
+    assert.equal(b.window.listenerCount('hashchange'), 1);
+    assert.equal(b.logs.filter(args => args.includes('Script started')).length, 1);
+    assert.equal(b.document.listenerCount('pointermove'), 0);
+    assert.equal(b.requests.length, 0);
+    assert.equal(b.scheduler.timers.size, 0);
+});
+
+test('generated route entry, exit and reentry own one listener/observer set', async () => {
+    const b = browser();
+    b.mountMyList();
+    b.start();
+    await b.navigate('/browse/my-list');
+    assert.equal(b.document.listenerCount('pointermove'), 1);
+    assert.equal(b.window.listenerCount('resize'), 1);
+    assert.equal(b.observers.filter(observer => observer.active).length, 1);
+    assert.equal(b.scheduler.timers.size, 1);
+    await b.navigate('/browse/my-list?language=en', 'replaceState');
+    assert.equal(b.document.listenerCount('pointermove'), 1);
+    await b.navigate('/browse');
+    assert.equal(b.document.listenerCount('pointermove'), 0);
+    assert.equal(b.window.listenerCount('resize'), 0);
+    assert.equal(b.observers.filter(observer => observer.active).length, 0);
+    assert.equal(b.scheduler.timers.size, 0);
+    await b.navigate('/browse/my-list');
+    assert.equal(b.document.listenerCount('pointermove'), 1);
+    assert.equal(b.menus.size, 1);
+});
+
+test('generated startup retains optional grants, storage and viewport fallbacks', async () => {
+    const b = browser({ pathname: '/browse/my-list', grants: false, storage: false, visualViewport: false });
+    b.start();
+    assert.equal(b.menus.size, 0);
+    assert.equal(b.document.listenerCount('pointermove'), 1);
+    await b.scheduler.advance();
+    assert.equal(b.requests.length, 0, 'unmounted native source keeps bounded discovery rather than fetching');
+    await b.navigate('/browse');
+    assert.equal(b.scheduler.timers.size, 0);
+});
+
+for (const stage of ['response', 'body']) {
+    test(`generated route exit rejects a stale ${stage} without restoring old UI`, async () => {
+        const b = browser();
+        b.mountMyList();
+        b.start();
+        await b.navigate('/browse/my-list');
+        await b.scheduler.advance();
+        assert.equal(b.requests.length, 1, JSON.stringify(b.logs));
+        assert.ok(b.document.getElementById('tm-netflix-mylist-v15-grid'));
+        const request = b.requests[0];
+        let bodyReads = 0;
+        let resolveBody;
+        const body = new Promise(resolve => { resolveBody = resolve; });
+        const response = { ok: true, url: request.url, text() { bodyReads++; return body; } };
+        if (stage === 'body') { request.resolve(response); await b.scheduler.flush(); assert.equal(bodyReads, 1); }
+        await b.navigate('/browse');
+        assert.equal(request.options.signal.aborted, true);
+        request.resolve(response);
+        resolveBody('<script>obsolete malformed bootstrap</script>');
+        await b.scheduler.flush();
+        assert.equal(bodyReads, stage === 'body' ? 1 : 0);
+        assert.equal(b.document.getElementById('tm-netflix-mylist-v15-grid'), null);
+        assert.equal(b.document.getElementById('tm-netflix-mylist-v15-status'), null);
+        assert.equal(b.document.getElementById('tm-netflix-mylist-v15-style'), null);
+        assert.equal(b.scheduler.timers.size, 0);
+        assert.ok(!b.logs.some(args => args.includes('Initialization failed')));
+        assert.equal(b.requests.length, 1, 'cancelled request never starts a fallback');
+    });
+}
+
+async function fixture(operation) {
+    const base = path.resolve(root, '.tmp-build-tests-');
+    const directory = await mkdtemp(base);
+    try {
+        for (const name of ['package.json', 'userscript.meta.json', 'src']) {
+            await cp(path.join(root, name), path.join(directory, name), { recursive: true });
+        }
+        await writeFile(path.join(directory, distribution), shipped);
+        await operation(directory);
+    } finally {
+        assert.ok(path.resolve(directory).startsWith(base), 'cleanup stays inside the created temporary fixture');
+        await rm(directory, { recursive: true, force: true });
+    }
+}
+
+test('build is deterministic, self-contained and preserves metadata/version', async () => {
+    const { generateUserscript } = await import('../scripts/build.mjs');
+    const first = await generateUserscript();
+    const second = await generateUserscript();
+    assert.equal(first.code, second.code);
+    assert.equal(first.code, shipped);
+    assert.ok(first.code.startsWith('// ==UserScript==\n'));
+    const header = first.code.slice(0, first.code.indexOf('// ==/UserScript=='));
+    assert.equal(header.match(/@version\s+(\S+)/)?.[1], releaseVersion);
+    assert.equal(first.code.match(/SCRIPT_VERSION = ["']([^"']+)["']/)?.[1], releaseVersion);
+    assert.match(header, /@sandbox\s+raw/);
+    assert.match(header, /@run-at\s+document-idle/);
+    assert.match(header, /@noframes\s*$/m);
+    assert.deepEqual([...header.matchAll(/@grant\s+(\S+)/g)].map(match => match[1]),
+        ['GM_registerMenuCommand', 'GM_unregisterMenuCommand', 'GM_getValue', 'GM_setValue']);
+    assert.doesNotMatch(header, /@require|@resource/);
+    assert.ok(Object.values(first.metafile.outputs).every(output => output.imports.length === 0));
+    new vm.Script(first.code);
+});
+
+test('check rejects stale output/source and version disagreement without writing', async () => {
+    const { checkUserscript } = await import('../scripts/check.mjs');
+    await fixture(async directory => {
+        await checkUserscript({ root: directory });
+        const output = path.join(directory, distribution);
+        await writeFile(output, shipped + '// stale\n');
+        await assert.rejects(checkUserscript({ root: directory }), /stale|differs/i);
+        assert.equal(await readFile(output, 'utf8'), shipped + '// stale\n');
+        await writeFile(output, shipped);
+        await writeFile(path.join(directory, 'src/main.js'), "throw new Error('changed entry');\n");
+        await assert.rejects(checkUserscript({ root: directory }), /stale|differs|version/i);
+        assert.equal(await readFile(output, 'utf8'), shipped);
+    });
+    await fixture(async directory => {
+        await writeFile(path.join(directory, distribution), shipped.replace(/(@version\s+)\S+/, (_match, prefix) => prefix + '0.0.0'));
+        await assert.rejects(checkUserscript({ root: directory }), /version/i);
+    });
+    await fixture(async directory => {
+        await writeFile(path.join(directory, distribution), shipped.replace(/(SCRIPT_VERSION = ["'])[^"']+/, (_match, prefix) => prefix + '0.0.0'));
+        await assert.rejects(checkUserscript({ root: directory }), /version/i);
+    });
+});
+
+test('check rejects altered grants and execution settings', async () => {
+    const { checkUserscript } = await import('../scripts/check.mjs');
+    for (const [key, value] of Object.entries({ grant: ['GM_getValue'], sandbox: 'JavaScript',
+        'run-at': 'document-start', noframes: false, match: ['https://example.com/*'],
+        namespace: 'changed.script.identity', require: ['https://example.com/runtime.js'] })) {
+        await fixture(async directory => {
+            const file = path.join(directory, 'userscript.meta.json');
+            const metadata = JSON.parse(await readFile(file, 'utf8'));
+            metadata[key] = value;
+            await writeFile(file, JSON.stringify(metadata));
+            await assert.rejects(checkUserscript({ root: directory }), /metadata/i);
+        });
+    }
+});
+
+test('importing authored legacy source does not activate the runtime', async () => {
+    const legacy = await import('../src/legacy.js');
+    assert.equal(typeof legacy.startLegacy, 'function');
+});

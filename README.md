@@ -1,0 +1,32 @@
+# My List for Netflix
+
+A Tampermonkey userscript that presents Netflix My List as a scrollable grid, using Netflix's native hover experience.
+
+## Installation
+
+Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released userscript](https://github.com/final221/Netflix-List/raw/refs/heads/main/Legacy%20My%20List%20for%20Netflix.user.js) and install it. Visit `https://www.netflix.com/browse/my-list`. The existing menu command toggles the original Netflix list, and CopyLogs exports the script's diagnostics.
+
+## Development
+
+Use Node **24.13.0** and npm **11.6.2**, as declared in package.json. Install the locked build dependency with `npm ci`.
+
+```sh
+npm run check
+npm test
+npm run build
+npm run check
+node --check "Legacy My List for Netflix.user.js"
+git diff --check
+```
+
+Check verifies the current committed artifact without writing it. Run it before rebuilding when verifying a checkout; otherwise rebuilding could hide stale output. After editing authored source or release metadata, build creates the reviewed release artifact and check verifies it.
+
+Edit `src/` rather than the generated root userscript. `package.json` is the single release-version source; `userscript.meta.json` supplies the other metadata. Build generates a readable, self-contained userscript at the original filename. No runtime npm installation or external module fetch is needed in Tampermonkey.
+
+Any pushed change to the distributable requires a version greater than the newest published release, using AGENTS.md's increment rules. Update package.json and its lockfile together, then rebuild; metadata and internal SCRIPT_VERSION receive that same version automatically. Documentation/tooling changes that leave output unchanged do not need a userscript version increase.
+
+## Architecture and migration
+
+[docs/architecture.md](docs/architecture.md) describes the implemented structure. [Migration.md](Migration.md) defines the destination and ownership contracts; [MigrationPlan.md](MigrationPlan.md) defines the ordered steps and verification. [findings.md](findings.md) records selections, evidence and remaining work.
+
+The runtime is currently in transitional `src/legacy.js`, explicitly started by `src/main.js`. Further steps transfer real state/resource ownership to the planned capabilities. The residual regression suite reads authored legacy declarations; generated-bundle tests separately exercise startup, SPA navigation, cancellation and build consistency offline. Live Netflix compatibility remains a user-owned release check.

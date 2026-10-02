@@ -1,0 +1,12 @@
+{
+  "name": "My List for Netflix",
+  "description": "Displays your Netflix My List in an easy-to-browse grid.",
+  "author": "final221",
+  "license": "MIT",
+  "match": ["https://www.netflix.com/*"],
+  "run-at": "document-idle",
+  "sandbox": "raw",
+  "grant": ["GM_registerMenuCommand", "GM_unregisterMenuCommand", "GM_getValue", "GM_setValue"],
+  "noframes": true,
+  "namespace": "local.netflix.mylist.grid"
+}

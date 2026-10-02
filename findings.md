@@ -831,30 +831,44 @@ The readiness review finds no blocking design decision for beginning P01. The cu
 
 The final design review makes two coordination contracts explicit in Migration.md and the relevant steps: an intentional card replacement transfers only its admitted current hover attempt, and hover-facing resolution waits for responsive stability while refresh-internal carousel operations avoid waiting on their own transaction. The final audit also distinguishes import-graph enforcement from the separate audit of state ownership and cross-owner writes.
 
-Plan/document consistency and whitespace checks pass: all 21 steps have the required fields, ordered dependencies and matching progress entries. Context, runtime source, regression tests and version remain unchanged. No build dependency or migrated implementation is created in this request. All implementation steps await selection. The next ready step is P01; each future prompt selects one step and its completed evidence is recorded here.
+Plan/document consistency and whitespace checks pass: all 21 steps have the required fields, ordered dependencies and matching progress entries. That documentation request leaves context, runtime source, regression tests and version unchanged, without creating a build dependency or migrated implementation. At plan creation all steps await selection.
+
+The subsequent persistent user goal, **Do the migration**, authorizes the full saved migration in dependency order. This supersedes the need to select each step again; retain the individual verification/release checkpoints and bounded scope. Current execution status is recorded below.
 
 | Step | Outcome | Status |
 | --- | --- | --- |
-| P01 | Reproducible build and transitional test entry | Awaiting selection |
-| P02 | CI and output/dependency checks | Awaiting selection |
-| P03 | Localization, DOM names and styling | Awaiting selection |
-| P04 | Logging/reporting and bounded popup inspection | Awaiting selection |
-| P05 | Context, page DOM and card markup adapters | Awaiting selection |
-| P06 | My List data adapter | Awaiting selection |
-| P07 | Viewing data adapter | Awaiting selection |
-| P08 | Session scopes and native binding/page model | Awaiting selection |
-| P09 | Navigation queue and restoration | Awaiting selection |
-| P10 | Native collection and carousel facade | Awaiting selection |
-| P11 | Frame/card registry and resources | Awaiting selection |
-| P12 | Groups, filters and controls | Awaiting selection |
-| P13 | Membership/order and collection strategy | Awaiting selection |
-| P14 | Mutation queue, deferral and Undo | Awaiting selection |
-| P15 | Viewing rules, choices and cache | Awaiting selection |
-| P16 | Viewing scan and facade | Awaiting selection |
-| P17 | Native-popup integration | Awaiting selection |
-| P18 | Hover policy and timing | Awaiting selection |
-| P19 | Responsive transactions and image instrumentation | Awaiting selection |
-| P20 | Application/session composition and settings | Awaiting selection |
-| P21 | Legacy removal and final architecture audit | Awaiting selection |
+| P01 | Reproducible build and transitional test entry | Complete — 1.4.6; evidence below |
+| P02 | CI and output/dependency checks | Next ready — authorized goal |
+| P03 | Localization, DOM names and styling | Planned — authorized goal |
+| P04 | Logging/reporting and bounded popup inspection | Planned — authorized goal |
+| P05 | Context, page DOM and card markup adapters | Planned — authorized goal |
+| P06 | My List data adapter | Planned — authorized goal |
+| P07 | Viewing data adapter | Planned — authorized goal |
+| P08 | Session scopes and native binding/page model | Planned — authorized goal |
+| P09 | Navigation queue and restoration | Planned — authorized goal |
+| P10 | Native collection and carousel facade | Planned — authorized goal |
+| P11 | Frame/card registry and resources | Planned — authorized goal |
+| P12 | Groups, filters and controls | Planned — authorized goal |
+| P13 | Membership/order and collection strategy | Planned — authorized goal |
+| P14 | Mutation queue, deferral and Undo | Planned — authorized goal |
+| P15 | Viewing rules, choices and cache | Planned — authorized goal |
+| P16 | Viewing scan and facade | Planned — authorized goal |
+| P17 | Native-popup integration | Planned — authorized goal |
+| P18 | Hover policy and timing | Planned — authorized goal |
+| P19 | Responsive transactions and image instrumentation | Planned — authorized goal |
+| P20 | Application/session composition and settings | Planned — authorized goal |
+| P21 | Legacy removal and final architecture audit | Planned — authorized goal |
 
 For a completed step, replace its status with its actual result/commit, retain evidence and state any bridges/live checks still outstanding. Do not mark a step complete solely because code moved or test totals matched. A later user-owned live failure belongs to the affected step's follow-up record and must be assessed before dependent work proceeds.
+
+### P01 — Reproducible build and transitional entry
+
+The release is **1.4.6**, greater than the published **1.4.5** baseline on origin/main. Package version is canonical; build injects it into the metadata and internal SCRIPT_VERSION. Existing name, namespace, grants, match, document-idle/raw execution and noframes are preserved. The distributable keeps its original filename and is generated as one readable self-contained IIFE.
+
+Created package/lock/metadata, scripts/build.mjs and the read-only scripts/check.mjs, src/main.js and temporary src/legacy.js. The complete original executable body transfers unchanged, apart from the explicit start wrapper and injected version. Main starts it once; importing legacy activates nothing. No feature state/resource owner has moved yet, and no duplicate runtime is retained. The temporary entry is replaced in P20 and removed in P21.
+
+The 326 baseline cases remain in tests/performance.test.cjs; only their source loader changes to tests/helpers/legacy-source.cjs. That loader reads authored declarations rather than generated formatting and is removed with the residual suite in P21. Nine bundle/build cases execute the actual artifact and verify startup, route entry/exit/reentry, optional grants/storage/viewport fallbacks, cancellation before response delivery and during body reads, deterministic generation, stale-source/output rejection, metadata/version/installation guards and inactive legacy import. The source/version/build checks initially fail before the new boundary exists; the five runtime scenarios are first characterized against the original script, then pass against the generated artifact.
+
+Evidence: `npm test` passes **335 tests**, with no failures/cancellations/skips; the final focused bundle run passes all nine after making version expectations independent of future release numbers. Fresh `npm ci` succeeds with the locked esbuild **0.28.2**, Node **24.13.0** and npm **11.6.2**. Two generated builds match exactly. `npm run check`, distributable syntax and whitespace checks pass. A separate transfer audit compares the legacy body to HEAD's original source, checks every baseline metadata field and package/lock/dependency agreement, and confirms context is unchanged. Negative checks reject altered output, authored entry, metadata/internal versions, grants, sandbox, run-at, noframes, match, namespace and external runtime dependencies without repairing the artifact.
+
+README.md documents installation/development/release commands; docs/architecture.md distinguishes the implemented build/entry from the final destination. Minimal dependency/temporary-fixture ignore rules and shared offline DOM/timer helpers land with P01 so installation/tests leave a clean reviewable checkpoint; MigrationPlan.md records this minor operational ordering detail. CI and production import/cycle enforcement remain P02. User-owned live Netflix installation/entry/hover compatibility is not proved by these offline checks.
