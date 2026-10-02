@@ -839,7 +839,7 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | --- | --- | --- |
 | P01 | Reproducible build and transitional test entry | Complete — 1.4.6; commit ffb31df |
 | P02 | CI and output/dependency checks | Complete — 3ccca0e; CI repair 0a8113b verified |
-| P03 | Localization, DOM names and styling | Complete — 1.4.7; release checkpoint below |
+| P03 | Localization, DOM names and styling | Complete — 1.4.7; d4fa053; Windows/Linux CI verified |
 | P04 | Logging/reporting and bounded popup inspection | Next ready — authorized goal |
 | P05 | Context, page DOM and card markup adapters | Planned — authorized goal |
 | P06 | My List data adapter | Planned — authorized goal |
@@ -909,3 +909,5 @@ Before extraction, the existing locale coverage and full-initialization scenario
 Baseline comparison against the pre-step authored source confirms equality of every UI/log resource, the 31-locale set, all 19 named DOM contracts, exact interpolated stylesheet text and translation/plural/number/count/time results for every supported locale plus unsupported/regional inputs. All 366 remaining function bodies match the pre-step source except the two intended stylesheet caller changes in runScript and cleanupTargetSessionDom. Functional detection still uses DOM/state contracts, independent of localized text. The published package version was verified as 1.4.6 before creating maintenance release **1.4.7**; package, lockfile, metadata and internal version agree.
 
 Local evidence: **346 passing tests**, zero failures/cancellations/skips; deterministic build/read-only dependency and output check, distributable syntax and whitespace verification pass. Authored/generated diffs are reviewed together. Live Netflix visual/native-popup compatibility remains the user-owned release check; offline checks do not establish it. P04 is next under the authorized full migration goal; P04–P21 remain required.
+
+Release checkpoint **d4fa053** is committed and pushed. [Hosted run 37063250774](https://github.com/final221/Netflix-List/actions/runs/37063250774) succeeds on **windows-latest** and **ubuntu-latest**: locked installation, committed-output verification, all 346 tests, reproducible build, dependency/output checks, syntax, whitespace and unchanged tracked build output pass. P03 is complete; the full migration goal remains active.
