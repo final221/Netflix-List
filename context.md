@@ -38,6 +38,7 @@ what it should not contain
 - On list entry, the user prefers Films selected by default in both the main grid and Watched / Caught up, with independent Films/Series selections for those sections.
 - For viewing groups, the user accepts a completed latest episode as a caught-up hint and wants reversible manual choices remembered separately for each Netflix profile. Manual choices take priority over automatic status; a series correction should cover the current episodes and expire when reliable metadata reveals added episodes.
 - Marking or reversing a viewing choice should preserve the user's browsing position instead of scrolling to the destination section.
+- Keep card placement controls to one action between My List and Watched / Caught up. Fold returning to automatic classification into that action when it agrees with the destination; show a small passive marker for active manual placements rather than a separate reset button.
 - Known watched/caught-up titles should start in their section on list entry, and newly established viewing results should appear promptly.
 - After initial loading, viewing groups should remain stable while browsing; changes should follow explicit viewing actions/refresh, a new list entry, or actual list/profile changes.
 - Use Netflix's own hover popups rather than script-rendered replacements. The user prefers the complete native experience even if some hover latency or stuttering remains; a visual approximation is insufficient.

@@ -5107,7 +5107,8 @@ test('new viewing controls have translations for every supported Netflix UI loca
     const locales = vm.runInContext('Object.keys(UI_MESSAGES)', e.c);
     const keys = ['watchedCaughtUp', 'refreshViewingStatus', 'checkingViewingStatus', 'unknownViewingStatus', 'caughtUpMessage',
         'filterFilms', 'filterSeries', 'filterAll', 'titleTypeFilter', 'noMatchingTitles', 'unknownTitleTypes',
-        'markWatched', 'markCaughtUp', 'moveBackToMyList', 'useAutomaticViewingStatus', 'viewingChoiceStorageFailed'];
+        'markWatched', 'markCaughtUp', 'moveBackToMyList', 'manualViewingChoice', 'manualViewingChoiceDescription',
+        'viewingChoiceStorageFailed'];
     for (const locale of locales) {
         e.c.getUiLocale = () => locale;
         for (const key of keys) {
@@ -6358,7 +6359,8 @@ test('profile and route changes cancel direct episode reads and discard profile-
 
 function clickManualViewing(e, id, action = 'toggle', grid = e.state.grid, button = null) {
     const clone = e.state.cloneMap.get('v:' + id);
-    button ||= clone.__tmViewingControls[action === 'reset' ? 'reset' : 'toggle'];
+    assert.equal(action, 'toggle');
+    button ||= clone.__tmViewingControls.toggle;
     const events = [];
     grid.listeners.get('click')({ target: button, preventDefault: () => events.push('prevent'),
         stopPropagation: () => events.push('stop'), stopImmediatePropagation: () => events.push('immediate') });
@@ -6458,7 +6460,7 @@ test('manual choices move cards immediately, update filters and counts, and perf
     assert.equal(e.state.cloneMap.get('v:2').__tmViewingControls.toggle.textContent, 'Move back to My List');
 });
 
-test('manual choices survive reloads and automatic refresh and can be reversed or cleared', async () => {
+test('manual choices survive reloads and refresh and the move button restores automatic classification when it agrees', async () => {
     const first = await viewingEnvironment();
     await first.start();
     clickManualViewing(first, '2');
@@ -6470,13 +6472,116 @@ test('manual choices survive reloads and automatic refresh and can be reversed o
     next.state.watchStatus.ui.details.open = true;
     clickManualViewing(next, '2');
     assert.ok(mainViewingIds(next).includes('2'));
+    assert.equal(next.state.watchStatus.manualChoices.has('2'), false, 'returning to the automatic main group clears the correction');
+    assert.equal(next.state.cloneMap.get('v:2').__tmViewingControls.marker.hidden, true);
     next.fixtures().titles.videos[2] = viewingVideo('movie', true);
     await next.c.refreshViewingStatus(next.state);
+    assert.ok(completedViewingIds(next).includes('2'), 'automatic classification resumes after clearing the override');
+    clickManualViewing(next, '2');
+    assert.equal(next.state.watchStatus.manualChoices.get('2').status, 'main');
+    assert.equal(next.state.cloneMap.get('v:2').__tmViewingControls.marker.hidden, false);
+    await next.c.refreshViewingStatus(next.state);
     assert.ok(mainViewingIds(next).includes('2'), 'an explicit main-list choice outweighs automatic completion');
-    clickManualViewing(next, '2', 'reset');
+    clickManualViewing(next, '2');
     assert.ok(completedViewingIds(next).includes('2'));
     assert.equal(next.state.watchStatus.manualChoices.has('2'), false);
-    assert.equal(next.state.cloneMap.get('v:2').__tmViewingControls.reset.hidden, true);
+    assert.equal(next.state.cloneMap.get('v:2').__tmViewingControls.marker.hidden, true);
+});
+
+test('cards show one move button and a passive manual marker that survives reload without becoming a hover or click action', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    const clone = e.state.cloneMap.get('v:2'), controls = clone.__tmViewingControls;
+    assert.equal(controls.root.children.filter(child => child.type === 'button').length, 1);
+    assert.equal(controls.marker.hidden, true);
+    clickManualViewing(e, '2');
+    assert.equal(controls.marker.hidden, false);
+    assert.equal(controls.marker.textContent, 'Manual');
+    assert.equal(controls.marker.getAttribute('title'), 'Placed here by you');
+    assert.equal(controls.marker.getAttribute('role'), 'img');
+    assert.equal(controls.marker.getAttribute('aria-label'), 'Placed here by you');
+    assert.equal(controls.marker.getAttribute('data-tm-viewing-action'), null);
+    e.state.watchStatus.ui.details.open = true;
+    assert.equal(e.c.gridCloneFromPointerEvent({ target: controls.marker }, e.state.grid), null);
+    const before = { writes: e.storageCalls.writes, requests: e.requests.length, completed: e.state.watchStatus.completedCount };
+    const events = [];
+    e.state.grid.listeners.get('click')({ target: controls.marker, preventDefault: () => events.push('prevent'),
+        stopPropagation: () => events.push('stop'), stopImmediatePropagation: () => events.push('immediate') });
+    assert.deepEqual(events, []);
+    assert.deepEqual({ writes: e.storageCalls.writes, requests: e.requests.length, completed: e.state.watchStatus.completedCount }, before);
+    const next = await viewingEnvironment(7, null, e.storage);
+    await next.start();
+    assert.equal(next.state.cloneMap.get('v:2').__tmViewingControls.marker.hidden, false);
+    assert.equal(next.state.cloneMap.get('v:1').__tmViewingControls.marker.hidden, true, 'an automatic watched title has no marker');
+});
+
+test('moving back with unknown automatic progress retains the explicit main choice when a later scan reports complete', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    clickViewingFilter(e, 'main', 'all');
+    assert.equal(e.state.watchStatus.results.get('7'), 'unknown');
+    const requests = e.requests.length;
+    clickManualViewing(e, '7');
+    e.state.watchStatus.ui.details.open = true;
+    clickViewingFilter(e, 'watched', 'all');
+    clickManualViewing(e, '7');
+    assert.equal(e.state.watchStatus.manualChoices.get('7').status, 'main');
+    assert.equal(e.state.cloneMap.get('v:7').__tmViewingControls.marker.hidden, false);
+    assert.equal(e.requests.length, requests);
+    e.fixtures().titles.videos[7] = viewingVideo('movie', true);
+    await e.c.refreshViewingStatus(e.state);
+    assert.ok(mainViewingIds(e).includes('7'));
+    const action = e.logs.filter(row => row.name === 'viewingChoiceApplied').at(-1).details;
+    assert.equal(action.targetGroup, 'main');
+    assert.equal(action.automaticStatus, 'unknown');
+    assert.equal(action.placement, 'manual');
+    assert.equal(action.restoredAutomatic, false);
+    assert.equal(action.manualMarkerVisible, true);
+});
+
+test('the move button can restore an agreed cached classification without a live result or a new request', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    e.state.watchStatus.results = new Map();
+    e.state.watchStatus.cachedResults = new Map([['1', 'complete'], ['2', 'in-progress']]);
+    e.c.syncWatchGroups(e.state);
+    e.state.watchStatus.ui.details.open = true;
+    const requests = e.requests.length;
+    clickManualViewing(e, '1');
+    assert.equal(e.state.watchStatus.manualChoices.get('1').status, 'main');
+    clickManualViewing(e, '1');
+    assert.equal(e.state.watchStatus.manualChoices.has('1'), false);
+    assert.ok(completedViewingIds(e).includes('1'));
+    assert.equal(e.state.cloneMap.get('v:1').__tmViewingControls.marker.hidden, true);
+    const action = e.logs.filter(row => row.name === 'viewingChoiceApplied').at(-1).details;
+    assert.equal(action.targetGroup, 'watched');
+    assert.equal(action.placement, 'automatic');
+    assert.equal(action.restoredAutomatic, true);
+    assert.equal(action.manualMarkerVisible, false);
+    assert.equal(e.requests.length, requests);
+});
+
+test('failed automatic restoration keeps the saved placement and marker and the diagnostic reports that actual state', async () => {
+    const e = await viewingEnvironment();
+    await e.start();
+    clickManualViewing(e, '2');
+    e.state.watchStatus.ui.details.open = true;
+    e.c.GM_setValue = () => { throw new Error('storage denied'); };
+    clickManualViewing(e, '2');
+    assert.ok(completedViewingIds(e).includes('2'));
+    assert.equal(e.state.watchStatus.manualChoices.get('2').status, 'complete');
+    const controls = e.state.cloneMap.get('v:2').__tmViewingControls;
+    assert.equal(controls.marker.hidden, false);
+    assert.equal(controls.toggle.disabled, true);
+    const action = e.logs.filter(row => row.name === 'viewingChoiceApplied').at(-1).details;
+    assert.equal(action.saved, false);
+    assert.equal(action.restoredAutomatic, false);
+    assert.equal(action.manualMarkerVisible, true);
+    assert.doesNotMatch(JSON.stringify(action), /active-profile|test-auth-token|videoId|storage denied/);
+    const next = await viewingEnvironment(7, null, e.storage);
+    await next.start();
+    assert.ok(completedViewingIds(next).includes('2'));
+    assert.equal(next.state.cloneMap.get('v:2').__tmViewingControls.marker.hidden, false);
 });
 
 test('manual corrections remain available when optional viewing requests fail', async () => {
@@ -6696,7 +6801,7 @@ test('stable manual card synchronization performs no storage calls, allocations 
     clickManualViewing(e, '2');
     const before = { ...e.storageCalls, created: e.created.length, requests: e.requests.length };
     for (const clone of e.state.cloneMap.values()) {
-        for (const button of [clone.__tmViewingControls.toggle, clone.__tmViewingControls.reset]) {
+        for (const button of [clone.__tmViewingControls.toggle, clone.__tmViewingControls.marker]) {
             button.setAttribute = () => { throw new Error('unchanged button attribute write'); };
         }
     }
@@ -6744,7 +6849,7 @@ test('native hover clone replacement publishes correctly labeled manual controls
     assert.equal(fresh.__tmViewingControls.toggle.textContent, 'Move back to My List');
 });
 
-test('late automatic baseline capture preserves a newer manual choice saved in another tab', async () => {
+test('late automatic baseline capture preserves an override cleared by the move button in another tab', async () => {
     const e = await viewingEnvironment();
     const mockFetch = e.c.fetch;
     let release;
@@ -6765,9 +6870,9 @@ test('late automatic baseline capture preserves a newer manual choice saved in a
     clickManualViewing(next, '5');
     await release();
     await e.state.watchStatus.promise;
-    assert.equal(e.state.watchStatus.manualChoices.get('5').status, 'main');
+    assert.equal(e.state.watchStatus.manualChoices.has('5'), false);
     assert.ok(mainViewingIds(e).includes('5'));
-    assert.equal(e.storage.get('test.viewingChoices.active-profile').choices[5].status, 'main');
+    assert.equal(Object.hasOwn(e.storage.get('test.viewingChoices.active-profile').choices, '5'), false);
 });
 
 test('marking titles into the collapsed watched section preserves the viewport while handing off focus', async () => {
@@ -6808,10 +6913,12 @@ test('reversing and resetting a correction preserve the viewport when the destin
     assert.equal(e.state.cloneMap.get('v:2').getAttribute('data-tm-type-hidden'), 'true');
     e.fixtures().titles.videos[2] = viewingVideo('movie', true);
     await e.c.refreshViewingStatus(e.state);
+    clickViewingFilter(e, 'watched', 'movie');
+    clickManualViewing(e, '2');
     clickViewingFilter(e, 'main', 'movie');
     clickViewingFilter(e, 'watched', 'series');
     viewport = { x: 0, y: 2200 };
-    clickManualViewing(e, '2', 'reset');
+    clickManualViewing(e, '2');
     assert.deepEqual(viewport, { x: 0, y: 2200 });
     assert.ok(completedViewingIds(e).includes('2'));
     assert.equal(e.state.watchStatus.manualChoices.has('2'), false);

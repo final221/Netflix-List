@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.4
+// @version      1.4.5
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -123,7 +123,7 @@
     const STATUS_LABEL_CLASS = 'tm-netflix-mylist-v23-status-label';
     const STATUS_META_CLASS = 'tm-netflix-mylist-v23-status-meta';
     const SCRIPT_NAME = 'My List for Netflix';
-    const SCRIPT_VERSION = '1.4.4';
+    const SCRIPT_VERSION = '1.4.5';
     const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
     const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
@@ -798,40 +798,41 @@
     }
 
     const MANUAL_VIEWING_UI_MESSAGES = {
-        "da": ["Mark\u00e9r som set","Mark\u00e9r som ajour","Tilbage til Min liste","Brug automatisk status","Kunne ikke gemme visningsvalg. Genindl\u00e6s og pr\u00f8v igen."],
-        "de": ["Als gesehen markieren","Als aufgeholt markieren","Zur\u00fcck zu Meine Liste","Automatischen Status verwenden","Auswahl konnte nicht gespeichert werden. Neu laden und erneut versuchen."],
-        "en": ["Mark watched","Mark caught up","Move back to My List","Use automatic status","Could not save viewing choices. Reload and try again."],
-        "es": ["Marcar como visto","Marcar como al d\u00eda","Volver a Mi lista","Usar estado autom\u00e1tico","No se pudieron guardar tus cambios. Recarga e int\u00e9ntalo de nuevo."],
-        "fil": ["Markahang napanood","Markahang napapanahon","Ibalik sa Listahan Ko","Gamitin ang awtomatikong status","Hindi ma-save ang mga pagbabago. I-reload at subukan muli."],
-        "fr": ["Marquer comme vu","Marquer comme \u00e0 jour","Remettre dans Ma liste","Utiliser le statut automatique","Impossible d\u2019enregistrer les choix. Rechargez et r\u00e9essayez."],
-        "hr": ["Ozna\u010di kao pogledano","Ozna\u010di sve kao pogledano","Vrati na Moj popis","Koristi automatski status","Nije mogu\u0107e spremiti odabire. Ponovno u\u010ditaj i poku\u0161aj."],
-        "id": ["Tandai sudah ditonton","Tandai sudah mengikuti","Kembali ke Daftar Saya","Gunakan status otomatis","Pilihan tidak dapat disimpan. Muat ulang dan coba lagi."],
-        "it": ["Segna come visto","Segna come in pari","Riporta in La mia lista","Usa lo stato automatico","Impossibile salvare le scelte. Ricarica e riprova."],
-        "hu": ["Megn\u00e9zettnek jel\u00f6l\u00e9s","Naprak\u00e9sznek jel\u00f6l\u00e9s","Vissza a Saj\u00e1t list\u00e1mra","Automatikus \u00e1llapot haszn\u00e1lata","A v\u00e1laszt\u00e1sok ment\u00e9se sikertelen. T\u00f6ltsd \u00fajra \u00e9s pr\u00f3b\u00e1ld meg ism\u00e9t."],
-        "ms": ["Tandakan sudah ditonton","Tandakan sudah mengikuti","Kembali ke Senarai Saya","Gunakan status automatik","Pilihan tidak dapat disimpan. Muat semula dan cuba lagi."],
-        "nl": ["Markeer als bekeken","Markeer als bijgewerkt","Terug naar Mijn lijst","Automatische status gebruiken","Keuzes konden niet worden opgeslagen. Herlaad en probeer opnieuw."],
-        "nb": ["Merk som sett","Merk som \u00e0 jour","Tilbake til Min liste","Bruk automatisk status","Kunne ikke lagre valgene. Last inn p\u00e5 nytt og pr\u00f8v igjen."],
-        "pl": ["Oznacz jako obejrzane","Oznacz jako na bie\u017c\u0105co","Przenie\u015b do Mojej listy","U\u017cyj automatycznego statusu","Nie uda\u0142o si\u0119 zapisa\u0107 wybor\u00f3w. Od\u015bwie\u017c i spr\u00f3buj ponownie."],
-        "pt": ["Marcar como visto","Marcar como atualizado","Voltar para Minha lista","Usar status autom\u00e1tico","N\u00e3o foi poss\u00edvel salvar as escolhas. Recarregue e tente novamente."],
-        "ro": ["Marcheaz\u0103 ca vizionat","Marcheaz\u0103 ca la zi","\u00cenapoi \u00een Lista mea","Folose\u0219te starea automat\u0103","Nu s-au putut salva alegerile. Re\u00eencarc\u0103 \u0219i \u00eencearc\u0103 din nou."],
-        "fi": ["Merkitse katsotuksi","Merkitse ajan tasalla olevaksi","Takaisin Omaan listaan","K\u00e4yt\u00e4 automaattista tilaa","Valintoja ei voitu tallentaa. Lataa uudelleen ja yrit\u00e4 uudestaan."],
-        "sv": ["Markera som sedd","Markera som ikapp","Tillbaka till Min lista","Anv\u00e4nd automatisk status","Kunde inte spara valen. Ladda om och f\u00f6rs\u00f6k igen."],
-        "vi": ["\u0110\u00e1nh d\u1ea5u \u0111\u00e3 xem","\u0110\u00e1nh d\u1ea5u \u0111\u00e3 xem h\u1ebft","Tr\u1edf l\u1ea1i Danh s\u00e1ch c\u1ee7a t\u00f4i","D\u00f9ng tr\u1ea1ng th\u00e1i t\u1ef1 \u0111\u1ed9ng","Kh\u00f4ng th\u1ec3 l\u01b0u l\u1ef1a ch\u1ecdn. T\u1ea3i l\u1ea1i v\u00e0 th\u1eed l\u1ea1i."],
-        "tr": ["\u0130zlendi olarak i\u015faretle","G\u00fcncel olarak i\u015faretle","Listeme geri ta\u015f\u0131","Otomatik durumu kullan","Se\u00e7imler kaydedilemedi. Yeniden y\u00fckleyip tekrar dene."],
-        "cs": ["Ozna\u010dit jako zhl\u00e9dnut\u00e9","Ozna\u010dit jako dokoukan\u00e9","Zp\u011bt do M\u00e9ho seznamu","Pou\u017e\u00edt automatick\u00fd stav","Volby nelze ulo\u017eit. Na\u010dti str\u00e1nku znovu a zkus to znovu."],
-        "el": ["\u03a3\u03ae\u03bc\u03b1\u03bd\u03c3\u03b7 \u03c9\u03c2 \u03c0\u03c1\u03bf\u03b2\u03bb\u03b7\u03b8\u03ad\u03bd","\u03a3\u03ae\u03bc\u03b1\u03bd\u03c3\u03b7 \u03c9\u03c2 \u03b5\u03bd\u03b7\u03bc\u03b5\u03c1\u03c9\u03bc\u03ad\u03bd\u03bf","\u0395\u03c0\u03b9\u03c3\u03c4\u03c1\u03bf\u03c6\u03ae \u03c3\u03c4\u03b7 \u039b\u03af\u03c3\u03c4\u03b1 \u03bc\u03bf\u03c5","\u03a7\u03c1\u03ae\u03c3\u03b7 \u03b1\u03c5\u03c4\u03cc\u03bc\u03b1\u03c4\u03b7\u03c2 \u03ba\u03b1\u03c4\u03ac\u03c3\u03c4\u03b1\u03c3\u03b7\u03c2","\u0394\u03b5\u03bd \u03b1\u03c0\u03bf\u03b8\u03b7\u03ba\u03b5\u03cd\u03c4\u03b7\u03ba\u03b1\u03bd \u03bf\u03b9 \u03b5\u03c0\u03b9\u03bb\u03bf\u03b3\u03ad\u03c2. \u0391\u03bd\u03b1\u03bd\u03b5\u03ce\u03c3\u03c4\u03b5 \u03ba\u03b1\u03b9 \u03b4\u03bf\u03ba\u03b9\u03bc\u03ac\u03c3\u03c4\u03b5 \u03be\u03b1\u03bd\u03ac."],
-        "ru": ["\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u043d\u043d\u044b\u043c","\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u0432\u0441\u0435 \u0441\u0435\u0440\u0438\u0438 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u043d\u043d\u044b\u043c\u0438","\u0412\u0435\u0440\u043d\u0443\u0442\u044c \u0432 \u041c\u043e\u0439 \u0441\u043f\u0438\u0441\u043e\u043a","\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438\u0439 \u0441\u0442\u0430\u0442\u0443\u0441","\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0432\u044b\u0431\u043e\u0440. \u041f\u0435\u0440\u0435\u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u0435 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0443 \u0438 \u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435."],
-        "uk": ["\u041f\u043e\u0437\u043d\u0430\u0447\u0438\u0442\u0438 \u043f\u0435\u0440\u0435\u0433\u043b\u044f\u043d\u0443\u0442\u0438\u043c","\u041f\u043e\u0437\u043d\u0430\u0447\u0438\u0442\u0438 \u0432\u0441\u0456 \u0441\u0435\u0440\u0456\u0457 \u043f\u0435\u0440\u0435\u0433\u043b\u044f\u043d\u0443\u0442\u0438\u043c\u0438","\u041f\u043e\u0432\u0435\u0440\u043d\u0443\u0442\u0438 \u0434\u043e \u041c\u043e\u0433\u043e \u0441\u043f\u0438\u0441\u043a\u0443","\u0412\u0438\u043a\u043e\u0440\u0438\u0441\u0442\u043e\u0432\u0443\u0432\u0430\u0442\u0438 \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0438\u0439 \u0441\u0442\u0430\u043d","\u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438 \u0432\u0438\u0431\u0456\u0440. \u041f\u0435\u0440\u0435\u0437\u0430\u0432\u0430\u043d\u0442\u0430\u0436\u0442\u0435 \u0439 \u043f\u043e\u0432\u0442\u043e\u0440\u0456\u0442\u044c."],
-        "he": ["\u05e1\u05d9\u05de\u05d5\u05df \u05db\u05e0\u05e6\u05e4\u05d4","\u05e1\u05d9\u05de\u05d5\u05df \u05db\u05dc \u05d4\u05e4\u05e8\u05e7\u05d9\u05dd \u05db\u05e0\u05e6\u05e4\u05d5","\u05d7\u05d6\u05e8\u05d4 \u05dc\u05e8\u05e9\u05d9\u05de\u05d4 \u05e9\u05dc\u05d9","\u05e9\u05d9\u05de\u05d5\u05e9 \u05d1\u05de\u05e6\u05d1 \u05d0\u05d5\u05d8\u05d5\u05de\u05d8\u05d9","\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05e9\u05de\u05d5\u05e8 \u05d0\u05ea \u05d4\u05d1\u05d7\u05d9\u05e8\u05d5\u05ea. \u05d9\u05e9 \u05dc\u05d8\u05e2\u05d5\u05df \u05de\u05d7\u05d3\u05e9 \u05d5\u05dc\u05e0\u05e1\u05d5\u05ea \u05e9\u05d5\u05d1."],
-        "ar": ["\u062a\u062d\u062f\u064a\u062f \u0643\u0645\u064f\u0634\u0627\u0647\u062f","\u062a\u062d\u062f\u064a\u062f \u0643\u0645\u064f\u062a\u0627\u0628\u064e\u0639 \u0628\u0627\u0644\u0643\u0627\u0645\u0644","\u0625\u0639\u0627\u062f\u0629 \u0625\u0644\u0649 \u0642\u0627\u0626\u0645\u062a\u064a","\u0627\u0633\u062a\u062e\u062f\u0627\u0645 \u0627\u0644\u062d\u0627\u0644\u0629 \u0627\u0644\u062a\u0644\u0642\u0627\u0626\u064a\u0629","\u062a\u0639\u0630\u0631 \u062d\u0641\u0638 \u0627\u0644\u0627\u062e\u062a\u064a\u0627\u0631\u0627\u062a. \u0623\u0639\u062f \u0627\u0644\u062a\u062d\u0645\u064a\u0644 \u0648\u062d\u0627\u0648\u0644 \u0645\u062c\u062f\u062f\u064b\u0627."],
-        "hi": ["\u0926\u0947\u0916\u093e \u0939\u0941\u0906 \u091a\u093f\u0939\u094d\u0928\u093f\u0924 \u0915\u0930\u0947\u0902","\u0938\u092d\u0940 \u0909\u092a\u0932\u092c\u094d\u0927 \u090f\u092a\u093f\u0938\u094b\u0921 \u0926\u0947\u0916\u0947 \u091a\u093f\u0939\u094d\u0928\u093f\u0924 \u0915\u0930\u0947\u0902","\u092e\u0947\u0930\u0940 \u0932\u093f\u0938\u094d\u091f \u092e\u0947\u0902 \u0935\u093e\u092a\u0938 \u0930\u0916\u0947\u0902","\u0938\u094d\u0935\u091a\u093e\u0932\u093f\u0924 \u0938\u094d\u0925\u093f\u0924\u093f \u0915\u093e \u0909\u092a\u092f\u094b\u0917 \u0915\u0930\u0947\u0902","\u091a\u0941\u0928\u093e\u0935 \u0938\u0939\u0947\u091c\u0947 \u0928\u0939\u0940\u0902 \u091c\u093e \u0938\u0915\u0947\u0964 \u092b\u093f\u0930 \u0938\u0947 \u0932\u094b\u0921 \u0915\u0930\u0915\u0947 \u092a\u094d\u0930\u092f\u093e\u0938 \u0915\u0930\u0947\u0902\u0964"],
-        "th": ["\u0e17\u0e33\u0e40\u0e04\u0e23\u0e37\u0e48\u0e2d\u0e07\u0e2b\u0e21\u0e32\u0e22\u0e27\u0e48\u0e32\u0e14\u0e39\u0e41\u0e25\u0e49\u0e27","\u0e17\u0e33\u0e40\u0e04\u0e23\u0e37\u0e48\u0e2d\u0e07\u0e2b\u0e21\u0e32\u0e22\u0e27\u0e48\u0e32\u0e14\u0e39\u0e04\u0e23\u0e1a\u0e41\u0e25\u0e49\u0e27","\u0e22\u0e49\u0e32\u0e22\u0e01\u0e25\u0e31\u0e1a\u0e44\u0e1b\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e02\u0e2d\u0e07\u0e09\u0e31\u0e19","\u0e43\u0e0a\u0e49\u0e2a\u0e16\u0e32\u0e19\u0e30\u0e2d\u0e31\u0e15\u0e42\u0e19\u0e21\u0e31\u0e15\u0e34","\u0e1a\u0e31\u0e19\u0e17\u0e36\u0e01\u0e15\u0e31\u0e27\u0e40\u0e25\u0e37\u0e2d\u0e01\u0e44\u0e21\u0e48\u0e44\u0e14\u0e49 \u0e42\u0e2b\u0e25\u0e14\u0e43\u0e2b\u0e21\u0e48\u0e41\u0e25\u0e49\u0e27\u0e25\u0e2d\u0e07\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07"],
-        "zh": ["\u6807\u8bb0\u4e3a\u5df2\u89c2\u770b","\u6807\u8bb0\u4e3a\u5df2\u770b\u5b8c\u73b0\u6709\u5267\u96c6","\u79fb\u56de\u6211\u7684\u7247\u5355","\u4f7f\u7528\u81ea\u52a8\u72b6\u6001","\u65e0\u6cd5\u4fdd\u5b58\u9009\u62e9\u3002\u8bf7\u91cd\u65b0\u52a0\u8f7d\u540e\u518d\u8bd5\u3002"],
-        "ja": ["\u8996\u8074\u6e08\u307f\u306b\u3059\u308b","\u914d\u4fe1\u4e2d\u306e\u5168\u8a71\u3092\u8996\u8074\u6e08\u307f\u306b\u3059\u308b","\u30de\u30a4\u30ea\u30b9\u30c8\u306b\u623b\u3059","\u81ea\u52d5\u5224\u5b9a\u306b\u623b\u3059","\u9078\u629e\u3092\u4fdd\u5b58\u3067\u304d\u307e\u305b\u3093\u3002\u518d\u8aad\u307f\u8fbc\u307f\u3057\u3066\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002"],
-        "ko": ["\uc2dc\uccad \uc644\ub8cc\ub85c \ud45c\uc2dc","\uacf5\uac1c\ub41c \ubaa8\ub4e0 \ud68c\ucc28 \uc2dc\uccad \uc644\ub8cc\ub85c \ud45c\uc2dc","\ub0b4\uac00 \ucc1c\ud55c \ub9ac\uc2a4\ud2b8\ub85c \uc774\ub3d9","\uc790\ub3d9 \uc0c1\ud0dc \uc0ac\uc6a9","\uc120\ud0dd\uc744 \uc800\uc7a5\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4. \uc0c8\ub85c\uace0\uce68 \ud6c4 \ub2e4\uc2dc \uc2dc\ub3c4\ud558\uc138\uc694."],
+        "da": ["Mark\u00e9r som set","Mark\u00e9r som ajour","Tilbage til Min liste","Manuel","Kunne ikke gemme visningsvalg. Genindl\u00e6s og pr\u00f8v igen.","Placeret her af dig"],
+        "de": ["Als gesehen markieren","Als aufgeholt markieren","Zur\u00fcck zu Meine Liste","Manuell","Auswahl konnte nicht gespeichert werden. Neu laden und erneut versuchen.","Von dir hier eingeordnet"],
+        "en": ["Mark watched","Mark caught up","Move back to My List","Manual","Could not save viewing choices. Reload and try again.","Placed here by you"],
+        "es": ["Marcar como visto","Marcar como al d\u00eda","Volver a Mi lista","Manual","No se pudieron guardar tus cambios. Recarga e int\u00e9ntalo de nuevo.","Colocado aqu\u00ed por ti"],
+        "fil": ["Markahang napanood","Markahang napapanahon","Ibalik sa Listahan Ko","Manu-mano","Hindi ma-save ang mga pagbabago. I-reload at subukan muli.","Ikaw ang naglagay dito"],
+        "fr": ["Marquer comme vu","Marquer comme \u00e0 jour","Remettre dans Ma liste","Manuel","Impossible d\u2019enregistrer les choix. Rechargez et r\u00e9essayez.","Plac\u00e9 ici par vous"],
+        "hr": ["Ozna\u010di kao pogledano","Ozna\u010di sve kao pogledano","Vrati na Moj popis","Ru\u010dno","Nije mogu\u0107e spremiti odabire. Ponovno u\u010ditaj i poku\u0161aj.","Vi ste ovo ovdje premjestili"],
+        "id": ["Tandai sudah ditonton","Tandai sudah mengikuti","Kembali ke Daftar Saya","Manual","Pilihan tidak dapat disimpan. Muat ulang dan coba lagi.","Ditempatkan di sini oleh Anda"],
+        "it": ["Segna come visto","Segna come in pari","Riporta in La mia lista","Manuale","Impossibile salvare le scelte. Ricarica e riprova.","Spostato qui da te"],
+        "hu": ["Megn\u00e9zettnek jel\u00f6l\u00e9s","Naprak\u00e9sznek jel\u00f6l\u00e9s","Vissza a Saj\u00e1t list\u00e1mra","K\u00e9zi","A v\u00e1laszt\u00e1sok ment\u00e9se sikertelen. T\u00f6ltsd \u00fajra \u00e9s pr\u00f3b\u00e1ld meg ism\u00e9t.","Te helyezted ide"],
+        "ms": ["Tandakan sudah ditonton","Tandakan sudah mengikuti","Kembali ke Senarai Saya","Manual","Pilihan tidak dapat disimpan. Muat semula dan cuba lagi.","Diletakkan di sini oleh anda"],
+        "nl": ["Markeer als bekeken","Markeer als bijgewerkt","Terug naar Mijn lijst","Handmatig","Keuzes konden niet worden opgeslagen. Herlaad en probeer opnieuw.","Door jou hier geplaatst"],
+        "nb": ["Merk som sett","Merk som \u00e0 jour","Tilbake til Min liste","Manuelt","Kunne ikke lagre valgene. Last inn p\u00e5 nytt og pr\u00f8v igjen.","Plassert her av deg"],
+        "pl": ["Oznacz jako obejrzane","Oznacz jako na bie\u017c\u0105co","Przenie\u015b do Mojej listy","R\u0119cznie","Nie uda\u0142o si\u0119 zapisa\u0107 wybor\u00f3w. Od\u015bwie\u017c i spr\u00f3buj ponownie.","Umieszczone tutaj przez Ciebie"],
+        "pt": ["Marcar como visto","Marcar como atualizado","Voltar para Minha lista","Manual","N\u00e3o foi poss\u00edvel salvar as escolhas. Recarregue e tente novamente.","Colocado aqui por voc\u00ea"],
+        "ro": ["Marcheaz\u0103 ca vizionat","Marcheaz\u0103 ca la zi","\u00cenapoi \u00een Lista mea","Manual","Nu s-au putut salva alegerile. Re\u00eencarc\u0103 \u0219i \u00eencearc\u0103 din nou.","Plasat aici de tine"],
+        "fi": ["Merkitse katsotuksi","Merkitse ajan tasalla olevaksi","Takaisin Omaan listaan","K\u00e4sin","Valintoja ei voitu tallentaa. Lataa uudelleen ja yrit\u00e4 uudestaan.","Sin\u00e4 sijoitit t\u00e4m\u00e4n t\u00e4nne"],
+        "sv": ["Markera som sedd","Markera som ikapp","Tillbaka till Min lista","Manuellt","Kunde inte spara valen. Ladda om och f\u00f6rs\u00f6k igen.","Placerad h\u00e4r av dig"],
+        "vi": ["\u0110\u00e1nh d\u1ea5u \u0111\u00e3 xem","\u0110\u00e1nh d\u1ea5u \u0111\u00e3 xem h\u1ebft","Tr\u1edf l\u1ea1i Danh s\u00e1ch c\u1ee7a t\u00f4i","Th\u1ee7 c\u00f4ng","Kh\u00f4ng th\u1ec3 l\u01b0u l\u1ef1a ch\u1ecdn. T\u1ea3i l\u1ea1i v\u00e0 th\u1eed l\u1ea1i.","B\u1ea1n \u0111\u00e3 chuy\u1ec3n n\u1ed9i dung n\u00e0y v\u00e0o \u0111\u00e2y"],
+        "tr": ["\u0130zlendi olarak i\u015faretle","G\u00fcncel olarak i\u015faretle","Listeme geri ta\u015f\u0131","Manuel","Se\u00e7imler kaydedilemedi. Yeniden y\u00fckleyip tekrar dene.","Buraya sen yerle\u015ftirdin"],
+        "cs": ["Ozna\u010dit jako zhl\u00e9dnut\u00e9","Ozna\u010dit jako dokoukan\u00e9","Zp\u011bt do M\u00e9ho seznamu","Ru\u010dn\u011b","Volby nelze ulo\u017eit. Na\u010dti str\u00e1nku znovu a zkus to znovu.","Sem jste titul p\u0159esunuli vy"],
+        "el": ["\u03a3\u03ae\u03bc\u03b1\u03bd\u03c3\u03b7 \u03c9\u03c2 \u03c0\u03c1\u03bf\u03b2\u03bb\u03b7\u03b8\u03ad\u03bd","\u03a3\u03ae\u03bc\u03b1\u03bd\u03c3\u03b7 \u03c9\u03c2 \u03b5\u03bd\u03b7\u03bc\u03b5\u03c1\u03c9\u03bc\u03ad\u03bd\u03bf","\u0395\u03c0\u03b9\u03c3\u03c4\u03c1\u03bf\u03c6\u03ae \u03c3\u03c4\u03b7 \u039b\u03af\u03c3\u03c4\u03b1 \u03bc\u03bf\u03c5","\u03a7\u03b5\u03b9\u03c1\u03bf\u03ba\u03af\u03bd\u03b7\u03c4\u03b1","\u0394\u03b5\u03bd \u03b1\u03c0\u03bf\u03b8\u03b7\u03ba\u03b5\u03cd\u03c4\u03b7\u03ba\u03b1\u03bd \u03bf\u03b9 \u03b5\u03c0\u03b9\u03bb\u03bf\u03b3\u03ad\u03c2. \u0391\u03bd\u03b1\u03bd\u03b5\u03ce\u03c3\u03c4\u03b5 \u03ba\u03b1\u03b9 \u03b4\u03bf\u03ba\u03b9\u03bc\u03ac\u03c3\u03c4\u03b5 \u03be\u03b1\u03bd\u03ac.","\u03a4\u03bf\u03c0\u03bf\u03b8\u03b5\u03c4\u03ae\u03b8\u03b7\u03ba\u03b5 \u03b5\u03b4\u03ce \u03b1\u03c0\u03cc \u03b5\u03c3\u03ac\u03c2"],
+        "ru": ["\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u043d\u043d\u044b\u043c","\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u0432\u0441\u0435 \u0441\u0435\u0440\u0438\u0438 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u043d\u043d\u044b\u043c\u0438","\u0412\u0435\u0440\u043d\u0443\u0442\u044c \u0432 \u041c\u043e\u0439 \u0441\u043f\u0438\u0441\u043e\u043a","\u0412\u0440\u0443\u0447\u043d\u0443\u044e","\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0432\u044b\u0431\u043e\u0440. \u041f\u0435\u0440\u0435\u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u0435 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0443 \u0438 \u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435.","\u0412\u044b \u043f\u043e\u043c\u0435\u0441\u0442\u0438\u043b\u0438 \u044d\u0442\u043e \u0441\u044e\u0434\u0430"],
+        "uk": ["\u041f\u043e\u0437\u043d\u0430\u0447\u0438\u0442\u0438 \u043f\u0435\u0440\u0435\u0433\u043b\u044f\u043d\u0443\u0442\u0438\u043c","\u041f\u043e\u0437\u043d\u0430\u0447\u0438\u0442\u0438 \u0432\u0441\u0456 \u0441\u0435\u0440\u0456\u0457 \u043f\u0435\u0440\u0435\u0433\u043b\u044f\u043d\u0443\u0442\u0438\u043c\u0438","\u041f\u043e\u0432\u0435\u0440\u043d\u0443\u0442\u0438 \u0434\u043e \u041c\u043e\u0433\u043e \u0441\u043f\u0438\u0441\u043a\u0443","\u0412\u0440\u0443\u0447\u043d\u0443","\u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438 \u0432\u0438\u0431\u0456\u0440. \u041f\u0435\u0440\u0435\u0437\u0430\u0432\u0430\u043d\u0442\u0430\u0436\u0442\u0435 \u0439 \u043f\u043e\u0432\u0442\u043e\u0440\u0456\u0442\u044c.","\u0412\u0438 \u043f\u043e\u043c\u0456\u0441\u0442\u0438\u043b\u0438 \u0446\u0435 \u0441\u044e\u0434\u0438"],
+        "he": ["\u05e1\u05d9\u05de\u05d5\u05df \u05db\u05e0\u05e6\u05e4\u05d4","\u05e1\u05d9\u05de\u05d5\u05df \u05db\u05dc \u05d4\u05e4\u05e8\u05e7\u05d9\u05dd \u05db\u05e0\u05e6\u05e4\u05d5","\u05d7\u05d6\u05e8\u05d4 \u05dc\u05e8\u05e9\u05d9\u05de\u05d4 \u05e9\u05dc\u05d9","\u05d9\u05d3\u05e0\u05d9","\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05e9\u05de\u05d5\u05e8 \u05d0\u05ea \u05d4\u05d1\u05d7\u05d9\u05e8\u05d5\u05ea. \u05d9\u05e9 \u05dc\u05d8\u05e2\u05d5\u05df \u05de\u05d7\u05d3\u05e9 \u05d5\u05dc\u05e0\u05e1\u05d5\u05ea \u05e9\u05d5\u05d1.","\u05d4\u05d5\u05e2\u05d1\u05e8 \u05dc\u05db\u05d0\u05df \u05e2\u05dc \u05d9\u05d3\u05da"],
+        "ar": ["\u062a\u062d\u062f\u064a\u062f \u0643\u0645\u064f\u0634\u0627\u0647\u062f","\u062a\u062d\u062f\u064a\u062f \u0643\u0645\u064f\u062a\u0627\u0628\u064e\u0639 \u0628\u0627\u0644\u0643\u0627\u0645\u0644","\u0625\u0639\u0627\u062f\u0629 \u0625\u0644\u0649 \u0642\u0627\u0626\u0645\u062a\u064a","\u064a\u062f\u0648\u064a","\u062a\u0639\u0630\u0631 \u062d\u0641\u0638 \u0627\u0644\u0627\u062e\u062a\u064a\u0627\u0631\u0627\u062a. \u0623\u0639\u062f \u0627\u0644\u062a\u062d\u0645\u064a\u0644 \u0648\u062d\u0627\u0648\u0644 \u0645\u062c\u062f\u062f\u064b\u0627.","\u0648\u0636\u0639\u062a \u0647\u0630\u0627 \u0627\u0644\u0639\u0646\u0648\u0627\u0646 \u0647\u0646\u0627"],
+        "hi": ["\u0926\u0947\u0916\u093e \u0939\u0941\u0906 \u091a\u093f\u0939\u094d\u0928\u093f\u0924 \u0915\u0930\u0947\u0902","\u0938\u092d\u0940 \u0909\u092a\u0932\u092c\u094d\u0927 \u090f\u092a\u093f\u0938\u094b\u0921 \u0926\u0947\u0916\u0947 \u091a\u093f\u0939\u094d\u0928\u093f\u0924 \u0915\u0930\u0947\u0902","\u092e\u0947\u0930\u0940 \u0932\u093f\u0938\u094d\u091f \u092e\u0947\u0902 \u0935\u093e\u092a\u0938 \u0930\u0916\u0947\u0902","\u092e\u0948\u0928\u094d\u092f\u0941\u0905\u0932","\u091a\u0941\u0928\u093e\u0935 \u0938\u0939\u0947\u091c\u0947 \u0928\u0939\u0940\u0902 \u091c\u093e \u0938\u0915\u0947\u0964 \u092b\u093f\u0930 \u0938\u0947 \u0932\u094b\u0921 \u0915\u0930\u0915\u0947 \u092a\u094d\u0930\u092f\u093e\u0938 \u0915\u0930\u0947\u0902\u0964","\u0906\u092a\u0928\u0947 \u0907\u0938\u0947 \u092f\u0939\u093e\u0901 \u0930\u0916\u093e \u0939\u0948"],
+        "th": ["\u0e17\u0e33\u0e40\u0e04\u0e23\u0e37\u0e48\u0e2d\u0e07\u0e2b\u0e21\u0e32\u0e22\u0e27\u0e48\u0e32\u0e14\u0e39\u0e41\u0e25\u0e49\u0e27","\u0e17\u0e33\u0e40\u0e04\u0e23\u0e37\u0e48\u0e2d\u0e07\u0e2b\u0e21\u0e32\u0e22\u0e27\u0e48\u0e32\u0e14\u0e39\u0e04\u0e23\u0e1a\u0e41\u0e25\u0e49\u0e27","\u0e22\u0e49\u0e32\u0e22\u0e01\u0e25\u0e31\u0e1a\u0e44\u0e1b\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e02\u0e2d\u0e07\u0e09\u0e31\u0e19","\u0e01\u0e33\u0e2b\u0e19\u0e14\u0e40\u0e2d\u0e07","\u0e1a\u0e31\u0e19\u0e17\u0e36\u0e01\u0e15\u0e31\u0e27\u0e40\u0e25\u0e37\u0e2d\u0e01\u0e44\u0e21\u0e48\u0e44\u0e14\u0e49 \u0e42\u0e2b\u0e25\u0e14\u0e43\u0e2b\u0e21\u0e48\u0e41\u0e25\u0e49\u0e27\u0e25\u0e2d\u0e07\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07","\u0e04\u0e38\u0e13\u0e22\u0e49\u0e32\u0e22\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e19\u0e35\u0e49\u0e21\u0e32\u0e44\u0e27\u0e49\u0e17\u0e35\u0e48\u0e19\u0e35\u0e48"],
+        "zh": ["\u6807\u8bb0\u4e3a\u5df2\u89c2\u770b","\u6807\u8bb0\u4e3a\u5df2\u770b\u5b8c\u73b0\u6709\u5267\u96c6","\u79fb\u56de\u6211\u7684\u7247\u5355","\u624b\u52a8","\u65e0\u6cd5\u4fdd\u5b58\u9009\u62e9\u3002\u8bf7\u91cd\u65b0\u52a0\u8f7d\u540e\u518d\u8bd5\u3002","\u7531\u4f60\u79fb\u5230\u6b64\u5904"],
+        "ja": ["\u8996\u8074\u6e08\u307f\u306b\u3059\u308b","\u914d\u4fe1\u4e2d\u306e\u5168\u8a71\u3092\u8996\u8074\u6e08\u307f\u306b\u3059\u308b","\u30de\u30a4\u30ea\u30b9\u30c8\u306b\u623b\u3059","\u624b\u52d5","\u9078\u629e\u3092\u4fdd\u5b58\u3067\u304d\u307e\u305b\u3093\u3002\u518d\u8aad\u307f\u8fbc\u307f\u3057\u3066\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002","\u3042\u306a\u305f\u304c\u3053\u3053\u306b\u79fb\u52d5\u3057\u307e\u3057\u305f"],
+        "ko": ["\uc2dc\uccad \uc644\ub8cc\ub85c \ud45c\uc2dc","\uacf5\uac1c\ub41c \ubaa8\ub4e0 \ud68c\ucc28 \uc2dc\uccad \uc644\ub8cc\ub85c \ud45c\uc2dc","\ub0b4\uac00 \ucc1c\ud55c \ub9ac\uc2a4\ud2b8\ub85c \uc774\ub3d9","\uc218\ub3d9","\uc120\ud0dd\uc744 \uc800\uc7a5\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4. \uc0c8\ub85c\uace0\uce68 \ud6c4 \ub2e4\uc2dc \uc2dc\ub3c4\ud558\uc138\uc694.","\uc9c1\uc811 \uc774 \ubaa9\ub85d\uc73c\ub85c \uc774\ub3d9\ud55c \uc791\ud488"],
     };
     for (const [locale, values] of Object.entries(MANUAL_VIEWING_UI_MESSAGES)) {
-        const keys = ['markWatched', 'markCaughtUp', 'moveBackToMyList', 'useAutomaticViewingStatus', 'viewingChoiceStorageFailed'];
+        const keys = ['markWatched', 'markCaughtUp', 'moveBackToMyList', 'manualViewingChoice', 'viewingChoiceStorageFailed',
+            'manualViewingChoiceDescription'];
         keys.forEach((key, index) => { UI_MESSAGES[locale][key] = values[index]; });
     }
 
@@ -2914,6 +2915,7 @@
             #${GRID_ID} [data-tm-viewing-actions] {
                 display: flex;
                 flex-wrap: wrap;
+                align-items: center;
                 gap: 4px;
                 padding-top: 6px;
                 position: relative;
@@ -2942,6 +2944,25 @@
 
             #${GRID_ID} [data-tm-viewing-actions] > button:disabled { opacity: .45; cursor: default; }
             #${GRID_ID} [data-tm-viewing-actions] > button[hidden] { display: none; }
+            #${GRID_ID} [data-tm-manual-choice] {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                padding-inline: 4px;
+                color: rgba(255,255,255,.65);
+                font: inherit;
+                font-size: 11px;
+                line-height: 1.3;
+            }
+            #${GRID_ID} [data-tm-manual-choice]::before {
+                content: '';
+                width: 5px;
+                height: 5px;
+                flex: 0 0 5px;
+                border-radius: 50%;
+                background: currentColor;
+            }
+            #${GRID_ID} [data-tm-manual-choice][hidden] { display: none; }
 
             #${GRID_ID} > [data-tm-watch-section],
             #${GRID_ID} > [data-tm-type-filter],
@@ -4656,13 +4677,13 @@
             const toggle = document.createElement('button');
             toggle.type = 'button';
             toggle.setAttribute('data-tm-viewing-action', 'toggle');
-            const reset = document.createElement('button');
-            reset.type = 'button';
-            reset.setAttribute('data-tm-viewing-action', 'reset');
+            const marker = document.createElement('span');
+            marker.setAttribute('data-tm-manual-choice', 'true');
+            marker.setAttribute('role', 'img');
             root.appendChild(toggle);
-            root.appendChild(reset);
+            root.appendChild(marker);
             clone.appendChild(root);
-            controls = clone.__tmViewingControls = { root, toggle, reset };
+            controls = clone.__tmViewingControls = { root, toggle, marker };
         }
         return controls;
     }
@@ -4679,13 +4700,13 @@
         if (controls.toggle.getAttribute('aria-label') !== toggleLabel) controls.toggle.setAttribute('aria-label', toggleLabel);
         const disabled = !watch.manualProfileGuid || watch.manualFailure;
         if (controls.toggle.disabled !== disabled) controls.toggle.disabled = disabled;
-        const resetLabel = tUi('useAutomaticViewingStatus');
-        if (controls.reset.textContent !== resetLabel) controls.reset.textContent = resetLabel;
-        const resetAriaLabel = resetLabel + ': ' + (item.ariaLabel || id);
-        if (controls.reset.getAttribute('aria-label') !== resetAriaLabel) controls.reset.setAttribute('aria-label', resetAriaLabel);
+        const markerLabel = tUi('manualViewingChoice');
+        if (controls.marker.textContent !== markerLabel) controls.marker.textContent = markerLabel;
+        const description = tUi('manualViewingChoiceDescription');
+        if (controls.marker.getAttribute('title') !== description) controls.marker.setAttribute('title', description);
+        if (controls.marker.getAttribute('aria-label') !== description) controls.marker.setAttribute('aria-label', description);
         const hidden = !watch.manualChoices.has(id);
-        if (controls.reset.hidden !== hidden) controls.reset.hidden = hidden;
-        if (controls.reset.disabled !== disabled) controls.reset.disabled = disabled;
+        if (controls.marker.hidden !== hidden) controls.marker.hidden = hidden;
     }
 
     function ensureManualViewingBehavior(state) {
@@ -4695,7 +4716,7 @@
         grid.addEventListener('click', event => {
             let button = event.target instanceof Element ? event.target : event.target?.parentElement;
             while (button && button !== grid && !button.getAttribute('data-tm-viewing-action')) button = button.parentElement;
-            if (!button || button === grid) return;
+            if (!button || button === grid || button.getAttribute('data-tm-viewing-action') !== 'toggle') return;
             event.preventDefault();
             event.stopPropagation();
             event.stopImmediatePropagation();
@@ -4704,6 +4725,7 @@
             let clone = button.parentElement;
             while (clone && clone !== grid && !clone.__tmMyListItem) clone = clone.parentElement;
             if (!clone || !gridOwnsClone(clone, grid) || state.cloneMap.get(itemKey(clone.__tmMyListItem)) !== clone) return;
+            if (clone.__tmViewingControls?.toggle !== button) return;
             const watch = state.watchStatus;
             if (netflixModelData('userInfo')?.userGuid !== watch.manualProfileGuid) {
                 syncWatchGroups(state);
@@ -4711,13 +4733,15 @@
             }
             syncManualViewingProfile(watch);
             const id = String(clone.__tmMyListItem.videoId);
-            const changes = new Map();
-            if (button.getAttribute('data-tm-viewing-action') === 'reset') changes.set(id, null);
-            else {
-                const status = effectiveViewingStatus(watch, id) === 'complete' ? 'main' : 'complete';
-                changes.set(id, { status, type: viewingTitleType(watch, id) || 'unknown',
-                    coverage: status === 'complete' ? watch.seriesCoverage.get(id) || null : null });
-            }
+            const status = effectiveViewingStatus(watch, id) === 'complete' ? 'main' : 'complete';
+            const automatic = watch.results.get(id) || watch.cachedResults?.get(id) || 'unknown';
+            // Returning to an agreed automatic group also clears the old override.
+            // Unknown/in-flight data cannot establish agreement: keep that explicit
+            // placement, just as when automatic classification would undo the move.
+            const restoreAutomatic = automatic !== 'unknown' && (automatic === 'complete') === (status === 'complete');
+            const choice = restoreAutomatic ? null : { status, type: viewingTitleType(watch, id) || 'unknown',
+                coverage: status === 'complete' ? watch.seriesCoverage.get(id) || null : null };
+            const changes = new Map([[id, choice]]);
             const saved = saveManualViewingChoices(watch, changes);
             const changed = saved ? changedManualViewingIds(watch.manualChoices, saved) : new Set();
             if (saved) watch.manualChoices = saved;
@@ -4725,6 +4749,9 @@
             syncWatchGroups(state, changed, 'manual-choice');
             log(tLog('viewingChoiceApplied'), {
                 saved: Boolean(saved), action: button.getAttribute('data-tm-viewing-action'),
+                targetGroup: status === 'complete' ? 'watched' : 'main', automaticStatus: automatic,
+                placement: choice ? 'manual' : 'automatic', restoredAutomatic: Boolean(saved) && restoreAutomatic,
+                manualMarkerVisible: watch.manualChoices.has(id),
                 changedTitles: changed.size, completed: watch.completedCount,
                 work: Object.fromEntries(Object.entries(performanceDiagnostics.viewingGroups)
                     .filter(([, value]) => typeof value === 'number').map(([key, value]) => [key, value - beforeWork[key]]))
