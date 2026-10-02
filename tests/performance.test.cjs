@@ -12,7 +12,8 @@ const { createNetflixContext } = require('../src/netflix/context.js');
 const { createNetflixPageDom } = require('../src/netflix/page-dom.js');
 const { createCardMarkup } = require('../src/netflix/card-markup.js');
 const { createListData } = require('../src/netflix/list-data.js');
-const { carouselPayload } = require('./helpers/fixtures.js');
+const { createViewingData } = require('../src/netflix/viewing-data.js');
+const { carouselPayload, atom, reference, viewingVideo } = require('./helpers/fixtures.js');
 
 // Exercise residual authored functions without executing Netflix startup.
 // Generated-bundle startup and lifecycle are covered separately in bundle.test.js.
@@ -25,6 +26,11 @@ for (const name of ['isMyListGraphqlSection', 'graphqlCarouselCandidates', 'find
     'firstGraphqlText', 'firstGraphqlImageUrl', 'fetchMyListCarouselPage', 'carouselFetchError',
     'fetchFreshMyListBootstrapViaCarousel', 'collectFreshMyListCarouselItems', 'fetchFreshMyListBootstrapViaPage',
     'fetchFreshMyListBootstrap']) migratedAdapterFunctions.add(name);
+
+for (const name of ['unwrapViewingAtom', 'readViewingGraph', 'readViewingGraphReference', 'viewingNumber',
+    'viewingCount', 'viewingVideoRecord', 'viewingFieldKind', 'viewingReferenceId', 'viewingSeasonPlan']) {
+    migratedAdapterFunctions.add(name);
+}
 
 function fixtureListData(c) {
     return createListData({ context: { ...c.netflixContext, readGraphqlBootstrap: () => c.fixtureGraphqlData || null,
@@ -4240,7 +4246,7 @@ test('HTTP failure cleanup aborts the unread response body and releases its cont
 const viewingFunctions = [
     'unwrapViewingAtom', 'readViewingGraph', 'readViewingGraphReference', 'viewingNumber', 'viewingCount', 'viewingVideoRecord',
     'classifyViewingVideo', 'viewingFieldKind', 'recordViewingFieldKinds', 'viewingReferenceId', 'viewingSeasonPlan', 'classifyViewingSeries',
-    'viewingRequestContext', 'assertViewingJob', 'fetchViewingGraph', 'runViewingBatches', 'collectViewingStatuses', 'collectViewingSeriesBatch',
+    'viewingRequestContext', 'assertViewingJob', 'runViewingRequest', 'runViewingBatches', 'collectViewingStatuses', 'collectViewingSeriesBatch',
     'createViewingNetworkDiagnostics', 'collectViewingNetworkDiagnostics',
     'readViewingCache', 'clearCachedViewingStatus', 'writeViewingCache', 'publishViewingProgress', 'viewingTitleType',
     'collectViewingEpisodePlans', 'finishViewingSeriesPlan', 'recheckViewingSeries',
@@ -4254,12 +4260,6 @@ const viewingFunctions = [
     'abortObsoleteRouteFetches', 'gridCloneFromPointerEvent', 'gridHoverTargetActive', 'gridHoverSuppressed', 'cancelPendingGridHover',
     'formatHeaderParts'
 ];
-const atom = value => ({ $type: 'atom', value });
-const reference = (kind, id) => ({ $type: 'ref', value: [kind, String(id)] });
-function viewingVideo(type, watched, bookmark = 0, extra = {}) {
-    return { summary: atom({ type }), watched: atom(watched), bookmarkPosition: atom(bookmark),
-        runtime: atom(100), creditsOffset: atom(95), ...extra };
-}
 function viewingFixtures(extraEpisode = false) {
     return {
         titles: { videos: {
@@ -4332,6 +4332,8 @@ async function viewingEnvironment(count = 7, existing = null, storage = new Map(
     });
     const i18n = createI18n({ readLanguage: () => e.c.getUiLocale() });
     Object.assign(e.c, { tUi: i18n.tUi, tUiPlural: i18n.tUiPlural, formatItemCount: i18n.formatItemCount });
+    e.c.viewingData = createViewingData({ context: e.c.netflixContext,
+        fetch: (...args) => e.c.fetch(...args), createCancelledError: () => e.c.createRouteSessionCancelledError() });
     for (const name of viewingFunctions) if (!migratedAdapterFunctions.has(name)) vm.runInContext(declaration(name), e.c);
     return { ...e, models, requests, storage, storageCalls, items, state: e.c.sourceState,
         fixtures: () => fixtures, setFixtures: value => { fixtures = value; },
@@ -4341,6 +4343,11 @@ async function viewingEnvironment(count = 7, existing = null, storage = new Map(
             await e.c.sourceState.watchStatus.promise;
         }
     };
+}
+async function viewingRecords(e, graph, ids) {
+    e.c.fetch = async () => ({ ok: true, json: async () => ({ jsonGraph: graph }) });
+    return e.c.viewingData.readTitles(ids, e.c.viewingData.beginRead(),
+        { signal: new AbortController().signal, assertCurrent() {} });
 }
 function mainViewingIds(e) {
     return e.state.grid.children.filter(node => node.__tmMyListItem).map(node => node.__tmMyListItem.videoId);
@@ -4542,6 +4549,8 @@ test('viewing overlap aborts both owned reads after route or profile cancellatio
         }
         await e.state.watchStatus.promise;
         assert.ok(pending.every(entry => entry.signal.aborted));
+        assert.equal(e.state.watchStatus.network.aborted, reason === 'route' ? 2 : 1,
+            'transport aborts remain visible even when their session is obsolete');
         if (reason === 'profile') {
             assert.equal(unrelated.signal.aborted, false, 'a viewing-job cancellation leaves unrelated route requests owned');
             const controllers = e.c.routeFetchControllers.get(1);
@@ -4632,13 +4641,8 @@ test('viewing overlap honors request timeouts and the combined deadline without 
     }
 });
 
-test('viewing data resolves atoms/references safely and does not guess from missing or series flags', async () => {
+test('viewing completion does not guess from missing progress or series flags', async () => {
     const e = await viewingEnvironment();
-    const graph = { videos: { 1: viewingVideo('movie', true), 2: { $type: 'error', value: 'missing' } },
-        link: reference('videos', 1), cycle: { $type: 'ref', value: ['cycle'] } };
-    assert.equal(e.c.readViewingGraph(graph, ['link', 'watched']), true);
-    assert.equal(e.c.readViewingGraph(graph, ['cycle']), undefined);
-    assert.equal(e.c.viewingVideoRecord(graph, 2), null);
     const classify = fields => e.c.classifyViewingVideo({
         type: 'movie', bookmark: null, runtime: 100, creditsOffset: 95, ...fields
     });
@@ -4650,16 +4654,11 @@ test('viewing data resolves atoms/references safely and does not guess from miss
     assert.equal(classify({ watched: false }), 'unknown');
     assert.equal(classify({ type: 'show', watched: true }), 'unknown');
     assert.equal(classify({}), 'unknown');
-    assert.equal(e.c.viewingNumber('100'), null);
-    assert.equal(e.c.viewingNumber(null), null);
-    assert.equal(e.c.viewingReferenceId(['seasons', '40'], 'seasons'), '40');
-    assert.equal(e.c.viewingReferenceId(['videos', '40'], 'seasons'), '');
 });
 
 test('caught-up series require exact season and episode coverage, unique IDs, and complete episodes', async () => {
     const e = await viewingEnvironment();
-    const record = e.c.viewingVideoRecord(e.fixtures().titles, 4);
-    const plan = e.c.viewingSeasonPlan(e.fixtures().seasons, record);
+    const plan = { videoId: '4', expected: 2, seasons: [{ id: '40', count: 2, episodes: new Map() }] };
     assert.ok(plan);
     plan.seasons[0].episodes.set(0, { id: '400', status: 'complete' });
     plan.seasons[0].episodes.set(1, { id: '401', status: 'complete' });
@@ -4670,9 +4669,6 @@ test('caught-up series require exact season and episode coverage, unique IDs, an
     assert.equal(e.c.classifyViewingSeries(plan), 'unknown');
     plan.seasons[0].episodes.delete(1);
     assert.equal(e.c.classifyViewingSeries(plan), 'unknown');
-    assert.equal(e.c.viewingSeasonPlan(e.fixtures().seasons, { ...record, episodeCount: 3 }), null);
-    assert.equal(e.c.viewingSeasonPlan(e.fixtures().seasons, { ...record, seasonCount: 2 }), null);
-    assert.equal(e.c.viewingSeasonPlan(e.fixtures().seasons, { ...record, episodeCount: 501 }), null);
 });
 
 test('background viewing collection groups finished movies and complete series while preserving native order and counts', async () => {
@@ -5089,14 +5085,16 @@ test('near-completion requires valid progress and runtime rather than treating m
         { runtime: atom(NaN) },
         { runtime: atom('100') }
     ]) {
-        const record = e.c.viewingVideoRecord({ videos: {
+        const records = await viewingRecords(e, { videos: {
             1: viewingVideo('movie', false, 95, { creditsOffset: atom(90), ...fields })
-        } }, '1');
+        } }, ['1']);
+        const record = records.get('1');
         assert.notEqual(e.c.classifyViewingVideo(record), 'complete');
     }
-    assert.equal(e.c.classifyViewingVideo(e.c.viewingVideoRecord({ videos: {
+    const records = await viewingRecords(e, { videos: {
         1: viewingVideo('movie', false, 0)
-    } }, '1')), 'not-started');
+    } }, ['1']);
+    assert.equal(e.c.classifyViewingVideo(records.get('1')), 'not-started');
 });
 
 test('viewing requests resolve structured member API addresses before fetching', async () => {
@@ -5438,29 +5436,6 @@ test('small series batches fill the existing episode allowance without cutting o
     assert.equal(e.state.watchStatus.failure, null);
 });
 
-test('missing season and episode totals require an explicit complete season-list length and valid per-season totals', async () => {
-    const e = await viewingEnvironment();
-    const record = e.c.viewingVideoRecord(e.fixtures().titles, '4');
-    const missingCounts = { ...record, seasonCount: null, episodeCount: null };
-    const graph = e.fixtures().seasons;
-    assert.equal(e.c.viewingSeasonPlan(graph, missingCounts), null, 'a returned subset is not a complete season list');
-    graph.videos[4].seasonList.length = atom(1);
-    delete graph.seasons[40].summary;
-    graph.seasons[40].length = atom(2);
-    const plan = e.c.viewingSeasonPlan(graph, missingCounts);
-    assert.equal(plan.expected, 2);
-    assert.equal(plan.seasons.length, 1);
-    assert.equal(plan.seasons[0].count, 2);
-    for (const [seasonCount, episodeCount] of [[NaN, null], [1, NaN], [0, null], [41, null], [1, 501], [1, 3]]) {
-        assert.equal(e.c.viewingSeasonPlan(graph, { ...missingCounts, seasonCount, episodeCount }), null);
-    }
-    graph.videos[4].seasonList[1] = reference('seasons', '50');
-    assert.equal(e.c.viewingSeasonPlan(graph, missingCounts), null, 'extra returned seasons reject a contradictory length');
-    delete graph.videos[4].seasonList[1];
-    graph.seasons[40].length = atom('2');
-    assert.equal(e.c.viewingSeasonPlan(graph, missingCounts), null);
-});
-
 test('a missing-count series requires validated season coverage and a usable completed latest episode', async () => {
     const e = await viewingEnvironment();
     const title = e.fixtures().titles.videos[4];
@@ -5721,10 +5696,10 @@ test('referenced watched and progress fields are resolved without accepting cycl
     const graph = { videos: { 400: { summary: reference('values', 'summary'), watched: reference('values', 'watched'),
         bookmarkPosition: reference('values', 'bookmark'), runtime: reference('values', 'runtime') } },
         values: { summary: atom({ type: 'episode' }), watched: atom(false), bookmark: atom(95), runtime: atom(100) } };
-    assert.equal(e.c.classifyViewingVideo(e.c.viewingVideoRecord(graph, '400')), 'complete');
+    assert.equal(e.c.classifyViewingVideo((await viewingRecords(e, graph, ['400'])).get('400')), 'complete');
     graph.values.watched = { $type: 'ref', value: ['values', 'watched'] };
     delete graph.values.bookmark;
-    assert.equal(e.c.classifyViewingVideo(e.c.viewingVideoRecord(graph, '400')), 'unknown');
+    assert.equal(e.c.classifyViewingVideo((await viewingRecords(e, graph, ['400'])).get('400')), 'unknown');
 });
 
 test('direct episode lookups recover caught-up series from sparse nested responses', async () => {

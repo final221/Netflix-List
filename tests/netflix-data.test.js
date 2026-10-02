@@ -5,9 +5,10 @@ import { createNetflixContext } from '../src/netflix/context.js';
 import { createNetflixPageDom } from '../src/netflix/page-dom.js';
 import { createCardMarkup } from '../src/netflix/card-markup.js';
 import { createListData } from '../src/netflix/list-data.js';
+import { createViewingData } from '../src/netflix/viewing-data.js';
 import { createPopupInspection } from '../src/netflix/popup-inspection.js';
 import { createScheduler } from './helpers/scheduler.js';
-import { carouselEdge, carouselPayload, pageBootstrapHtml } from './helpers/fixtures.js';
+import { carouselEdge, carouselPayload, pageBootstrapHtml, atom, reference, viewingVideo } from './helpers/fixtures.js';
 
 function environment() {
     const document = createDocument();
@@ -461,4 +462,200 @@ test('page anchor fallbacks and direction/header facts use the current page with
     assert.equal(request.options.headers['x-netflix.context.app-version'], 'build');
     assert.equal(request.options.headers['x-netflix.context.locales'], 'de-de');
     assert.equal(request.options.headers['X-Netflix.Request.Originating.Url'], e.location.href);
+});
+
+function viewingDataEnvironment() {
+    const e = environment(), requests = [], responses = [];
+    let current = true;
+    const cancelled = () => Object.assign(new Error('Cancelled'), { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+    const controller = new AbortController();
+    const owner = { signal: controller.signal, assertCurrent: () => { if (!current) throw cancelled(); } };
+    const data = createViewingData({ context: e.context, createCancelledError: cancelled,
+        fetch: async (url, options) => {
+            const response = responses.shift();
+            if (!response) throw new Error('Unexpected request');
+            requests.push({ url, options, paths: new URLSearchParams(options.body).getAll('path').map(JSON.parse) });
+            response.headers?.();
+            return { ok: !response.status || response.status === 200, status: response.status || 200,
+                json: async () => { response.body?.(); if (response.error) throw response.error;
+                    return response.payload ?? { jsonGraph: response.graph }; } };
+        } });
+    return { ...e, data, requests, responses, owner, cancel: () => { current = false; } };
+}
+
+test('viewing access keeps credentials private and each typed operation dispatches one bounded request', async () => {
+    const e = viewingDataEnvironment(), access = e.data.beginRead();
+    assert.deepEqual(Object.keys(access).sort(), ['endpointPath', 'endpointType', 'profileGuid']);
+    assert.equal(Object.isFrozen(access), true);
+    e.responses.push({ graph: { videos: { 1: viewingVideo('show', false, 0,
+        { seasonCount: atom(1), episodeCount: atom(2) }) } } });
+    const titles = await e.data.readTitles(['1'], access, e.owner);
+    e.responses.push({ graph: { videos: { 1: { seasonList: { 0: reference('seasons', 10) } } },
+        seasons: { 10: { summary: atom({ length: 2 }) } } } });
+    const plans = await e.data.readSeasons([...titles.values()], access, e.owner);
+    assert.deepEqual(plans, [{ videoId: '1', expected: 2, seasons: [{ id: '10', count: 2 }] }]);
+    assert.ok(!Object.hasOwn(plans[0].seasons[0], 'episodes'));
+    e.responses.push({ graph: { seasons: { 10: { episodes: { 1: reference('videos', 101) } } },
+        videos: { 101: viewingVideo('episode', false, 90) } } });
+    const ranges = await e.data.readEpisodes([{ seasonId: '10', from: 1, to: 1 }], access, e.owner);
+    assert.equal(ranges[0].episodes[0].id, '101');
+    assert.equal(ranges[0].episodes[0].record.bookmark, 90);
+    e.responses.push({ graph: { videos: { 101: viewingVideo('', true) } } });
+    const repaired = await e.data.readDirectEpisodes(['101'], access, e.owner);
+    assert.equal(repaired.get('101').record.type, 'episode');
+    assert.equal(e.requests.length, 4);
+    for (const request of e.requests) {
+        assert.equal(request.options.credentials, 'same-origin');
+        assert.equal(request.options.redirect, 'error');
+        assert.equal(request.options.signal, e.owner.signal);
+        assert.equal(new URLSearchParams(request.options.body).get('authURL'), 'token');
+    }
+    assert.ok(!JSON.stringify({ access, titles: [...titles.values()], plans, ranges,
+        repaired: [...repaired.values()] }).includes('$type'));
+    assert.ok(!JSON.stringify(access).includes('token'));
+});
+
+test('viewing normalization resolves atom and reference chains without leaking malformed progress', async () => {
+    const e = viewingDataEnvironment();
+    e.responses.push({ graph: { videos: {
+        1: reference('videos', 10), 10: viewingVideo('movie', true),
+        2: { $type: 'error', value: 'missing' },
+        3: reference('videos', 4), 4: reference('videos', 3),
+        5: viewingVideo('show', { $type: 'ref', value: ['private'] }, '100',
+            { seasonCount: atom(null), episodeCount: atom('2'), runtime: atom(-1) }),
+        6: { summary: reference('summaries', 1), watched: reference('flags', 1) }
+    }, summaries: { 1: atom({ type: 'movie' }) }, flags: { 1: atom(false) } } });
+    const records = await e.data.readTitles(['1', '2', '3', '5', '6', '7'], e.data.beginRead(), e.owner);
+    assert.equal(records.get('1').watched, true);
+    assert.equal(records.get('2'), null);
+    assert.equal(records.get('3'), null);
+    assert.equal(records.get('5').watched, undefined);
+    assert.equal(records.get('5').bookmark, null);
+    assert.equal(records.get('5').runtime, null);
+    assert.equal(records.get('5').seasonCount, null);
+    assert.equal(Number.isNaN(records.get('5').episodeCount), true);
+    assert.equal(records.get('6').watched, false);
+    assert.equal(records.get('7'), null);
+    assert.ok(!JSON.stringify([...records.values()]).includes('$type'));
+});
+
+test('viewing coverage distinguishes absent counts from contradictory, incomplete and duplicate seasons', async () => {
+    const e = viewingDataEnvironment(), access = e.data.beginRead();
+    const graph = { videos: { 1: { seasonList: { length: atom(1), 0: reference('seasons', 10) } } },
+        seasons: { 10: { summary: atom({ length: 2 }) } } };
+    const base = { videoId: '1', seasonCount: null, episodeCount: null };
+    const read = async (record = base, data = graph) => {
+        e.responses.push({ graph: data });
+        return e.data.readSeasons([record], access, e.owner);
+    };
+    assert.equal((await read())[0].expected, 2);
+    graph.videos[1].seasonList[0] = ['seasons', '10'];
+    assert.equal((await read())[0].expected, 2, 'array season references retain their namespace interpretation');
+    graph.videos[1].seasonList[0] = reference('seasons', 10);
+    for (const record of [{ ...base, episodeCount: 3 }, { ...base, seasonCount: NaN },
+        { ...base, episodeCount: NaN }, { ...base, seasonCount: 2 }, { ...base, episodeCount: 501 }]) {
+        assert.deepEqual(await read(record), []);
+    }
+    assert.deepEqual(await read(base, { ...graph, videos: { 1: { seasonList: { 0: reference('seasons', 10) } } } }), []);
+    assert.deepEqual(await read({ ...base, seasonCount: 2 }, { ...graph,
+        videos: { 1: { seasonList: { 0: reference('seasons', 10), 1: reference('seasons', 10) } } } }), []);
+    assert.deepEqual(await read(base, { ...graph, videos: { 1: { seasonList: {
+        length: atom(1), 0: reference('videos', 10) } } } }), []);
+});
+
+test('viewing batches reject stale owners at headers and body before returning normalized records', async () => {
+    for (const phase of ['headers', 'body']) {
+        for (const reason of ['route', 'profile']) {
+            const e = viewingDataEnvironment(), access = e.data.beginRead();
+            e.responses.push({ graph: { videos: { 1: viewingVideo('movie', true) } },
+                [phase]: () => { if (reason === 'route') e.cancel(); else e.models.userInfo.userGuid = 'other'; } });
+            await assert.rejects(e.data.readTitles(['1'], access, e.owner),
+                { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+            assert.equal(e.requests.length, 1);
+        }
+    }
+});
+
+test('viewing request failures remain truthful and never start adapter retries', async () => {
+    for (const response of [{ status: 429 }, { error: new SyntaxError('bad JSON') },
+        { payload: { status: 'error', jsonGraph: {} } }, { payload: {} }]) {
+        const e = viewingDataEnvironment();
+        e.responses.push(response);
+        await assert.rejects(e.data.readTitles(['1'], e.data.beginRead(), e.owner));
+        assert.equal(e.requests.length, 1);
+    }
+});
+
+test('missing season and episode totals require an explicit complete season-list length and valid per-season totals', async () => {
+    const e = viewingDataEnvironment(), access = e.data.beginRead();
+    const graph = { videos: { 4: { seasonList: { 0: reference('seasons', 40) } } },
+        seasons: { 40: { summary: atom({ length: 2 }) } } };
+    const missingCounts = { videoId: '4', seasonCount: null, episodeCount: null };
+    const read = async (record = missingCounts) => {
+        e.responses.push({ graph });
+        return e.data.readSeasons([record], access, e.owner);
+    };
+    assert.deepEqual(await read(), [], 'a returned subset is not a complete season list');
+    graph.videos[4].seasonList.length = atom(1);
+    delete graph.seasons[40].summary;
+    graph.seasons[40].length = atom(2);
+    const [plan] = await read();
+    assert.equal(plan.expected, 2);
+    assert.equal(plan.seasons.length, 1);
+    assert.equal(plan.seasons[0].count, 2);
+    for (const [seasonCount, episodeCount] of [[NaN, null], [1, NaN], [0, null], [41, null], [1, 501], [1, 3]]) {
+        assert.deepEqual(await read({ ...missingCounts, seasonCount, episodeCount }), []);
+    }
+    graph.videos[4].seasonList[1] = reference('seasons', '50');
+    assert.deepEqual(await read(), [], 'extra returned seasons reject a contradictory length');
+    delete graph.videos[4].seasonList[1];
+    graph.seasons[40].length = atom('2');
+    assert.deepEqual(await read(), []);
+});
+
+test('viewing access rejects forged and obsolete profile tickets before a request starts', async () => {
+    const e = viewingDataEnvironment(), access = e.data.beginRead();
+    await assert.rejects(e.data.readTitles(['1'], { ...access }, e.owner), { message: 'VIEWING_STATUS_CONTEXT' });
+    e.models.userInfo.userGuid = 'other';
+    await assert.rejects(e.data.readTitles(['1'], access, e.owner), { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+    assert.equal(e.requests.length, 0);
+    e.models.services.memberapi = 'https://other.test/memberapi';
+    assert.equal(e.data.beginRead(), null);
+    assert.equal(e.requests.length, 0);
+});
+
+test('viewing batches enforce the existing title, season and episode bounds without splitting requests', async () => {
+    const e = viewingDataEnvironment(), access = e.data.beginRead();
+    const ids = size => Array.from({ length: size }, (_, index) => String(index + 1));
+    await assert.rejects(e.data.readTitles(ids(51), access, e.owner), { message: 'VIEWING_STATUS_BATCH' });
+    await assert.rejects(e.data.readDirectEpisodes(ids(201), access, e.owner), { message: 'VIEWING_STATUS_BATCH' });
+    await assert.rejects(e.data.readEpisodes([{ seasonId: '10', from: 0, to: 200 }], access, e.owner),
+        { message: 'VIEWING_STATUS_BATCH' });
+    await assert.rejects(e.data.readEpisodes([{ seasonId: '10', from: 500, to: 500 }], access, e.owner),
+        { message: 'VIEWING_STATUS_BATCH' });
+    await assert.rejects(e.data.readSeasons(ids(6).map(videoId => ({ videoId, seasonCount: null, episodeCount: null })),
+        access, e.owner), { message: 'VIEWING_STATUS_BATCH' });
+    assert.equal(e.requests.length, 0);
+    assert.equal(Object.isFrozen(e.data.limits), true);
+});
+
+test('episode normalization preserves reference identity and diagnostic shapes without transferring raw values', async () => {
+    const e = viewingDataEnvironment(), access = e.data.beginRead();
+    const graph = { seasons: { 10: { episodes: { 0: ['videos', '100'], 1: reference('seasons', 101),
+        2: reference('videos', 102) } } }, videos: {
+        100: viewingVideo('', { unsupported: true }, '95', { runtime: atom(-1) }),
+        102: viewingVideo('movie', true)
+    } };
+    e.responses.push({ graph });
+    const [{ episodes }] = await e.data.readEpisodes([{ seasonId: '10', from: 0, to: 2 }], access, e.owner);
+    assert.equal(episodes[0].record.type, 'episode');
+    assert.equal(episodes[0].record.watched, undefined);
+    assert.equal(episodes[0].record.bookmark, null);
+    assert.deepEqual(episodes[0].kinds, { watched: 'atom:object', bookmark: 'atom:string', runtime: 'atom:negative-number' });
+    assert.equal(episodes[1].id, '');
+    assert.equal(episodes[1].record, null);
+    assert.deepEqual(episodes[1].kinds, { watched: 'missing', bookmark: 'missing', runtime: 'missing' });
+    assert.equal(episodes[2].id, '102');
+    assert.equal(episodes[2].record, null, 'a movie reference cannot qualify as episode progress');
+    assert.ok(!JSON.stringify(episodes).includes('$type'));
 });

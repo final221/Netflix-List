@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.10
+// @version      1.4.11
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -2916,11 +2916,258 @@
     return Object.freeze({ ...pageFacts, fetchBootstrap, collectRecords, reset, diagnostics });
   }
 
+  // src/netflix/viewing-data.js
+  function createViewingData({ context, fetch: fetch2, createCancelledError }) {
+    const limits = Object.freeze({ titleBatch: 50, episodeBatch: 200, seasons: 40, episodes: 500 });
+    const VIEWING_MAX_SEASONS = limits.seasons, VIEWING_MAX_EPISODES = limits.episodes;
+    const credentials = /* @__PURE__ */ new WeakMap();
+    function beginRead() {
+      const request = context.viewingRequestContext();
+      if (!request) return null;
+      const access = Object.freeze({
+        profileGuid: request.profileGuid,
+        endpointType: request.endpointType,
+        endpointPath: request.endpointPath
+      });
+      credentials.set(access, request);
+      return access;
+    }
+    function assertAccess(access, owner) {
+      owner.assertCurrent();
+      const request = credentials.get(access);
+      if (!request) throw new Error("VIEWING_STATUS_CONTEXT");
+      if (context.activeProfile() !== request.profileGuid) throw createCancelledError();
+      return request;
+    }
+    async function requestGraph(paths, access, owner) {
+      const request = assertAccess(access, owner);
+      const body = new URLSearchParams();
+      for (const path of paths) body.append("path", JSON.stringify(path));
+      body.set("authURL", request.authURL);
+      try {
+        const response = await fetch2(request.url, {
+          method: "POST",
+          credentials: "same-origin",
+          cache: "no-store",
+          redirect: "error",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            "x-netflix.nq.stack": "prod",
+            "x-netflix.request.client.user.guid": request.profileGuid
+          },
+          body: body.toString(),
+          signal: owner.signal
+        });
+        assertAccess(access, owner);
+        if (!response.ok) throw new Error("VIEWING_STATUS_HTTP_" + response.status);
+        const payload = await response.json();
+        assertAccess(access, owner);
+        if (!payload?.jsonGraph || typeof payload.jsonGraph !== "object" || payload.status === "error") {
+          throw new Error("VIEWING_STATUS_RESPONSE");
+        }
+        return payload.jsonGraph;
+      } catch (error) {
+        if (error?.name === "AbortError") throw error;
+        assertAccess(access, owner);
+        throw error;
+      }
+    }
+    function unwrapViewingAtom(value) {
+      if (value?.$type === "error") return void 0;
+      return value?.$type === "atom" ? value.value : value;
+    }
+    function readViewingGraph(graph, path) {
+      let value = graph;
+      const resolve = (input) => {
+        let node = unwrapViewingAtom(input);
+        const visited = /* @__PURE__ */ new Set();
+        while (node?.$type === "ref") {
+          const reference = node.value;
+          if (!Array.isArray(reference) || reference.length > 12) return void 0;
+          const key = JSON.stringify(reference);
+          if (visited.has(key) || visited.size >= 12) return void 0;
+          visited.add(key);
+          node = readViewingGraphReference(graph, reference);
+          node = unwrapViewingAtom(node);
+        }
+        return node;
+      };
+      for (const key of path) {
+        value = resolve(value);
+        if (!value || typeof value !== "object") return void 0;
+        value = value[key];
+      }
+      return resolve(value);
+    }
+    function readViewingGraphReference(graph, path) {
+      let value = graph;
+      for (const key of path) {
+        value = unwrapViewingAtom(value);
+        if (!value || typeof value !== "object") return void 0;
+        value = value[key];
+      }
+      return value;
+    }
+    function viewingNumber(value) {
+      const unwrapped = unwrapViewingAtom(value);
+      return typeof unwrapped === "number" && Number.isFinite(unwrapped) && unwrapped >= 0 ? unwrapped : null;
+    }
+    function viewingCount(value) {
+      const unwrapped = unwrapViewingAtom(value);
+      if (unwrapped == null) return null;
+      return Number.isSafeInteger(unwrapped) && unwrapped >= 0 ? unwrapped : NaN;
+    }
+    function viewingVideoRecord(graph, videoId, type = "") {
+      const video = readViewingGraph(graph, ["videos", String(videoId)]);
+      if (!video || typeof video !== "object") return null;
+      const field = (key) => video[key]?.$type === "ref" ? readViewingGraph(graph, ["videos", String(videoId), key]) : unwrapViewingAtom(video[key]);
+      const summary = field("summary");
+      const watched = field("watched");
+      return {
+        videoId: String(videoId),
+        type: type || (typeof summary?.type === "string" ? summary.type.toLowerCase() : ""),
+        watched: typeof watched === "boolean" ? watched : void 0,
+        bookmark: viewingNumber(field("bookmarkPosition")),
+        runtime: viewingNumber(field("runtime")),
+        creditsOffset: viewingNumber(field("creditsOffset")),
+        seasonCount: viewingCount(field("seasonCount")),
+        episodeCount: viewingCount(field("episodeCount"))
+      };
+    }
+    function viewingFieldKind(value, depth = 0) {
+      if (value === void 0) return "missing";
+      if (value === null) return "null";
+      if (typeof value === "boolean") return value ? "true" : "false";
+      if (typeof value === "number") return !Number.isFinite(value) ? "invalid-number" : value < 0 ? "negative-number" : value === 0 ? "zero" : "positive-number";
+      if (typeof value === "string") return "string";
+      if (value?.$type === "error") return "error";
+      if (value?.$type === "ref") return "reference";
+      if (value?.$type === "atom" && depth < 2) return "atom:" + viewingFieldKind(value.value, depth + 1);
+      return "object";
+    }
+    function viewingFieldKinds(graph, id) {
+      const video = readViewingGraph(graph, ["videos", String(id)]);
+      const kinds = {};
+      for (const [key, field] of [["watched", "watched"], ["bookmark", "bookmarkPosition"], ["runtime", "runtime"]]) {
+        const kind = viewingFieldKind(video?.[field]);
+        kinds[key] = kind;
+      }
+      return kinds;
+    }
+    function viewingReferenceId(reference, kind) {
+      const value = unwrapViewingAtom(reference);
+      const path = Array.isArray(value) ? value : value?.$type === "ref" ? value.value : null;
+      return Array.isArray(path) && path.length === 2 && path[0] === kind && /^\d+$/.test(String(path[1])) ? String(path[1]) : "";
+    }
+    function viewingSeasonPlan(graph, record) {
+      const count = record.seasonCount ?? viewingCount(readViewingGraph(graph, ["videos", record.videoId, "seasonList", "length"]));
+      const expected = record.episodeCount;
+      if (!Number.isSafeInteger(count) || count < 1 || count > VIEWING_MAX_SEASONS || expected !== null && (!Number.isSafeInteger(expected) || expected < 1 || expected > VIEWING_MAX_EPISODES)) return null;
+      const list = readViewingGraph(graph, ["videos", record.videoId, "seasonList"]);
+      if (!list || typeof list !== "object") return null;
+      if (Object.keys(list).some((key) => /^\d+$/.test(key) && Number(key) >= count)) return null;
+      const seasons = [];
+      const seen = /* @__PURE__ */ new Set();
+      let total = 0;
+      for (let index = 0; index < count; index++) {
+        const id = viewingReferenceId(list[index], "seasons");
+        const summary = id ? readViewingGraph(graph, ["seasons", id, "summary"]) : null;
+        const length = viewingCount(summary?.length ?? readViewingGraph(graph, ["seasons", id, "length"]));
+        if (!id || seen.has(id) || !Number.isSafeInteger(length) || length > VIEWING_MAX_EPISODES) return null;
+        seen.add(id);
+        total += length;
+        if (total > VIEWING_MAX_EPISODES || expected !== null && total > expected) return null;
+        seasons.push({ id, count: length });
+      }
+      return total > 0 && (expected === null || total === expected) ? { videoId: record.videoId, expected: total, seasons } : null;
+    }
+    function requireBatch(values, max) {
+      if (!Array.isArray(values) || !values.length || values.length > max) throw new Error("VIEWING_STATUS_BATCH");
+    }
+    async function readTitles(ids, access, owner) {
+      requireBatch(ids, limits.titleBatch);
+      const graph = await requestGraph([[
+        "videos",
+        ids,
+        ["summary", "watched", "bookmarkPosition", "runtime", "creditsOffset", "seasonCount", "episodeCount"]
+      ]], access, owner);
+      return new Map(ids.map((id) => [String(id), viewingVideoRecord(graph, id)]));
+    }
+    async function readSeasons(records, access, owner) {
+      requireBatch(records, limits.titleBatch);
+      let requested = 0;
+      const paths = records.flatMap((record) => {
+        const count = Number.isSafeInteger(record.seasonCount) && record.seasonCount > 0 ? Math.min(record.seasonCount, limits.seasons) : limits.seasons;
+        requested += count;
+        const paths2 = [[
+          "videos",
+          record.videoId,
+          "seasonList",
+          { from: 0, to: count - 1 },
+          ["summary", "length"]
+        ]];
+        if (record.seasonCount === null) paths2.push(["videos", record.videoId, "seasonList", "length"]);
+        return paths2;
+      });
+      if (requested > limits.episodeBatch) throw new Error("VIEWING_STATUS_BATCH");
+      const graph = await requestGraph(paths, access, owner);
+      return records.map((record) => viewingSeasonPlan(graph, record)).filter(Boolean);
+    }
+    function episodeData(graph, id) {
+      const fetched = id ? viewingVideoRecord(graph, id) : null;
+      const record = fetched && (!fetched.type || fetched.type === "episode") ? { ...fetched, type: "episode" } : null;
+      return { record, kinds: viewingFieldKinds(graph, id) };
+    }
+    async function readEpisodes(segments, access, owner) {
+      requireBatch(segments, limits.episodeBatch);
+      let size = 0;
+      const paths = segments.map(({ seasonId, from, to }) => {
+        if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from || to >= limits.episodes) {
+          throw new Error("VIEWING_STATUS_BATCH");
+        }
+        size += to - from + 1;
+        return [
+          "seasons",
+          seasonId,
+          "episodes",
+          { from, to },
+          ["summary", "watched", "bookmarkPosition", "runtime", "creditsOffset"]
+        ];
+      });
+      if (size > limits.episodeBatch) throw new Error("VIEWING_STATUS_BATCH");
+      const graph = await requestGraph(paths, access, owner);
+      return segments.map(({ seasonId, from, to }) => {
+        const list = readViewingGraph(graph, ["seasons", seasonId, "episodes"]);
+        const episodes = [];
+        for (let index = from; index <= to; index++) {
+          const id = viewingReferenceId(list?.[index], "videos");
+          episodes.push({ index, id, ...episodeData(graph, id) });
+        }
+        return { seasonId, from, to, episodes };
+      });
+    }
+    async function readDirectEpisodes(ids, access, owner) {
+      requireBatch(ids, limits.episodeBatch);
+      const graph = await requestGraph([[
+        "videos",
+        ids,
+        ["summary", "watched", "bookmarkPosition", "runtime", "creditsOffset"]
+      ]], access, owner);
+      return new Map(ids.map((id) => [String(id), episodeData(graph, String(id))]));
+    }
+    return Object.freeze({ limits, beginRead, readTitles, readSeasons, readEpisodes, readDirectEpisodes });
+  }
+
   // src/legacy.js
   function startLegacy() {
     "use strict";
     const netflixContext = createNetflixContext({ window, document, navigator, location });
-    const { getHtmlLanguage, getNetflixLanguage, viewingRequestContext } = netflixContext;
+    const { getHtmlLanguage, getNetflixLanguage } = netflixContext;
+    const viewingData = createViewingData({
+      context: netflixContext,
+      fetch: (...args) => fetch(...args),
+      createCancelledError: createRouteSessionCancelledError
+    });
     const netflixDom = createNetflixPageDom({
       document,
       Element,
@@ -2966,10 +3213,10 @@
     const FRESH_MY_LIST_FETCH_TIMEOUT_MS = 1e4;
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
-    const VIEWING_TITLE_BATCH_SIZE = 50;
-    const VIEWING_EPISODE_BATCH_SIZE = 200;
-    const VIEWING_MAX_SEASONS = 40;
-    const VIEWING_MAX_EPISODES = 500;
+    const VIEWING_TITLE_BATCH_SIZE = viewingData.limits.titleBatch;
+    const VIEWING_EPISODE_BATCH_SIZE = viewingData.limits.episodeBatch;
+    const VIEWING_MAX_SEASONS = viewingData.limits.seasons;
+    const VIEWING_MAX_EPISODES = viewingData.limits.episodes;
     const VIEWING_MAX_REQUESTS = 32;
     const VIEWING_MAX_PASSES = 3;
     const VIEWING_REQUEST_CONCURRENCY = 2;
@@ -3005,7 +3252,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.10";
+    const SCRIPT_VERSION = "1.4.11";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -4879,86 +5126,8 @@
         layout: layoutSummary(layout)
       });
     }
-    function unwrapViewingAtom(value) {
-      if (value?.$type === "error") return void 0;
-      return value?.$type === "atom" ? value.value : value;
-    }
-    function readViewingGraph(graph, path) {
-      let value = graph;
-      const resolve = (input) => {
-        let node = unwrapViewingAtom(input);
-        const visited = /* @__PURE__ */ new Set();
-        while (node?.$type === "ref") {
-          const reference = node.value;
-          if (!Array.isArray(reference) || reference.length > 12) return void 0;
-          const key = JSON.stringify(reference);
-          if (visited.has(key) || visited.size >= 12) return void 0;
-          visited.add(key);
-          node = readViewingGraphReference(graph, reference);
-          node = unwrapViewingAtom(node);
-        }
-        return node;
-      };
-      for (const key of path) {
-        value = resolve(value);
-        if (!value || typeof value !== "object") return void 0;
-        value = value[key];
-      }
-      return resolve(value);
-    }
-    function readViewingGraphReference(graph, path) {
-      let value = graph;
-      for (const key of path) {
-        value = unwrapViewingAtom(value);
-        if (!value || typeof value !== "object") return void 0;
-        value = value[key];
-      }
-      return value;
-    }
-    function viewingNumber(value) {
-      const unwrapped = unwrapViewingAtom(value);
-      return typeof unwrapped === "number" && Number.isFinite(unwrapped) && unwrapped >= 0 ? unwrapped : null;
-    }
-    function viewingCount(value) {
-      const unwrapped = unwrapViewingAtom(value);
-      if (unwrapped == null) return null;
-      return Number.isSafeInteger(unwrapped) && unwrapped >= 0 ? unwrapped : NaN;
-    }
-    function viewingVideoRecord(graph, videoId, type = "") {
-      const video = readViewingGraph(graph, ["videos", String(videoId)]);
-      if (!video || typeof video !== "object") return null;
-      const field = (key) => video[key]?.$type === "ref" ? readViewingGraph(graph, ["videos", String(videoId), key]) : unwrapViewingAtom(video[key]);
-      const summary = field("summary");
-      return {
-        videoId: String(videoId),
-        type: type || (typeof summary?.type === "string" ? summary.type.toLowerCase() : ""),
-        watched: field("watched"),
-        bookmark: viewingNumber(field("bookmarkPosition")),
-        runtime: viewingNumber(field("runtime")),
-        creditsOffset: viewingNumber(field("creditsOffset")),
-        seasonCount: viewingCount(field("seasonCount")),
-        episodeCount: viewingCount(field("episodeCount"))
-      };
-    }
-    function viewingFieldKind(value, depth = 0) {
-      if (value === void 0) return "missing";
-      if (value === null) return "null";
-      if (typeof value === "boolean") return value ? "true" : "false";
-      if (typeof value === "number") return !Number.isFinite(value) ? "invalid-number" : value < 0 ? "negative-number" : value === 0 ? "zero" : "positive-number";
-      if (typeof value === "string") return "string";
-      if (value?.$type === "error") return "error";
-      if (value?.$type === "ref") return "reference";
-      if (value?.$type === "atom" && depth < 2) return "atom:" + viewingFieldKind(value.value, depth + 1);
-      return "object";
-    }
-    function recordViewingFieldKinds(graph, id, counts) {
-      const video = readViewingGraph(graph, ["videos", String(id)]);
-      const kinds = {};
-      for (const [key, field] of [["watched", "watched"], ["bookmark", "bookmarkPosition"], ["runtime", "runtime"]]) {
-        const kind = viewingFieldKind(video?.[field]);
-        kinds[key] = kind;
-        counts[key][kind] = (counts[key][kind] || 0) + 1;
-      }
+    function recordViewingFieldKinds(kinds, counts) {
+      for (const [key, kind] of Object.entries(kinds)) counts[key][kind] = (counts[key][kind] || 0) + 1;
       return kinds;
     }
     function classifyViewingVideo(record) {
@@ -4972,33 +5141,6 @@
       if (record.bookmark > 0) return "in-progress";
       if (record.watched === false && record.bookmark === 0) return "not-started";
       return "unknown";
-    }
-    function viewingReferenceId(reference, kind) {
-      const value = unwrapViewingAtom(reference);
-      const path = Array.isArray(value) ? value : value?.$type === "ref" ? value.value : null;
-      return Array.isArray(path) && path.length === 2 && path[0] === kind && /^\d+$/.test(String(path[1])) ? String(path[1]) : "";
-    }
-    function viewingSeasonPlan(graph, record) {
-      const count = record.seasonCount ?? viewingCount(readViewingGraph(graph, ["videos", record.videoId, "seasonList", "length"]));
-      const expected = record.episodeCount;
-      if (!Number.isSafeInteger(count) || count < 1 || count > VIEWING_MAX_SEASONS || expected !== null && (!Number.isSafeInteger(expected) || expected < 1 || expected > VIEWING_MAX_EPISODES)) return null;
-      const list = readViewingGraph(graph, ["videos", record.videoId, "seasonList"]);
-      if (!list || typeof list !== "object") return null;
-      if (Object.keys(list).some((key) => /^\d+$/.test(key) && Number(key) >= count)) return null;
-      const seasons = [];
-      const seen = /* @__PURE__ */ new Set();
-      let total = 0;
-      for (let index = 0; index < count; index++) {
-        const id = viewingReferenceId(list[index], "seasons");
-        const summary = id ? readViewingGraph(graph, ["seasons", id, "summary"]) : null;
-        const length = viewingCount(summary?.length ?? readViewingGraph(graph, ["seasons", id, "length"]));
-        if (!id || seen.has(id) || !Number.isSafeInteger(length) || length > VIEWING_MAX_EPISODES) return null;
-        seen.add(id);
-        total += length;
-        if (total > VIEWING_MAX_EPISODES || expected !== null && total > expected) return null;
-        seasons.push({ id, count: length, episodes: /* @__PURE__ */ new Map() });
-      }
-      return total > 0 && (expected === null || total === expected) ? { videoId: record.videoId, expected: total, seasons } : null;
     }
     function classifyViewingSeries(plan) {
       if (!plan) return "unknown";
@@ -5091,7 +5233,7 @@
         overlapMs: Math.round(network.overlapMs + (network.inFlight > 1 ? now - network.lastChangeAt : 0))
       };
     }
-    async function fetchViewingGraph(paths, job) {
+    async function runViewingRequest(job, readBatch) {
       assertViewingJob(job);
       if (job.collectionFailure) throw job.collectionFailure;
       const now = performance.now();
@@ -5116,35 +5258,12 @@
       clearTimeout(request.timeoutId);
       request.timeoutId = setTimeout(() => request.controller.abort(), Math.min(8e3, remaining));
       try {
-        const body = new URLSearchParams();
-        for (const path of paths) body.append("path", JSON.stringify(path));
-        body.set("authURL", job.context.authURL);
-        const response = await fetch(job.context.url, {
-          method: "POST",
-          credentials: "same-origin",
-          cache: "no-store",
-          redirect: "error",
-          headers: {
-            "content-type": "application/x-www-form-urlencoded",
-            "x-netflix.nq.stack": "prod",
-            "x-netflix.request.client.user.guid": job.context.profileGuid
-          },
-          body: body.toString(),
-          signal: request.controller.signal
-        });
+        const result = await readBatch({ signal: request.controller.signal, assertCurrent: () => assertViewingJob(job) });
         assertViewingJob(job);
-        if (!response.ok) {
-          if (response.status === 429) network.rateLimited++;
-          throw new Error("VIEWING_STATUS_HTTP_" + response.status);
-        }
-        const payload = await response.json();
-        assertViewingJob(job);
-        if (!payload?.jsonGraph || typeof payload.jsonGraph !== "object" || payload.status === "error") {
-          throw new Error("VIEWING_STATUS_RESPONSE");
-        }
         succeeded = true;
-        return payload.jsonGraph;
+        return result;
       } catch (error) {
+        if (error?.message === "VIEWING_STATUS_HTTP_429") network.rateLimited++;
         if (error?.name === "AbortError") network.aborted++;
         assertViewingJob(job);
         if (performance.now() >= job.deadline) throw new Error("VIEWING_STATUS_BUDGET");
@@ -5239,7 +5358,6 @@
       syncWatchGroups(job.state, changedIds, "scan-batch");
     }
     async function collectViewingStatuses(job) {
-      const fields = ["summary", "watched", "bookmarkPosition", "runtime", "creditsOffset", "seasonCount", "episodeCount"];
       const ids = [...new Set(job.state.items.map((item) => String(item.videoId)).filter((id) => /^\d+$/.test(id)))];
       const seriesById = /* @__PURE__ */ new Map();
       const titleBatches = [];
@@ -5247,9 +5365,9 @@
         titleBatches.push(ids.slice(offset, offset + VIEWING_TITLE_BATCH_SIZE));
       }
       await runViewingBatches(titleBatches, job, async (batch) => {
-        const graph = await fetchViewingGraph([["videos", batch, fields]], job);
+        const records = await runViewingRequest(job, (owner) => viewingData.readTitles(batch, job.context, owner));
         for (const id of batch) {
-          const record = viewingVideoRecord(graph, id);
+          const record = records.get(id);
           let pendingSeries = false;
           job.watch.cachedTypes.delete(id);
           if (record?.type === "movie") job.types.set(id, "movie");
@@ -5289,19 +5407,11 @@
       await recheckViewingSeries(job);
     }
     async function collectViewingSeriesBatch(records, job) {
-      const paths = records.flatMap((record) => {
-        const paths2 = [[
-          "videos",
-          record.videoId,
-          "seasonList",
-          { from: 0, to: (record.seasonCount ?? VIEWING_MAX_SEASONS) - 1 },
-          ["summary", "length"]
-        ]];
-        if (record.seasonCount === null) paths2.push(["videos", record.videoId, "seasonList", "length"]);
-        return paths2;
-      });
-      const graph = await fetchViewingGraph(paths, job);
-      const plans = records.map((record) => viewingSeasonPlan(graph, record)).filter(Boolean);
+      const coverage = await runViewingRequest(job, (owner) => viewingData.readSeasons(records, job.context, owner));
+      const plans = coverage.map((plan) => ({
+        ...plan,
+        seasons: plan.seasons.map((season) => ({ ...season, episodes: /* @__PURE__ */ new Map() }))
+      }));
       job.seriesStats.planned += plans.length;
       job.seriesStats.unplanned += records.length - plans.length;
       const plannedIds = new Set(plans.map((plan) => plan.videoId));
@@ -5339,21 +5449,16 @@
           offset++;
         }
         if (!batch.length) continue;
-        const paths = batch.map(({ season, from, to }) => [
-          "seasons",
-          season.id,
-          "episodes",
-          { from, to },
-          ["summary", "watched", "bookmarkPosition", "runtime", "creditsOffset"]
-        ]);
-        const graph = await fetchViewingGraph(paths, job);
-        for (const { plan, season, from, to } of batch) {
-          const episodes = readViewingGraph(graph, ["seasons", season.id, "episodes"]);
+        const ranges = await runViewingRequest(job, (owner) => viewingData.readEpisodes(
+          batch.map(({ season, from, to }) => ({ seasonId: season.id, from, to })),
+          job.context,
+          owner
+        ));
+        for (let batchIndex = 0; batchIndex < batch.length; batchIndex++) {
+          const { plan, season, from, to } = batch[batchIndex];
           const latest = viewingLatestEpisode(plan);
           for (let index = from; index <= to; index++) {
-            const id = viewingReferenceId(episodes?.[index], "videos");
-            const fetched = id ? viewingVideoRecord(graph, id) : null;
-            const record = fetched && (!fetched.type || fetched.type === "episode") ? { ...fetched, type: "episode" } : null;
+            const { id, record, kinds } = ranges[batchIndex].episodes[index - from];
             const status = classifyViewingVideo(record);
             season.episodes.set(index, { id, status, ...status === "unknown" ? { record } : {} });
             if (latest?.season === season && latest.index === index) season.episodes.get(index).progress = viewingProgressSummary(record);
@@ -5361,7 +5466,7 @@
             if (!id) job.seriesStats.missingEpisodeRefs++;
             if (status === "unknown") {
               job.seriesStats.episodesUnknown++;
-              season.episodes.get(index).kinds = recordViewingFieldKinds(graph, id, job.recheckStats.initialUnknownFields);
+              season.episodes.get(index).kinds = recordViewingFieldKinds(kinds, job.recheckStats.initialUnknownFields);
             } else if (status !== "complete") job.seriesStats.episodesIncomplete++;
           }
         }
@@ -5473,13 +5578,9 @@
         }
         if (!targets.size) return;
         const beforeRequests = job.requests;
-        let graph;
+        let directData;
         try {
-          graph = await fetchViewingGraph([[
-            "videos",
-            [...targets.keys()],
-            ["summary", "watched", "bookmarkPosition", "runtime", "creditsOffset"]
-          ]], job);
+          directData = await runViewingRequest(job, (owner) => viewingData.readDirectEpisodes([...targets.keys()], job.context, owner));
         } finally {
           job.recheckStats.requests += job.requests - beforeRequests;
         }
@@ -5487,8 +5588,7 @@
         for (const [id, entries] of targets) {
           attempted.add(id);
           job.recheckStats.episodes++;
-          const fetched = viewingVideoRecord(graph, id);
-          const direct = fetched && (!fetched.type || fetched.type === "episode") ? { ...fetched, type: "episode" } : null;
+          const { record: direct, kinds } = directData.get(id);
           for (const { plan, episode } of entries) {
             affected.add(plan);
             const previous = episode.record;
@@ -5503,7 +5603,7 @@
             if (episode === viewingLatestEpisode(plan)?.episode) episode.progress = viewingProgressSummary(record);
             if (episode.status === "unknown") {
               job.recheckStats.unknownEpisodes++;
-              episode.kinds = recordViewingFieldKinds(graph, id, job.recheckStats.remainingUnknownFields);
+              episode.kinds = recordViewingFieldKinds(kinds, job.recheckStats.remainingUnknownFields);
             } else job.recheckStats.recoveredEpisodes++;
             if (episode.status !== "complete") plan.recheckBlocked = true;
             if (episode.status === "unknown") episode.record = record;
@@ -6047,7 +6147,7 @@
       if (sourceState !== state || !state.grid?.isConnected || !state.watchStatus) return;
       const watch = state.watchStatus;
       if (watch.loading) return watch.promise;
-      const context = viewingRequestContext();
+      const context = viewingData.beginRead();
       if (!context || !isRouteSessionActive(watch.sessionToken)) {
         clearCachedViewingStatus(watch);
         watch.results = /* @__PURE__ */ new Map();
