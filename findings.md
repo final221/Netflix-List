@@ -841,7 +841,7 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | P02 | CI and output/dependency checks | Complete — 3ccca0e; CI repair 0a8113b verified |
 | P03 | Localization, DOM names and styling | Complete — 1.4.7; d4fa053; Windows/Linux CI verified |
 | P04 | Logging/reporting and bounded popup inspection | Complete — 1.4.8; 3626cea / bfed675; Windows/Linux CI verified |
-| P05 | Context, page DOM and card markup adapters | Complete — 1.4.9; local gates passed, release checkpoint pending |
+| P05 | Context, page DOM and card markup adapters | Complete — 1.4.9; 140cff7; Windows/Linux CI verified |
 | P06 | My List data adapter | Next ready — authorized goal |
 | P07 | Viewing data adapter | Planned — authorized goal |
 | P08 | Session scopes and native binding/page model | Planned — authorized goal |
@@ -947,3 +947,5 @@ Six selected baseline integration cases passed before extraction. Six new public
 Source comparison with the pre-step commit confirms 11 declarations removed and 338 remaining. Exactly 11 remaining bodies change: six active-profile guard callers, bootstrap headers, shared-template construction, membership decoding, clone construction and clone normalization. The other 327 bodies are identical. Selector/identity/context/markup implementations no longer have duplicate owners in legacy; source selection, mutation and presentation bridges remain explicit. Build/dependency/bundle checks confirm the new production modules are reachable and import-only startup remains inert.
 
 Local evidence: **357 passing tests**, no failed/cancelled/skipped cases; reproducible build, read-only output/dependency checks, distributable syntax and whitespace checks pass. Authored and generated diffs are reviewed together. Published package version is verified as 1.4.8 before the patch release **1.4.9**; package/lockfile/metadata/internal version agree. README and implemented architecture describe the actual boundary and remaining ownership transfers. Live Netflix DOM/profile/native-popup compatibility remains user-owned. P06 is next under the active full migration goal; P06–P21 remain required.
+
+Release checkpoint **140cff7** is committed and pushed. [Hosted run 37067587596](https://github.com/final221/Netflix-List/actions/runs/37067587596) succeeds on Windows and Linux: locked dependency installation, committed-output verification, all 357 regression/bundle cases, reproducible build, dependency/output checks, syntax, whitespace and unchanged tracked output pass. P05 is complete; the full migration goal remains active with P06–P21 still required.
