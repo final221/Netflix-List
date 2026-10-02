@@ -1,0 +1,38 @@
+name: Check userscript
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check committed output before rebuilding
+        run: npm run check
+      - name: Regression and bundle tests
+        run: npm test
+      - name: Verify reproducible build
+        run: npm run build
+      - name: Check generated output and dependencies
+        run: npm run check
+      - name: Syntax
+        run: node --check "Legacy My List for Netflix.user.js"
+      - name: Whitespace
+        run: git show --format= --check HEAD
+      - name: Build leaves tracked files unchanged
+        run: git diff --exit-code

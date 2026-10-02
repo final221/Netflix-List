@@ -1,9 +1,92 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Script } from 'node:vm';
 import { distributionName, generateUserscript, repositoryRoot } from './build.mjs';
+
+// Each temporary edge is exact, justified in findings.md and removed at its named step.
+const legacyImports = new Map([
+    ['src/main.js -> src/legacy.js', 'P20: replace the transitional startup entry']
+]);
+const publicFeatures = new Set(['src/list/list.js', 'src/viewing/viewing.js', 'src/grid/grid.js', 'src/hover/hover.js']);
+const netflixEntries = new Set(['context', 'page-dom', 'list-data', 'viewing-data', 'card-markup', 'native-popup', 'popup-inspection']
+    .map(name => `src/netflix/${name}.js`).concat('src/netflix/carousel/carousel.js'));
+const supportEntries = new Set(['src/dom-names.js', 'src/i18n/i18n.js', 'src/diagnostics/logger.js', 'src/diagnostics/report.js']);
+const listAdapters = new Set(['src/netflix/list-data.js', 'src/netflix/page-dom.js', 'src/netflix/carousel/carousel.js']);
+const viewingAdapters = new Set(['src/netflix/context.js', 'src/netflix/viewing-data.js']);
+const gridAdapters = new Set(['src/netflix/card-markup.js', 'src/dom-names.js', 'src/i18n/i18n.js']);
+const hoverAdapters = new Set(['src/netflix/native-popup.js', 'src/netflix/carousel/carousel.js']);
+
+function area(file) {
+    if (file.startsWith('src/netflix/carousel/')) return 'carousel';
+    return file.split('/')[1];
+}
+
+function allowedImport(from, to) {
+    if (from === 'src/legacy.js' || to === 'src/legacy.js') return false;
+    const owner = area(from);
+    if (owner === 'app' || from === 'src/main.js') {
+        return area(to) === 'app' || publicFeatures.has(to) || netflixEntries.has(to) || supportEntries.has(to);
+    }
+    // A capability may depend on its private neighbors, but never import the application entry.
+    if (owner === area(to) && owner !== 'main.js' && owner !== 'dom-names.js') return true;
+    if (owner === 'netflix' || owner === 'carousel') return netflixEntries.has(to) || to === 'src/dom-names.js';
+    if (owner === 'list') return listAdapters.has(to);
+    if (owner === 'viewing') return from !== 'src/viewing/completion.js' && viewingAdapters.has(to);
+    if (owner === 'grid') return gridAdapters.has(to);
+    if (owner === 'hover') return hoverAdapters.has(to);
+    return false;
+}
+
+async function productionFiles(root, directory = 'src') {
+    const files = [];
+    for (const entry of await readdir(path.join(root, directory), { withFileTypes: true })) {
+        const relative = `${directory}/${entry.name}`;
+        if (entry.isDirectory()) files.push(...await productionFiles(root, relative));
+        else if (entry.isFile() && entry.name.endsWith('.js')) files.push(relative);
+        else throw new Error('Unexpected production source entry: ' + relative);
+    }
+    return files;
+}
+
+async function checkDependencies(metafile, root) {
+    const graph = new Map();
+    const usedExceptions = new Set();
+    for (const [name, input] of Object.entries(metafile.inputs)) {
+        const from = name.replaceAll('\\', '/');
+        assert.ok(from.startsWith('src/'), 'Production input must be authored source: ' + from);
+        const dependencies = [];
+        for (const dependency of input.imports) {
+            const to = dependency.path.replaceAll('\\', '/');
+            const edge = `${from} -> ${to}`;
+            assert.ok(!dependency.external && to.startsWith('src/'), 'External production import: ' + edge);
+            if (legacyImports.has(edge)) usedExceptions.add(edge);
+            else assert.ok(allowedImport(from, to), 'Forbidden production import: ' + edge);
+            dependencies.push(to);
+        }
+        graph.set(from, dependencies);
+    }
+    for (const file of await productionFiles(root)) {
+        assert.ok(graph.has(file), 'Unreachable production module: ' + file);
+    }
+    for (const edge of legacyImports.keys()) {
+        assert.ok(usedExceptions.has(edge), 'Remove obsolete legacy import exception: ' + edge);
+    }
+    const visited = new Set(), visiting = new Set(), chain = [];
+    function visit(file) {
+        if (visiting.has(file)) throw new Error('Production import cycle: ' + [...chain, file].join(' -> '));
+        if (visited.has(file)) return;
+        assert.ok(graph.has(file), 'Missing production dependency: ' + file);
+        visiting.add(file);
+        chain.push(file);
+        for (const dependency of graph.get(file)) visit(dependency);
+        chain.pop();
+        visiting.delete(file);
+        visited.add(file);
+    }
+    for (const file of graph.keys()) visit(file);
+}
 
 // Preserve the baseline installation contract while feature ownership migrates.
 function checkInstallation(metadata) {
@@ -22,6 +105,7 @@ function checkInstallation(metadata) {
 export async function checkUserscript({ root = repositoryRoot } = {}) {
     const generated = await generateUserscript({ root });
     checkInstallation(generated.metadata);
+    await checkDependencies(generated.metafile, root);
     const shipped = (await readFile(path.join(root, distributionName), 'utf8')).replace(/\r\n/g, '\n');
     const header = shipped.match(/^\/\/ ==UserScript==\n([\s\S]*?)\/\/ ==\/UserScript==\n/);
     assert.ok(header, 'Userscript header must be the first bytes');

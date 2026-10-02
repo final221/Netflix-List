@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile, mkdtemp, cp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdtemp, mkdir, cp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
@@ -184,7 +184,8 @@ test('check rejects stale output/source and version disagreement without writing
         await assert.rejects(checkUserscript({ root: directory }), /stale|differs/i);
         assert.equal(await readFile(output, 'utf8'), shipped + '// stale\n');
         await writeFile(output, shipped);
-        await writeFile(path.join(directory, 'src/main.js'), "throw new Error('changed entry');\n");
+        const entry = path.join(directory, 'src/main.js');
+        await writeFile(entry, await readFile(entry, 'utf8') + "throw new Error('changed entry');\n");
         await assert.rejects(checkUserscript({ root: directory }), /stale|differs|version/i);
         assert.equal(await readFile(output, 'utf8'), shipped);
     });
@@ -216,4 +217,88 @@ test('check rejects altered grants and execution settings', async () => {
 test('importing authored legacy source does not activate the runtime', async () => {
     const legacy = await import('../src/legacy.js');
     assert.equal(typeof legacy.startLegacy, 'function');
+});
+
+test('production graph rejects a forbidden feature import before output comparison', async () => {
+    const { checkUserscript } = await import('../scripts/check.mjs');
+    await fixture(async directory => {
+        await mkdir(path.join(directory, 'src/viewing'), { recursive: true });
+        await mkdir(path.join(directory, 'src/grid'), { recursive: true });
+        await writeFile(path.join(directory, 'src/viewing/viewing.js'), "import '../grid/grid.js';\n");
+        await writeFile(path.join(directory, 'src/grid/grid.js'), 'export function createGrid() {}\n');
+        const main = path.join(directory, 'src/main.js');
+        await writeFile(main, "import './viewing/viewing.js';\n" + await readFile(main, 'utf8'));
+        await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*viewing\/viewing\.js.*grid\/grid\.js/);
+    });
+});
+
+test('production graph rejects private cross-feature access and real import cycles', async () => {
+    const { checkUserscript } = await import('../scripts/check.mjs');
+    await fixture(async directory => {
+        await mkdir(path.join(directory, 'src/grid'), { recursive: true });
+        await writeFile(path.join(directory, 'src/grid/cards.js'), 'export const cards = [];\n');
+        const main = path.join(directory, 'src/main.js');
+        await writeFile(main, "import './grid/cards.js';\n" + await readFile(main, 'utf8'));
+        await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*main\.js.*grid\/cards\.js/);
+    });
+    await fixture(async directory => {
+        await mkdir(path.join(directory, 'src/grid'), { recursive: true });
+        await writeFile(path.join(directory, 'src/grid/grid.js'), "import './cards.js';\n");
+        await writeFile(path.join(directory, 'src/grid/cards.js'), "import './grid.js';\n");
+        const main = path.join(directory, 'src/main.js');
+        await writeFile(main, "import './grid/grid.js';\n" + await readFile(main, 'utf8'));
+        await assert.rejects(checkUserscript({ root: directory }), /Production import cycle.*grid/);
+    });
+});
+
+test('production graph rejects dormant source and unlisted legacy bridges', async () => {
+    const { checkUserscript } = await import('../scripts/check.mjs');
+    await fixture(async directory => {
+        await mkdir(path.join(directory, 'src/grid'), { recursive: true });
+        await writeFile(path.join(directory, 'src/grid/grid.js'), 'export function createGrid() {}\n');
+        await assert.rejects(checkUserscript({ root: directory }), /Unreachable production module.*grid\/grid\.js/);
+    });
+    await fixture(async directory => {
+        await mkdir(path.join(directory, 'src/grid'), { recursive: true });
+        await writeFile(path.join(directory, 'src/grid/grid.js'), 'export function createGrid() {}\n');
+        const legacy = path.join(directory, 'src/legacy.js');
+        await writeFile(legacy, "import './grid/grid.js';\n" + await readFile(legacy, 'utf8'));
+        await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*legacy\.js.*grid\/grid\.js/);
+    });
+});
+
+test('production graph accepts public composition and private capability dependencies', async () => {
+    const { checkUserscript } = await import('../scripts/check.mjs');
+    const { generateUserscript } = await import('../scripts/build.mjs');
+    await fixture(async directory => {
+        const files = {
+            'app/application.js': "import '../grid/grid.js'; import '../list/list.js'; import '../viewing/viewing.js'; import '../hover/hover.js'; import '../diagnostics/report.js';\n",
+            'grid/grid.js': "import './cards.js'; import '../netflix/card-markup.js'; import '../i18n/i18n.js';\n",
+            'grid/cards.js': "import '../dom-names.js';\n",
+            'dom-names.js': "export const GRID_ID = 'fixture';\n",
+            'i18n/i18n.js': "import './ui-messages.js';\n",
+            'i18n/ui-messages.js': 'export const messages = {};\n',
+            'list/list.js': "import '../netflix/list-data.js'; import '../netflix/carousel/carousel.js';\n",
+            'viewing/viewing.js': "import '../netflix/viewing-data.js';\n",
+            'hover/hover.js': "import '../netflix/native-popup.js';\n",
+            'netflix/native-popup.js': "import './carousel/carousel.js';\n",
+            'netflix/carousel/carousel.js': "import './page-model.js';\n",
+            'netflix/carousel/page-model.js': 'export const model = {};\n',
+            'netflix/card-markup.js': "import '../dom-names.js';\n",
+            'netflix/list-data.js': "import './context.js';\n",
+            'netflix/viewing-data.js': "import './context.js';\n",
+            'netflix/context.js': 'export const context = {};\n',
+            'diagnostics/report.js': "import './logger.js';\n",
+            'diagnostics/logger.js': 'export function log() {}\n'
+        };
+        for (const [name, code] of Object.entries(files)) {
+            const file = path.join(directory, 'src', name);
+            await mkdir(path.dirname(file), { recursive: true });
+            await writeFile(file, code);
+        }
+        const main = path.join(directory, 'src/main.js');
+        await writeFile(main, "import './app/application.js';\n" + await readFile(main, 'utf8'));
+        await writeFile(path.join(directory, distribution), (await generateUserscript({ root: directory })).code);
+        await checkUserscript({ root: directory });
+    });
 });

@@ -837,9 +837,9 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 
 | Step | Outcome | Status |
 | --- | --- | --- |
-| P01 | Reproducible build and transitional test entry | Complete — 1.4.6; evidence below |
-| P02 | CI and output/dependency checks | Next ready — authorized goal |
-| P03 | Localization, DOM names and styling | Planned — authorized goal |
+| P01 | Reproducible build and transitional test entry | Complete — 1.4.6; commit ffb31df |
+| P02 | CI and output/dependency checks | Complete — tooling only; evidence below |
+| P03 | Localization, DOM names and styling | Next ready — authorized goal |
 | P04 | Logging/reporting and bounded popup inspection | Planned — authorized goal |
 | P05 | Context, page DOM and card markup adapters | Planned — authorized goal |
 | P06 | My List data adapter | Planned — authorized goal |
@@ -872,3 +872,21 @@ The 326 baseline cases remain in tests/performance.test.cjs; only their source l
 Evidence: `npm test` passes **335 tests**, with no failures/cancellations/skips; the final focused bundle run passes all nine after making version expectations independent of future release numbers. Fresh `npm ci` succeeds with the locked esbuild **0.28.2**, Node **24.13.0** and npm **11.6.2**. Two generated builds match exactly. `npm run check`, distributable syntax and whitespace checks pass. A separate transfer audit compares the legacy body to HEAD's original source, checks every baseline metadata field and package/lock/dependency agreement, and confirms context is unchanged. Negative checks reject altered output, authored entry, metadata/internal versions, grants, sandbox, run-at, noframes, match, namespace and external runtime dependencies without repairing the artifact.
 
 README.md documents installation/development/release commands; docs/architecture.md distinguishes the implemented build/entry from the final destination. Minimal dependency/temporary-fixture ignore rules and shared offline DOM/timer helpers land with P01 so installation/tests leave a clean reviewable checkpoint; MigrationPlan.md records this minor operational ordering detail. CI and production import/cycle enforcement remain P02. User-owned live Netflix installation/entry/hover compatibility is not proved by these offline checks.
+
+### P02 — CI and production boundary verification
+
+scripts/check.mjs now validates the build's real production dependency graph against Migration.md's allowed directions/public entries. It rejects cross-feature private imports, application back-dependencies, cycles, external inputs, dormant production files and unlisted legacy bridges. Carousel private files remain private to that capability inside Netflix. An exception applies to one exact edge, not an entire feature, and an obsolete exception fails verification.
+
+Created .github/workflows/check.yml for Windows and Linux. The workflow reads the exact Node version from package.json, installs locked dependencies, verifies committed output before any write-producing build, runs tests/build/read-only check/syntax, checks commit whitespace and rejects tracked build changes. README and implemented architecture describe the same command order and enforcement. Existing P01 ignore rules already cover dependencies/temporary fixtures; P02 introduces no additional temporary output needing an ignore rule.
+
+Four additional bundle cases use real esbuild dependency metadata from isolated fixtures. The three negative cases fail before graph enforcement and then prove rejection of forbidden/private imports, cycles, dormant modules and unlisted legacy imports. A positive composed fixture exercises allowed application/public-feature/Netflix/support imports and private neighbors. These checks catch empty imported modules even when their code is absent from the emitted bundle. P01's stale-source scenario retains its existing imports so it continues specifically exercising output inconsistency after graph enforcement.
+
+Evidence: fresh `npm ci`, check-before-build, **339 passing tests**, build, repeated check, distributable syntax and whitespace checks pass. No failed/cancelled/skipped cases. Review confirms the userscript, authored runtime, package/lock and **1.4.6** version are unchanged by P02. The workflow uses locally verified commands; its first hosted execution becomes observable after pushing this checkpoint. Graph enforcement complements the later ownership/purity/caller audits; it does not prove them by itself.
+
+#### Temporary production import exceptions
+
+| Exact edge | Current caller/reason | Removal step |
+| --- | --- | --- |
+| src/main.js → src/legacy.js | One transitional runtime startup, established in P01 | P20, when main starts application |
+
+Before adding a bridge during a later extraction, record its exact caller/target, justification and removal step here and in the checker. Remove the edge/exception together on cutover. No other exception is currently allowed; the temporary source/test-loader/residual suite still have their planned P20/P21 retirement.

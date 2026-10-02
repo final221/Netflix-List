@@ -8,7 +8,13 @@ This document describes what exists now. [Migration.md](../Migration.md) defines
 
 `scripts/build.mjs` owns metadata rendering, version injection and generation. Its `generateUserscript` function builds in memory and returns code plus dependency metadata, without changing repository files. The build command writes that result to the existing `Legacy My List for Netflix.user.js` path. The output is a readable IIFE with the userscript header first, no external imports and no source-map/runtime dependency. It preserves escaped strings and the raw page execution environment.
 
-`scripts/check.mjs` uses the same generation function. It validates the preserved installation contract, syntax, metadata/internal/package version agreement, lack of external runtime imports and normalized output equality. It never overwrites the file it is checking. CRLF checkout differences are normalized for equality; source changes, metadata changes and extra output remain detectable. Production capability dependency rules and CI are added by P02.
+`scripts/check.mjs` uses the same generation function. It validates the preserved installation contract, syntax, metadata/internal/package version agreement, lack of external runtime imports and normalized output equality. It never overwrites the file it is checking. CRLF checkout differences are normalized for equality; source changes, metadata changes and extra output remain detectable.
+
+The checker enforces Migration.md's production import directions and public entries using esbuild's dependency metadata. Private files are accessible within their owning capability; carousel internals are a separate capability inside Netflix. Back-dependencies on application coordination, direct access to another feature's internals, cycles, external inputs and dormant production files fail verification. Completion policy cannot import Netflix integration. These graph checks do not prove state ownership, import-time purity or runtime behavior; the migration still audits those contracts through actual caller transitions and capability scenarios.
+
+Legacy imports have no blanket exemption. Currently only `src/main.js -> src/legacy.js` is allowed, with removal in P20. Any needed future bridge must be recorded as an exact edge with its caller/reason/removal step in the checker and findings.md; obsolete exceptions fail verification rather than silently remaining after cutover.
+
+`.github/workflows/check.yml` runs the normal verification commands on Windows and Linux with the exact Node version from package.json and locked dependencies. It verifies the committed bundle before any write-producing build, then runs regression tests, rebuilds, repeats the read-only check, checks syntax/commit whitespace and rejects tracked build changes. Runtime output/version is unchanged by adding this enforcement.
 
 ## Transitional runtime
 

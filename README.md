@@ -21,6 +21,8 @@ git diff --check
 
 Check verifies the current committed artifact without writing it. Run it before rebuilding when verifying a checkout; otherwise rebuilding could hide stale output. After editing authored source or release metadata, build creates the reviewed release artifact and check verifies it.
 
+The same command order runs in GitHub Actions on Windows and Linux. CI takes its exact Node version from package.json, installs locked dependencies, checks committed output before testing/building, then checks syntax, commit whitespace and absence of tracked build changes. Check also verifies reachable production modules, the declared public import boundaries and absence of cycles. Temporary legacy import exceptions are exact edges with removal steps recorded in findings.md.
+
 Edit `src/` rather than the generated root userscript. `package.json` is the single release-version source; `userscript.meta.json` supplies the other metadata. Build generates a readable, self-contained userscript at the original filename. No runtime npm installation or external module fetch is needed in Tampermonkey.
 
 Any pushed change to the distributable requires a version greater than the newest published release, using AGENTS.md's increment rules. Update package.json and its lockfile together, then rebuild; metadata and internal SCRIPT_VERSION receive that same version automatically. Documentation/tooling changes that leave output unchanged do not need a userscript version increase.
