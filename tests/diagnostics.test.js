@@ -83,7 +83,9 @@ test('logger preserves error, DOM, circular detail and timestamp formatting', ()
     assert.equal(copied.self, '[Circular]');
     assert.equal(copied.node, '<a#title.first.second>');
     assert.equal(copied.error.stack, 'stack');
-    assert.match(logger.formatTimestamp(), /^2026-10-02T\d{2}:34:56\.789[+-]\d{2}:\d{2}$/);
+    const timestamp = logger.formatTimestamp();
+    assert.match(timestamp, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.789[+-]\d{2}:\d{2}$/);
+    assert.equal(Date.parse(timestamp), Date.parse('2026-10-02T12:34:56.789Z'));
 });
 
 test('popup reset and current-owner checks reject stale observations without exposing counter ownership', () => {
