@@ -844,7 +844,7 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | P05 | Context, page DOM and card markup adapters | Complete — 1.4.9; 140cff7; Windows/Linux CI verified |
 | P06 | My List data adapter | Complete — 1.4.10; 9f8624d; Windows/Linux CI verified |
 | P07 | Viewing data adapter | Complete — 1.4.11; 3c6b48a; Windows/Linux CI verified |
-| P08 | Session scopes and native binding/page model | In progress — session/request scope checkpoint 1.4.12; native ownership still required |
+| P08 | Session scopes and native binding/page model | In progress — scope checkpoint 1.4.12; 848b95f; Windows/Linux CI verified; native ownership still required |
 | P09 | Navigation queue and restoration | Planned — authorized goal |
 | P10 | Native collection and carousel facade | Planned — authorized goal |
 | P11 | Frame/card registry and resources | Planned — authorized goal |
@@ -1008,3 +1008,5 @@ Targeted route/body/profile cancellation and stale-grid cases pass before and af
 Source audit against the pre-checkpoint revision confirms one obsolete declaration removed, 313 remaining, and 31 changed bodies: 23 change only the token reader; eight transfer validity/error/request creation/cleanup, start/suspend and viewing deadline mechanics. Other native, collection, policy, rendering and responsive bodies remain unchanged. Authored/generated diffs, metadata/internal/package/lock agreement and the exact production exception are reviewed together.
 
 Local evidence: **377 passing tests**, no failures/cancellations/skips; build, read-only output/dependency checks, userscript syntax and whitespace pass. Published package version is verified as 1.4.11 before patch **1.4.12**. README/implemented architecture describe only this actual transfer; context.md requires no durable edit. This is a working checkpoint inside P08, not completion of that step. Next work must transfer native discovery/binding/shared reads and page-model state to carousel.js/page-model.js, prove obsolete binding/poll rejection and remove direct native-state writers. P09 and the remainder of the full migration remain unfinished; live Netflix compatibility remains user-owned.
+
+Checkpoint **848b95f** is committed and pushed. [Hosted run 37076560856](https://github.com/final221/Netflix-List/actions/runs/37076560856) succeeds on Windows and Linux: locked dependency installation, committed-output verification, all regression/bundle cases, reproducible generation, output/dependency checks, syntax, commit whitespace and unchanged tracked output pass. P08 remains in progress with its native binding/model/discovery acceptance conditions still required; the full migration goal remains active.
