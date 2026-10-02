@@ -842,8 +842,8 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | P03 | Localization, DOM names and styling | Complete — 1.4.7; d4fa053; Windows/Linux CI verified |
 | P04 | Logging/reporting and bounded popup inspection | Complete — 1.4.8; 3626cea / bfed675; Windows/Linux CI verified |
 | P05 | Context, page DOM and card markup adapters | Complete — 1.4.9; 140cff7; Windows/Linux CI verified |
-| P06 | My List data adapter | Local gates passed — 1.4.10; release checkpoint pending |
-| P07 | Viewing data adapter | Next after P06 release verification — authorized goal |
+| P06 | My List data adapter | Complete — 1.4.10; 9f8624d; Windows/Linux CI verified |
+| P07 | Viewing data adapter | Next ready — authorized goal |
 | P08 | Session scopes and native binding/page model | Planned — authorized goal |
 | P09 | Navigation queue and restoration | Planned — authorized goal |
 | P10 | Native collection and carousel facade | Planned — authorized goal |
@@ -968,3 +968,5 @@ The existing snapshot cancellation case now reads normalized records. Added inte
 Source audit against the pre-step revision confirms 16 declarations and the old GraphQL facade removed, one bounded collection bridge added, and 323 declarations remaining. Six remaining bodies change at their data/material/cache callers; the other 316 bodies are identical. Of the 16 moved functions, 12 bodies match after explicit collaborator renaming. The four refinements are page-anchor facts, direction facts, the shared identity walker and injected page nonce time. No raw GraphQL edges/request/cursor parsing or writable GraphQL cache key remains in legacy.
 
 Local evidence: **365 passing tests**, no failed/cancelled/skipped cases; build, read-only output/dependency checks, distributable syntax and whitespace checks pass. Authored and generated diffs are reviewed together. Published 1.4.9 is verified before maintenance release **1.4.10**; package/lockfile/metadata/internal version agree. README and implemented architecture describe the actual boundary and remaining bridges. Live Netflix response/DOM/native-popup compatibility remains user-owned. P07 is next under the active full migration goal; P07–P21 remain required.
+
+Release checkpoint **9f8624d** is committed and pushed. [Hosted run 37071092233](https://github.com/final221/Netflix-List/actions/runs/37071092233) succeeds on Windows and Linux: locked dependency installation, committed-output verification, regression/bundle tests, reproducible generation, output/dependency checks, syntax, commit whitespace and unchanged tracked output all pass. The final import-order adjustment preserves existing generated module order; all 15 bundle cases and local output/syntax/whitespace checks pass again after that adjustment. P06 is complete, and the full migration goal remains active with P07–P21 still required.
