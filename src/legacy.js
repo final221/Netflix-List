@@ -1,3 +1,6 @@
+import { createLogger } from './diagnostics/logger.js';
+import { createReport } from './diagnostics/report.js';
+import { createPopupInspection } from './netflix/popup-inspection.js';
 import {
     GRID_ID, STATUS_ID, ORDER_MISMATCH_DIALOG_ID, SECTION_ATTR,
     SOURCE_SCAN_CLASS, SOURCE_PARKED_CLASS, LOG_LINK_ID, STATUS_TEXT_CLASS,
@@ -85,42 +88,33 @@ export function startLegacy() {
     // preview transfer or exit. This does not retry or alter native hover.
     const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze({ delayMs: 900, routeReplays: 48, roots: 6 });
     const HOVER_INTERRUPTION_LOG_LIMIT = 48;
-    // Read-only investigation: sample existing responses and component shapes,
-    // never invoke a private callback or retain its live objects.
-    const NATIVE_POPUP_DIAGNOSTIC_LIMITS = Object.freeze({ responsePages: 8, cardsPerPage: 4,
-        responseNodes: 48, responseDepth: 6, keys: 40, paths: 32,
-        fibers: 14, holders: 32, holderDepth: 2, functions: 24, sourceChars: 4096, previewCaptures: 1 });
-    const POPUP_FIELD_GROUPS = Object.freeze(['identity', 'title', 'synopsis', 'artwork', 'runtime', 'year',
-        'maturity', 'genres', 'seasons', 'preview', 'playback', 'rating', 'membership']);
-    const POPUP_RESPONSE_FIELDS = Object.freeze({
-        identity: /^(id|videoid|entityid|titleid)$/,
-        title: /^(title|displaystring|titletext)$/,
-        synopsis: /^(synopsis|contextualsynopsis|description|plot)$/,
-        artwork: /^(contextualartwork|artwork|boxart|boxshot|logo|storyart)$/,
-        runtime: /^(runtime|duration)$/,
-        year: /^(releaseyear|year)$/,
-        maturity: /^(maturity|maturityrating|maturitylevel)$/,
-        genres: /^(genres|genre)$/,
-        seasons: /^(seasons|seasoncount|numseasons|numseasonslabel|episodecount|episodes)$/,
-        preview: /preview|trailer|miniplayer|^bob$/,
-        playback: /^(playback|playable|playcontext|playbackcontext|isplayable)$/,
-        rating: /^(userrating|thumbsrating|matchscore|rating)$/,
-        membership: /^(inmylist|inqueue|isinplaylist|ismylist)$/
-    });
     const HOVER_CANCELLATION_REASONS = Object.freeze({ scroll: 'Scroll', 'pointer-leave': 'PointerLeave',
         superseded: 'Superseded', resize: 'Resize', group: 'Group', source: 'Source', route: 'Route',
         controls: 'Controls', 'outside-grid': 'OutsideGrid', preview: 'Preview', other: 'Other' });
 
     const SCRIPT_NAME = 'My List for Netflix';
     const SCRIPT_VERSION = __SCRIPT_VERSION__;
-    const LOG_PREFIX = `[${SCRIPT_NAME} v${SCRIPT_VERSION}]`;
-    const MAX_LOG_ENTRIES = 5000;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = 'legacyMyListForNetflix.settings.v3';
     const VIEWING_CHOICES_STORAGE_KEY = 'legacyMyListForNetflix.viewingChoices.v1.';
     const VIEWING_CACHE_STORAGE_KEY = 'legacyMyListForNetflix.viewingCache.v1.';
     const VIEWING_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+    const logger = createLogger({ name: SCRIPT_NAME, version: SCRIPT_VERSION, Element, console,
+        isTraceEnabled: () => VERBOSE_INTERACTION_LOGS });
+    const { log, warn, trace } = logger;
+    const popupInspection = createPopupInspection({ Element, now: () => performance.now(),
+        isCurrentSession: token => targetSessionActive && isRouteSessionActive(token),
+        readSessionToken: () => routeSessionToken, isSourceMounted: () => Boolean(sourceState?.grid?.isConnected),
+        readSourceCard: () => sourceState.track?.querySelector(NETFLIX_DOM_SELECTORS.standardCard) });
+    const diagnosticReport = createReport({ logger, version: SCRIPT_VERSION, document, navigator, tLog,
+        readEnvironment: () => ({ url: location.href, userAgent: navigator.userAgent, browserLanguage: navigator.language || '',
+            htmlLanguage: getHtmlLanguage(), netflixLanguage: getNetflixLanguage(), displayLanguage: getUiLocale(),
+            logLanguage: getLogLocale(), viewport: `${window.innerWidth}x${window.innerHeight}`, devicePixelRatio: window.devicePixelRatio }),
+        readRuntime: () => collectRuntimeSnapshot(), readSeriesViewing: () => collectViewingSeriesDiagnostics(sourceState),
+        readThumbnails: () => collectThumbnailDiagnostics(sourceState), readNativePopup: () => popupInspection.collect() });
+
     function getHtmlLanguage() {
         return (document.documentElement?.getAttribute('lang') || '').trim();
     }
@@ -242,20 +236,12 @@ export function startLegacy() {
     let performanceDiagnostics = createPerformanceDiagnostics();
     let imageResourceObserver = null;
     let hoverFrameDiagnosticOwner = null;
-    const investigationLog = [];
-    let investigationLogStart = 0;
 
     function createPerformanceDiagnostics() {
         return {
             viewingGroups: { syncs: 0, fullSyncs: 0, cardsConsidered: 0, controlsUpdated: 0, categoryMoves: 0,
                 hoverPreserved: 0, hoverCancelled: 0, lastReason: '' },
             hoverPreparation: { calls: 0, slotsConsidered: 0, clonesRebuilt: 0, neighborsSkipped: 0 },
-            popupInvestigation: { scope: 'read-only-response-and-native-shapes',
-                responsePages: 0, responseEdges: 0, sampledCards: 0, responseNodes: 0,
-                truncatedCards: 0, skippedPages: 0, fieldPaths: '', failures: 0, responseMs: 0,
-                previewCaptures: 0, previewShape: '', previewProbeMs: 0,
-                ...Object.fromEntries(POPUP_FIELD_GROUPS.flatMap(field =>
-                    [[field + 'Present', 0], [field + 'Scalar', 0]])) },
             hoverLifecycle: { replayAttempts: 0, replaysDispatched: 0, replayCancelled: 0, replayFailed: 0,
                 exitsDispatched: 0, exitSkipped: 0, exitFailed: 0, scrollBursts: 0, scrollExits: 0,
                 lastExitReason: '', boundaryDetoursAvoided: 0, duplicateAlignmentsAvoided: 0,
@@ -320,183 +306,9 @@ export function startLegacy() {
     }
 
     function collectPerformanceDiagnostics() {
-        return Object.fromEntries(Object.entries(performanceDiagnostics).map(([key, counters]) => [key, { ...counters }]));
-    }
-
-    function popupDiagnosticValue(object, key) {
-        // Reading a descriptor avoids executing getters on private application objects.
-        if (!object || (typeof object !== 'object' && typeof object !== 'function')) return undefined;
-        return Object.getOwnPropertyDescriptor(object, key)?.value;
-    }
-
-    function popupDiagnosticKey(key) {
-        return /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(key) &&
-            !/auth|token|secret|cookie|password|profile|guid|tracking|session/i.test(key);
-    }
-
-    function popupResponseField(key) {
-        const normalized = key.toLowerCase().replace(/_/g, '');
-        return POPUP_FIELD_GROUPS.find(field => POPUP_RESPONSE_FIELDS[field].test(normalized)) || '';
-    }
-
-    function surveyPopupResponseCard(node) {
-        const limits = NATIVE_POPUP_DIAGNOSTIC_LIMITS;
-        const result = { present: new Set(), scalar: new Set(), paths: [], nodes: 0, truncated: false };
-        const queue = [{ value: node, path: 'node', depth: 0, field: '' }], seen = new Set();
-        for (let index = 0; index < queue.length; index++) {
-            const entry = queue[index];
-            if (!entry.value || typeof entry.value !== 'object' || seen.has(entry.value)) continue;
-            seen.add(entry.value);
-            result.nodes++;
-            const array = Array.isArray(entry.value);
-            const keys = array ? Array.from({ length: Math.min(entry.value.length, 4) }, (_, i) => String(i))
-                : Object.keys(entry.value);
-            if (keys.length > limits.keys || (array && entry.value.length > 4)) result.truncated = true;
-            for (const key of keys.slice(0, limits.keys)) {
-                if (!array && (!popupDiagnosticKey(key) || key === '__typename' || key === '__ref')) continue;
-                const value = popupDiagnosticValue(entry.value, key);
-                const field = (!array && popupResponseField(key)) || entry.field;
-                const path = array ? entry.path + '[]' : entry.path + '.' + key;
-                if (field) {
-                    result.present.add(field);
-                    if ((typeof value === 'string' && value.trim() !== '') ||
-                        (typeof value === 'number' && Number.isFinite(value)) || typeof value === 'boolean') {
-                        result.scalar.add(field);
-                    }
-                    if (result.paths.length < limits.paths && path.length <= 256 && !result.paths.includes(path)) {
-                        result.paths.push(path);
-                    }
-                }
-                if (value && typeof value === 'object' && !seen.has(value)) {
-                    if (entry.depth >= limits.responseDepth || queue.length >= limits.responseNodes) {
-                        result.truncated = true;
-                    } else queue.push({ value, path, depth: entry.depth + 1, field });
-                }
-            }
-        }
-        return result;
-    }
-
-    function recordInitialCardResponse(edges) {
-        const counters = performanceDiagnostics.popupInvestigation, limits = NATIVE_POPUP_DIAGNOSTIC_LIMITS;
-        const started = performance.now();
-        try {
-            if (counters.responsePages >= limits.responsePages) { counters.skippedPages++; return; }
-            counters.responsePages++;
-            counters.responseEdges += edges.length;
-            const samples = Math.min(edges.length, limits.cardsPerPage);
-            const paths = new Set(counters.fieldPaths ? counters.fieldPaths.split('|') : []);
-            for (let index = 0; index < samples; index++) {
-                // Spread the small schema sample across the page, independent of grid visibility.
-                const offset = samples === 1 ? 0 : Math.round(index * (edges.length - 1) / (samples - 1));
-                const result = surveyPopupResponseCard(popupDiagnosticValue(edges[offset], 'node'));
-                counters.sampledCards++;
-                counters.responseNodes += result.nodes;
-                if (result.truncated) counters.truncatedCards++;
-                for (const field of result.present) counters[field + 'Present']++;
-                for (const field of result.scalar) counters[field + 'Scalar']++;
-                for (const path of result.paths) if (paths.size < limits.paths) paths.add(path);
-            }
-            counters.fieldPaths = [...paths].join('|');
-        } catch (_) { counters.failures++; }
-        finally { counters.responseMs += Math.max(0, performance.now() - started); }
-    }
-
-    function describeNativePopupChain(node) {
-        const limits = NATIVE_POPUP_DIAGNOSTIC_LIMITS;
-        const result = { status: 'no-fiber', components: [], functions: [], fields: [],
-            holders: 0, accessorsSkipped: 0, failures: 0, truncated: false };
-        const seen = new Set(), pending = [], fiberSeen = new Set();
-        const enqueue = (value, path, depth = 0) => {
-            if (!value || typeof value !== 'object' || value instanceof Element || seen.has(value)) return;
-            if (depth > limits.holderDepth || pending.length >= limits.holders) { result.truncated = true; return; }
-            seen.add(value);
-            pending.push({ value, path, depth });
-        };
-        try {
-            let fiber = null;
-            for (let parent = 0; node && parent < 3 && !fiber; parent++, node = node.parentElement) {
-                const key = Object.keys(node).find(name => /^__react(Fiber|InternalInstance)\$/.test(name));
-                if (key) fiber = popupDiagnosticValue(node, key);
-            }
-            if (!fiber) return result;
-            result.status = 'read-only-candidates';
-            for (let depth = 0; fiber && depth < limits.fibers && !fiberSeen.has(fiber); depth++) {
-                fiberSeen.add(fiber);
-                const type = popupDiagnosticValue(fiber, 'elementType') || popupDiagnosticValue(fiber, 'type');
-                const name = typeof type === 'string' ? type :
-                    popupDiagnosticValue(type, 'displayName') || popupDiagnosticValue(type, 'name');
-                result.components.push({ depth, type: typeof name === 'string' && popupDiagnosticKey(name) ? name : 'anonymous' });
-                enqueue(popupDiagnosticValue(fiber, 'memoizedProps'), 'fiber' + depth + '.props');
-                enqueue(popupDiagnosticValue(fiber, 'pendingProps'), 'fiber' + depth + '.pendingProps');
-                enqueue(popupDiagnosticValue(fiber, 'stateNode'), 'fiber' + depth + '.instance');
-                const dependencies = popupDiagnosticValue(fiber, 'dependencies');
-                let context = popupDiagnosticValue(dependencies, 'firstContext');
-                for (let index = 0; context && index < 2; index++) {
-                    const current = popupDiagnosticValue(context, 'memoizedValue');
-                    const contextObject = popupDiagnosticValue(context, 'context');
-                    enqueue(current ?? popupDiagnosticValue(contextObject, '_currentValue'), 'fiber' + depth + '.context' + index);
-                    context = popupDiagnosticValue(context, 'next');
-                }
-                fiber = popupDiagnosticValue(fiber, 'return');
-            }
-            if (fiber && !fiberSeen.has(fiber)) result.truncated = true;
-            for (let index = 0; index < pending.length; index++) {
-                const entry = pending[index];
-                result.holders++;
-                const keys = Object.keys(entry.value);
-                if (keys.length > limits.keys) result.truncated = true;
-                for (const key of keys.slice(0, limits.keys)) {
-                    if (!popupDiagnosticKey(key) || key === 'children') continue;
-                    const descriptor = Object.getOwnPropertyDescriptor(entry.value, key);
-                    if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
-                        result.accessorsSkipped++; continue;
-                    }
-                    const value = descriptor.value, path = entry.path + '.' + key;
-                    if (typeof value === 'function') {
-                        if (result.functions.length >= limits.functions) { result.truncated = true; continue; }
-                        const source = Function.prototype.toString.call(value);
-                        const sample = source.slice(0, limits.sourceChars).toLowerCase();
-                        const arity = popupDiagnosticValue(value, 'length');
-                        result.functions.push({ path, arity: Number.isSafeInteger(arity) && arity >= 0 && arity <= 64 ? arity : null,
-                            sourceTruncated: source.length > limits.sourceChars,
-                            hints: ['currentTarget', 'videoId', 'titleId', 'entityId', 'preview', 'popup',
-                                'miniPlayer', 'bob', 'dispatch', 'setState', 'hover', 'pointer', 'mouse']
-                                .filter(hint => sample.includes(hint.toLowerCase())) });
-                    } else {
-                        if (result.fields.length < limits.paths) {
-                            result.fields.push({ path, kind: value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value });
-                        }
-                        if (!Array.isArray(value)) enqueue(value, path, entry.depth + 1);
-                    }
-                }
-            }
-        } catch (_) { result.failures++; result.status = 'partial-probe'; }
-        return result;
-    }
-
-    function captureNativePopupShape(root) {
-        const counters = performanceDiagnostics.popupInvestigation;
-        if (counters.previewCaptures >= NATIVE_POPUP_DIAGNOSTIC_LIMITS.previewCaptures) return;
-        counters.previewCaptures++;
-        const started = performance.now();
-        try { counters.previewShape = JSON.stringify(describeNativePopupChain(root)); }
-        catch (_) { counters.failures++; }
-        finally { counters.previewProbeMs += Math.max(0, performance.now() - started); }
-    }
-
-    function collectNativePopupDiagnostics() {
-        // Only Copy Logs probes the current source card; hover keeps one bounded
-        // preview summary so it remains available after moving to the log button.
-        try {
-            if (!targetSessionActive || !sourceState?.grid?.isConnected || !isRouteSessionActive(routeSessionToken)) {
-                return { status: 'inactive-route' };
-            }
-            const card = sourceState.track?.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-            const saved = performanceDiagnostics.popupInvestigation.previewShape;
-            return { scope: 'read-only-shapes-no-values-or-code', limits: NATIVE_POPUP_DIAGNOSTIC_LIMITS,
-                source: describeNativePopupChain(card), preview: saved ? JSON.parse(saved) : null };
-        } catch (_) { return { status: 'probe-failed' }; }
+        const snapshots = Object.fromEntries(Object.entries(performanceDiagnostics).map(([key, counters]) => [key, { ...counters }]));
+        return { viewingGroups: snapshots.viewingGroups, hoverPreparation: snapshots.hoverPreparation,
+            popupInvestigation: popupInspection.diagnostics(), ...snapshots };
     }
 
     function recordHoverTiming(counters, phase, started) {
@@ -1045,6 +857,7 @@ export function startLegacy() {
         initializationBlockedSessionToken = null;
         nativeInitializationFailure = null;
         performanceDiagnostics = createPerformanceDiagnostics();
+        popupInspection.reset();
         startImageResourceDiagnostics(routeSessionToken);
         targetSessionEntryKind = reason === 'route:initial' ? 'initial' : 'spa';
         targetSessionReason = reason;
@@ -1104,80 +917,6 @@ export function startLegacy() {
 
         window.addEventListener('popstate', () => handleRouteChange('popstate'), true);
         window.addEventListener('hashchange', () => handleRouteChange('hashchange'), true);
-    }
-
-    function formatLogValue(value) {
-        if (value instanceof Error) {
-            return JSON.stringify({
-                name: value.name,
-                message: value.message,
-                stack: value.stack || ''
-            });
-        }
-        if (value instanceof Element) {
-            const tag = value.tagName.toLowerCase();
-            const id = value.id ? `#${value.id}` : '';
-            const cls = value.classList?.length ? `.${[...value.classList].join('.')}` : '';
-            return `<${tag}${id}${cls}>`;
-        }
-        if (typeof value === 'string') return value;
-        try {
-            const seen = new WeakSet();
-            return JSON.stringify(value, (key, item) => {
-                if (item instanceof Element) return formatLogValue(item);
-                if (item instanceof Error) {
-                    return { name: item.name, message: item.message, stack: item.stack || '' };
-                }
-                if (item && typeof item === 'object') {
-                    if (seen.has(item)) return '[Circular]';
-                    seen.add(item);
-                }
-                return item;
-            });
-        } catch (_) {
-            return String(value);
-        }
-    }
-
-    function formatSystemTimestamp(date = new Date()) {
-        const pad = (value, width = 2) => String(value).padStart(width, '0');
-        const offsetMinutes = -date.getTimezoneOffset();
-        const sign = offsetMinutes >= 0 ? '+' : '-';
-        const absoluteOffset = Math.abs(offsetMinutes);
-        const offsetHours = pad(Math.floor(absoluteOffset / 60));
-        const offsetMins = pad(absoluteOffset % 60);
-        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-            `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}` +
-            `${sign}${offsetHours}:${offsetMins}`;
-    }
-
-    function appendInvestigationLog(level, args) {
-        const body = args.map(formatLogValue).join(' ');
-        const entry = `[${formatSystemTimestamp()}] ${level.padEnd(5, ' ')} ${body}`;
-        if (investigationLog.length < MAX_LOG_ENTRIES) {
-            investigationLog.push(entry);
-        } else {
-            investigationLog[investigationLogStart] = entry;
-            investigationLogStart = (investigationLogStart + 1) % MAX_LOG_ENTRIES;
-        }
-    }
-
-    function retainedInvestigationLog() {
-        return investigationLog.slice(investigationLogStart).concat(investigationLog.slice(0, investigationLogStart));
-    }
-
-    function trace(buildArgs) {
-        if (VERBOSE_INTERACTION_LOGS) log(...buildArgs());
-    }
-
-    function log(...args) {
-        appendInvestigationLog('INFO', args);
-        console.log(LOG_PREFIX, ...args);
-    }
-
-    function warn(...args) {
-        appendInvestigationLog('WARN', args);
-        console.warn(LOG_PREFIX, ...args);
     }
 
     function initializationError(code, stage, message, details = {}) {
@@ -1527,55 +1266,6 @@ export function startLegacy() {
         return report;
     }
 
-    function buildInvestigationLogText() {
-        const snapshot = collectRuntimeSnapshot();
-        return [
-            'My List for Netflix Diagnostic Log',
-            `version: ${SCRIPT_VERSION}`,
-            `copiedAt: ${formatSystemTimestamp()}`,
-            `url: ${location.href}`,
-            `userAgent: ${navigator.userAgent}`,
-            `browserLanguage: ${navigator.language || ''}`,
-            `htmlLanguage: ${getHtmlLanguage()}`,
-            `netflixLanguage: ${getNetflixLanguage()}`,
-            `displayLanguage: ${getUiLocale()}`,
-            `logLanguage: ${getLogLocale()}`,
-            `viewport: ${window.innerWidth}x${window.innerHeight}`,
-            `devicePixelRatio: ${window.devicePixelRatio}`,
-            `entries: ${investigationLog.length}`,
-            `snapshot: ${formatLogValue(snapshot)}`,
-            `seriesViewing: ${formatLogValue(collectViewingSeriesDiagnostics(sourceState))}`,
-            `thumbnailDiagnostics: ${formatLogValue(collectThumbnailDiagnostics(sourceState))}`,
-            `nativePopupDiagnostics: ${formatLogValue(collectNativePopupDiagnostics())}`,
-            '---',
-            ...retainedInvestigationLog()
-        ].join('\n') + '\n';
-    }
-
-    async function copyTextToClipboard(text) {
-        if (navigator.clipboard?.writeText) {
-            try {
-                await navigator.clipboard.writeText(text);
-                return 'navigator.clipboard';
-            } catch (error) {
-                warn(tLog('clipboardFallback'), error);
-            }
-        }
-
-        const textarea = document.createElement('textarea');
-        textarea.value = text;
-        textarea.setAttribute('readonly', '');
-        textarea.style.position = 'fixed';
-        textarea.style.left = '-100000px';
-        textarea.style.top = '0';
-        document.body.appendChild(textarea);
-        textarea.select();
-        const ok = document.execCommand('copy');
-        textarea.remove();
-        if (!ok) throw new Error(tLog('execCommandCopyFailed'));
-        return 'execCommand';
-    }
-
     function copyLogsTooltip() {
         return tLog('copyLogsTooltip');
     }
@@ -1596,9 +1286,9 @@ export function startLegacy() {
         const link = event.currentTarget;
         log(tLog('copyLogsRequested'), collectRuntimeSnapshot());
         try {
-            const method = await copyTextToClipboard(buildInvestigationLogText());
+            const method = await diagnosticReport.copy();
             showLogCopiedFeedback(link);
-            log(tLog('copyLogsCompleted'), { method, entries: investigationLog.length });
+            log(tLog('copyLogsCompleted'), { method, entries: logger.size() });
         } catch (error) {
             warn(tLog('copyLogsFailed'), error);
             link.title = tLog('copyFailed', { message: error?.message || error });
@@ -4044,7 +3734,7 @@ export function startLegacy() {
         const edges = Array.isArray(node?.entities?.edges) ? node.entities.edges : [];
         // Piggyback on the validated response; this neither fetches metadata nor
         // publishes it into Netflix's rendering store.
-        recordInitialCardResponse(edges);
+        popupInspection.recordResponse(edges, sessionToken);
         return {
             totalCount,
             edges,
@@ -9409,7 +9099,7 @@ export function startLegacy() {
             owner.counters.previewTransfers++;
             owner.counters.lastPreviewReason = candidate.reason;
             finishNativePreviewDiagnostic(owner, { result: 'matching-preview-transfer' });
-            try { captureNativePopupShape(candidate.root); }
+            try { popupInspection.capturePreview(candidate.root, owner.sessionToken); }
             catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
             try {
                 log(tLog('hoverPreviewTransfer'), { reason: candidate.reason,

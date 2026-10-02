@@ -1,0 +1,281 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createDocument, Element } from './helpers/dom.js';
+import { createLogger } from '../src/diagnostics/logger.js';
+import { createReport } from '../src/diagnostics/report.js';
+import { createPopupInspection } from '../src/netflix/popup-inspection.js';
+
+function popupEnvironment() {
+    let sourceReader = () => null;
+    const e = { sessionToken: 1, active: true, connected: true, inspection: null,
+        setSourceReader: reader => { sourceReader = reader; }, setSourceCard: card => { sourceReader = () => card; } };
+    e.inspection = createPopupInspection({ Element, now: () => 0,
+        isCurrentSession: token => e.active && token === e.sessionToken,
+        readSessionToken: () => e.sessionToken, isSourceMounted: () => e.connected,
+        readSourceCard: () => sourceReader() });
+    return e;
+}
+function popupProbeFixture() {
+    const e = popupEnvironment();
+    const card = new Element('a');
+    let calls = 0;
+    const context = { popup: { open(videoId, anchor) { calls++; return { videoId, anchor, preview: 'private-title' }; } } };
+    const props = { onPointerEnter(event) { calls++; return context.popup.open('private-video-id', event.currentTarget); },
+        title: 'private-title', authToken: 'private-auth', children: new Element('span') };
+    card.__reactFiber$test = { type: 'a', memoizedProps: props, pendingProps: props,
+        dependencies: { firstContext: { memoizedValue: context } },
+        return: { type: function NativeCard() {}, memoizedProps: { videoId: 'private-video-id' } } };
+    e.setSourceCard(card);
+    return Object.assign(e, { card, props, context, calls: () => calls });
+}
+function loggerFixture() {
+    const writes = [];
+    let verbose = false;
+    const logger = createLogger({ name: 'My List for Netflix', version: 'test', Element,
+        now: () => new Date('2026-10-02T12:34:56.789Z'), isTraceEnabled: () => verbose,
+        console: { log: (...args) => writes.push(args), warn: (...args) => writes.push(args) } });
+    return { logger, writes, enableTrace: () => { verbose = true; } };
+}
+
+test('disabled traces avoid payload construction while warnings retain existing detail', () => {
+    const e = loggerFixture();
+    let payloads = 0;
+    const payload = () => { payloads++; return ['source trace', { videoId: '123', href: '/watch/123' }]; };
+    e.logger.trace(payload);
+    assert.equal(payloads, 0);
+    assert.equal(e.writes.length, 0);
+    e.logger.warn('failed source', { videoId: '123', href: '/watch/123' });
+    assert.match(e.logger.entries()[0], /WARN.*123.*\/watch\/123/);
+    e.enableTrace();
+    e.logger.trace(payload);
+    assert.equal(payloads, 1);
+    assert.equal(e.writes.length, 2);
+    assert.equal(e.writes[0][0], '[My List for Netflix vtest]');
+});
+
+test('circular diagnostics retain the newest 5000 entries in chronological copied-report order', () => {
+    const { logger } = loggerFixture();
+    for (let index = 0; index < 10003; index++) logger.log(String(index));
+    const retained = logger.entries();
+    assert.equal(logger.size(), 5000);
+    assert.equal(retained.length, 5000);
+    assert.match(retained[0], / 5003$/);
+    assert.match(retained[4999], / 10002$/);
+    for (let index = 1; index < retained.length; index++) assert.equal(Number(retained[index].split(' ').at(-1)), 5003 + index);
+    retained.length = 0;
+    assert.equal(logger.size(), 5000, 'callers cannot edit the retained buffer');
+});
+
+test('logger preserves error, DOM, circular detail and timestamp formatting', () => {
+    const { logger } = loggerFixture();
+    const error = new Error('failed');
+    error.stack = 'stack';
+    assert.deepEqual(JSON.parse(logger.formatValue(error)), { name: 'Error', message: 'failed', stack: 'stack' });
+    const node = new Element('a');
+    node.id = 'title';
+    node.classList = { length: 2, *[Symbol.iterator]() { yield 'first'; yield 'second'; } };
+    assert.equal(logger.formatValue(node), '<a#title.first.second>');
+    const details = { videoId: '123', href: '/watch/123', node, error };
+    details.self = details;
+    const copied = JSON.parse(logger.formatValue(details));
+    assert.equal(copied.videoId, '123');
+    assert.equal(copied.href, '/watch/123');
+    assert.equal(copied.self, '[Circular]');
+    assert.equal(copied.node, '<a#title.first.second>');
+    assert.equal(copied.error.stack, 'stack');
+    assert.match(logger.formatTimestamp(), /^2026-10-02T\d{2}:34:56\.789[+-]\d{2}:\d{2}$/);
+});
+
+test('popup reset and current-owner checks reject stale observations without exposing counter ownership', () => {
+    const e = popupProbeFixture();
+    e.inspection.recordResponse([{ node: { title: 'one' } }], 1);
+    const snapshot = e.inspection.diagnostics();
+    snapshot.responsePages = 999;
+    assert.equal(e.inspection.diagnostics().responsePages, 1);
+    e.sessionToken = 2;
+    e.inspection.reset();
+    e.inspection.recordResponse([{ node: { title: 'old' } }], 1);
+    e.inspection.capturePreview(e.card, 1);
+    assert.equal(e.inspection.diagnostics().responsePages, 0);
+    assert.equal(e.inspection.diagnostics().previewCaptures, 0);
+    e.inspection.recordResponse([{ node: { title: 'new' } }], 2);
+    assert.equal(e.inspection.diagnostics().responsePages, 1);
+});
+
+function reportFixture({ primary, fallback = true, throws = false } = {}) {
+    const { logger } = loggerFixture();
+    const document = createDocument();
+    let copied = '', selected = 0, reads = 0;
+    const createElement = document.createElement;
+    document.createElement = tag => {
+        const node = createElement(tag);
+        node.select = () => { selected++; };
+        return node;
+    };
+    document.execCommand = command => {
+        assert.equal(command, 'copy');
+        copied = document.body.querySelector('textarea').value;
+        if (throws) throw new Error('clipboard failed');
+        return fallback;
+    };
+    const navigator = primary ? { clipboard: { writeText: async text => { copied = text; await primary(text); } } } : {};
+    const report = createReport({ logger, version: 'test', document, navigator, tLog: key => key,
+        readEnvironment: () => ({ url: 'https://www.netflix.com/browse/my-list', userAgent: 'offline', browserLanguage: 'en',
+            htmlLanguage: 'ja', netflixLanguage: 'ja', displayLanguage: 'ja', logLanguage: 'ja', viewport: '1280x800', devicePixelRatio: 1 }),
+        readRuntime: () => { reads++; return { performanceWork: { nativeCollection: { metadataReads: 2 } } }; },
+        readSeriesViewing: () => [{ title: 'Weeds', reason: 'unavailable-episode-progress' }],
+        readThumbnails: () => ({ available: true }), readNativePopup: () => ({ status: 'inactive-route' }) });
+    return { logger, report, document, copied: () => copied, selected: () => selected, reads: () => reads };
+}
+
+test('report copies current explicit summaries and chronological logs only on request', async () => {
+    const e = reportFixture({ primary: async () => {} });
+    assert.equal(e.reads(), 0);
+    e.logger.log('first', { videoId: '123' });
+    e.logger.warn('second', { href: '/watch/123' });
+    assert.equal(await e.report.copy(), 'navigator.clipboard');
+    const text = e.copied();
+    assert.equal(e.reads(), 1);
+    assert.match(text, /version: test\ncopiedAt:/);
+    assert.match(text, /entries: 2\nsnapshot: .*metadataReads/);
+    assert.match(text, /seriesViewing: .*Weeds/);
+    assert.match(text, /thumbnailDiagnostics: \{"available":true\}/);
+    assert.match(text, /nativePopupDiagnostics: \{"status":"inactive-route"\}/);
+    assert.ok(text.indexOf('INFO  first') < text.indexOf('WARN  second'));
+    assert.ok(text.endsWith('\n'));
+    assert.equal(e.selected(), 0);
+    assert.equal(e.document.body.children.length, 0);
+});
+
+test('clipboard rejection falls back once and releases its owned textarea on success or failure', async () => {
+    const rejected = reportFixture({ primary: async () => { throw new Error('denied'); } });
+    assert.equal(await rejected.report.copy(), 'execCommand');
+    assert.equal(rejected.selected(), 1);
+    assert.equal(rejected.document.body.children.length, 0);
+    assert.match(rejected.logger.entries()[0], /WARN.*clipboardFallback.*denied/);
+    for (const options of [{ fallback: false }, { throws: true }]) {
+        const failed = reportFixture(options);
+        await assert.rejects(failed.report.copy(), /execCommandCopyFailed|clipboard failed/);
+        assert.equal(failed.document.body.children.length, 0);
+    }
+});
+
+test('initial response diagnostics distinguish wrapped scalar metadata from absent or type-only fields without exporting values', () => {
+    const e = popupEnvironment();
+    const node = { id: 'private-video-id', displayString: { __typename: 'Text', text: 'private-title' },
+        synopsis: { __typename: 'Text', text: null }, contextualArtwork: { url: 'https://private.test/image.jpg' },
+        runtime: 3600, releaseYear: 2024, maturity: { value: '18' }, genres: ['private-genre'],
+        seasons: null, preview: { url: 'https://private.test/preview' }, inMyList: false,
+        authToken: 'private-auth', profile: { synopsis: 'private-profile' } };
+    e.inspection.recordResponse([{ node }], e.sessionToken);
+    const report = e.inspection.diagnostics();
+    assert.equal(report.sampledCards, 1);
+    assert.equal(report.titleScalar, 1);
+    assert.equal(report.synopsisPresent, 1);
+    assert.equal(report.synopsisScalar, 0, '__typename alone is not a scalar metadata value');
+    assert.equal(report.artworkScalar, 1);
+    assert.equal(report.seasonsPresent, 1);
+    assert.equal(report.seasonsScalar, 0);
+    assert.equal(report.membershipScalar, 1, 'false is an actual value');
+    assert.equal(report.playbackPresent, 0);
+    assert.match(report.fieldPaths, /node.displayString.text/);
+    assert.doesNotMatch(JSON.stringify(report), /private-|https:|3600|2024|__typename|authToken|profile/);
+    assert.ok(Object.values(report).every(value => value === null || typeof value !== 'object'));
+});
+
+test('response surveys sample across each page and cap pages, paths, nodes, depth and arrays even with cycles', () => {
+    const e = popupEnvironment();
+    const node = { genres: Array.from({ length: 10000 }, () => ({ text: 'private-genre' })) };
+    node.self = node;
+    for (let index = 0; index < 80; index++) node['field' + index] = { synopsis: { text: 'private-plot' } };
+    const edges = Array.from({ length: 75 }, () => ({ node: { id: 'private-id' } }));
+    edges[74] = { node: { synopsis: 'last-card-plot' } };
+    for (let index = 0; index < 12; index++) e.inspection.recordResponse(edges, e.sessionToken);
+    const report = e.inspection.diagnostics();
+    assert.equal(report.responsePages, 8);
+    assert.equal(report.skippedPages, 4);
+    assert.equal(report.sampledCards, 32);
+    assert.equal(report.synopsisScalar, 8, 'the final card is sampled as well as the first');
+    assert.equal(report.identityScalar, 24);
+    e.inspection.reset();
+    e.inspection.recordResponse([{ node }], e.sessionToken);
+    const survey = e.inspection.diagnostics();
+    assert.ok(survey.responseNodes <= 48);
+    assert.ok(survey.fieldPaths.split('|').length <= 32);
+    assert.equal(survey.truncatedCards, 1);
+    let deep = { synopsis: 'deep-plot' };
+    for (let index = 0; index < 12; index++) deep = { wrapper: deep };
+    e.inspection.reset();
+    e.inspection.recordResponse([{ node: deep }], e.sessionToken);
+    const deepSurvey = e.inspection.diagnostics();
+    assert.equal(deepSurvey.truncatedCards, 1);
+    assert.equal(deepSurvey.synopsisScalar, 0);
+});
+
+test('response diagnostic failures and private getters cannot break collection', () => {
+    const e = popupEnvironment();
+    let reads = 0;
+    const node = {};
+    Object.defineProperty(node, 'synopsis', { enumerable: true, get() { reads++; throw new Error('private-error'); } });
+    e.inspection.recordResponse([{ node }], e.sessionToken);
+    assert.equal(reads, 0);
+    assert.equal(e.inspection.diagnostics().synopsisScalar, 0);
+    const hostile = new Proxy({}, { ownKeys() { throw new Error('private-error'); } });
+    assert.doesNotThrow(() => e.inspection.recordResponse([{ node: hostile }], e.sessionToken));
+    assert.equal(e.inspection.diagnostics().failures, 1);
+    assert.doesNotMatch(JSON.stringify(e.inspection.diagnostics()), /private-error/);
+});
+
+test('native source and context reports expose callback shapes without calling them or retaining their objects or source', () => {
+    const e = popupProbeFixture();
+    const report = e.inspection.collect();
+    assert.equal(report.source.status, 'read-only-candidates');
+    assert.equal(report.source.components.length, 2);
+    assert.ok(report.source.functions.some(row => row.path.endsWith('.props.onPointerEnter') &&
+        row.arity === 1 && row.hints.includes('currentTarget')));
+    assert.ok(report.source.functions.some(row => row.path.endsWith('.context0.popup.open') && row.arity === 2));
+    assert.equal(e.calls(), 0);
+    assert.doesNotMatch(JSON.stringify(report), /private-|authToken|return \{|calls\+\+|function NativeCard/);
+    assert.equal(report.preview, null);
+    e.inspection.capturePreview(e.card, e.sessionToken);
+    const saved = e.inspection.diagnostics().previewShape;
+    e.card.__reactFiber$test.memoizedProps = null;
+    e.inspection.capturePreview(e.card, e.sessionToken);
+    assert.equal(e.inspection.diagnostics().previewCaptures, 1);
+    assert.equal(e.inspection.diagnostics().previewShape, saved);
+    assert.equal(e.inspection.collect().preview.status, 'read-only-candidates');
+    assert.equal(e.calls(), 0);
+});
+
+test('native shape probes skip getters and custom toString, cap cyclic/wide graphs and inspect only a bounded function prefix', () => {
+    const e = popupProbeFixture();
+    let reads = 0;
+    Object.defineProperty(e.props, 'onMouseOver', { enumerable: true, get() { reads++; throw new Error('private-error'); } });
+    e.props.onPointerEnter.toString = () => { reads++; throw new Error('private-error'); };
+    e.context.self = e.context;
+    e.props.longHandler = Function('/*' + 'x'.repeat(5000) + '*/ return "preview";');
+    for (let index = 0; index < 80; index++) e.props['handler' + index] = () => { reads++; };
+    const report = e.inspection.collect().source;
+    assert.equal(reads, 0);
+    assert.equal(report.accessorsSkipped, 1);
+    assert.ok(report.functions.length <= 24);
+    assert.ok(report.holders <= 32);
+    assert.ok(report.fields.length <= 32);
+    assert.equal(report.truncated, true);
+    const long = report.functions.find(row => row.path.endsWith('.longHandler'));
+    assert.equal(long.sourceTruncated, true);
+    assert.equal(long.hints.includes('preview'), false, 'hints after the bounded prefix are not inspected');
+});
+
+test('Copy Logs guards inactive routes and isolates private probe failures', () => {
+    const e = popupProbeFixture();
+    e.setSourceReader(() => { throw new Error('private-error'); });
+    e.active = false;
+    assert.equal(e.inspection.collect().status, 'inactive-route');
+    e.active = true;
+    assert.equal(e.inspection.collect().status, 'probe-failed');
+    const hostile = new Proxy({}, { ownKeys() { throw new Error('private-error'); } });
+    assert.doesNotThrow(() => e.inspection.capturePreview(hostile, e.sessionToken));
+    assert.equal(JSON.parse(e.inspection.diagnostics().previewShape).status, 'partial-probe');
+    assert.doesNotMatch(e.inspection.diagnostics().previewShape, /private-error/);
+});

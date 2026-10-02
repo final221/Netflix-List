@@ -840,8 +840,8 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | P01 | Reproducible build and transitional test entry | Complete — 1.4.6; commit ffb31df |
 | P02 | CI and output/dependency checks | Complete — 3ccca0e; CI repair 0a8113b verified |
 | P03 | Localization, DOM names and styling | Complete — 1.4.7; d4fa053; Windows/Linux CI verified |
-| P04 | Logging/reporting and bounded popup inspection | Next ready — authorized goal |
-| P05 | Context, page DOM and card markup adapters | Planned — authorized goal |
+| P04 | Logging/reporting and bounded popup inspection | Complete — 1.4.8; release checkpoint below |
+| P05 | Context, page DOM and card markup adapters | Next ready — authorized goal |
 | P06 | My List data adapter | Planned — authorized goal |
 | P07 | Viewing data adapter | Planned — authorized goal |
 | P08 | Session scopes and native binding/page model | Planned — authorized goal |
@@ -895,6 +895,9 @@ The corrected [hosted run 37061083374](https://github.com/final221/Netflix-List/
 | src/legacy.js → src/dom-names.js | Remaining runtime consumers use the shared DOM contract catalog | P20, when remaining consumers leave legacy |
 | src/legacy.js → src/i18n/i18n.js | Create localization once and call its explicit display operations | P20, when composition injects localization into remaining owners |
 | src/legacy.js → src/grid/styles.js | Preserve current route installation/cleanup points | P11, when grid frame owns stylesheet lifetime |
+| src/legacy.js → src/diagnostics/logger.js | Compose one retained application-lifetime logger; use explicit log/trace/size operations | P20, when application owns composition |
+| src/legacy.js → src/diagnostics/report.js | Compose export from explicit environment and feature-summary providers | P20, when application supplies those collaborators |
+| src/legacy.js → src/netflix/popup-inspection.js | Compose private survey state/current-owner readers, reset at route entry and connect current response/preview callers | P20, when application owns composition and native/data consumers are injected |
 
 Before adding a bridge during a later extraction, record its exact caller/target, justification and removal step here and in the checker. Remove the edge/exception together on cutover. No other exception is currently allowed; the temporary source/test-loader/residual suite still have their planned P20/P21 retirement.
 
@@ -911,3 +914,17 @@ Baseline comparison against the pre-step authored source confirms equality of ev
 Local evidence: **346 passing tests**, zero failures/cancellations/skips; deterministic build/read-only dependency and output check, distributable syntax and whitespace verification pass. Authored/generated diffs are reviewed together. Live Netflix visual/native-popup compatibility remains the user-owned release check; offline checks do not establish it. P04 is next under the authorized full migration goal; P04–P21 remain required.
 
 Release checkpoint **d4fa053** is committed and pushed. [Hosted run 37063250774](https://github.com/final221/Netflix-List/actions/runs/37063250774) succeeds on **windows-latest** and **ubuntu-latest**: locked installation, committed-output verification, all 346 tests, reproducible build, dependency/output checks, syntax, whitespace and unchanged tracked build output pass. P03 is complete; the full migration goal remains active.
+
+### P04 — Logging, report export and bounded popup inspection
+
+Created the three planned owners: diagnostics/logger.js, diagnostics/report.js and netflix/popup-inspection.js. Legacy live callers use the new capabilities. Logger privately owns the existing 5,000-entry ring and cursor, formatting and disabled-trace gate; copied entries/size are observations, with no public buffer mutation. It lives across route changes. Report has one copy operation fed by explicit scalar environment metadata and separate runtime/series/thumbnail/native-popup summary providers, preserving report fields/detail and clipboard fallback behavior. It imports no legacy state and performs no requests/recovery. The fallback's owned textarea now releases in finally when selection or copy fails; failure still propagates through the same UI warning path.
+
+Popup inspection owns its bounded response/preview counters and serialized preview shape. It keeps the original interpretation/probe limits, descriptor reads, sensitive-key/value/source safeguards and one-preview capture cap. The facade receives current-session checks, a token reader, a mounted-grid predicate and one current-card reader, rather than a legacy context bag. Response and capture commands carry the existing session token; stale commands cannot mutate current counters. It resets at the original route-entry diagnostic reset point. Existing validated response and admitted preview-transfer callers invoke it without extra requests/listeners/polling or changes to native interaction. The old shared performance object no longer owns a competing popup counter set; collected performance summaries merge a copied inspection snapshot at the original field.
+
+Temporary imports/callers/removal steps are recorded above and enforced by check. Remaining feature counters/samplers, delayed preview presence checks, CopyLogs UI handler and feedback timer stay with their existing feature lifetimes until P11/P17/P18/P19. Legacy composition and summary callbacks move to application in P20; upcoming native/data modules receive the inspection operations through injected collaborators.
+
+Before extraction, the selected logging/survey/private-shape/collection/native-transfer baseline scenarios passed. The new diagnostics suite initially failed on the absent planned modules. Eight baseline cases move to public-interface diagnostics tests: the disabled trace and ring-order cases, plus six pure response/probe cases. Existing real CarouselPage/stale-body, viewing-series report, preview capture and throwing-diagnostic/native-transfer integrations retain their feature fixtures but call the real capabilities. Added scenarios cover Error/DOM/circular/timestamp formatter fidelity, copied-counter isolation and stale/reset ownership, report providers running only on export, and clipboard rejection/failed fallback cleanup. A generated-bundle case clicks CopyLogs, verifies export without extra requests and retained logs across route reentry.
+
+Baseline comparison against the pre-step source proves identical retained log entries, capped 12-page response/capture summaries and exact copied-report bytes for the same inputs. All 349 remaining function bodies match except the six intended ownership/caller changes: createPerformanceDiagnostics, collectPerformanceDiagnostics, startTargetSession, handleLogClick, fetchMyListCarouselPage and retainNativeHoverForPreview. Seventeen moved declarations have one production implementation in their new owner; there is no legacy table/buffer/probe/report duplicate.
+
+Local evidence: **351 passing tests**, no failed/cancelled/skipped cases; build, read-only output/dependency checks, distributable syntax and whitespace verification pass. Package/lockfile/metadata/internal version agree on maintenance release **1.4.8**, above the verified published 1.4.7. Authored and generated changes are reviewed together. Import-only startup still activates no browser work. Live Netflix compatibility remains user-owned. P05 is next; P05–P21 remain required under the active full migration goal.

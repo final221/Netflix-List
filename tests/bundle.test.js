@@ -20,7 +20,7 @@ function browser({ pathname = '/browse', grants = true, visualViewport = true, s
     Object.assign(window, { innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1 });
     if (visualViewport) window.visualViewport = new EventTarget();
     const location = { origin: 'https://www.netflix.com', pathname, href: 'https://www.netflix.com' + pathname };
-    const logs = [], menus = new Map(), observers = [], requests = [];
+    const logs = [], menus = new Map(), observers = [], requests = [], clipboard = [];
     class MutationObserver {
         constructor(callback) { this.callback = callback; this.active = false; observers.push(this); }
         observe() { this.active = true; }
@@ -35,7 +35,8 @@ function browser({ pathname = '/browse', grants = true, visualViewport = true, s
     }
     const context = vm.createContext({
         window, document, location, history, Element, HTMLElement: Element, MutationObserver, URL, AbortController,
-        navigator: { userAgent: 'offline-bundle-test', language: 'en' },
+        navigator: { userAgent: 'offline-bundle-test', language: 'en',
+            clipboard: { writeText: async text => { clipboard.push(text); } } },
         localStorage: storage ? { getItem: () => null, setItem() {} } : { getItem() { throw new Error('denied'); } },
         console: { log: (...args) => logs.push(args), warn: (...args) => logs.push(args) },
         performance: scheduler.performance,
@@ -53,7 +54,7 @@ function browser({ pathname = '/browse', grants = true, visualViewport = true, s
     });
     // In raw mode the browser's page globals and window refer to the same environment.
     window.netflix = {};
-    return { context, scheduler, document, window, history, location, logs, menus, observers, requests,
+    return { context, scheduler, document, window, history, location, logs, menus, observers, requests, clipboard,
         start: () => vm.runInContext(shipped, context, { filename: distribution, timeout: 1000 }),
         async navigate(url, method = 'pushState') { history[method](null, '', url); await scheduler.flush(); },
         mountMyList() {
@@ -125,6 +126,36 @@ test('generated runtime localizes live menu commands and releases stylesheet on 
     assert.notEqual(replacement, first);
     assert.equal(replacement.textContent, first.textContent);
     assert.equal(b.document.head.querySelectorAll('style').length, 1);
+    await b.navigate('/browse');
+});
+
+test('generated CopyLogs uses report providers without requests and retains logs across route entries', async () => {
+    const b = browser();
+    b.mountMyList();
+    b.start();
+    await b.navigate('/browse/my-list');
+    await b.scheduler.advance();
+    const requests = b.requests.length;
+    async function copy() {
+        const link = b.document.getElementById('tm-netflix-mylist-v20-log');
+        assert.ok(link);
+        link.dispatchEvent({ type: 'click', currentTarget: link, preventDefault() {} });
+        await b.scheduler.flush();
+    }
+    await copy();
+    assert.equal(b.clipboard.length, 1);
+    assert.equal(b.requests.length, requests);
+    assert.match(b.clipboard[0], /^My List for Netflix Diagnostic Log\nversion: /);
+    assert.ok(b.clipboard[0].includes(`version: ${releaseVersion}\n`));
+    assert.match(b.clipboard[0], /nativePopupDiagnostics: /);
+    assert.match(b.clipboard[0], /Script started/);
+    await b.navigate('/browse');
+    await b.navigate('/browse/my-list');
+    await b.scheduler.advance();
+    await copy();
+    assert.equal(b.clipboard.length, 2);
+    assert.ok(b.clipboard[1].includes('CopyLogs completed'));
+    assert.equal(b.clipboard[1].match(/Script started/g).length, 1);
     await b.navigate('/browse');
 });
 
