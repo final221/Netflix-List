@@ -843,8 +843,8 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | P04 | Logging/reporting and bounded popup inspection | Complete — 1.4.8; 3626cea / bfed675; Windows/Linux CI verified |
 | P05 | Context, page DOM and card markup adapters | Complete — 1.4.9; 140cff7; Windows/Linux CI verified |
 | P06 | My List data adapter | Complete — 1.4.10; 9f8624d; Windows/Linux CI verified |
-| P07 | Viewing data adapter | Local gates passed — 1.4.11; release checkpoint pending |
-| P08 | Session scopes and native binding/page model | Next after P07 release verification — authorized goal |
+| P07 | Viewing data adapter | Complete — 1.4.11; 3c6b48a; Windows/Linux CI verified |
+| P08 | Session scopes and native binding/page model | Next ready — authorized goal |
 | P09 | Navigation queue and restoration | Planned — authorized goal |
 | P10 | Native collection and carousel facade | Planned — authorized goal |
 | P11 | Frame/card registry and resources | Planned — authorized goal |
@@ -987,3 +987,5 @@ Review identifies a diagnostic regression: adapter cancellation masks the origin
 Source audit against the pre-step checkpoint confirms 10 declarations removed (nine protocol helpers and the old mixed fetchViewingGraph), one scan-accounting bridge added, and 314 declarations remaining. Six surviving bodies change only at normalized reads, diagnostic aggregation and context acquisition; the other 307 bodies are identical. Seven moved parsing bodies are identical. The two remaining parser refinements narrow watched to a scalar and transfer validated coverage without scan-owned episode maps; field-kind interpretation and counter aggregation now have separate owners. Completion, persistence, wave scheduling and publication rules are unchanged.
 
 Local evidence: **373 passing tests**, no failed/cancelled/skipped cases; reproducible build, read-only output/dependency checks, distributable syntax and whitespace checks pass. Published 1.4.10 is verified before maintenance release **1.4.11**; package/lockfile/metadata/internal version agree. README and implemented architecture describe the actual boundary and remaining bridges. Live Netflix viewing endpoint/private protocol compatibility remains user-owned. P08 follows under the active full migration goal; P08–P21 remain required.
+
+Release checkpoint **3c6b48a** is committed and pushed. [Hosted run 37073183342](https://github.com/final221/Netflix-List/actions/runs/37073183342) succeeds on Windows and Linux: locked dependency installation, committed-output verification, all 373 regression/bundle cases, reproducible generation, output/dependency checks, syntax, commit whitespace and unchanged tracked output pass. Authored and generated changes are reviewed together; no baseline policy case is removed. The final array-reference assertion passes in the 29-case adapter suite and this hosted full run. P07 is complete, and the full migration goal remains active with P08–P21 still required.
