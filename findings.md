@@ -1,6 +1,6 @@
 # Findings and follow-up plan
 
-Updated: 2026-10-01
+Updated: 2026-10-02
 
 This file records the code-review findings and the agreed follow-up plan for My List for Netflix. It is a working record; the plan does not authorize extra code changes beyond the step the user has chosen to pursue.
 
@@ -812,3 +812,22 @@ The existing per-action Viewing choice applied event adds targetGroup, automatic
 All **326 deterministic tests pass**. Four new regressions cover the passive single-action marker and reload/hover behavior, unknown progress followed by automatic completion, agreement with cached classification without new requests, and failed restoration preserving saved placement/marker with truthful logs. Updated existing checks cover both-direction restoration, later automatic changes, cross-tab deletion during late series-baseline capture, filtered destinations without viewport jumps, all locale strings and stable control synchronization. Existing series expiry, profile, native hover and diagnostic coverage remains passing. Syntax, matching patch versions, diff review and whitespace checks apply. context.md records the durable preference for one placement action and a passive marker while preserving its protected prefix.
 
 Next UI check is the user's reload of **1.4.5** and movement between the two sections. The direct-native-popup investigation is held at the user's request; its 1.4.4 diagnostics remain available for a later selected continuation. No assistant browser inspection or authenticated Netflix request was performed, and no latency bypass or additional performance step was implemented.
+
+## Modular-source migration design recorded
+
+The user selects preserving the architectural proposal as [Migration.md](Migration.md) and reviewing it again before further work. The file records the concrete target tree, each file's responsibilities, state/resource ownership, permitted dependency directions, boundary data/contracts, complete collaboration paths, build/release design and eight increments with acceptance conditions. Its second review adds concrete mutation-deferral tickets, card/material transfer and replacement rules, listener/observer ownership, normalized network-batch contracts and original-source preference handling. The design is justified from current code responsibilities and lifetimes; past discussion volume does not determine architectural priority.
+
+The documentation step is complete. Runtime remains **1.4.5**; no build/source migration increment is selected or implemented by this request. `AGENTS.md` identifies the new design document and its boundary, and the editable context records the user's durable architectural-review preference. The native-popup investigation remains held, with no change to previously selected/deferred performance work.
+
+| Migration increment | Status |
+| --- | --- |
+| 1. Establish the build | Awaiting selection |
+| 2. Extract resources and logging | Awaiting selection |
+| 3. Establish Netflix boundaries | Awaiting selection |
+| 4. Own the native carousel | Awaiting selection |
+| 5. Separate membership and presentation | Awaiting selection |
+| 6. Separate viewing and presentation | Awaiting selection |
+| 7. Own interaction and responsive workflows | Awaiting selection |
+| 8. Finish composition | Awaiting selection |
+
+Review and implementation should use `Migration.md` for target design/acceptance conditions and this section for selections, results and remaining work. Creating/reviewing the design document does not select increment 1 or resume another investigation.
