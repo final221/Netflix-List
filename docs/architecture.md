@@ -14,7 +14,7 @@ The checker enforces Migration.md's production import directions and public entr
 
 Legacy imports have no blanket exemption. Currently only `src/main.js -> src/legacy.js` is allowed, with removal in P20. Any needed future bridge must be recorded as an exact edge with its caller/reason/removal step in the checker and findings.md; obsolete exceptions fail verification rather than silently remaining after cutover.
 
-`.github/workflows/check.yml` runs the normal verification commands on Windows and Linux with the exact Node version from package.json and locked dependencies. It verifies the committed bundle before any write-producing build, then runs regression tests, rebuilds, repeats the read-only check, checks syntax/commit whitespace and rejects tracked build changes. Runtime output/version is unchanged by adding this enforcement.
+`.github/workflows/check.yml` runs the normal verification commands on Windows and Linux with the exact Node version from package.json and locked dependencies. Checkout includes HEAD's parent so commit whitespace checks inspect the actual change. It verifies the committed bundle before any write-producing build, then runs regression tests, rebuilds, repeats the read-only check, checks syntax/commit whitespace and rejects tracked build changes. Runtime output/version is unchanged by adding this enforcement.
 
 ## Transitional runtime
 

@@ -838,8 +838,8 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | Step | Outcome | Status |
 | --- | --- | --- |
 | P01 | Reproducible build and transitional test entry | Complete — 1.4.6; commit ffb31df |
-| P02 | CI and output/dependency checks | Local checks complete — hosted CI repair/recheck |
-| P03 | Localization, DOM names and styling | Next after P02 hosted CI — authorized goal |
+| P02 | CI and output/dependency checks | Complete — 3ccca0e; CI repair 0a8113b verified |
+| P03 | Localization, DOM names and styling | Next ready — authorized goal |
 | P04 | Logging/reporting and bounded popup inspection | Planned — authorized goal |
 | P05 | Context, page DOM and card markup adapters | Planned — authorized goal |
 | P06 | My List data adapter | Planned — authorized goal |
@@ -884,6 +884,8 @@ Four additional bundle cases use real esbuild dependency metadata from isolated 
 Evidence: fresh `npm ci`, check-before-build, **339 passing tests**, build, repeated check, distributable syntax and whitespace checks pass. No failed/cancelled/skipped cases. Review confirms the userscript, authored runtime, package/lock and **1.4.6** version are unchanged by P02. The workflow uses locally verified commands; its first hosted execution becomes observable after pushing this checkpoint. Graph enforcement complements the later ownership/purity/caller audits; it does not prove them by itself.
 
 The first hosted run for commit **3ccca0e** passes dependencies, committed-output checks, all 339 cases, reproducible generation and syntax on Linux, then fails its whitespace step. With checkout's default depth of one, `git show --check HEAD` treats HEAD as a root commit and checks the entire historical tree, including existing whitespace in protected context.md. The workflow is corrected to fetch depth two so HEAD's actual diff is checked. This changes no runtime file or protected context; the corrected hosted run must be checked before proceeding to P03.
+
+The corrected [hosted run 37061083374](https://github.com/final221/Netflix-List/actions/runs/37061083374), at commit **0a8113b**, completes successfully on both **ubuntu-latest** and **windows-latest**. Both jobs pass dependency installation, committed-output verification, all 339 cases, generation/consistency, syntax, whitespace and unchanged tracked output. P02 is complete and P03 is next; the full migration goal remains active with P03–P21 still required.
 
 #### Temporary production import exceptions
 
