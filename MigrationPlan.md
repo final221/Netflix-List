@@ -55,6 +55,27 @@ During transition, `npm test` runs migrated suites and the residual `tests/perfo
 
 Dependency checks apply to migrated production code from the first extraction. Any remaining legacy exception is named, scoped and tied to a removal step; an exception cannot exempt an entire feature from checks. Final strict enforcement and removal of all exceptions happen in P21.
 
+### Verification suite handoffs
+
+The target test files are created or deepened with the owner they exercise. This table makes the coverage destination explicit; it does not require duplicate tests or a case for every moved helper. Record each retained, transferred or deliberately replaced baseline scenario in findings.md as its step completes. Tests of a private rule supplement the workflow that calls it; they do not replace that workflow.
+
+| Target suite | Transfer steps | Behavior exercised through the real owner |
+| --- | --- | --- |
+| tests/bundle.test.js | P01–P02; deepen in P20–P21 | Generated startup, route lifecycle, installation contract, deterministic output and dependency enforcement |
+| tests/i18n.test.js | P03 | Locale selection, message coverage and display formatting |
+| tests/diagnostics.test.js | P04 | Bounded logging, explicit export and failure-isolated native inspection |
+| tests/netflix-data.test.js | P05–P07 | Page/context/markup interpretation and actual list/viewing protocol operations |
+| tests/app.test.js | P08; deepen in P20 | Session/request invalidation first, then composed initialization, recovery and disposal |
+| tests/carousel.test.js | P08–P10 | Binding replacement, shared reads, readiness, page mapping, serialized movement and native collection |
+| tests/grid.test.js | P03 resource checks; deepen in P11–P12 | Frame/card lifetime, complete replacement, groups, controls, filters and focus |
+| tests/list.test.js | P13–P14 | Collection strategy, validated membership/order, pending changes, deferral and Undo |
+| tests/viewing.test.js | P15–P16 | Completion/cache use, bounded scan, partial results, repairs and incremental publication |
+| tests/viewing-choices.test.js | P15 | Profile-scoped manual placement, persistence, precedence and coverage expiry |
+| tests/hover.test.js | P17–P18 | Native interaction/card handoff first, then composed intent, cancellation, replay and dismissal |
+| tests/responsive.test.js | P19 | Coalesced refresh, native/grid publication, deferred membership and stale-owner rejection |
+
+Timing/image instrumentation checks move with P18/P19 into the suite for the workflow that owns their lifetime. Diagnostic export checks remain in diagnostics.test.js and consume those owners' summaries. Shared helpers model DOM, scheduling and response fixtures; they must not reimplement the production decisions under test.
+
 ## Changes
 
 ### Overview
@@ -84,6 +105,21 @@ Dependency checks apply to migrated production code from the first extraction. A
 | P21 | Remove legacy support and audit the final architecture | 8. Finish composition |
 
 Execution is sequential by default. Each step depends on its immediate predecessor, plus the specific interfaces listed below. This order keeps one owner transfer reviewable at a time; it is not a recommendation to parallelize overlapping state changes.
+
+### Architectural handoff checks
+
+These checks are part of the named step's evidence, not additional implementation steps. Review the composed paths before starting the next architectural increment; individual helper tests and the import graph cannot establish these contracts alone.
+
+| Checkpoint | Required handoff evidence |
+| --- | --- |
+| P07 → P08 | Data callers use normalized results; request validity and timeout/job cancellation have declared owners before scope mechanics move |
+| P10 → P11 | The carousel owns discovery, binding, mapping, movement and traversal; remaining callers cannot write them, and source replacement invalidates borrowed handles |
+| P14 → P15 | List records contain no lasting DOM or placement state; grid owns active/retained card material, while list alone decides Undo validity and releases its deferral tickets |
+| P16 → P17 | Viewing owns scan/policy/persistence and publishes small semantic changes; membership and rendered presentation remain with their respective owners |
+| P19 → P20 | A real grid/native/hover replacement preserves only its admitted attempt; obsolete cleanup cannot affect new owners, and responsive work cannot wait on itself |
+| P21 final audit | Every target file has a live responsibility, baseline scenarios have recorded coverage destinations, and no legacy state owner, bridge, loader or import exception remains |
+
+If a handoff fails, keep the affected step incomplete and resolve the boundary in that step. If the evidence requires a different responsibility or target path, revise Migration.md and this plan before applying that design change. Do not carry an unrecorded workaround into the next owner transfer.
 
 ### P01 — Establish a reproducible build
 
