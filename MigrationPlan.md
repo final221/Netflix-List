@@ -34,6 +34,8 @@ Replace `P01` with the desired step ID. After a completed step, this shorter pro
 
 For any new prompt, read AGENTS.md, context.md, Migration.md, this plan and the migration progress section in findings.md. Inspect the current version and working tree rather than assuming the planning baseline is still HEAD. If earlier work is incomplete, finish or reconcile that selected step before proceeding to dependent work.
 
+When resuming an existing migration, select its first unfinished step from findings.md rather than restarting P01. A released checkpoint within a step does not satisfy that step's remaining acceptance conditions. Carry those conditions into the next prompt explicitly.
+
 ### Common completion gate
 
 Every implementation step must:
@@ -43,7 +45,7 @@ Every implementation step must:
 3. After P01, run `npm test`, `npm run build`, `npm run check`, `node --check "Legacy My List for Netflix.user.js"`, and `git diff --check`. A full regression run follows the relevant checks once the change is ready; repeated broad runs need a new change/failure to justify them.
 4. Review the authored-source and generated-output diffs together. Check metadata/internal/package version agreement and verify the release version exceeds the newest published version if output changed.
 5. Update docs/architecture.md to describe the architecture actually present. Update findings.md with outcome, evidence, remaining bridges, retained/moved baseline scenarios and any needed user-owned live check. Do not describe later steps as implemented.
-6. Commit and push according to the standing repository workflow. Report the step ID, resulting behavior/ownership, version/commit, verification and any real limitation. Then stop at the checkpoint.
+6. Commit and push according to the standing repository workflow. For runtime/build changes, confirm that the pushed revision passes the Windows and Linux CI jobs before starting a dependent step; record the revision and run link in findings.md. A pending or failed run does not satisfy this gate. Report the step ID, resulting behavior/ownership, version/commit, verification and any real limitation. Then stop at the checkpoint.
 
 P01 establishes these commands. Until they exist, use the current `node --check` and `node --test tests/performance.test.cjs` checks alongside the new build verification.
 
@@ -313,6 +315,10 @@ If a handoff fails, keep the affected step incomplete and resolve the boundary i
 ## Checkpoint and recovery rules
 
 One completed step normally produces one reviewed commit and, if the distributable changes, one patch release. Do not hard-code future release numbers; inspect the latest published version each time. A later prompt can revise ordering or scope, but it does not erase earlier evidence or silently select unrelated work.
+
+A step may require more than one prompt. If an interruption leaves work incomplete, record the transferred ownership, remaining caller cutovers, unresolved checks and exact next action in findings.md. Keep the step in progress. A separately releasable partial checkpoint must pass the same applicable verification/release gates and must not leave two owners for the responsibility it transfers; the next prompt resumes the same step until its full acceptance conditions pass.
+
+Before resuming an unfinished step, inspect both tracked edits and new files and reconcile them with its recorded checkpoint. Before committing, review the staged paths and diff so a documentation-only change or another selected step cannot accidentally publish unfinished runtime work.
 
 If a step uncovers a missing contract, first determine whether it can be resolved within the selected outcome and existing architectural boundary. Document the routine detail and continue when it can. A material ownership/layout/behavior change must be explained and reflected in Migration.md and this plan; ask the user only when a real unresolved choice affects that boundary.
 
