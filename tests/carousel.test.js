@@ -483,6 +483,186 @@ function mountedEnvironment(overrides = {}) {
         capture: bootstrap => e.carousel.collect({ ...options, mode: 'mounted-single-page', bootstrap, totalCount: 3, columns: 3 }) };
 }
 
+test('delta mapping anchors native positions or visible title hints synchronously without rewriting membership', () => {
+    const e = mountedEnvironment();
+    const hints = new Map([['1', 1], ['2', 1], ['3', 0]]);
+    const options = { ...e.options, mode: 'delta', totalCount: 6, columns: 3, pageHintForVideoId: id => hints.get(id) };
+    const first = e.carousel.refreshMapping(options);
+    assert.equal(first instanceof Promise, false);
+    assert.equal(first.status, 'anchored');
+    assert.equal(first.currentPage, 0, 'native indices take precedence over old membership hints');
+    assert.equal(first.knownPageCount, 2);
+    assert.equal(first.pageMappingStale, true);
+    assert.deepEqual(first.itemIndices, [0, 1, 2]);
+    assert.equal(e.carousel.isMappingCurrent(first), true);
+    assert.equal(e.carousel.isMappingCurrent({ ...first }), false);
+    assert.ok(Object.isFrozen(first) && Object.isFrozen(first.visibleIds));
+    for (const slot of e.slots) slot.__reactFiber$mounted.memoizedProps.itemIndex = null;
+    const second = e.carousel.refreshMapping(options);
+    assert.equal(second.currentPage, 1, 'non-canonical windows retain the dominant visible page hint');
+    assert.equal(e.carousel.isMappingCurrent(first), false);
+    assert.deepEqual([...hints], [['1', 1], ['2', 1], ['3', 0]]);
+    const indicator = navigationEnvironment({ mode: 'indicator' });
+    assert.equal(indicator.carousel.refreshMapping({ ...options, section: indicator.section,
+        scroller: indicator.scroller, track: indicator.track, sessionToken: indicator.scope.token }).status, 'not-applicable');
+});
+
+test('responsive mapping commits unchanged and changed layouts with validated observations and invalidates old source handles', async () => {
+    const e = mountedEnvironment();
+    const source = e.carousel.mountedCard({ ...e.options, item: { videoId: '1' } });
+    const first = await e.carousel.refreshMapping({ ...e.options, mode: 'responsive', totalCount: 3, columns: 3 });
+    assert.equal(first.status, 'committed');
+    assert.equal(first.countConverged, true);
+    assert.equal(first.knownPageCount, 1);
+    assert.equal(first.currentPage, 0);
+    assert.equal(first.pageMappingStale, false);
+    assert.equal(e.carousel.isSourceCurrent(source), false);
+    for (const [index, slot] of e.slots.entries()) Object.assign(slot.__reactFiber$mounted.memoizedProps, { itemIndex: index + 3, totalCount: 8 });
+    const changed = await e.carousel.refreshMapping({ ...e.options, mode: 'responsive', totalCount: 8, columns: 3 });
+    assert.equal(changed.status, 'committed');
+    assert.equal(changed.currentPage, 1);
+    assert.equal(changed.knownPageCount, 3);
+    assert.deepEqual(changed.itemIndices, [3, 4, 5]);
+    assert.equal(e.carousel.isMappingCurrent(first), false);
+    assert.equal(e.carousel.isMappingCurrent(changed), true);
+    assert.throws(() => e.carousel.assertMapping({ ...changed }), { code: 'NATIVE_SOURCE_REPLACED' });
+    e.pageDom.filledSlots = e.pageDom.directSlots = () => e.slots.slice(0, 2);
+    for (const [index, slot] of e.slots.entries()) slot.__reactFiber$mounted.memoizedProps.itemIndex = index + 2;
+    const resized = await e.carousel.refreshMapping({ ...e.options, mode: 'responsive', totalCount: 8, columns: 2 });
+    assert.equal(resized.status, 'committed');
+    assert.equal(resized.columns, 2);
+    assert.equal(resized.currentPage, 1);
+    assert.equal(resized.knownPageCount, 4);
+    assert.deepEqual(resized.itemIndices, [2, 3]);
+    assert.equal(e.carousel.isMappingCurrent(changed), false);
+    assert.deepEqual(e.directions, []);
+    assert.equal(e.scheduler.timers.size, 0);
+});
+
+test('responsive mapping defers inconsistent native counts while preserving finalized pages and releasing its motion lease', async () => {
+    const e = mountedEnvironment();
+    e.carousel.completeCollection(e.section, 4);
+    e.carousel.notePage(e.section, 3);
+    e.track.style.setProperty('transition-duration', '75ms');
+    for (const [index, slot] of e.slots.entries()) slot.__reactFiber$mounted.memoizedProps.totalCount = index === 1 ? 7 : 8;
+    for (let retry = 1; retry <= 2; retry++) {
+        const result = await e.carousel.refreshMapping({ ...e.options, mode: 'responsive', totalCount: 8, columns: 3 });
+        assert.equal(result.status, 'deferred');
+        assert.equal(result.reason, 'count-not-converged');
+        assert.equal(result.countConverged, false);
+        assert.equal(result.knownPageCount, 4);
+        assert.equal(result.pageCountFinalized, true);
+        assert.equal(result.retryCount, retry);
+        assert.equal(e.carousel.isMappingCurrent(result), true);
+    }
+    assert.equal(e.track.style.getPropertyValue('transition-duration'), '75ms');
+    assert.equal(e.carousel.diagnostics().navigation.motionLeases, 0);
+    assert.deepEqual(e.directions, []);
+});
+
+test('responsive mapping validates compatible wrapped tails and retains count convergence on non-canonical deferral', async () => {
+    for (const compatible of [true, false]) {
+        const e = mountedEnvironment();
+        e.carousel.completeCollection(e.section, 4);
+        e.carousel.notePage(e.section, compatible ? 3 : 0);
+        for (const [index, slot] of e.slots.entries()) Object.assign(slot.__reactFiber$mounted.memoizedProps,
+            { itemIndex: [6, 7, 0][index], totalCount: 8 });
+        const result = await e.carousel.refreshMapping({ ...e.options, mode: 'responsive', totalCount: 8, columns: 3 });
+        assert.equal(result.countConverged, true);
+        assert.equal(result.status, compatible ? 'committed' : 'deferred');
+        assert.equal(result.knownPageCount, compatible ? 3 : 4);
+        assert.equal(result.currentPage, compatible ? 2 : 0);
+        if (!compatible) assert.equal(result.reason, 'non-canonical-window');
+        assert.deepEqual(result.itemIndices, [6, 7, 0]);
+    }
+});
+
+test('remapping admission rejects replaced owners and supersedes already-stale work before another native scan', async () => {
+    for (const change of ['binding', 'model', 'route', 'caller', 'delta', 'new-remap']) {
+        const e = mountedEnvironment();
+        let current = true, scans = 0;
+        const filled = e.pageDom.filledSlots;
+        e.pageDom.filledSlots = (...args) => { scans++; return filled(...args); };
+        const options = { ...e.options, mode: 'responsive', totalCount: 3, columns: 3,
+            assertCurrent() { if (!current) throw Object.assign(new Error('caller replaced'), { code: 'CALLER_REPLACED' }); } };
+        const pending = e.carousel.refreshMapping(options);
+        const rejected = assert.rejects(pending, { code: change === 'route' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' :
+            change === 'caller' ? 'CALLER_REPLACED' : 'NATIVE_SOURCE_REPLACED' });
+        const before = scans;
+        let latest = null;
+        if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
+        if (change === 'model') e.carousel.resetModel(e.section);
+        if (change === 'route') e.scope.begin();
+        if (change === 'caller') current = false;
+        if (change === 'delta') e.carousel.refreshMapping({ ...options, mode: 'delta' });
+        if (change === 'new-remap') latest = e.carousel.refreshMapping(options);
+        const afterReplacement = scans;
+        await rejected;
+        if (latest) assert.equal((await latest).status, 'committed');
+        else assert.equal(scans, afterReplacement, 'obsolete remapping performs no further native scan');
+        if (!['delta', 'new-remap'].includes(change)) assert.equal(scans, before);
+        assert.equal(e.scheduler.timers.size, 0);
+    }
+});
+
+test('remapping queued behind real navigation cannot commit after a membership delta', async () => {
+    const e = navigationEnvironment({ onClick() {} });
+    for (const [index, slots] of e.pages.entries()) slots[0].__reactFiber$remap = {
+        memoizedProps: { itemIndex: index, totalCount: 3 }, return: null };
+    const movement = e.carousel.movePage(e.section, e.scroller, 1, null, e.scope.token);
+    const outcome = movement.catch(error => error);
+    await e.scheduler.flush();
+    const options = { section: e.section, scroller: e.scroller, track: e.track,
+        sessionToken: e.scope.token, totalCount: 3, columns: 1 };
+    const pending = e.carousel.refreshMapping({ ...options, mode: 'responsive' });
+    const rejected = assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' });
+    const delta = e.carousel.refreshMapping({ ...options, mode: 'delta', totalCount: 4 });
+    e.setPage(1);
+    e.observers.forEach(observer => observer.callback([]));
+    await e.settle(outcome);
+    await e.settle(rejected);
+    assert.equal(e.carousel.model(e.section).knownPageCount, 4);
+    assert.equal(e.carousel.model(e.section).pageMappingStale, true);
+    assert.equal(e.carousel.isMappingCurrent(delta), false, 'navigation has changed the observed page');
+    assert.deepEqual(e.directions, [1]);
+    assert.equal(e.scheduler.timers.size, 0);
+});
+
+test('native remapping diagnostics cannot commit or publish after replacing their source', async () => {
+    let e, replacementLease;
+    e = mountedEnvironment({ log(message) {
+        if (message === 'Logical My List wrapped tail accepted for current-page recovery') {
+            e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track);
+            replacementLease = e.carousel.suppressMotion(e.section, e.track);
+        }
+    } });
+    e.carousel.completeCollection(e.section, 4);
+    e.carousel.notePage(e.section, 3);
+    e.track.style.setProperty('transition', '125ms');
+    for (const [index, slot] of e.slots.entries()) Object.assign(slot.__reactFiber$mounted.memoizedProps,
+        { itemIndex: [6, 7, 0][index], totalCount: 8 });
+    await assert.rejects(e.carousel.refreshMapping({ ...e.options, mode: 'responsive', totalCount: 8, columns: 3 }),
+        { code: 'NATIVE_SOURCE_REPLACED' });
+    assert.equal(e.carousel.model(e.section).knownPageCount, null);
+    assert.equal(e.carousel.diagnostics().navigation.motionLeases, 1);
+    assert.equal(e.track.style.getPropertyValue('transition'), 'none', 'old finally cannot restore over a replacement lease');
+    replacementLease.release();
+    assert.equal(e.carousel.diagnostics().navigation.motionLeases, 0);
+    assert.equal(e.track.style.getPropertyValue('transition'), '125ms');
+});
+
+test('responsive mapping defers a canonical window with no title signature and preserves count convergence', async () => {
+    const e = mountedEnvironment();
+    for (const slot of e.slots) slot.querySelector('a').href = '';
+    const result = await e.carousel.refreshMapping({ ...e.options, mode: 'responsive', totalCount: 3, columns: 3 });
+    assert.equal(result.status, 'deferred');
+    assert.equal(result.reason, 'signature-unavailable');
+    assert.equal(result.countConverged, true);
+    assert.equal(result.pageMappingStale, true);
+    assert.equal(result.retryCount, 1);
+    assert.equal(e.carousel.diagnostics().navigation.motionLeases, 0);
+});
+
 test('mounted borrowing preserves synchronous active filtering and validated identity fallback', () => {
     for (const mode of ['logical', 'indicator']) {
         const e = navigationEnvironment({ mode });

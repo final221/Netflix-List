@@ -3112,59 +3112,30 @@ export function startLegacy() {
     }
 
     function syncLogicalPageModelAfterDelta(reason = 'delta-reindex') {
-        if (!sourceState?.section || !sourceState?.scroller || !sourceState?.track) return false;
-        const runtime = getCarouselDomRuntime(sourceState.section);
-        if (!runtime || runtime.profile.pageMode !== 'logical') return false;
-
-        const columns = Math.max(1, sourceState.layout?.columns || 1);
-        const items = sourceState.items || [];
-        const estimatedPages = Math.max(1, Math.ceil(Math.max(items.length, 1) / columns));
-        const slots = currentPageSlots(sourceState.scroller, sourceState.track);
-        const signature = visibleSignature(slots);
-
-        // Hawkins page boundaries can retain a native phase across a responsive
-        // column-count change or a My List delta. Recomputing every item.page as
-        // floor(index / columns) fabricates page boundaries that may be one page
-        // away from the live carousel. Preserve the last native-observed pages and
-        // re-anchor only the page that is actually visible now.
-        const votes = new Map();
-        for (const slot of slots) {
-            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-            const videoId = card ? videoIdFromHref(card.getAttribute('href') || card.href || '') : '';
-            const item = videoId ? sourceState.itemMap?.get(`v:${videoId}`) : null;
-            if (!Number.isFinite(item?.page)) continue;
-            votes.set(item.page, (votes.get(item.page) || 0) + 1);
-        }
-
-        const nativePageState = nativeLogicalPageState(
-            sourceState.scroller,
-            sourceState.track,
-            items.length,
-            columns
-        );
-        let currentPage = Number.isFinite(nativePageState.page)
-            ? nativePageState.page
-            : Math.max(0, Math.min(estimatedPages - 1, runtime.currentPage || 0));
-        if (!Number.isFinite(nativePageState.page) && votes.size) {
-            currentPage = [...votes.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0][0];
-            currentPage = Math.max(0, Math.min(estimatedPages - 1, currentPage));
-        }
-
+        const state = sourceState;
+        if (!state?.section || !state?.scroller || !state?.track) return false;
+        const { section, scroller, track, itemMap } = state;
+        const recordOwner = state.items, items = recordOwner || [];
+        const totalCount = items.length;
+        const assertOwner = () => {
+            if (sourceState !== state || state.items !== recordOwner || state.itemMap !== itemMap || items.length !== totalCount ||
+                state.section !== section || state.scroller !== scroller || state.track !== track) {
+                throw createRouteSessionCancelledError();
+            }
+        };
+        const result = nativeCarousel.refreshMapping({ mode: 'delta', section, scroller, track,
+            totalCount, columns: Math.max(1, state.layout?.columns || 1), sessionToken: sessionScope.token,
+            assertCurrent: assertOwner, pageHintForVideoId: id => itemMap?.get('v:' + id)?.page });
+        if (result.status !== 'anchored') return false;
+        nativeCarousel.assertMapping(result);
         myListCountConvergencePending = true;
-        nativeCarousel.anchorAfterDelta(sourceState.section, { pageCount: estimatedPages, currentPage, signature });
-
         log(tLog('logicalPageModelSynchronizedAfterDelta'), {
-            reason,
-            currentPage,
-            knownPageCount: runtime.knownPageCount,
-            pageCountFinalized: runtime.pageCountFinalized,
-            pageMappingStale: runtime.pageMappingStale,
-            visibleSignature: signature,
-            visibleIds: slots.map(slot => videoIdFromHref(slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard)?.href || '')).filter(Boolean),
-            itemIndices: nativePageState.itemIndices,
-            logicalIndices: nativePageState.logicalIndices,
-            totalCount: items.length
+            reason, currentPage: result.currentPage, knownPageCount: result.knownPageCount,
+            pageCountFinalized: result.pageCountFinalized, pageMappingStale: result.pageMappingStale,
+            visibleSignature: result.visibleSignature, visibleIds: result.visibleIds,
+            itemIndices: result.itemIndices, logicalIndices: result.logicalIndices, totalCount
         });
+        nativeCarousel.assertMapping(result);
         return true;
     }
 
@@ -5809,145 +5780,59 @@ export function startLegacy() {
         return nativeCarousel.wrappedTail(...args);
     }
 
-    function wrappedTailLogicalPageForRebuild(...args) {
-        return nativeCarousel.wrappedTailForRebuild(...args);
-    }
-
     async function rebuildLogicalPageModelFromNativePosition(layout, reason = 'responsive-remap', sessionToken = sessionScope.token) {
         assertRouteSession(sessionToken);
         const live = ensureLiveNativeBinding('logical-page-model-rebuild-start') || sourceState;
-        const section = live?.section || sourceState?.section;
-        const scroller = live?.scroller || sourceState?.scroller;
-        const track = live?.track || sourceState?.track;
-        const items = sourceState?.items || [];
+        const state = sourceState;
+        const section = live?.section || state?.section;
+        const scroller = live?.scroller || state?.scroller;
+        const track = live?.track || state?.track;
         if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
             throw new Error('Native carousel binding is unavailable during logical page model rebuild');
         }
-
-        const bindingOwner = nativeCarousel.borrowBinding(section, scroller, track);
-        nativeCarousel.assertBinding(bindingOwner);
-        const columns = Math.max(1, layout?.columns || sourceState?.layout?.columns || 1);
-        const pages = Math.max(1, Math.ceil(Math.max(items.length, 1) / columns));
-        let motionLease = null;
-
-        let runtime = getCarouselDomRuntime(section);
-        nativeCarousel.markMappingStale(section);
-
-        try {
-            await nativeCarousel.whenNavigationIdle();
+        if (!state) throw createRouteSessionCancelledError();
+        const { itemMap, cloneMap, grid } = state;
+        const recordOwner = state.items, items = recordOwner || [];
+        const totalCount = items.length;
+        const columns = Math.max(1, layout?.columns || state.layout?.columns || 1);
+        const previousColumns = state.layout?.columns;
+        const assertOwner = () => {
             assertRouteSession(sessionToken);
-            nativeCarousel.assertBinding(bindingOwner);
-
-            // Keep the finalized runtime until the current Hawkins page has been
-            // validated. A My List mutation can briefly expose a wrapped virtual
-            // tail; a transient read must not collapse pageCount() for hover.
-            motionLease = nativeCarousel.suppressMotion(section, track);
-
-            const nativeCountState = nativeReactCarouselTotalCount(scroller, track);
-            const nativeCountHasReadings = nativeCountState.uniqueReadings.length > 0;
-            const nativeCountConverged =
-                Number.isSafeInteger(nativeCountState.totalCount) &&
-                nativeCountState.totalCount === items.length;
-            if (nativeCountConverged) myListCountConvergencePending = false;
-            if (!nativeCountHasReadings || !nativeCountConverged) {
-                nativeCarousel.deferMapping(section);
-                log('Logical My List page-model rebuild deferred until native delta converges', {
-                    reason,
-                    legacyTotalCount: items.length,
-                    nativeTotalCount: nativeCountState.totalCount,
-                    readings: nativeCountState.readings,
-                    uniqueReadings: nativeCountState.uniqueReadings,
-                    selectedPage: selectedPage(section),
-                    pageMappingStale: runtime.pageMappingStale,
-                    retryCount: runtime.logicalRemapRetryCount
-                });
-                return null;
+            if (sourceState !== state || state.items !== recordOwner || items.length !== totalCount || state.itemMap !== itemMap ||
+                state.cloneMap !== cloneMap || state.grid !== grid || (grid && !grid.isConnected) ||
+                state.layout?.columns !== previousColumns || state.section !== section || state.scroller !== scroller || state.track !== track) {
+                throw createRouteSessionCancelledError();
             }
-
-            let pageState = nativeLogicalPageState(scroller, track, items.length, columns);
-            const strictPageStateValid =
-                pageState.positions.length > 0 &&
-                pageState.positions.every(position => Number.isSafeInteger(position.itemIndex)) &&
-                Number.isFinite(pageState.page);
-
-            if (!strictPageStateValid) {
-                const wrappedTail = wrappedTailLogicalPageForRebuild(
-                    pageState.positions,
-                    items.length,
-                    columns,
-                    runtime
-                );
-                if (wrappedTail) {
-                    pageState = { ...pageState, page: wrappedTail.page };
-                    log('Logical My List wrapped tail accepted for current-page recovery', {
-                        reason,
-                        page: wrappedTail.page,
-                        wrapIndex: wrappedTail.wrapIndex,
-                        totalCount: items.length,
-                        columns,
-                        itemIndices: pageState.itemIndices
-                    });
-                } else {
-                    logVirtualRawIndexDiagnostic(pageState.slots, items.length, columns, 'logical-page-model-rebuild');
-                    nativeCarousel.deferMapping(section);
-                    log('Logical My List page-model rebuild deferred for non-canonical native window', {
-                        reason,
-                        totalCount: items.length,
-                        columns,
-                        slots: pageState.slots.length,
-                        itemIndices: pageState.itemIndices,
-                        logicalIndices: pageState.logicalIndices,
-                        resolvedPage: pageState.page,
-                        retryCount: runtime.logicalRemapRetryCount
-                    });
-                    return null;
-                }
-            }
-
-            const signature = visibleSignature(pageState.slots);
-            if (!signature) {
-                nativeCarousel.deferMapping(section);
-                log('Logical My List page-model rebuild deferred because native signature is unavailable', {
-                    reason,
-                    totalCount: items.length,
-                    columns,
-                    retryCount: runtime.logicalRemapRetryCount
-                });
-                return null;
-            }
-
-            nativeCarousel.commitMapping(section, { pageCount: pages, currentPage: pageState.page, signature });
-            runtime = getCarouselDomRuntime(section);
-
+        };
+        const result = await nativeCarousel.refreshMapping({ mode: 'responsive', section, scroller, track,
+            totalCount, columns, reason, sessionToken, assertCurrent: assertOwner });
+        const assertPublication = () => { assertOwner(); nativeCarousel.assertMapping(result); };
+        assertPublication();
+        if (result.countConverged) myListCountConvergencePending = false;
+        if (result.status !== 'committed') return null;
+        return nativeCarousel.sample(() => {
             let changed = 0;
             items.forEach((item, index) => {
-                const page = Math.min(pages - 1, Math.floor(index / columns));
+                assertPublication();
+                const page = Math.min(result.knownPageCount - 1, Math.floor(index / columns));
                 item.logicalIndex = index;
                 if (item.page !== page) changed++;
                 item.page = page;
-                const clone = sourceState?.cloneMap?.get(itemKey(item));
+                const clone = cloneMap?.get(itemKey(item));
                 if (clone?.isConnected) clone.setAttribute('data-tm-item-page', String(page));
+                assertPublication();
             });
-            if (sourceState) sourceState.initialPage = pageState.page;
-
+            assertPublication();
+            state.initialPage = result.currentPage;
             log(tLog('logicalPageModelSynchronizedAfterDelta'), {
-                reason,
-                currentPage: runtime.currentPage,
-                knownPageCount: runtime.knownPageCount,
-                pageCountFinalized: runtime.pageCountFinalized,
-                pageMappingStale: runtime.pageMappingStale,
-                visibleSignature: signature,
-                visibleIds: currentPageVideoIds(scroller, track),
-                itemIndices: pageState.itemIndices,
-                logicalIndices: pageState.logicalIndices,
-                columns,
-                changed,
-                totalCount: items.length
+                reason, currentPage: result.currentPage, knownPageCount: result.knownPageCount,
+                pageCountFinalized: result.pageCountFinalized, pageMappingStale: result.pageMappingStale,
+                visibleSignature: result.visibleSignature, visibleIds: result.visibleIds,
+                itemIndices: result.itemIndices, logicalIndices: result.logicalIndices, columns, changed, totalCount
             });
+            assertPublication();
             return changed;
-        } finally {
-            motionLease?.release();
-        }
+        });
     }
 
     async function remapItemsByOrder(layout, sessionToken = sessionScope.token) {

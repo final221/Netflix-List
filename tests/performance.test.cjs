@@ -2090,6 +2090,81 @@ test('recovery bridges consume native observations and own only transitional lis
     assert.equal(e.timers.size, 0);
 });
 
+function remappingBridgeEnvironment() {
+    const e = nativeReadEnvironment();
+    const { Element: NativeElement } = require('./helpers/dom.js');
+    e.section.classList = new NativeElement('section').classList;
+    e.c.sourceState.track.style = new NativeElement('div').style;
+    for (const name of ['createRouteSessionCancelledError', 'itemKey', 'syncLogicalPageModelAfterDelta',
+        'rebuildLogicalPageModelFromNativePosition']) vm.runInContext(declaration(name), e.c);
+    e.c.videoIdFromHref = href => href?.split('/').at(-1);
+    const slots = e.mount([0, 1, 2, 3, 4, 5]);
+    for (const slot of slots) {
+        slot.__reactFiber$test.memoizedProps.totalCount = 8;
+        slot.tagName = 'DIV'; slot.querySelector().tagName = 'A';
+    }
+    const items = Array.from({ length: 8 }, (_, index) => ({ videoId: String(index), href: '/watch/' + index, page: 77 }));
+    const clones = items.map(() => new Element('clone'));
+    Object.assign(e.c.sourceState, { items, itemMap: new Map(items.map(item => ['v:' + item.videoId, item])),
+        cloneMap: new Map(items.map((item, index) => ['v:' + item.videoId, clones[index]])), totalCount: 8 });
+    e.c.ensureLiveNativeBinding = () => e.c.sourceState;
+    e.c.myListCountConvergencePending = false;
+    return { ...e, slots, items, clones };
+}
+
+test('mapping bridges keep membership/card publication and convergence outside native reconstruction', async () => {
+    const e = remappingBridgeEnvironment();
+    assert.equal(e.c.syncLogicalPageModelAfterDelta('test-delta'), true);
+    assert.equal(e.c.myListCountConvergencePending, true);
+    assert.deepEqual(e.items.map(item => item.page), Array(8).fill(77));
+    const direct = await e.c.nativeCarousel.refreshMapping({ mode: 'responsive', section: e.section,
+        scroller: e.scroller, track: e.c.sourceState.track, totalCount: 8, columns: 6, sessionToken: 1 });
+    assert.equal(direct.status, 'committed');
+    assert.deepEqual(e.items.map(item => item.page), Array(8).fill(77));
+    assert.ok(e.clones.every(clone => clone.getAttribute('data-tm-item-page') === null));
+    assert.equal(await e.c.rebuildLogicalPageModelFromNativePosition({ columns: 6 }, 'test-remap', 1), 8);
+    assert.deepEqual(e.items.map(item => item.page), [0, 0, 0, 0, 0, 0, 1, 1]);
+    assert.deepEqual(e.items.map(item => item.logicalIndex), [0, 1, 2, 3, 4, 5, 6, 7]);
+    assert.equal(e.c.sourceState.initialPage, 0);
+    assert.equal(e.c.myListCountConvergencePending, false);
+    e.c.myListCountConvergencePending = true;
+    for (const slot of e.slots) slot.index = null;
+    assert.equal(await e.c.rebuildLogicalPageModelFromNativePosition({ columns: 6 }, 'bad-window', 1), null);
+    assert.equal(e.c.myListCountConvergencePending, false, 'count convergence is external even when the native window is deferred');
+    assert.deepEqual(e.items.map(item => item.page), [0, 0, 0, 0, 0, 0, 1, 1]);
+    assert.equal(e.timers.size, 0);
+});
+
+test('mapping bridge rejects replaced parent records and card owners before native commit or publication', async () => {
+    for (const change of ['state', 'membership-map', 'items', 'count', 'cards']) {
+        const e = remappingBridgeEnvironment();
+        e.c.myListCountConvergencePending = true;
+        const pending = e.c.rebuildLogicalPageModelFromNativePosition({ columns: 6 }, 'obsolete', 1);
+        const rejected = assert.rejects(pending, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+        if (change === 'state') e.c.sourceState = { ...e.c.sourceState };
+        if (change === 'membership-map') e.c.sourceState.itemMap = new Map(e.c.sourceState.itemMap);
+        if (change === 'items') e.c.sourceState.items = [...e.items];
+        if (change === 'count') e.items.push({ videoId: '8', page: 77 });
+        if (change === 'cards') e.c.sourceState.cloneMap = new Map(e.c.sourceState.cloneMap);
+        await rejected;
+        assert.ok(e.items.every(item => item.page === 77));
+        assert.ok(e.clones.every(clone => clone.getAttribute('data-tm-item-page') === null));
+        assert.equal(e.c.nativeCarousel.model(e.section).pageMappingStale, true);
+        assert.equal(e.c.myListCountConvergencePending, true);
+    }
+});
+
+test('mapping bridge stops remaining card publication when a callback replaces the parent', async () => {
+    const e = remappingBridgeEnvironment();
+    const set = e.clones[0].setAttribute.bind(e.clones[0]);
+    e.clones[0].setAttribute = (...args) => { set(...args); e.c.sourceState = { ...e.c.sourceState, initialPage: 99 }; };
+    await assert.rejects(e.c.rebuildLogicalPageModelFromNativePosition({ columns: 6 }, 'replaced-during-publication', 1),
+        { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+    assert.deepEqual(e.items.map(item => item.page), [0, 77, 77, 77, 77, 77, 77, 77]);
+    assert.equal(e.c.sourceState.initialPage, 99);
+    assert.ok(e.clones.slice(1).every(clone => clone.getAttribute('data-tm-item-page') === null));
+});
+
 test('cancelled expected-page and recovery retries stop before native binding work', async () => {
     const e = environment([
         'hoverPreparationCancelled', 'resolveExpectedPageSourceItem',

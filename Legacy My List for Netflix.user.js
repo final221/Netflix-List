@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.20
+// @version      1.4.21
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -5889,6 +5889,8 @@
     let bindingGeneration = 0;
     const bindingTickets = /* @__PURE__ */ new WeakMap();
     const sourceTickets = /* @__PURE__ */ new WeakMap();
+    const mappingTickets = /* @__PURE__ */ new WeakMap();
+    let mappingSequence = 0;
     const mountedWaits = /* @__PURE__ */ new Set();
     let discoveryOwner = null, targetDocumentObserver = null, targetMutationFrame = null;
     let targetObservedBrowseHost = null, targetObservedMyListSection = null, targetObservedAncestors = [];
@@ -6493,6 +6495,234 @@
       log(tLog("hoverExpectedPageMismatch"), { item: target, expectedPage, visibleIds });
       guard();
       return Object.freeze({ status: "mismatch", reason: "target-not-in-expected-page", visibleIds, visibleCards });
+    }
+    function mappingOperation({
+      section,
+      scroller,
+      track,
+      sessionToken = null,
+      totalCount,
+      columns,
+      assertCurrent = () => {
+      }
+    }) {
+      assertRouteSession(sessionToken);
+      assertCurrent();
+      const binding = borrowBinding(section, scroller, track);
+      assertBinding(binding);
+      let model = getModel(section), generation = model.mappingGeneration;
+      const sequence = ++mappingSequence;
+      const guard = () => {
+        assertRouteSession(sessionToken);
+        assertCurrent();
+        assertBinding(binding);
+        if (sequence !== mappingSequence || models.get(section) !== model || model.mappingGeneration !== generation) {
+          throw initializationError("NATIVE_SOURCE_REPLACED", "native-remapping", "Native mapping owner changed during remapping");
+        }
+      };
+      guard();
+      return {
+        binding,
+        totalCount,
+        columns: Math.max(1, columns || 1),
+        guard,
+        get model() {
+          return model;
+        },
+        write(callback) {
+          guard();
+          callback(model);
+          generation = model.mappingGeneration;
+          guard();
+        },
+        commit(facts) {
+          guard();
+          const replacement = createPageModel(model.view.profile);
+          replacement.commit(facts);
+          models.set(section, replacement);
+          model = replacement;
+          generation = model.mappingGeneration;
+          invalidateNativeReadScope();
+          guard();
+        }
+      };
+    }
+    function mappingResult(operation, status, facts = {}) {
+      operation.guard();
+      const runtime = operation.model.view;
+      const result = Object.freeze({
+        status,
+        reason: null,
+        countConverged: false,
+        totalCount: operation.totalCount,
+        columns: operation.columns,
+        currentPage: runtime.currentPage,
+        knownPageCount: runtime.knownPageCount,
+        pageCountFinalized: runtime.pageCountFinalized,
+        pageMappingStale: runtime.pageMappingStale,
+        retryCount: runtime.logicalRemapRetryCount,
+        visibleSignature: "",
+        ...facts,
+        visibleIds: Object.freeze([...facts.visibleIds || []]),
+        itemIndices: Object.freeze([...facts.itemIndices || []]),
+        logicalIndices: Object.freeze([...facts.logicalIndices || []])
+      });
+      mappingTickets.set(result, { operation, revision: operation.model.revision });
+      return result;
+    }
+    function assertMapping(result) {
+      const ticket = mappingTickets.get(result);
+      if (ticket) {
+        ticket.operation.guard();
+        getModel(ticket.operation.binding.section);
+        ticket.operation.guard();
+        if (ticket.operation.model.revision === ticket.revision) return result;
+      }
+      throw initializationError("NATIVE_SOURCE_REPLACED", "native-remapping", "Native mapping observation is no longer current");
+    }
+    function isMappingCurrent(result) {
+      try {
+        assertMapping(result);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    function anchorMappingAfterDelta(options) {
+      return withNativeReadScope(() => {
+        const operation = mappingOperation(options);
+        const { section, scroller, track } = operation.binding;
+        if (operation.model.view.profile.pageMode !== "logical") return mappingResult(operation, "not-applicable");
+        const pages = Math.max(1, Math.ceil(Math.max(operation.totalCount, 1) / operation.columns));
+        const slots = currentPageSlots(scroller, track), signature = visibleSignature(slots);
+        const votes = /* @__PURE__ */ new Map();
+        for (const slot of slots) {
+          operation.guard();
+          const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+          const id = card ? netflixDom.videoIdFromHref(card.getAttribute("href") || card.href || "") : "";
+          const page2 = id ? options.pageHintForVideoId?.(id) : null;
+          operation.guard();
+          if (Number.isFinite(page2)) votes.set(page2, (votes.get(page2) || 0) + 1);
+        }
+        const nativePage = nativeLogicalPageState(scroller, track, operation.totalCount, operation.columns);
+        operation.guard();
+        let page = Number.isFinite(nativePage.page) ? nativePage.page : operation.model.view.currentPage || 0;
+        if (!Number.isFinite(nativePage.page) && votes.size) {
+          page = [...votes.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0][0];
+        }
+        page = Math.max(0, Math.min(pages - 1, page));
+        operation.write((model) => model.anchor({ pageCount: pages, currentPage: page, signature }));
+        return mappingResult(operation, "anchored", {
+          visibleSignature: signature,
+          visibleIds: currentPageVideoIds(scroller, track),
+          itemIndices: nativePage.itemIndices,
+          logicalIndices: nativePage.logicalIndices
+        });
+      });
+    }
+    async function rebuildMappingFromNativePosition(options) {
+      const operation = withNativeReadScope(() => mappingOperation(options));
+      const { section, scroller, track } = operation.binding;
+      const { totalCount, columns } = operation;
+      const reason = options.reason || "responsive-remap";
+      if (operation.model.view.profile.pageMode !== "logical") return mappingResult(operation, "not-applicable");
+      operation.write((model) => model.markStale());
+      let motionLease = null;
+      try {
+        await navigation.whenIdle();
+        operation.guard();
+        return withNativeReadScope(() => {
+          getModel(section);
+          operation.guard();
+          motionLease = navigation.suppress(section, track);
+          operation.guard();
+          const runtime = operation.model.view;
+          const count = nativeReactCarouselTotalCount(scroller, track);
+          operation.guard();
+          const countConverged = Number.isSafeInteger(count.totalCount) && count.totalCount === totalCount;
+          if (!count.uniqueReadings.length || !countConverged) {
+            operation.write((model) => model.deferMapping());
+            log("Logical My List page-model rebuild deferred until native delta converges", {
+              reason,
+              legacyTotalCount: totalCount,
+              nativeTotalCount: count.totalCount,
+              readings: count.readings,
+              uniqueReadings: count.uniqueReadings,
+              selectedPage: selectedPage(section),
+              pageMappingStale: runtime.pageMappingStale,
+              retryCount: runtime.logicalRemapRetryCount
+            });
+            operation.guard();
+            return mappingResult(operation, "deferred", { reason: "count-not-converged" });
+          }
+          let page = nativeLogicalPageState(scroller, track, totalCount, columns);
+          operation.guard();
+          if (!page.positions.length || !page.positions.every((position) => Number.isSafeInteger(position.itemIndex)) || !Number.isFinite(page.page)) {
+            const tail = wrappedTailLogicalPageForRebuild(page.positions, totalCount, columns, runtime);
+            if (tail) {
+              page = { ...page, page: tail.page };
+              log("Logical My List wrapped tail accepted for current-page recovery", {
+                reason,
+                page: tail.page,
+                wrapIndex: tail.wrapIndex,
+                totalCount,
+                columns,
+                itemIndices: page.itemIndices
+              });
+              operation.guard();
+            } else {
+              logVirtualRawIndexDiagnostic(page.slots, totalCount, columns, "logical-page-model-rebuild");
+              operation.guard();
+              operation.write((model) => model.deferMapping());
+              log("Logical My List page-model rebuild deferred for non-canonical native window", {
+                reason,
+                totalCount,
+                columns,
+                slots: page.slots.length,
+                itemIndices: page.itemIndices,
+                logicalIndices: page.logicalIndices,
+                resolvedPage: page.page,
+                retryCount: runtime.logicalRemapRetryCount
+              });
+              operation.guard();
+              return mappingResult(operation, "deferred", {
+                reason: "non-canonical-window",
+                countConverged,
+                itemIndices: page.itemIndices,
+                logicalIndices: page.logicalIndices
+              });
+            }
+          }
+          const signature = visibleSignature(page.slots);
+          operation.guard();
+          if (!signature) {
+            operation.write((model) => model.deferMapping());
+            log("Logical My List page-model rebuild deferred because native signature is unavailable", {
+              reason,
+              totalCount,
+              columns,
+              retryCount: runtime.logicalRemapRetryCount
+            });
+            operation.guard();
+            return mappingResult(operation, "deferred", { reason: "signature-unavailable", countConverged });
+          }
+          const visibleIds = currentPageVideoIds(scroller, track);
+          operation.guard();
+          operation.commit({ pageCount: Math.max(1, Math.ceil(Math.max(totalCount, 1) / columns)), currentPage: page.page, signature });
+          return mappingResult(operation, "committed", {
+            countConverged,
+            visibleSignature: signature,
+            visibleIds,
+            itemIndices: page.itemIndices,
+            logicalIndices: page.logicalIndices
+          });
+        });
+      } finally {
+        motionLease?.release();
+      }
+    }
+    function refreshMapping(options) {
+      return options.mode === "delta" ? anchorMappingAfterDelta(options) : rebuildMappingFromNativePosition(options);
     }
     function getModel(section) {
       if (!section) return null;
@@ -7559,6 +7789,9 @@
       isSourceCurrent,
       assertSource,
       viewportSlots: viewportPageSlots,
+      refreshMapping,
+      isMappingCurrent,
+      assertMapping,
       collect: (options) => options.mode === "mounted-single-page" ? collection.collectMounted(options) : collection.collect(options),
       resetSource() {
         clearBinding();
@@ -7724,7 +7957,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.20";
+    const SCRIPT_VERSION = "1.4.21";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -10960,47 +11193,43 @@
       return true;
     }
     function syncLogicalPageModelAfterDelta(reason = "delta-reindex") {
-      if (!sourceState?.section || !sourceState?.scroller || !sourceState?.track) return false;
-      const runtime = getCarouselDomRuntime(sourceState.section);
-      if (!runtime || runtime.profile.pageMode !== "logical") return false;
-      const columns = Math.max(1, sourceState.layout?.columns || 1);
-      const items = sourceState.items || [];
-      const estimatedPages = Math.max(1, Math.ceil(Math.max(items.length, 1) / columns));
-      const slots = currentPageSlots(sourceState.scroller, sourceState.track);
-      const signature = visibleSignature(slots);
-      const votes = /* @__PURE__ */ new Map();
-      for (const slot of slots) {
-        const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-        const videoId = card ? videoIdFromHref(card.getAttribute("href") || card.href || "") : "";
-        const item = videoId ? sourceState.itemMap?.get(`v:${videoId}`) : null;
-        if (!Number.isFinite(item?.page)) continue;
-        votes.set(item.page, (votes.get(item.page) || 0) + 1);
-      }
-      const nativePageState = nativeLogicalPageState(
-        sourceState.scroller,
-        sourceState.track,
-        items.length,
-        columns
-      );
-      let currentPage = Number.isFinite(nativePageState.page) ? nativePageState.page : Math.max(0, Math.min(estimatedPages - 1, runtime.currentPage || 0));
-      if (!Number.isFinite(nativePageState.page) && votes.size) {
-        currentPage = [...votes.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0][0];
-        currentPage = Math.max(0, Math.min(estimatedPages - 1, currentPage));
-      }
+      const state = sourceState;
+      if (!state?.section || !state?.scroller || !state?.track) return false;
+      const { section, scroller, track, itemMap } = state;
+      const recordOwner = state.items, items = recordOwner || [];
+      const totalCount = items.length;
+      const assertOwner = () => {
+        if (sourceState !== state || state.items !== recordOwner || state.itemMap !== itemMap || items.length !== totalCount || state.section !== section || state.scroller !== scroller || state.track !== track) {
+          throw createRouteSessionCancelledError();
+        }
+      };
+      const result = nativeCarousel.refreshMapping({
+        mode: "delta",
+        section,
+        scroller,
+        track,
+        totalCount,
+        columns: Math.max(1, state.layout?.columns || 1),
+        sessionToken: sessionScope.token,
+        assertCurrent: assertOwner,
+        pageHintForVideoId: (id) => itemMap?.get("v:" + id)?.page
+      });
+      if (result.status !== "anchored") return false;
+      nativeCarousel.assertMapping(result);
       myListCountConvergencePending = true;
-      nativeCarousel.anchorAfterDelta(sourceState.section, { pageCount: estimatedPages, currentPage, signature });
       log(tLog("logicalPageModelSynchronizedAfterDelta"), {
         reason,
-        currentPage,
-        knownPageCount: runtime.knownPageCount,
-        pageCountFinalized: runtime.pageCountFinalized,
-        pageMappingStale: runtime.pageMappingStale,
-        visibleSignature: signature,
-        visibleIds: slots.map((slot) => videoIdFromHref(slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard)?.href || "")).filter(Boolean),
-        itemIndices: nativePageState.itemIndices,
-        logicalIndices: nativePageState.logicalIndices,
-        totalCount: items.length
+        currentPage: result.currentPage,
+        knownPageCount: result.knownPageCount,
+        pageCountFinalized: result.pageCountFinalized,
+        pageMappingStale: result.pageMappingStale,
+        visibleSignature: result.visibleSignature,
+        visibleIds: result.visibleIds,
+        itemIndices: result.itemIndices,
+        logicalIndices: result.logicalIndices,
+        totalCount
       });
+      nativeCarousel.assertMapping(result);
       return true;
     }
     function reindexLegacyItemsAfterDelta(reason = "delta-reindex") {
@@ -13433,125 +13662,77 @@
     function wrappedTailLogicalPageInfo2(...args) {
       return nativeCarousel.wrappedTail(...args);
     }
-    function wrappedTailLogicalPageForRebuild2(...args) {
-      return nativeCarousel.wrappedTailForRebuild(...args);
-    }
     async function rebuildLogicalPageModelFromNativePosition(layout, reason = "responsive-remap", sessionToken = sessionScope.token) {
       assertRouteSession(sessionToken);
       const live = ensureLiveNativeBinding("logical-page-model-rebuild-start") || sourceState;
-      const section = live?.section || sourceState?.section;
-      const scroller = live?.scroller || sourceState?.scroller;
-      const track = live?.track || sourceState?.track;
-      const items = sourceState?.items || [];
+      const state = sourceState;
+      const section = live?.section || state?.section;
+      const scroller = live?.scroller || state?.scroller;
+      const track = live?.track || state?.track;
       if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
         throw new Error("Native carousel binding is unavailable during logical page model rebuild");
       }
-      const bindingOwner = nativeCarousel.borrowBinding(section, scroller, track);
-      nativeCarousel.assertBinding(bindingOwner);
-      const columns = Math.max(1, layout?.columns || sourceState?.layout?.columns || 1);
-      const pages = Math.max(1, Math.ceil(Math.max(items.length, 1) / columns));
-      let motionLease = null;
-      let runtime = getCarouselDomRuntime(section);
-      nativeCarousel.markMappingStale(section);
-      try {
-        await nativeCarousel.whenNavigationIdle();
+      if (!state) throw createRouteSessionCancelledError();
+      const { itemMap, cloneMap, grid } = state;
+      const recordOwner = state.items, items = recordOwner || [];
+      const totalCount = items.length;
+      const columns = Math.max(1, layout?.columns || state.layout?.columns || 1);
+      const previousColumns = state.layout?.columns;
+      const assertOwner = () => {
         assertRouteSession(sessionToken);
-        nativeCarousel.assertBinding(bindingOwner);
-        motionLease = nativeCarousel.suppressMotion(section, track);
-        const nativeCountState = nativeReactCarouselTotalCount(scroller, track);
-        const nativeCountHasReadings = nativeCountState.uniqueReadings.length > 0;
-        const nativeCountConverged = Number.isSafeInteger(nativeCountState.totalCount) && nativeCountState.totalCount === items.length;
-        if (nativeCountConverged) myListCountConvergencePending = false;
-        if (!nativeCountHasReadings || !nativeCountConverged) {
-          nativeCarousel.deferMapping(section);
-          log("Logical My List page-model rebuild deferred until native delta converges", {
-            reason,
-            legacyTotalCount: items.length,
-            nativeTotalCount: nativeCountState.totalCount,
-            readings: nativeCountState.readings,
-            uniqueReadings: nativeCountState.uniqueReadings,
-            selectedPage: selectedPage(section),
-            pageMappingStale: runtime.pageMappingStale,
-            retryCount: runtime.logicalRemapRetryCount
-          });
-          return null;
+        if (sourceState !== state || state.items !== recordOwner || items.length !== totalCount || state.itemMap !== itemMap || state.cloneMap !== cloneMap || state.grid !== grid || grid && !grid.isConnected || state.layout?.columns !== previousColumns || state.section !== section || state.scroller !== scroller || state.track !== track) {
+          throw createRouteSessionCancelledError();
         }
-        let pageState = nativeLogicalPageState(scroller, track, items.length, columns);
-        const strictPageStateValid = pageState.positions.length > 0 && pageState.positions.every((position) => Number.isSafeInteger(position.itemIndex)) && Number.isFinite(pageState.page);
-        if (!strictPageStateValid) {
-          const wrappedTail = wrappedTailLogicalPageForRebuild2(
-            pageState.positions,
-            items.length,
-            columns,
-            runtime
-          );
-          if (wrappedTail) {
-            pageState = { ...pageState, page: wrappedTail.page };
-            log("Logical My List wrapped tail accepted for current-page recovery", {
-              reason,
-              page: wrappedTail.page,
-              wrapIndex: wrappedTail.wrapIndex,
-              totalCount: items.length,
-              columns,
-              itemIndices: pageState.itemIndices
-            });
-          } else {
-            logVirtualRawIndexDiagnostic(pageState.slots, items.length, columns, "logical-page-model-rebuild");
-            nativeCarousel.deferMapping(section);
-            log("Logical My List page-model rebuild deferred for non-canonical native window", {
-              reason,
-              totalCount: items.length,
-              columns,
-              slots: pageState.slots.length,
-              itemIndices: pageState.itemIndices,
-              logicalIndices: pageState.logicalIndices,
-              resolvedPage: pageState.page,
-              retryCount: runtime.logicalRemapRetryCount
-            });
-            return null;
-          }
-        }
-        const signature = visibleSignature(pageState.slots);
-        if (!signature) {
-          nativeCarousel.deferMapping(section);
-          log("Logical My List page-model rebuild deferred because native signature is unavailable", {
-            reason,
-            totalCount: items.length,
-            columns,
-            retryCount: runtime.logicalRemapRetryCount
-          });
-          return null;
-        }
-        nativeCarousel.commitMapping(section, { pageCount: pages, currentPage: pageState.page, signature });
-        runtime = getCarouselDomRuntime(section);
+      };
+      const result = await nativeCarousel.refreshMapping({
+        mode: "responsive",
+        section,
+        scroller,
+        track,
+        totalCount,
+        columns,
+        reason,
+        sessionToken,
+        assertCurrent: assertOwner
+      });
+      const assertPublication = () => {
+        assertOwner();
+        nativeCarousel.assertMapping(result);
+      };
+      assertPublication();
+      if (result.countConverged) myListCountConvergencePending = false;
+      if (result.status !== "committed") return null;
+      return nativeCarousel.sample(() => {
         let changed = 0;
         items.forEach((item, index) => {
-          const page = Math.min(pages - 1, Math.floor(index / columns));
+          assertPublication();
+          const page = Math.min(result.knownPageCount - 1, Math.floor(index / columns));
           item.logicalIndex = index;
           if (item.page !== page) changed++;
           item.page = page;
-          const clone = sourceState?.cloneMap?.get(itemKey(item));
+          const clone = cloneMap?.get(itemKey(item));
           if (clone?.isConnected) clone.setAttribute("data-tm-item-page", String(page));
+          assertPublication();
         });
-        if (sourceState) sourceState.initialPage = pageState.page;
+        assertPublication();
+        state.initialPage = result.currentPage;
         log(tLog("logicalPageModelSynchronizedAfterDelta"), {
           reason,
-          currentPage: runtime.currentPage,
-          knownPageCount: runtime.knownPageCount,
-          pageCountFinalized: runtime.pageCountFinalized,
-          pageMappingStale: runtime.pageMappingStale,
-          visibleSignature: signature,
-          visibleIds: currentPageVideoIds(scroller, track),
-          itemIndices: pageState.itemIndices,
-          logicalIndices: pageState.logicalIndices,
+          currentPage: result.currentPage,
+          knownPageCount: result.knownPageCount,
+          pageCountFinalized: result.pageCountFinalized,
+          pageMappingStale: result.pageMappingStale,
+          visibleSignature: result.visibleSignature,
+          visibleIds: result.visibleIds,
+          itemIndices: result.itemIndices,
+          logicalIndices: result.logicalIndices,
           columns,
           changed,
-          totalCount: items.length
+          totalCount
         });
+        assertPublication();
         return changed;
-      } finally {
-        motionLease?.release();
-      }
+      });
     }
     async function remapItemsByOrder(layout, sessionToken = sessionScope.token) {
       const { section, items, cloneMap } = sourceState;
