@@ -3830,16 +3830,8 @@ export function startLegacy() {
         return nativeCarousel.model(...args);
     }
 
-    function resetCarouselDomRuntime(...args) {
-        return nativeCarousel.resetModel(...args);
-    }
-
     function carouselDomProfileSummary(...args) {
         return nativeCarousel.profileSummary(...args);
-    }
-
-    function logCarouselDomProfile(...args) {
-        return nativeCarousel.logProfile(...args);
     }
 
     function logicalVisibleSignature(...args) {
@@ -3906,8 +3898,15 @@ export function startLegacy() {
         return nativeCarousel.mountedBootstrap({ section, scroller, track, sessionToken });
     }
 
-    function waitForNativeCarouselReady(...args) {
-        return nativeCarousel.ready(...args);
+    function waitForNativeCarouselReady(section, scroller, track, sessionToken = null, options = {}) {
+        const owner = sourceState;
+        return nativeCarousel.prepareSource({ section, scroller, track, sessionToken,
+            fastSinglePageTotalCount: options.fastSinglePageTotalCount,
+            assertCurrent() {
+                assertRouteSession(sessionToken);
+                if (sourceState !== owner) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-preparation',
+                    'Page session source changed during native preparation');
+            } });
     }
 
     function waitStableCurrentPage(...args) {
@@ -6369,12 +6368,8 @@ export function startLegacy() {
         let fastItems = null;
         let fastCollectionSource = 'graphql';
         let parallelReadinessPromise = null;
-        let carouselProfileLoggedForReadiness = false;
         const startParallelReadiness = () => {
             if (parallelReadinessPromise || !scroller || !track) return;
-            resetCarouselDomRuntime(section);
-            logCarouselDomProfile(section, 'before-readiness');
-            carouselProfileLoggedForReadiness = true;
             parallelReadinessPromise = waitForNativeCarouselReady(section, scroller, track, sessionToken)
                 .then(value => ({ value, error: null }), error => ({ value: null, error }));
         };
@@ -6493,11 +6488,6 @@ export function startLegacy() {
         // Netflix can expose the My List section before its virtual carousel has finished
         // building. Do not alter the carousel (especially transition/animation styles)
         // until the native page/slot structure has settled.
-        if (!carouselProfileLoggedForReadiness) {
-            resetCarouselDomRuntime(section);
-            logCarouselDomProfile(section, 'before-readiness');
-            carouselProfileLoggedForReadiness = true;
-        }
         let readiness;
         try {
             if (parallelReadinessPromise) {
@@ -6510,6 +6500,11 @@ export function startLegacy() {
                 });
             }
         } catch (error) {
+            if (error?.code === 'NATIVE_SOURCE_REPLACED') {
+                clearRunningSession(sessionToken, false);
+                recoverNativeInitialization(sessionToken, 'readiness-source-replaced');
+                return;
+            }
             if (!isRouteSessionCancelledError(error)) {
                 warn(tLog('nativeCarouselReadinessCheckFailed'), error);
             }
@@ -6622,14 +6617,13 @@ export function startLegacy() {
         }
 
         if (mountedProfile.pageMode === 'logical') {
-            const fastBindingOwner = nativeCarousel.borrowBinding(section, scroller, track);
             const retryReplacedSource = () => {
                 log('Fast My List collection discarded after native source replacement', { sessionToken });
                 clearRunningSession(sessionToken, false);
                 scheduleRun(0, sessionToken);
             };
             try {
-                nativeCarousel.assertBinding(fastBindingOwner);
+                nativeCarousel.assertPreparation(readiness);
                 const graphqlLayout = measureVisibleLayout(section, scroller, track);
                 const templateSlot = currentPageSlots(scroller, track)[0] || netflixDom.filledSlots(track)[0];
                 const graphqlCollection = await collectLogicalListItems({
@@ -6640,7 +6634,7 @@ export function startLegacy() {
                     sessionToken
                 });
                 assertRouteSession(sessionToken);
-                if (!nativeCarousel.isBindingCurrent(fastBindingOwner)) {
+                if (!nativeCarousel.isPreparationCurrent(readiness)) {
                     retryReplacedSource();
                     return;
                 }
@@ -6649,8 +6643,8 @@ export function startLegacy() {
                 fastCollectionSource = graphqlCollection.collectionSource || 'graphql';
                 if (graphqlCollection.error) throw graphqlCollection.error;
                 if (fastItems) {
-                    const runtime = getCarouselDomRuntime(section);
-                    nativeCarousel.confirmPageCount(section, Math.max(1, Math.ceil(earlyTotalCount / Math.max(1, graphqlLayout.columns))));
+                    const accepted = nativeCarousel.acceptCollection({ preparation: readiness,
+                        totalCount: earlyTotalCount, columns: graphqlLayout.columns, collectedCount: fastItems.length });
                     log(fastCollectionSource === 'mounted-single-page'
                         ? 'Mounted single-page My List fast collection prepared' : 'GraphQL My List fast collection prepared', {
                         collectionSource: fastCollectionSource,
@@ -6659,8 +6653,10 @@ export function startLegacy() {
                         collected: fastItems.length,
                         graphqlPageCount: freshMyListBootstrap.pageCount || null,
                         columns: graphqlLayout.columns,
-                        knownPageCount: runtime.knownPageCount
+                        knownPageCount: accepted.knownPageCount
                     });
+                    nativeCarousel.assertMapping(accepted);
+                    nativeCarousel.assertPreparation(readiness);
                 } else {
                     warn('GraphQL My List fast collection was incomplete; falling back to native scan', {
                         totalCount: earlyTotalCount,
@@ -6675,10 +6671,11 @@ export function startLegacy() {
                     clearRunningSession(sessionToken);
                     return;
                 }
-                if (!nativeCarousel.isBindingCurrent(fastBindingOwner)) {
+                if (!nativeCarousel.isPreparationCurrent(readiness)) {
                     retryReplacedSource();
                     return;
                 }
+                fastItems = null;
                 warn('GraphQL My List fast collection failed; falling back to native scan', {
                     code: error?.code || null,
                     stage: error?.stage || 'graphql-fast-collection',

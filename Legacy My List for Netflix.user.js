@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.21
+// @version      1.4.22
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -5890,6 +5890,8 @@
     const bindingTickets = /* @__PURE__ */ new WeakMap();
     const sourceTickets = /* @__PURE__ */ new WeakMap();
     const mappingTickets = /* @__PURE__ */ new WeakMap();
+    const preparationTickets = /* @__PURE__ */ new WeakMap();
+    let preparationOwner = null;
     let mappingSequence = 0;
     const mountedWaits = /* @__PURE__ */ new Set();
     let discoveryOwner = null, targetDocumentObserver = null, targetMutationFrame = null;
@@ -6724,6 +6726,90 @@
     function refreshMapping(options) {
       return options.mode === "delta" ? anchorMappingAfterDelta(options) : rebuildMappingFromNativePosition(options);
     }
+    async function prepareSource({
+      section,
+      scroller,
+      track,
+      sessionToken = null,
+      fastSinglePageTotalCount = null,
+      assertCurrent = () => {
+      }
+    }) {
+      assertRouteSession(sessionToken);
+      assertCurrent();
+      const binding = borrowBinding(section, scroller, track);
+      assertBinding(binding);
+      const owner = { binding, sessionToken, model: null, generation: null, accepted: false };
+      preparationOwner = owner;
+      const guard = () => {
+        assertRouteSession(sessionToken);
+        assertCurrent();
+        assertBinding(binding);
+        if (preparationOwner !== owner || owner.model && models.get(section) !== owner.model || owner.generation !== null && owner.model.mappingGeneration !== owner.generation) {
+          throw initializationError("NATIVE_SOURCE_REPLACED", "native-preparation", "Native source preparation was replaced");
+        }
+      };
+      owner.guard = guard;
+      resetCarouselDomRuntime(section);
+      owner.model = models.get(section);
+      guard();
+      logCarouselDomProfile(section, "before-readiness");
+      guard();
+      const readiness = await waitForNativeCarouselReady(section, scroller, track, sessionToken, {
+        fastSinglePageTotalCount,
+        assertAdmission: guard
+      });
+      guard();
+      owner.generation = owner.model.mappingGeneration;
+      const state = readiness.state && Object.freeze({
+        ...readiness.state,
+        capabilities: Object.freeze({ ...readiness.state.capabilities })
+      });
+      const result = Object.freeze({ ...readiness, ...state ? { state } : {} });
+      if (result.ready && !result.empty) preparationTickets.set(result, owner);
+      return result;
+    }
+    function assertPreparation(result) {
+      const owner = preparationTickets.get(result);
+      if (owner) {
+        owner.guard();
+        getModel(owner.binding.section);
+        owner.guard();
+        return result;
+      }
+      throw initializationError("NATIVE_SOURCE_REPLACED", "native-preparation", "Native source preparation is no longer current");
+    }
+    function isPreparationCurrent(result) {
+      try {
+        assertPreparation(result);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    function acceptCollection({ preparation, totalCount, columns, collectedCount }) {
+      assertPreparation(preparation);
+      const owner = preparationTickets.get(preparation);
+      if (!Number.isSafeInteger(totalCount) || totalCount <= 0 || !Number.isSafeInteger(columns) || columns <= 0 || !Number.isSafeInteger(collectedCount) || collectedCount !== totalCount) {
+        throw initializationError(
+          "NATIVE_COLLECTION_COUNT_MISMATCH",
+          "native-collection-acceptance",
+          "Complete collection count and positive layout columns are required",
+          { totalCount, columns, collectedCount }
+        );
+      }
+      if (owner.accepted) throw initializationError(
+        "NATIVE_COLLECTION_ALREADY_ACCEPTED",
+        "native-collection-acceptance",
+        "This preparation already accepted a complete collection"
+      );
+      owner.guard();
+      owner.model.confirmCount(Math.max(1, Math.ceil(totalCount / columns)));
+      owner.generation = owner.model.mappingGeneration;
+      owner.accepted = true;
+      owner.guard();
+      return mappingResult({ binding: owner.binding, model: owner.model, totalCount, columns, guard: owner.guard }, "accepted");
+    }
     function getModel(section) {
       if (!section) return null;
       let model = models.get(section);
@@ -6780,6 +6866,7 @@
     }
     function bind(section, scroller = null, track = null) {
       if (acceptedBinding && acceptedBinding.section === section && acceptedBinding.scroller === scroller && acceptedBinding.track === track && isBindingCurrent(acceptedBinding)) return acceptedBinding;
+      preparationOwner = null;
       resetMountedWaits();
       collection.reset();
       navigation.reset();
@@ -6790,6 +6877,7 @@
       return acceptedBinding;
     }
     function clearBinding() {
+      preparationOwner = null;
       resetMountedWaits();
       collection.reset();
       navigation.reset();
@@ -7147,6 +7235,9 @@
       };
     }
     async function waitForNativeCarouselReady(section, scroller, track, sessionToken = null, options = {}) {
+      const assertAdmission = options.assertAdmission || (() => {
+      });
+      assertAdmission();
       assertRouteSession(sessionToken);
       const bindingOwner = borrowBinding(section, scroller, track);
       const started = performance2.now();
@@ -7168,7 +7259,9 @@
         pageMode: lastState.pageMode,
         capabilities: lastState.capabilities
       });
+      assertAdmission();
       while (performance2.now() - started < NATIVE_READY_TIMEOUT_MS) {
+        assertAdmission();
         assertRouteSession(sessionToken);
         if (!isBindingCurrent(bindingOwner)) return {
           ready: false,
@@ -7203,8 +7296,10 @@
         }
         if (logicalCarouselReady || multiPageReady || singlePageReady) {
           await new Promise((resolve) => requestAnimationFrame2(resolve));
+          assertAdmission();
           assertRouteSession(sessionToken);
           await new Promise((resolve) => requestAnimationFrame2(resolve));
+          assertAdmission();
           assertRouteSession(sessionToken);
           if (!isBindingCurrent(bindingOwner)) return {
             ready: false,
@@ -7221,6 +7316,7 @@
               state: confirmed
             };
             log(tLog("nativeCarouselInitializationReady"), result2);
+            assertAdmission();
             return result2;
           }
           lastSignature = confirmed.signature;
@@ -7228,6 +7324,7 @@
           lastState = confirmed;
         }
         await sleep(NATIVE_READY_POLL_MS);
+        assertAdmission();
         assertRouteSession(sessionToken);
       }
       assertRouteSession(sessionToken);
@@ -7250,7 +7347,9 @@
         elapsedMs: result.elapsedMs,
         state: finalState
       });
+      assertAdmission();
       warn(tLog("nativeCarouselInitializationIsStillIncompleteInitializationDeferred"), result);
+      assertAdmission();
       return result;
     }
     function parseSlotLayoutFormula(track) {
@@ -7803,7 +7902,6 @@
       resetModel: resetCarouselDomRuntime,
       profile: detectCarouselDomProfile,
       profileSummary: carouselDomProfileSummary,
-      logProfile: logCarouselDomProfile,
       registerPage: registerLogicalPageSignature,
       forcePage: forceLogicalPageSignature,
       normalizePages: normalizeLogicalPages,
@@ -7811,7 +7909,10 @@
       beginCollection: (section) => modelForWrite(section)?.beginCollection(),
       markCycle: (section) => modelForWrite(section)?.markCycle(),
       completeCollection: (section, pages) => modelForWrite(section)?.finishCollection(pages),
-      confirmPageCount: (section, pages) => modelForWrite(section)?.confirmCount(pages),
+      prepareSource,
+      acceptCollection,
+      isPreparationCurrent,
+      assertPreparation,
       anchorAfterDelta: (section, facts) => modelForWrite(section)?.anchor(facts),
       markMappingStale: (section) => modelForWrite(section)?.markStale(),
       deferMapping: (section) => modelForWrite(section)?.deferMapping(),
@@ -7957,7 +8058,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.21";
+    const SCRIPT_VERSION = "1.4.22";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -11801,14 +11902,8 @@
     function getCarouselDomRuntime(...args) {
       return nativeCarousel.model(...args);
     }
-    function resetCarouselDomRuntime(...args) {
-      return nativeCarousel.resetModel(...args);
-    }
     function carouselDomProfileSummary(...args) {
       return nativeCarousel.profileSummary(...args);
-    }
-    function logCarouselDomProfile(...args) {
-      return nativeCarousel.logProfile(...args);
     }
     function logicalVisibleSignature(...args) {
       return nativeCarousel.visiblePageSignature(...args);
@@ -11867,8 +11962,23 @@
       if (targetSessionEntryKind !== "spa" || !targetSessionReason.startsWith("route:")) return null;
       return nativeCarousel.mountedBootstrap({ section, scroller, track, sessionToken });
     }
-    function waitForNativeCarouselReady(...args) {
-      return nativeCarousel.ready(...args);
+    function waitForNativeCarouselReady(section, scroller, track, sessionToken = null, options = {}) {
+      const owner = sourceState;
+      return nativeCarousel.prepareSource({
+        section,
+        scroller,
+        track,
+        sessionToken,
+        fastSinglePageTotalCount: options.fastSinglePageTotalCount,
+        assertCurrent() {
+          assertRouteSession(sessionToken);
+          if (sourceState !== owner) throw initializationError(
+            "NATIVE_SOURCE_REPLACED",
+            "native-preparation",
+            "Page session source changed during native preparation"
+          );
+        }
+      });
     }
     function waitStableCurrentPage(...args) {
       return nativeCarousel.stablePage(...args);
@@ -14210,12 +14320,8 @@
       let fastItems = null;
       let fastCollectionSource = "graphql";
       let parallelReadinessPromise = null;
-      let carouselProfileLoggedForReadiness = false;
       const startParallelReadiness = () => {
         if (parallelReadinessPromise || !scroller || !track) return;
-        resetCarouselDomRuntime(section);
-        logCarouselDomProfile(section, "before-readiness");
-        carouselProfileLoggedForReadiness = true;
         parallelReadinessPromise = waitForNativeCarouselReady(section, scroller, track, sessionToken).then((value) => ({ value, error: null }), (error) => ({ value: null, error }));
       };
       try {
@@ -14320,11 +14426,6 @@
         track = sourceWait.track;
         attachNativeBinding(sourceState, section, scroller, track);
       }
-      if (!carouselProfileLoggedForReadiness) {
-        resetCarouselDomRuntime(section);
-        logCarouselDomProfile(section, "before-readiness");
-        carouselProfileLoggedForReadiness = true;
-      }
       let readiness;
       try {
         if (parallelReadinessPromise) {
@@ -14337,6 +14438,11 @@
           });
         }
       } catch (error) {
+        if (error?.code === "NATIVE_SOURCE_REPLACED") {
+          clearRunningSession(sessionToken, false);
+          recoverNativeInitialization(sessionToken, "readiness-source-replaced");
+          return;
+        }
         if (!isRouteSessionCancelledError(error)) {
           warn(tLog("nativeCarouselReadinessCheckFailed"), error);
         }
@@ -14435,14 +14541,13 @@
         }
       }
       if (mountedProfile.pageMode === "logical") {
-        const fastBindingOwner = nativeCarousel.borrowBinding(section, scroller, track);
         const retryReplacedSource = () => {
           log("Fast My List collection discarded after native source replacement", { sessionToken });
           clearRunningSession(sessionToken, false);
           scheduleRun(0, sessionToken);
         };
         try {
-          nativeCarousel.assertBinding(fastBindingOwner);
+          nativeCarousel.assertPreparation(readiness);
           const graphqlLayout = measureVisibleLayout(section, scroller, track);
           const templateSlot = currentPageSlots(scroller, track)[0] || netflixDom.filledSlots(track)[0];
           const graphqlCollection = await collectLogicalListItems({
@@ -14453,7 +14558,7 @@
             sessionToken
           });
           assertRouteSession(sessionToken);
-          if (!nativeCarousel.isBindingCurrent(fastBindingOwner)) {
+          if (!nativeCarousel.isPreparationCurrent(readiness)) {
             retryReplacedSource();
             return;
           }
@@ -14462,8 +14567,12 @@
           fastCollectionSource = graphqlCollection.collectionSource || "graphql";
           if (graphqlCollection.error) throw graphqlCollection.error;
           if (fastItems) {
-            const runtime = getCarouselDomRuntime(section);
-            nativeCarousel.confirmPageCount(section, Math.max(1, Math.ceil(earlyTotalCount / Math.max(1, graphqlLayout.columns))));
+            const accepted = nativeCarousel.acceptCollection({
+              preparation: readiness,
+              totalCount: earlyTotalCount,
+              columns: graphqlLayout.columns,
+              collectedCount: fastItems.length
+            });
             log(fastCollectionSource === "mounted-single-page" ? "Mounted single-page My List fast collection prepared" : "GraphQL My List fast collection prepared", {
               collectionSource: fastCollectionSource,
               avoidedMembershipRequests: fastCollectionSource === "mounted-single-page" ? 1 : 0,
@@ -14471,8 +14580,10 @@
               collected: fastItems.length,
               graphqlPageCount: freshMyListBootstrap.pageCount || null,
               columns: graphqlLayout.columns,
-              knownPageCount: runtime.knownPageCount
+              knownPageCount: accepted.knownPageCount
             });
+            nativeCarousel.assertMapping(accepted);
+            nativeCarousel.assertPreparation(readiness);
           } else {
             warn("GraphQL My List fast collection was incomplete; falling back to native scan", {
               totalCount: earlyTotalCount,
@@ -14487,10 +14598,11 @@
             clearRunningSession(sessionToken);
             return;
           }
-          if (!nativeCarousel.isBindingCurrent(fastBindingOwner)) {
+          if (!nativeCarousel.isPreparationCurrent(readiness)) {
             retryReplacedSource();
             return;
           }
+          fastItems = null;
           warn("GraphQL My List fast collection failed; falling back to native scan", {
             code: error?.code || null,
             stage: error?.stage || "graphql-fast-collection",

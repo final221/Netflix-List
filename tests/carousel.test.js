@@ -483,6 +483,138 @@ function mountedEnvironment(overrides = {}) {
         capture: bootstrap => e.carousel.collect({ ...options, mode: 'mounted-single-page', bootstrap, totalCount: 3, columns: 3 }) };
 }
 
+test('source preparation owns reset/readiness and accepts complete collection facts in both native modes', async () => {
+    for (const mode of ['logical', 'indicator']) {
+        const e = mode === 'logical' ? mountedEnvironment() : navigationEnvironment({ mode });
+        const options = { section: e.section, scroller: e.scroller, track: e.track, sessionToken: e.scope.token };
+        const before = e.carousel.model(e.section);
+        const prepared = await e.settle(e.carousel.prepareSource(options));
+        assert.equal(prepared.ready, true);
+        assert.notEqual(e.carousel.model(e.section), before);
+        assert.equal(prepared.state.pageMode, mode);
+        assert.ok(Object.isFrozen(prepared) && Object.isFrozen(prepared.state) && Object.isFrozen(prepared.state.capabilities));
+        assert.equal(e.carousel.isPreparationCurrent(prepared), true);
+        assert.equal(e.carousel.isPreparationCurrent({ ...prepared }), false);
+        const accepted = e.carousel.acceptCollection({ preparation: prepared, totalCount: 7, columns: 3, collectedCount: 7 });
+        assert.equal(accepted.status, 'accepted');
+        assert.equal(accepted.knownPageCount, 3);
+        assert.equal(accepted.pageCountFinalized, true);
+        assert.equal(e.carousel.isMappingCurrent(accepted), true);
+        assert.equal(e.carousel.isMappingCurrent({ ...accepted }), false);
+        assert.equal(e.carousel.isPreparationCurrent(prepared), true, 'own finalization retains its preparation');
+        assert.deepEqual(e.directions, [], 'preparation and acceptance add no native movement');
+        assert.equal(e.scheduler.timers.size, 0);
+        assert.equal(e.scheduler.frames.size, 0);
+    }
+});
+
+test('collection acceptance rejects incomplete or invalid facts before changing native mapping', async () => {
+    const e = mountedEnvironment();
+    const prepared = await e.settle(e.carousel.prepareSource(e.options));
+    const model = e.carousel.model(e.section);
+    for (const facts of [
+        { totalCount: 7, columns: 3, collectedCount: 6 },
+        { totalCount: null, columns: 3, collectedCount: 0 },
+        { totalCount: 7, columns: 0, collectedCount: 7 },
+        { totalCount: 7, columns: 1.5, collectedCount: 7 }
+    ]) {
+        assert.throws(() => e.carousel.acceptCollection({ preparation: prepared, ...facts }), { code: 'NATIVE_COLLECTION_COUNT_MISMATCH' });
+        assert.equal(model.pageCountFinalized, false);
+    }
+    assert.throws(() => e.carousel.acceptCollection({ preparation: { ...prepared }, totalCount: 3, columns: 3, collectedCount: 3 }),
+        { code: 'NATIVE_SOURCE_REPLACED' });
+    assert.equal(model.pageCountFinalized, false);
+    const accepted = e.carousel.acceptCollection({ preparation: prepared, totalCount: 3, columns: 3, collectedCount: 3 });
+    assert.equal(accepted.knownPageCount, 1);
+    assert.throws(() => e.carousel.acceptCollection({ preparation: prepared, totalCount: 6, columns: 3, collectedCount: 6 }),
+        { code: 'NATIVE_COLLECTION_ALREADY_ACCEPTED' });
+    assert.equal(model.knownPageCount, 1);
+});
+
+test('prepared observations reject source, route, mapping and preparation replacement before finalization', async () => {
+    for (const change of ['binding', 'route', 'mapping', 'preparation']) {
+        const e = mountedEnvironment();
+        const prepared = await e.settle(e.carousel.prepareSource(e.options));
+        let current = e.carousel.model(e.section);
+        if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); current = e.carousel.model(e.section); }
+        if (change === 'route') e.scope.begin();
+        if (change === 'mapping') e.carousel.refreshMapping({ ...e.options, mode: 'delta', totalCount: 6, columns: 3 });
+        if (change === 'preparation') { await e.settle(e.carousel.prepareSource(e.options)); current = e.carousel.model(e.section); }
+        const pages = current.knownPageCount;
+        assert.equal(e.carousel.isPreparationCurrent(prepared), false);
+        assert.throws(() => e.carousel.acceptCollection({ preparation: prepared, totalCount: 3, columns: 3, collectedCount: 3 }),
+            { code: change === 'route' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'NATIVE_SOURCE_REPLACED' });
+        assert.equal(current.knownPageCount, pages);
+        assert.equal(e.scheduler.timers.size, 0);
+    }
+});
+
+test('preparation checks its admission after profile and readiness diagnostic callbacks', async () => {
+    for (const phase of ['carouselDomProfileDetected', 'waitingForNativeCarouselInitialization', 'nativeCarouselInitializationReady']) {
+        let e, replaced = false;
+        e = mountedEnvironment({ log(message) {
+            if (message !== phase || replaced) return;
+            replaced = true;
+            e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track);
+        } });
+        const rejected = assert.rejects(e.carousel.prepareSource(e.options), { code: 'NATIVE_SOURCE_REPLACED' });
+        await e.settle(rejected);
+        assert.equal(replaced, true);
+        assert.equal(e.carousel.model(e.section).pageCountFinalized, false);
+        assert.equal(e.scheduler.timers.size, 0);
+        assert.equal(e.scheduler.frames.size, 0);
+    }
+});
+
+test('a new preparation invalidates existing card handles and supersedes a pending readiness operation', async () => {
+    const e = mountedEnvironment();
+    const source = e.carousel.mountedCard({ ...e.options, item: { videoId: '1' } });
+    const first = e.carousel.prepareSource(e.options);
+    const rejected = assert.rejects(first, { code: 'NATIVE_SOURCE_REPLACED' });
+    const second = e.carousel.prepareSource(e.options);
+    assert.equal(e.carousel.isSourceCurrent(source), false);
+    await e.settle(rejected);
+    const prepared = await e.settle(second);
+    assert.equal(prepared.ready, true);
+    assert.equal(e.carousel.isPreparationCurrent(prepared), true);
+    assert.equal(e.scheduler.timers.size, 0);
+    assert.equal(e.scheduler.frames.size, 0);
+});
+
+test('source preparation preserves the fast single-page two-frame path without another wait', async () => {
+    const e = mountedEnvironment();
+    const prepared = await e.settle(e.carousel.prepareSource({ ...e.options, fastSinglePageTotalCount: 3 }));
+    assert.equal(prepared.reason, 'fast-single-page');
+    assert.equal(prepared.elapsedMs, 32);
+    assert.equal(e.carousel.confirmPageCount, undefined, 'callers cannot finalize a page model directly');
+    assert.equal(e.scheduler.timers.size, 0);
+    assert.equal(e.scheduler.frames.size, 0);
+});
+
+test('source preparation and acceptance check the captured caller before publishing', async () => {
+    for (const phase of ['pending', 'acceptance']) {
+        const e = mountedEnvironment();
+        let current = true;
+        const operation = e.carousel.prepareSource({ ...e.options, assertCurrent() {
+            if (!current) throw Object.assign(new Error('caller replaced'), { code: 'CALLER_REPLACED' });
+        } });
+        if (phase === 'pending') {
+            const rejected = assert.rejects(operation, { code: 'CALLER_REPLACED' });
+            current = false;
+            await e.settle(rejected);
+        } else {
+            const prepared = await e.settle(operation);
+            current = false;
+            assert.equal(e.carousel.isPreparationCurrent(prepared), false);
+            assert.throws(() => e.carousel.acceptCollection({ preparation: prepared, totalCount: 3, columns: 3, collectedCount: 3 }),
+                { code: 'CALLER_REPLACED' });
+        }
+        assert.equal(e.carousel.model(e.section).pageCountFinalized, false);
+        assert.equal(e.scheduler.timers.size, 0);
+        assert.equal(e.scheduler.frames.size, 0);
+    }
+});
+
 test('delta mapping anchors native positions or visible title hints synchronously without rewriting membership', () => {
     const e = mountedEnvironment();
     const hints = new Map([['1', 1], ['2', 1], ['3', 0]]);

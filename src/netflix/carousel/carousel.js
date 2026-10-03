@@ -35,6 +35,8 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     const bindingTickets = new WeakMap();
     const sourceTickets = new WeakMap();
     const mappingTickets = new WeakMap();
+    const preparationTickets = new WeakMap();
+    let preparationOwner = null;
     let mappingSequence = 0;
     const mountedWaits = new Set();
     let discoveryOwner = null, targetDocumentObserver = null, targetMutationFrame = null;
@@ -677,6 +679,68 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         return options.mode === 'delta' ? anchorMappingAfterDelta(options) : rebuildMappingFromNativePosition(options);
     }
 
+    async function prepareSource({ section, scroller, track, sessionToken = null, fastSinglePageTotalCount = null,
+        assertCurrent = () => {} }) {
+        assertRouteSession(sessionToken); assertCurrent();
+        const binding = borrowBinding(section, scroller, track);
+        assertBinding(binding);
+        const owner = { binding, sessionToken, model: null, generation: null, accepted: false };
+        preparationOwner = owner;
+        const guard = () => {
+            assertRouteSession(sessionToken); assertCurrent(); assertBinding(binding);
+            if (preparationOwner !== owner || (owner.model && models.get(section) !== owner.model) ||
+                (owner.generation !== null && owner.model.mappingGeneration !== owner.generation)) {
+                throw initializationError('NATIVE_SOURCE_REPLACED', 'native-preparation', 'Native source preparation was replaced');
+            }
+        };
+        owner.guard = guard;
+        resetCarouselDomRuntime(section);
+        owner.model = models.get(section);
+        guard();
+        logCarouselDomProfile(section, 'before-readiness');
+        guard();
+        const readiness = await waitForNativeCarouselReady(section, scroller, track, sessionToken, {
+            fastSinglePageTotalCount, assertAdmission: guard
+        });
+        guard();
+        // Profile detection may legitimately change while Netflix initializes.
+        // The confirmed interpretation is retained for subsequent acceptance.
+        owner.generation = owner.model.mappingGeneration;
+        const state = readiness.state && Object.freeze({ ...readiness.state,
+            capabilities: Object.freeze({ ...readiness.state.capabilities }) });
+        const result = Object.freeze({ ...readiness, ...(state ? { state } : {}) });
+        if (result.ready && !result.empty) preparationTickets.set(result, owner);
+        return result;
+    }
+    function assertPreparation(result) {
+        const owner = preparationTickets.get(result);
+        if (owner) {
+            owner.guard(); getModel(owner.binding.section); owner.guard();
+            return result;
+        }
+        throw initializationError('NATIVE_SOURCE_REPLACED', 'native-preparation', 'Native source preparation is no longer current');
+    }
+    function isPreparationCurrent(result) {
+        try { assertPreparation(result); return true; } catch (_) { return false; }
+    }
+    function acceptCollection({ preparation, totalCount, columns, collectedCount }) {
+        assertPreparation(preparation);
+        const owner = preparationTickets.get(preparation);
+        if (!Number.isSafeInteger(totalCount) || totalCount <= 0 || !Number.isSafeInteger(columns) || columns <= 0 ||
+            !Number.isSafeInteger(collectedCount) || collectedCount !== totalCount) {
+            throw initializationError('NATIVE_COLLECTION_COUNT_MISMATCH', 'native-collection-acceptance',
+                'Complete collection count and positive layout columns are required', { totalCount, columns, collectedCount });
+        }
+        if (owner.accepted) throw initializationError('NATIVE_COLLECTION_ALREADY_ACCEPTED', 'native-collection-acceptance',
+            'This preparation already accepted a complete collection');
+        owner.guard();
+        owner.model.confirmCount(Math.max(1, Math.ceil(totalCount / columns)));
+        owner.generation = owner.model.mappingGeneration;
+        owner.accepted = true;
+        owner.guard();
+        return mappingResult({ binding: owner.binding, model: owner.model, totalCount, columns, guard: owner.guard }, 'accepted');
+    }
+
     function getModel(section) {
         if (!section) return null;
         let model = models.get(section);
@@ -719,13 +783,14 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     function bind(section, scroller = null, track = null) {
         if (acceptedBinding && acceptedBinding.section === section && acceptedBinding.scroller === scroller &&
             acceptedBinding.track === track && isBindingCurrent(acceptedBinding)) return acceptedBinding;
+        preparationOwner = null;
         resetMountedWaits(); collection.reset(); navigation.reset();
         bindingGeneration++; invalidateNativeReadScope();
         if (section) models.delete(section);
         acceptedBinding = borrowBinding(section, scroller, track);
         return acceptedBinding;
     }
-    function clearBinding() { resetMountedWaits(); collection.reset(); navigation.reset(); bindingGeneration++; acceptedBinding = null; invalidateNativeReadScope(); }
+    function clearBinding() { preparationOwner = null; resetMountedWaits(); collection.reset(); navigation.reset(); bindingGeneration++; acceptedBinding = null; invalidateNativeReadScope(); }
     function median(values) {
         if (!values.length) return 0;
         const sorted = [...values].sort((a, b) => a - b);
@@ -1109,6 +1174,8 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     }
 
     async function waitForNativeCarouselReady(section, scroller, track, sessionToken = null, options = {}) {
+        const assertAdmission = options.assertAdmission || (() => {});
+        assertAdmission();
         assertRouteSession(sessionToken);
         const bindingOwner = borrowBinding(section, scroller, track);
         const started = performance.now();
@@ -1133,8 +1200,10 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
             pageMode: lastState.pageMode,
             capabilities: lastState.capabilities
         });
+        assertAdmission();
 
         while (performance.now() - started < NATIVE_READY_TIMEOUT_MS) {
+            assertAdmission();
             assertRouteSession(sessionToken);
             if (!isBindingCurrent(bindingOwner)) return { ready: false, reason: 'detached',
                 elapsedMs: Math.round(performance.now() - started), state: { ...lastState, connected: false } };
@@ -1204,8 +1273,10 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
 
             if (logicalCarouselReady || multiPageReady || singlePageReady) {
                 await new Promise(resolve => requestAnimationFrame(resolve));
+                assertAdmission();
                 assertRouteSession(sessionToken);
                 await new Promise(resolve => requestAnimationFrame(resolve));
+                assertAdmission();
                 assertRouteSession(sessionToken);
                 if (!isBindingCurrent(bindingOwner)) return { ready: false, reason: 'detached',
                     elapsedMs: Math.round(performance.now() - started), state: { ...lastState, connected: false } };
@@ -1220,6 +1291,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                         state: confirmed
                     };
                     log(tLog('nativeCarouselInitializationReady'), result);
+                    assertAdmission();
                     return result;
                 }
                 lastSignature = confirmed.signature;
@@ -1228,6 +1300,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
             }
 
             await sleep(NATIVE_READY_POLL_MS);
+            assertAdmission();
             assertRouteSession(sessionToken);
         }
 
@@ -1247,7 +1320,9 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
             elapsedMs: result.elapsedMs,
             state: finalState
         });
+        assertAdmission();
         warn(tLog('nativeCarouselInitializationIsStillIncompleteInitializationDeferred'), result);
+        assertAdmission();
         return result;
     }
 
@@ -1860,13 +1935,13 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         collect: options => options.mode === 'mounted-single-page' ? collection.collectMounted(options) : collection.collect(options),
         resetSource() { clearBinding(); collection.resetDiagnostics(); models = new WeakMap(); nativeReadScope = null; },
         model: getCarouselDomRuntime, resetModel: resetCarouselDomRuntime,
-        profile: detectCarouselDomProfile, profileSummary: carouselDomProfileSummary, logProfile: logCarouselDomProfile,
+        profile: detectCarouselDomProfile, profileSummary: carouselDomProfileSummary,
         registerPage: registerLogicalPageSignature, forcePage: forceLogicalPageSignature, normalizePages: normalizeLogicalPages,
         notePage: (section, page, cycle = null) => modelForWrite(section)?.notePage(page, cycle),
         beginCollection: section => modelForWrite(section)?.beginCollection(),
         markCycle: section => modelForWrite(section)?.markCycle(),
         completeCollection: (section, pages) => modelForWrite(section)?.finishCollection(pages),
-        confirmPageCount: (section, pages) => modelForWrite(section)?.confirmCount(pages),
+        prepareSource, acceptCollection, isPreparationCurrent, assertPreparation,
         anchorAfterDelta: (section, facts) => modelForWrite(section)?.anchor(facts),
         markMappingStale: section => modelForWrite(section)?.markStale(),
         deferMapping: section => modelForWrite(section)?.deferMapping(),

@@ -835,7 +835,7 @@ Plan/document consistency and whitespace checks pass: all 21 steps have the requ
 
 The subsequent persistent user goal, **Do the migration**, authorizes the full saved migration in dependency order. This supersedes the need to select each step again; retain the individual verification/release checkpoints and bounded scope. Current execution status is recorded below.
 
-**Platform scope, revised 2026-10-03:** the user limits this personal-script migration to Windows. Future implementation, compatibility work and required hosted verification target Windows only. Historical Windows/Linux CI records below describe completed past runs; Linux success is no longer an acceptance condition for any remaining step. P10.7 remains the next migration checkpoint.
+**Platform scope, revised 2026-10-03:** the user limits this personal-script migration to Windows. Future implementation, compatibility work and required hosted verification target Windows only. Historical Windows/Linux CI records below describe completed past runs; Linux success is no longer an acceptance condition for any remaining step. P10.7 is selected and remains in progress.
 
 | Step | Outcome | Status |
 | --- | --- | --- |
@@ -848,7 +848,7 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | P07 | Viewing data adapter | Complete — 1.4.11; 3c6b48a; Windows/Linux CI verified |
 | P08 | Session scopes and native binding/page model | Complete — scope 1.4.12 / 848b95f; native transfer 1.4.13 / b2b64c3; Windows/Linux CI verified |
 | P09 | Navigation queue and restoration | Complete — 1.4.15; b18ec49; Windows/Linux CI verified |
-| P10 | Native collection and carousel facade | In progress — P10.6 remapping 1.4.21 / e11be88 verified on Windows/Linux; P10.7 facade/caller audit remains |
+| P10 | Native collection and carousel facade | In progress — P10.6 1.4.21 / e11be88 verified; P10.7 initialization admission/acceptance 1.4.22 passes locally, hosted Windows evidence pending; remaining facade/caller audit required |
 | P11 | Frame/card registry and resources | Planned — authorized goal |
 | P12 | Groups, filters and controls | Planned — authorized goal |
 | P13 | Membership/order and collection strategy | Planned — authorized goal |
@@ -1282,3 +1282,28 @@ The workflow now has one windows-latest job instead of a Windows/Linux matrix. I
 Local read-only output/dependency verification and userscript syntax pass. Workflow/document review confirms the single Windows runner, preserved verification steps, unchanged 21-step sequence and protected context; whitespace checks pass. Runtime source, generated userscript, dependencies, tests and version remain unchanged at **1.4.21**. Commit/push and hosted Windows CI will verify the revised workflow; the full migration remains in progress.
 
 Scope/workflow commit **a1669c6** (`a1669c67e05e9f47a490b8630bb6105245878f72`) is pushed. [Hosted run 37153158521](https://github.com/final221/Netflix-List/actions/runs/37153158521) succeeds with exactly **one job**, labelled **windows-latest**, and every verification/setup/cleanup step successful. The Windows-only scope change is complete. Continue at P10.7 under the revised Windows release gate; Linux implementation and verification remain out of scope.
+
+
+### P10.7 — Native initialization admission and collection acceptance checkpoint
+
+P10.7 is selected under the Windows-only scope. The live initialization path still coordinated model reset/profile logging and directly finalized page counts after fast collection. This checkpoint transfers that complete admission/finalization responsibility to the existing carousel owner; it is part of P10.7, not completion of that checkpoint or the parent P10 handoff.
+
+Migration.md defines prepareSource/acceptCollection before implementation. No target folder/file or dependency direction changes. prepareSource resets its private model, logs the profile and runs the existing readiness wait. It retains the binding/preparation/model owner across polls, confirmation frames and callbacks, while allowing legitimate profile detection during initialization. The bridge captures its parent sourceState and supplies a narrow validity check. The confirmed non-empty readiness observation is frozen and privately registered; copies, re-preparation, remapping, source/route replacement and obsolete parent state cannot authorize collection acceptance. Binding reset releases the retained preparation owner.
+
+acceptCollection consumes only the current preparation and complete scalar count/column/collected-count facts. It derives/finalizes native page count once, retains its own preparation across that write and returns a privately validated mapping observation. Invalid/incomplete facts do not alter mapping. The real fast-collection caller checks before starting, after its await and after the accepted-result log; it cannot finalize or publish an obsolete result even when native DOM stays connected. Discard retains queued membership work. Acceptance failure drops the fast result for native fallback. Strategy selection, authoritative count reconciliation, membership/grid publication and responsive scheduling remain external.
+
+| Remaining caller/boundary | Current responsibility | Retirement/next evidence |
+| --- | --- | --- |
+| waitForNativeCarouselReady / runScript | Parent admission, choice of parallel readiness or mounted hint, semantic preparation/acceptance and recovery | Composition P20; no direct reset/finalize command remains in these live callers |
+| Preparation and responsive consumers of model/profile/page/index/window observations | Existing read-only technical bridges; hover still interprets wrapped-tail buffers | Remaining P10.7: validated semantic observations through actual callers before P11 |
+| Fixture-only model writers and private-rule characterization | Existing technical facade commands still prime some real-owner fixtures | Remaining P10.7: move priming to real operations or private policy fixtures, then retire the obsolete public writers/read surface |
+| Native marker/UI write audit | Legacy scan/parking/visibility/cleanup writes remain; cleanup still removes FAST_MOVE_CLASS alongside its UI class | Remaining P10.7 must settle native marker/restoration ownership; grid/UI transfer follows P11, native-popup graft/geometry follows P17 |
+| Dependency exception | Legacy imports carousel for construction and residual callers, with the existing exact P20 ledger entry | P10.7 must prove it retains only composition, not algorithms/model control, before the P10-to-P11 handoff |
+
+The public confirmPageCount/logProfile commands and legacy resetCarouselDomRuntime/logCarouselDomProfile bridges are removed. Source audit compares **286** prior top-level declarations with **284** now: only waitForNativeCarouselReady/runScript change, the two bridges disappear, and **282** declarations are identical. Private collector reset/model commands stay internal to its injected native collaborator; the broader public technical fixture surface is explicitly unfinished.
+
+Seven new carousel scenarios cover both modes, reset/readiness ownership, immutable/forged observations, incomplete/invalid counts, repeated acceptance, replacement after preparation, diagnostic callback replacement, superseded pending preparation, existing card-handle invalidation, the exact two-frame fast single-page path and caller replacement. The initial five fail before the new capability exists and pass after the transfer. Two composed legacy initialization scenarios exercise same-binding remapping/re-preparation/parent replacement during late fast completion and replacement from the accepted-result log. Existing initialization fixtures now run real prepareSource rather than a successful readiness stub; separate failure/gate fixtures retain their controlled inputs. Mounted fixtures retire the default template before installing their complete native window, preserving qualification/capture variants and rejection coverage. All prior scenarios remain.
+
+The full local gate passes **452 tests**, with no failures, cancellations or skips. Read-only output/dependency verification, generated syntax and whitespace checks pass. Package/lock/metadata/internal versions agree on **1.4.22**, above published **1.4.21**. Authored/generated diffs and actual caller/state/resource ownership are reviewed together. README and docs/architecture.md describe the actual transfer and remaining facade audit. Commit/push and exact-revision Windows CI are the final release gate. Live Netflix private DOM/React compatibility remains user-owned.
+
+Resume the remaining P10.7 facade/caller/write audit after this release is verified. P10.7, P10 and the full migration remain in progress; P11–P21 are still required. The two optional CI cost suggestions from the Windows tooling discussion are unselected and unchanged.

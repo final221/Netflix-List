@@ -2470,7 +2470,7 @@ function nativeMotionFacts(e, section, scroller, track, signature, click, { mode
     let reads = 0;
     e.c.netflixDom = { ...e.c.netflixDom, findTrack: () => track, filledSlots: () => { reads++; return [slot]; }, directSlots: () => [slot] };
     e.c.sourceState = e.c.attachNativeBinding({}, section, scroller, track);
-    e.c.nativeCarousel.confirmPageCount(section, count);
+    e.c.nativeCarousel.completeCollection(section, count);
     return { right, left, reads: () => reads };
 }
 
@@ -2759,7 +2759,7 @@ test('route listener cleanup cancels pending hover and observer work', async () 
 
 const nativeReadFunctions = [
     'nativeRect', 'nativeFilledSlots', 'nativeIndicatorItems', 'detectCarouselDomProfile',
-    'getCarouselDomRuntime', 'resetCarouselDomRuntime', 'pageCount', 'selectedPage',
+    'getCarouselDomRuntime', 'pageCount', 'selectedPage',
     'currentPageSlots', 'visibleSignature', 'netflixItemIndexFromSlot', 'normalizeNetflixLogicalIndex',
     'logicalSlotPositions', 'expectedLogicalIndicesForPage', 'logicalPageFromSlotPositions',
     'nativeLogicalPageState', 'forceLogicalPageSignature', 'readNativeMyListDomState',
@@ -2890,7 +2890,7 @@ test('restoring a geometry proxy and resetting runtime invalidate reads inside a
         assert.equal(e.c.netflixItemIndexFromSlot(slot), 9);
         assert.equal(e.c.getCarouselDomRuntime(e.section).profile.pageMode, 'logical');
         e.setMode('indicator', 2);
-        e.c.resetCarouselDomRuntime(e.section);
+        e.c.nativeCarousel.resetModel(e.section);
         assert.equal(e.c.selectedPage(e.section), 2);
     });
 });
@@ -3386,6 +3386,17 @@ function initializationEnvironment(count = 150) {
     const e = constructionEnvironment();
     const bootstrap = { totalCount: count, source: 'graphql', pageCount: 2, edgeCount: count, hasMore: false };
     mountNativeControls(e.section);
+    e.track.appendChild(e.template);
+    e.template.querySelector('card').href = 'https://www.netflix.com/browse?jbv=1';
+    e.template.querySelector('card').setAttribute('tabindex', '0');
+    e.track.style.getPropertyValue = key => key === 'display' ? 'flex' : '';
+    vm.runInContext(declaration('waitForNativeCarouselReady'), e.c);
+    const prepare = e.c.waitForNativeCarouselReady;
+    let pendingPreparation = 0;
+    e.c.waitForNativeCarouselReady = (...args) => {
+        pendingPreparation++;
+        return prepare(...args).finally(() => { pendingPreparation--; });
+    };
     vm.runInContext(declaration('collectLogicalListItems'), e.c);
     e.c.listData = { ...e.c.listData, firstMyListVideoId: () => '', fetchBootstrap: async () => bootstrap,
         collectRecords: async () => ({ bootstrap, records: e.records(count) }) };
@@ -3398,9 +3409,7 @@ function initializationEnvironment(count = 150) {
         measureVisibleLayout: () => e.layout, measureNativeCarouselGap: () => 10,
         placeLegacyFrame: () => ({ grid: e.oldGrid, status: e.status }), applyOriginalMyListVisibility() {},
         waitForMyListTotalCount: async () => count,
-        logCarouselDomProfile() {}, resetCarouselDomRuntime: section => e.c.nativeCarousel.resetModel(section),
         getCarouselDomRuntime: section => e.c.nativeCarousel.model(section),
-        waitForNativeCarouselReady: async () => ({ ready: true, empty: false }),
         requireNativeReactCarouselTotalCount: () => ({ totalCount: count }),
         currentPageSlots: () => [e.template],
         netflixDom: { findTrack: () => e.track, filledSlots: () => [e.template], directSlots: () => [e.template] },
@@ -3414,7 +3423,15 @@ function initializationEnvironment(count = 150) {
         cleanupTargetSessionDom() { e.oldGrid.remove(); }, scheduleRun() {}
     });
     vm.runInContext(declaration('runScript'), e.c);
-    return { ...e, async flush() { await e.flush(); await e.flush(); } };
+    const flush = async () => {
+        await e.flush();
+        for (let attempts = 0; pendingPreparation; attempts++) {
+            assert.ok(attempts < 30, 'actual source preparation settles within its existing deadline');
+            await e.advance(150); await e.frame(); await e.frame();
+        }
+        await e.flush();
+    };
+    return { ...e, flush, async drain() { await flush(); return e.drain(); } };
 }
 
 test('late fast-collection completion cannot finalize the model or republish a replaced native binding', async () => {
@@ -3436,6 +3453,61 @@ test('late fast-collection completion cannot finalize the model or republish a r
     assert.equal(e.c.nativeCarousel.currentBinding().track, replacement);
     assert.equal(current.pageCountFinalized, false);
     assert.equal(e.logs.filter(entry => entry.name === 'legacyGridBuilt').length, 0);
+    assert.equal(e.c.completedSection, null);
+    assert.deepEqual(runs, [[0, 1]]);
+});
+
+test('late fast collection rejects remapping, repeated preparation and parent replacement on the same native binding', async () => {
+    for (const change of ['mapping', 'preparation', 'parent']) {
+        const e = initializationEnvironment(6);
+        const gate = deferred(), runs = [];
+        let collections = 0, acceptances = 0;
+        const carousel = e.c.nativeCarousel;
+        e.c.nativeCarousel = Object.freeze({ ...carousel, acceptCollection(options) { acceptances++; return carousel.acceptCollection(options); } });
+        e.c.collectLogicalListItems = () => { collections++; return gate.promise; };
+        e.c.scheduleRun = (...args) => runs.push(args);
+        const completion = e.c.runScript(1);
+        await e.flush();
+        assert.equal(collections, 1);
+        const owner = e.c.sourceState;
+        if (change === 'mapping') carousel.refreshMapping({ mode: 'delta', section: e.section,
+            scroller: e.scroller, track: e.track, totalCount: 8, columns: 6, sessionToken: 1 });
+        if (change === 'preparation') { const preparation = e.c.waitForNativeCarouselReady(e.section, e.scroller, e.track, 1); await e.flush(); await preparation; }
+        if (change === 'parent') e.c.sourceState = e.c.attachNativeBinding({ ...owner }, e.section, e.scroller, e.track);
+        const current = carousel.model(e.section);
+        const before = { pages: current.knownPageCount, finalized: current.pageCountFinalized, stale: current.pageMappingStale };
+        gate.resolve({ bootstrap: { totalCount: 6 }, items: e.items(6), collectionSource: 'graphql' });
+        await e.flush(); await completion;
+        assert.equal(acceptances, 0, 'obsolete collection must stop before acceptance');
+        assert.deepEqual({ pages: current.knownPageCount, finalized: current.pageCountFinalized, stale: current.pageMappingStale }, before);
+        assert.equal(carousel.currentBinding().track, e.track);
+        assert.equal(e.logs.filter(entry => entry.name === 'legacyGridBuilt').length, 0);
+        assert.equal(e.c.completedSection, null);
+        assert.deepEqual(runs, [[0, 1]]);
+    }
+});
+
+test('fast collection revalidates its accepted native observation after logging before grid publication', async () => {
+    const e = initializationEnvironment(6);
+    const runs = [];
+    const log = e.c.log;
+    const mutation = { videoId: '2', action: 'remove' };
+    e.c.pendingMyListMutations.set('2', mutation);
+    e.c.scheduleRun = (...args) => runs.push(args);
+    let replacement = false;
+    e.c.log = (name, details) => {
+        log(name, details);
+        if (name !== 'GraphQL My List fast collection prepared') return;
+        replacement = true;
+        e.c.nativeCarousel.clearBinding();
+        e.c.nativeCarousel.bind(e.section, e.scroller, e.track);
+    };
+    const completion = e.c.runScript(1);
+    await e.flush(); await e.drain(); await completion;
+    assert.equal(replacement, true);
+    assert.equal(e.c.nativeCarousel.model(e.section).pageCountFinalized, false);
+    assert.equal(e.logs.filter(entry => entry.name === 'legacyGridBuilt').length, 0);
+    assert.equal(e.c.pendingMyListMutations.size, 1);
     assert.equal(e.c.completedSection, null);
     assert.deepEqual(runs, [[0, 1]]);
 });
@@ -4143,6 +4215,7 @@ test('SPA indicator and not-yet-mounted modes bootstrap one page without optiona
 
 function mountedSinglePageEnvironment(count = 6) {
     const e = fetchEnvironment(count);
+    e.template.remove();
     Object.assign(e.c, {
         targetSessionEntryKind: 'spa', targetSessionReason: 'route:popstate', mountedCount: count,
         currentPageSlots: (_, track) => track.children,
@@ -4468,7 +4541,8 @@ test('logical SPA initialization waits for mode confirmation before continuing p
     const e = fetchEnvironment(150);
     e.c.targetSessionEntryKind = 'spa';
     const readiness = fetchDeferred();
-    e.c.waitForNativeCarouselReady = () => readiness.promise;
+    const prepare = e.c.waitForNativeCarouselReady;
+    e.c.waitForNativeCarouselReady = (...args) => readiness.promise.then(() => prepare(...args));
     e.responses.push(
         e.page(150, Array.from({ length: 75 }, (_, index) => index + 1), true, 'next'),
         e.page(150, Array.from({ length: 75 }, (_, index) => index + 76))
@@ -7477,8 +7551,9 @@ test('readiness detachment retries one verified replacement and preserves queued
     const scheduled = configureInitializationRecovery(e);
     const replacement = new ConstructionNode('replacement');
     let readinessCalls = 0;
-    e.c.waitForNativeCarouselReady = async () => {
-        if (++readinessCalls > 1) return { ready: true, empty: false };
+    const prepare = e.c.waitForNativeCarouselReady;
+    e.c.waitForNativeCarouselReady = async (...args) => {
+        if (++readinessCalls > 1) return prepare(...args);
         e.track.setConnected(false);
         e.scroller.appendChild(replacement);
         e.c.netflixDom.findTrack = () => replacement;
