@@ -42,6 +42,15 @@ For any new prompt, read AGENTS.md, context.md, Migration.md, this plan and the 
 
 When resuming an existing migration, select its first unfinished step from findings.md rather than restarting P01. A released checkpoint within a step does not satisfy that step's remaining acceptance conditions. Carry those conditions into the next prompt explicitly.
 
+### Before editing in each prompt
+
+1. Reconcile the selected step or checkpoint with findings.md, the current revision and the working tree. Confirm its prerequisite releases and CI evidence; preserve completed work and inspect unfinished edits before choosing the remaining scope.
+2. Identify the responsibility being transferred, its current and intended state/resource owner, and the live callers that will switch in this checkpoint. Use the corresponding implementation and evidence fields below. A checkpoint must leave that responsibility with one owner; splitting declarations without switching callers is not a checkpoint.
+3. Trace the actual workflow through success, failure, replacement and disposal. Select existing characterization scenarios and add only the missing boundary scenarios needed to prove the transfer. Check the involved source against Migration.md rather than choosing scope from the frequency of earlier findings.
+4. After P01, run `npm run check` against the starting checkout before editing or rebuilding. This read-only check establishes that the existing artifact matches its authored source. If resuming unfinished runtime edits, explain and reconcile any expected mismatch with the recorded checkpoint rather than treating a rebuilt file as evidence that the starting release was consistent.
+
+The selected step's outcome, dependencies and completion gate determine readiness. A design discussion can refine the plan without selecting runtime work; an existing authorization recorded in findings.md continues to apply to execution prompts.
+
 ### Handoff between prompts
 
 End each implementation prompt with a compact record in findings.md containing:
@@ -60,7 +69,7 @@ Every implementation step must:
 
 1. Identify its existing characterization cases and run the relevant behavior against the intended new boundary before extraction. Where coverage is missing, introduce a meaningful failing scenario first, then implement the smallest transfer that makes it pass. For purely documented/wiring changes, use appropriate verification rather than artificial unit tests.
 2. Complete its stated live caller cutover and prove there is one owner for the transferred state/resources. Temporary callers cannot write that owner's internal state.
-3. After P01, run `npm test`, `npm run build`, `npm run check`, `node --check "Legacy My List for Netflix.user.js"`, and `git diff --check`. A full regression run follows the relevant checks once the change is ready; repeated broad runs need a new change/failure to justify them.
+3. After P01, once runtime edits and any required version update are ready, run `npm run build`, `npm run check`, `npm test`, `node --check "Legacy My List for Netflix.user.js"`, and `git diff --check`. Build before the full regression run because bundle scenarios execute the generated userscript. This local sequence follows the read-only starting-checkout check above; hosted CI still checks the committed artifact before rebuilding. For documentation-only checkpoints, review document consistency and whitespace without rebuilding unchanged runtime output. Repeated broad runs need a new change/failure to justify them.
 4. Review the authored-source and generated-output diffs together. Check metadata/internal/package version agreement and verify the release version exceeds the newest published version if output changed.
 5. Update docs/architecture.md to describe the architecture actually present. Update findings.md with outcome, evidence, remaining bridges, retained/moved baseline scenarios and any needed user-owned live check. Do not describe later steps as implemented.
 6. Commit and push according to the standing repository workflow. For runtime/build changes, confirm that the pushed revision passes the Windows and Linux CI jobs before starting a dependent step; record the revision and run link in findings.md. A pending or failed run does not satisfy this gate. Report the step ID, resulting behavior/ownership, version/commit, verification and any real limitation. Then stop at the checkpoint.
