@@ -5,6 +5,9 @@ export function createPageModel(profile) {
     let signatureToPage = new Map();
     let pageToSignature = new Map();
     let profileLogSignature = '';
+    let revision = 0;
+    let mappingGeneration = 0;
+    const notePosition = page => { if (state.currentPage !== page) revision++; state.currentPage = page; };
     const readMap = read => Object.freeze({
         get size() { return read().size; }, get: key => read().get(key), has: key => read().has(key),
         values: () => read().values(), entries: () => read().entries(), keys: () => read().keys(),
@@ -20,61 +23,79 @@ export function createPageModel(profile) {
     function register(signature, page = null) {
         if (!signature) return null;
         if (signatureToPage.has(signature)) {
-            state.currentPage = signatureToPage.get(signature);
+            notePosition(signatureToPage.get(signature));
             return state.currentPage;
         }
         const resolvedPage = Number.isFinite(page) ? Math.max(0, page) : Math.max(0, state.currentPage);
         const previousSignature = pageToSignature.get(resolvedPage);
+        revision++;
         if (previousSignature && previousSignature !== signature) signatureToPage.delete(previousSignature);
         signatureToPage.set(signature, resolvedPage);
         pageToSignature.set(resolvedPage, signature);
-        state.currentPage = resolvedPage;
+        notePosition(resolvedPage);
         return resolvedPage;
     }
     function force(signature, page) {
         if (!signature || !Number.isFinite(page)) return null;
         const resolvedPage = Math.max(0, Math.floor(page));
+        if (signatureToPage.get(signature) === resolvedPage && pageToSignature.get(resolvedPage) === signature) {
+            notePosition(resolvedPage);
+            return resolvedPage;
+        }
+        revision++;
         const oldPage = signatureToPage.get(signature);
         if (Number.isFinite(oldPage) && oldPage !== resolvedPage && pageToSignature.get(oldPage) === signature) pageToSignature.delete(oldPage);
         const oldSignature = pageToSignature.get(resolvedPage);
         if (oldSignature && oldSignature !== signature) signatureToPage.delete(oldSignature);
         signatureToPage.set(signature, resolvedPage);
         pageToSignature.set(resolvedPage, signature);
-        state.currentPage = resolvedPage;
+        notePosition(resolvedPage);
         return resolvedPage;
     }
-    return Object.freeze({ view,
-        updateProfile(value) { state.profile = value; }, register, force,
+    return Object.freeze({ view, get revision() { return revision; }, get mappingGeneration() { return mappingGeneration; },
+        updateProfile(value) {
+            if (state.profile !== value && ['generation', 'navigationMode', 'pageMode', 'indicatorCount'].some(key => state.profile[key] !== value[key])) {
+                revision++; mappingGeneration++;
+            }
+            state.profile = value;
+        }, register, force,
         normalize() {
             const pages = [...signatureToPage.values()].filter(Number.isFinite);
             if (!pages.length) return 0;
             const minimum = Math.min(...pages);
             if (minimum === 0) return 0;
+            revision++; mappingGeneration++;
             signatureToPage = new Map([...signatureToPage].map(([signature, page]) => [signature, page - minimum]));
             pageToSignature = new Map([...signatureToPage].map(([signature, page]) => [page, signature]));
             state.currentPage = Math.max(0, state.currentPage - minimum);
             return -minimum;
         },
         notePage(page, cycleDetected = null) {
-            state.currentPage = page;
+            notePosition(page);
             if (cycleDetected !== null) state.cycleDetected = cycleDetected;
         },
-        beginCollection() { state.pageCountFinalized = false; state.cycleDetected = false; },
+        beginCollection() { revision++; mappingGeneration++; state.pageCountFinalized = false; state.cycleDetected = false; },
         markCycle() { state.cycleDetected = true; },
-        confirmCount(pages) { state.knownPageCount = pages; state.pageCountFinalized = true; },
+        confirmCount(pages) {
+            if (state.knownPageCount !== pages || !state.pageCountFinalized) { revision++; mappingGeneration++; }
+            state.knownPageCount = pages; state.pageCountFinalized = true;
+        },
         finishCollection(pages) {
+            if (state.knownPageCount !== pages || !state.pageCountFinalized || state.pageMappingStale) { revision++; mappingGeneration++; }
             state.knownPageCount = pages; state.pageCountFinalized = true;
             state.pageMappingStale = false; state.cycleDetected = false;
         },
         anchor({ pageCount, currentPage, signature }) {
+            revision++; mappingGeneration++;
             signatureToPage.clear(); pageToSignature.clear();
             state.knownPageCount = pageCount; state.pageCountFinalized = true;
             state.cycleDetected = false; state.pageMappingStale = true; state.currentPage = currentPage;
             if (signature) register(signature, currentPage);
         },
-        markStale() { state.pageMappingStale = true; },
+        markStale() { if (!state.pageMappingStale) { revision++; mappingGeneration++; } state.pageMappingStale = true; },
         deferMapping() { return ++state.logicalRemapRetryCount; },
         commit({ pageCount, currentPage, signature }) {
+            revision++; mappingGeneration++;
             state.knownPageCount = pageCount; state.pageCountFinalized = true;
             state.cycleDetected = false; state.pageMappingStale = false; state.logicalRemapRetryCount = 0;
             state.currentPage = currentPage; force(signature, currentPage);

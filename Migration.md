@@ -195,6 +195,8 @@ Keep authoritative expected count separate from collected count and pending nati
 
 Source-card handles can carry native references within the native integration. Grid-card handles deliberately carry a rendered element for interaction. These limited borrows do not expose the entire native binding, membership store or grid registry.
 
+Carousel source handles are unforgeable and read-only. They retain binding/session, native page-model ownership and the card's identity/index observation; accessing the borrowed slot revalidates those facts. Meaningful native mapping changes invalidate them, while repeating an unchanged observation does not. Expected-page resolution accepts identity/count/columns/page-size hints and returns found, inconclusive or mismatch plus native visible-card facts. Comparing those facts with authoritative list positions, deciding the mismatch threshold and presenting recovery UI remain outside carousel.
+
 ## Dependency rules
 
 1. `main.js` and `app/` construct instances and connect their public operations directly. Use explicit callbacks and collaborators; no event bus, service locator, or framework is required.

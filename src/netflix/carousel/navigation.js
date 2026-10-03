@@ -428,7 +428,8 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
         };
     }
 
-    async function moveOnePage(section, scroller, direction, token = null, sessionToken = null) {
+    async function moveOnePage(section, scroller, direction, token = null, sessionToken = null, assertOperation = () => {}) {
+        assertOperation();
         const hoverTiming = diagnosticSink(token).record;
         const queueStarted = hoverTiming ? performance.now() : 0;
         let moveStarted = null;
@@ -436,6 +437,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
 
         try {
             await moveOwner.ready;
+            assertOperation();
             if (hoverTiming) hoverTiming('queue', queueStarted);
             assertRouteSession(sessionToken);
 
@@ -502,8 +504,10 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
 
                 assertRouteSession(sessionToken);
                 moveOwner.assertCurrent();
+                assertOperation();
                 button.click();
                 moveOwner.assertCurrent();
+                assertOperation();
                 const acknowledgementStarted = hoverTiming ? performance.now() : 0;
                 try {
                     if (profile.pageMode === 'logical') {
@@ -529,6 +533,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
                 } finally { if (hoverTiming) acknowledgementMs = hoverTiming('acknowledgement', acknowledgementStarted) ?? null; }
                 assertRouteSession(sessionToken);
                 moveOwner.assertCurrent();
+                assertOperation();
                 const settlementStarted = hoverTiming ? performance.now() : 0;
                 try {
                     if (sharedFastMode) {
@@ -541,12 +546,14 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
                             assertRouteSession(sessionToken);
                         }
                         moveOwner.assertCurrent();
+                        assertOperation();
                         afterTransform = track.style.getPropertyValue('transform') || getComputedStyle(track).transform;
                         afterSignature = visibleSignature(currentPageSlots(scroller, track));
                         settleObservedChange = settleObservedChange || after !== before;
                     } else {
                         const settled = await waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken);
                         moveOwner.assertCurrent();
+                        assertOperation();
                         afterTransform = settled.transform;
                         afterSignature = settled.signature;
                         settleObservedChange = settled.observedChange;
@@ -557,6 +564,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
             }
 
             moveOwner.assertCurrent();
+            assertOperation();
             log(tLog('carouselMoveCompleted'), {
                 seq,
                 direction: direction < 0 ? 'left' : 'right',
@@ -581,10 +589,11 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
         }
     }
 
-    async function goToPage(section, scroller, target, token = null, sessionToken = null, preferCyclicShortest = false) {
+    async function goToPage(section, scroller, target, token = null, sessionToken = null, preferCyclicShortest = false, assertOperation = () => {}) {
         const bindingOwner = borrowBinding(section, scroller);
         assertRouteSession(sessionToken);
         assertBinding(bindingOwner);
+        assertOperation();
         const diagnostic = diagnosticSink(token);
         const total = pageCount(section);
         target = Math.max(0, Math.min(total - 1, target));
@@ -611,10 +620,12 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
         while (true) {
             assertRouteSession(sessionToken);
             assertBinding(bindingOwner);
+            assertOperation();
             const current = selectedPage(section);
             if (current === target || guard-- <= 0) break;
             assertRouteSession(sessionToken);
             assertBinding(bindingOwner);
+            assertOperation();
             if (token !== null && token !== readHoverToken()) {
                 cancelled = true;
                 break;
@@ -630,7 +641,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
             }
             let next;
             try {
-                next = await moveOnePage(section, scroller, direction, token, sessionToken);
+                next = await moveOnePage(section, scroller, direction, token, sessionToken, assertOperation);
                 pageChangeRetryCount = 0;
             } catch (error) {
                 if (isRouteSessionCancelledError(error)) throw error;
@@ -645,12 +656,14 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
                     await sleep(120);
                     assertRouteSession(sessionToken);
                     assertBinding(bindingOwner);
+                    assertOperation();
                     continue;
                 }
                 throw error;
             }
             assertRouteSession(sessionToken);
             assertBinding(bindingOwner);
+            assertOperation();
             if (token !== null && token !== readHoverToken()) {
                 cancelled = true;
                 break;
@@ -667,9 +680,10 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
                         fallbackDirection: directDirection < 0 ? 'left' : 'right',
                         token
                     });
-                    const retried = await moveOnePage(section, scroller, directDirection, token, sessionToken);
+                    const retried = await moveOnePage(section, scroller, directDirection, token, sessionToken, assertOperation);
                     assertRouteSession(sessionToken);
                     assertBinding(bindingOwner);
+                    assertOperation();
                     if (token !== null && token !== readHoverToken()) {
                         cancelled = true;
                         break;
@@ -689,6 +703,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
 
         assertRouteSession(sessionToken);
         assertBinding(bindingOwner);
+        assertOperation();
         const result = selectedPage(section);
         if (startPage !== target || result !== target || cancelled) {
             log(tLog('pageMoveResult'), {
@@ -708,6 +723,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
     }
 
     async function waitStableCurrentPage(scroller, track, options = {}) {
+        const assertOperation = options.assertOperation || (() => {});
         const timeout = options.timeout ?? PAGE_STABLE_TIMEOUT_MS;
         const previousSignature = options.previousSignature ?? '';
         const requiredStableFrames = options.requiredStableFrames ?? 2;
@@ -720,6 +736,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
         const bindingOwner = bindingForSource(scroller, track);
         assertRouteSession(sessionToken);
         assertBinding(bindingOwner);
+        assertOperation();
         if (hoverPreparationCancelled(token)) return [];
         const start = performance.now();
         let lastSignature = '';
@@ -764,6 +781,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
             await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
             assertRouteSession(sessionToken);
             assertBinding(bindingOwner);
+            assertOperation();
             if (hoverPreparationCancelled(token)) return [];
             const slots = currentPageSlots(scroller, track);
             const newItems = countNewItems(slots);
@@ -806,6 +824,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
         }
         assertRouteSession(sessionToken);
         assertBinding(bindingOwner);
+        assertOperation();
         if (hoverPreparationCancelled(token)) return [];
         return best;
     }

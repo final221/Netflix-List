@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.17
+// @version      1.4.18
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -3264,6 +3264,12 @@
     let signatureToPage = /* @__PURE__ */ new Map();
     let pageToSignature = /* @__PURE__ */ new Map();
     let profileLogSignature = "";
+    let revision = 0;
+    let mappingGeneration = 0;
+    const notePosition = (page) => {
+      if (state.currentPage !== page) revision++;
+      state.currentPage = page;
+    };
     const readMap = (read) => Object.freeze({
       get size() {
         return read().size;
@@ -3285,32 +3291,48 @@
     function register(signature, page = null) {
       if (!signature) return null;
       if (signatureToPage.has(signature)) {
-        state.currentPage = signatureToPage.get(signature);
+        notePosition(signatureToPage.get(signature));
         return state.currentPage;
       }
       const resolvedPage = Number.isFinite(page) ? Math.max(0, page) : Math.max(0, state.currentPage);
       const previousSignature = pageToSignature.get(resolvedPage);
+      revision++;
       if (previousSignature && previousSignature !== signature) signatureToPage.delete(previousSignature);
       signatureToPage.set(signature, resolvedPage);
       pageToSignature.set(resolvedPage, signature);
-      state.currentPage = resolvedPage;
+      notePosition(resolvedPage);
       return resolvedPage;
     }
     function force(signature, page) {
       if (!signature || !Number.isFinite(page)) return null;
       const resolvedPage = Math.max(0, Math.floor(page));
+      if (signatureToPage.get(signature) === resolvedPage && pageToSignature.get(resolvedPage) === signature) {
+        notePosition(resolvedPage);
+        return resolvedPage;
+      }
+      revision++;
       const oldPage = signatureToPage.get(signature);
       if (Number.isFinite(oldPage) && oldPage !== resolvedPage && pageToSignature.get(oldPage) === signature) pageToSignature.delete(oldPage);
       const oldSignature = pageToSignature.get(resolvedPage);
       if (oldSignature && oldSignature !== signature) signatureToPage.delete(oldSignature);
       signatureToPage.set(signature, resolvedPage);
       pageToSignature.set(resolvedPage, signature);
-      state.currentPage = resolvedPage;
+      notePosition(resolvedPage);
       return resolvedPage;
     }
     return Object.freeze({
       view,
+      get revision() {
+        return revision;
+      },
+      get mappingGeneration() {
+        return mappingGeneration;
+      },
       updateProfile(value) {
+        if (state.profile !== value && ["generation", "navigationMode", "pageMode", "indicatorCount"].some((key) => state.profile[key] !== value[key])) {
+          revision++;
+          mappingGeneration++;
+        }
         state.profile = value;
       },
       register,
@@ -3320,16 +3342,20 @@
         if (!pages.length) return 0;
         const minimum = Math.min(...pages);
         if (minimum === 0) return 0;
+        revision++;
+        mappingGeneration++;
         signatureToPage = new Map([...signatureToPage].map(([signature, page]) => [signature, page - minimum]));
         pageToSignature = new Map([...signatureToPage].map(([signature, page]) => [page, signature]));
         state.currentPage = Math.max(0, state.currentPage - minimum);
         return -minimum;
       },
       notePage(page, cycleDetected = null) {
-        state.currentPage = page;
+        notePosition(page);
         if (cycleDetected !== null) state.cycleDetected = cycleDetected;
       },
       beginCollection() {
+        revision++;
+        mappingGeneration++;
         state.pageCountFinalized = false;
         state.cycleDetected = false;
       },
@@ -3337,16 +3363,26 @@
         state.cycleDetected = true;
       },
       confirmCount(pages) {
+        if (state.knownPageCount !== pages || !state.pageCountFinalized) {
+          revision++;
+          mappingGeneration++;
+        }
         state.knownPageCount = pages;
         state.pageCountFinalized = true;
       },
       finishCollection(pages) {
+        if (state.knownPageCount !== pages || !state.pageCountFinalized || state.pageMappingStale) {
+          revision++;
+          mappingGeneration++;
+        }
         state.knownPageCount = pages;
         state.pageCountFinalized = true;
         state.pageMappingStale = false;
         state.cycleDetected = false;
       },
       anchor({ pageCount, currentPage, signature }) {
+        revision++;
+        mappingGeneration++;
         signatureToPage.clear();
         pageToSignature.clear();
         state.knownPageCount = pageCount;
@@ -3357,12 +3393,18 @@
         if (signature) register(signature, currentPage);
       },
       markStale() {
+        if (!state.pageMappingStale) {
+          revision++;
+          mappingGeneration++;
+        }
         state.pageMappingStale = true;
       },
       deferMapping() {
         return ++state.logicalRemapRetryCount;
       },
       commit({ pageCount, currentPage, signature }) {
+        revision++;
+        mappingGeneration++;
         state.knownPageCount = pageCount;
         state.pageCountFinalized = true;
         state.cycleDetected = false;
@@ -3979,13 +4021,16 @@
         observedChange
       };
     }
-    async function moveOnePage(section, scroller, direction, token = null, sessionToken = null) {
+    async function moveOnePage(section, scroller, direction, token = null, sessionToken = null, assertOperation = () => {
+    }) {
+      assertOperation();
       const hoverTiming = diagnosticSink(token).record;
       const queueStarted = hoverTiming ? performance2.now() : 0;
       let moveStarted = null;
       const moveOwner = begin(section, scroller);
       try {
         await moveOwner.ready;
+        assertOperation();
         if (hoverTiming) hoverTiming("queue", queueStarted);
         assertRouteSession(sessionToken);
         if (token !== null && token !== readHoverToken()) {
@@ -4045,8 +4090,10 @@
           if (!sharedFastMode) motionLease = suppress(section, track);
           assertRouteSession(sessionToken);
           moveOwner.assertCurrent();
+          assertOperation();
           button.click();
           moveOwner.assertCurrent();
+          assertOperation();
           const acknowledgementStarted = hoverTiming ? performance2.now() : 0;
           try {
             if (profile.pageMode === "logical") {
@@ -4074,6 +4121,7 @@
           }
           assertRouteSession(sessionToken);
           moveOwner.assertCurrent();
+          assertOperation();
           const settlementStarted = hoverTiming ? performance2.now() : 0;
           try {
             if (sharedFastMode) {
@@ -4082,12 +4130,14 @@
                 assertRouteSession(sessionToken);
               }
               moveOwner.assertCurrent();
+              assertOperation();
               afterTransform = track.style.getPropertyValue("transform") || getComputedStyle2(track).transform;
               afterSignature = visibleSignature(currentPageSlots(scroller, track));
               settleObservedChange = settleObservedChange || after !== before;
             } else {
               const settled = await waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken);
               moveOwner.assertCurrent();
+              assertOperation();
               afterTransform = settled.transform;
               afterSignature = settled.signature;
               settleObservedChange = settled.observedChange;
@@ -4099,6 +4149,7 @@
           motionLease?.release();
         }
         moveOwner.assertCurrent();
+        assertOperation();
         log(tLog("carouselMoveCompleted"), {
           seq,
           direction: direction < 0 ? "left" : "right",
@@ -4122,10 +4173,12 @@
         moveOwner.release();
       }
     }
-    async function goToPage(section, scroller, target, token = null, sessionToken = null, preferCyclicShortest = false) {
+    async function goToPage(section, scroller, target, token = null, sessionToken = null, preferCyclicShortest = false, assertOperation = () => {
+    }) {
       const bindingOwner = borrowBinding(section, scroller);
       assertRouteSession(sessionToken);
       assertBinding(bindingOwner);
+      assertOperation();
       const diagnostic = diagnosticSink(token);
       const total = pageCount(section);
       target = Math.max(0, Math.min(total - 1, target));
@@ -4149,10 +4202,12 @@
       while (true) {
         assertRouteSession(sessionToken);
         assertBinding(bindingOwner);
+        assertOperation();
         const current = selectedPage(section);
         if (current === target || guard-- <= 0) break;
         assertRouteSession(sessionToken);
         assertBinding(bindingOwner);
+        assertOperation();
         if (token !== null && token !== readHoverToken()) {
           cancelled = true;
           break;
@@ -4168,7 +4223,7 @@
         }
         let next;
         try {
-          next = await moveOnePage(section, scroller, direction, token, sessionToken);
+          next = await moveOnePage(section, scroller, direction, token, sessionToken, assertOperation);
           pageChangeRetryCount = 0;
         } catch (error) {
           if (isRouteSessionCancelledError(error)) throw error;
@@ -4183,12 +4238,14 @@
             await sleep(120);
             assertRouteSession(sessionToken);
             assertBinding(bindingOwner);
+            assertOperation();
             continue;
           }
           throw error;
         }
         assertRouteSession(sessionToken);
         assertBinding(bindingOwner);
+        assertOperation();
         if (token !== null && token !== readHoverToken()) {
           cancelled = true;
           break;
@@ -4203,9 +4260,10 @@
               fallbackDirection: directDirection < 0 ? "left" : "right",
               token
             });
-            const retried = await moveOnePage(section, scroller, directDirection, token, sessionToken);
+            const retried = await moveOnePage(section, scroller, directDirection, token, sessionToken, assertOperation);
             assertRouteSession(sessionToken);
             assertBinding(bindingOwner);
+            assertOperation();
             if (token !== null && token !== readHoverToken()) {
               cancelled = true;
               break;
@@ -4221,6 +4279,7 @@
       }
       assertRouteSession(sessionToken);
       assertBinding(bindingOwner);
+      assertOperation();
       const result = selectedPage(section);
       if (startPage !== target || result !== target || cancelled) {
         log(tLog("pageMoveResult"), {
@@ -4239,6 +4298,8 @@
       return result;
     }
     async function waitStableCurrentPage(scroller, track, options = {}) {
+      const assertOperation = options.assertOperation || (() => {
+      });
       const timeout = options.timeout ?? PAGE_STABLE_TIMEOUT_MS;
       const previousSignature = options.previousSignature ?? "";
       const requiredStableFrames = options.requiredStableFrames ?? 2;
@@ -4251,6 +4312,7 @@
       const bindingOwner = bindingForSource(scroller, track);
       assertRouteSession(sessionToken);
       assertBinding(bindingOwner);
+      assertOperation();
       if (hoverPreparationCancelled(token)) return [];
       const start = performance2.now();
       let lastSignature = "";
@@ -4291,6 +4353,7 @@
         await scheduledWait(requestAnimationFrame2, cancelAnimationFrame2);
         assertRouteSession(sessionToken);
         assertBinding(bindingOwner);
+        assertOperation();
         if (hoverPreparationCancelled(token)) return [];
         const slots = currentPageSlots(scroller, track);
         const newItems = countNewItems(slots);
@@ -4327,6 +4390,7 @@
       }
       assertRouteSession(sessionToken);
       assertBinding(bindingOwner);
+      assertOperation();
       if (hoverPreparationCancelled(token)) return [];
       return best;
     }
@@ -5784,6 +5848,8 @@
     },
     warn = () => {
     },
+    trace = () => {
+    },
     tLog = (value) => value,
     logTimeout: logOperationTimeout = () => {
     },
@@ -5822,6 +5888,7 @@
     let acceptedBinding = null;
     let bindingGeneration = 0;
     const bindingTickets = /* @__PURE__ */ new WeakMap();
+    const sourceTickets = /* @__PURE__ */ new WeakMap();
     let discoveryOwner = null, targetDocumentObserver = null, targetMutationFrame = null;
     let targetObservedBrowseHost = null, targetObservedMyListSection = null, targetObservedAncestors = [];
     let targetDocumentDiscoveryActive = false;
@@ -5914,11 +5981,11 @@
     }
     async function anchorPageZero({ section, scroller, track, firstVideoId, columns, sessionToken = null }) {
       const owner = borrowBinding(section, scroller, track);
-      const assertSource = () => {
+      const assertSource2 = () => {
         assertRouteSession(sessionToken);
         assertBinding(owner);
       };
-      assertSource();
+      assertSource2();
       const expectedFirstVideoId = String(firstVideoId || "");
       if (!expectedFirstVideoId) return true;
       const runtime = getCarouselDomRuntime(section);
@@ -5926,7 +5993,7 @@
       if (profile?.pageMode !== "indicator") return true;
       if (selectedPage(section) !== 0) {
         const returned = await navigation.navigate(section, scroller, 0, null, sessionToken, false);
-        assertSource();
+        assertSource2();
         if (returned !== 0 || selectedPage(section) !== 0) {
           throw initializationError(
             "NATIVE_PAGE_ZERO_NOT_REACHED",
@@ -5944,7 +6011,7 @@
           selectedPage: selectedPage(section),
           pageMode: profile.pageMode
         });
-        assertSource();
+        assertSource2();
         return true;
       }
       log("Fresh Netflix My List page-0 anchor mismatch; refreshing native page 0", {
@@ -5954,11 +6021,11 @@
         pages: pageCount(section),
         pageMode: profile.pageMode
       });
-      assertSource();
+      assertSource2();
       if (pageCount(section) > 1) {
         const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
         const adjacent = await navigation.move(section, scroller, 1, null, sessionToken);
-        assertSource();
+        assertSource2();
         if (adjacent !== 0) {
           await navigation.stable(scroller, track, {
             previousSignature: beforeSignature,
@@ -5966,9 +6033,9 @@
             timeout: 900,
             sessionToken
           });
-          assertSource();
+          assertSource2();
           await navigation.move(section, scroller, -1, null, sessionToken);
-          assertSource();
+          assertSource2();
         }
       }
       const requiredKey = `v:${expectedFirstVideoId}`;
@@ -5979,7 +6046,7 @@
         timeout: 1200,
         sessionToken
       });
-      assertSource();
+      assertSource2();
       visibleIds = currentPageVideoIds(scroller, track);
       if (selectedPage(section) === 0 && visibleIds[0] === expectedFirstVideoId) {
         log("Fresh Netflix My List page-0 anchor restored", {
@@ -5988,7 +6055,7 @@
           selectedPage: selectedPage(section),
           pageMode: profile.pageMode
         });
-        assertSource();
+        assertSource2();
         return true;
       }
       throw initializationError(
@@ -6003,6 +6070,195 @@
           pageMode: profile.pageMode
         }
       );
+    }
+    function viewportPageSlots(scroller, track, columns = 1) {
+      return withNativeReadScope(() => {
+        const all = nativeFilledSlots(track);
+        if (!all.length) return [];
+        const count = Math.max(1, columns || 1);
+        const sr = nativeRect(scroller);
+        const visible = all.map((slot) => ({ slot, rect: nativeRect(slot) })).filter((entry) => {
+          const cx = entry.rect.left + entry.rect.width / 2;
+          return entry.rect.width > 1 && cx >= sr.left && cx <= sr.right;
+        }).sort((a, b) => a.rect.left - b.rect.left).map((entry) => entry.slot);
+        return visible.length ? visible.slice(0, count) : currentPageSlots(scroller, track).slice().sort((a, b) => nativeRect(a).left - nativeRect(b).left).slice(0, count);
+      });
+    }
+    function isSourceCurrent(source) {
+      const ticket = sourceTickets.get(source);
+      if (!ticket || !isBindingCurrent(ticket.binding) || ticket.slot.isConnected === false || models.get(ticket.binding.section) !== ticket.model || ticket.model.revision !== ticket.revision) return false;
+      return withNativeReadScope(() => {
+        if (getModel(ticket.binding.section) !== ticket.model || ticket.model.revision !== ticket.revision) return false;
+        const card = ticket.slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+        const href = card?.href || card?.getAttribute("href") || "";
+        if (href !== ticket.href || netflixItemIndexFromSlot(ticket.slot) !== ticket.itemIndex || !nativeFilledSlots(ticket.binding.track).includes(ticket.slot)) return false;
+        if (ticket.model.view.profile.pageMode === "indicator") {
+          const indicators = nativeIndicatorItems(ticket.binding.section);
+          const page = Math.max(0, indicators.findIndex((node) => node.getAttribute("data-indicator-selected") === "true"));
+          if (page !== ticket.page) return false;
+        }
+        return isBindingCurrent(ticket.binding) && models.get(ticket.binding.section) === ticket.model && ticket.model.revision === ticket.revision;
+      });
+    }
+    function assertSource(source) {
+      if (!isSourceCurrent(source)) throw initializationError(
+        "NATIVE_SOURCE_REPLACED",
+        "native-card",
+        "Native source card or its page ownership changed"
+      );
+    }
+    function sourceHandle(binding, slot, page) {
+      assertBinding(binding);
+      const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+      const href = card?.href || card?.getAttribute("href") || "";
+      const itemIndex = netflixItemIndexFromSlot(slot);
+      const model = getModel(binding.section);
+      const source = Object.freeze({
+        href,
+        videoId: netflixDom.videoIdFromHref(href),
+        itemIndex: Number.isSafeInteger(itemIndex) && itemIndex >= 0 ? itemIndex : null,
+        page,
+        get slot() {
+          assertSource(source);
+          return slot;
+        },
+        isCurrent: () => isSourceCurrent(source)
+      });
+      sourceTickets.set(source, { binding, slot, href, itemIndex, page, model, revision: model.revision });
+      assertSource(source);
+      return source;
+    }
+    async function resolveCard({
+      section,
+      scroller,
+      track,
+      item,
+      expectedPage,
+      totalCount,
+      columns = 1,
+      pageItemCount = 1,
+      hoverToken = null,
+      sessionToken = null
+    }) {
+      assertRouteSession(sessionToken);
+      if (isHoverCancelled(hoverToken)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+      if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
+        return Object.freeze({ status: "unknown", reason: "native-binding-unavailable" });
+      }
+      const binding = borrowBinding(section, scroller, track);
+      const model = getModel(section), mappingGeneration = model.mappingGeneration;
+      const guard = () => {
+        assertRouteSession(sessionToken);
+        assertBinding(binding);
+        if (models.get(section) !== model || model.mappingGeneration !== mappingGeneration) {
+          throw initializationError("NATIVE_SOURCE_REPLACED", "native-resolution", "Native page mapping changed during source resolution");
+        }
+      };
+      guard();
+      const target = Object.freeze({ href: String(item?.href || ""), videoId: String(item?.videoId || "") });
+      const key = target.videoId ? "v:" + target.videoId : "h:" + target.href;
+      const keyOf = (slot2) => {
+        const card = slot2.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+        const href = card?.href || card?.getAttribute("href") || "";
+        const id = netflixDom.videoIdFromHref(href);
+        return id ? "v:" + id : "h:" + href;
+      };
+      const width = Math.max(1, columns || 1);
+      const expectedPageCount = Math.max(1, Math.ceil(Math.max(totalCount || 0, 1) / width));
+      const nativePageCount = pageCount(section);
+      if (nativePageCount !== expectedPageCount || expectedPage < 0 || expectedPage >= nativePageCount) {
+        log(tLog("hoverExpectedPageUnknown"), {
+          reason: "page-count-not-converged",
+          item: target,
+          expectedPage,
+          nativePageCount,
+          expectedPageCount,
+          legacyItemCount: totalCount,
+          columns: width
+        });
+        guard();
+        return Object.freeze({ status: "unknown", reason: "page-count-not-converged" });
+      }
+      const selectedBefore = selectedPage(section);
+      const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
+      await navigation.navigate(section, scroller, expectedPage, hoverToken, sessionToken, true, guard);
+      guard();
+      if (hoverToken !== null && hoverToken !== readHoverToken()) {
+        return Object.freeze({ status: "unknown", reason: "token-changed-after-page-move" });
+      }
+      if (selectedPage(section) !== expectedPage) {
+        log(tLog("hoverExpectedPageUnknown"), {
+          reason: "expected-page-not-reached",
+          item: target,
+          expectedPage,
+          selectedPage: selectedPage(section)
+        });
+        guard();
+        return Object.freeze({ status: "unknown", reason: "expected-page-not-reached" });
+      }
+      const foundResult = (slot2, slots, afterStabilityWait = false) => withNativeReadScope(() => {
+        guard();
+        const sources = Object.freeze(slots.map((node) => sourceHandle(binding, node, expectedPage)));
+        const source = sources[slots.indexOf(slot2)];
+        trace(() => [tLog("hoverExpectedPageMatch"), {
+          item: target,
+          expectedPage,
+          selectedPage: selectedPage(section),
+          source: slotDescriptor(slot2),
+          ...afterStabilityWait ? { afterStabilityWait: true } : {}
+        }]);
+        guard();
+        assertSource(source);
+        return Object.freeze({ status: "found", source, sources, page: expectedPage });
+      });
+      let pageSlots = viewportPageSlots(scroller, track, width);
+      let slot = pageSlots.find((node) => keyOf(node) === key) || null;
+      if (slot) return foundResult(slot, pageSlots);
+      const minimumSlots = Math.min(width, Math.max(1, pageItemCount));
+      const stableSlots = await navigation.stable(scroller, track, {
+        previousSignature: selectedBefore === expectedPage ? "" : beforeSignature,
+        requiredStableFrames: 2,
+        minimumSlots,
+        requiredKeys: /* @__PURE__ */ new Set([key]),
+        timeout: 650,
+        sessionToken,
+        hoverToken,
+        assertOperation: guard
+      });
+      guard();
+      if (hoverToken !== null && hoverToken !== readHoverToken()) {
+        return Object.freeze({ status: "unknown", reason: "token-changed-after-stability-wait" });
+      }
+      if (selectedPage(section) !== expectedPage) return Object.freeze({ status: "unknown", reason: "page-changed-during-stability-wait" });
+      pageSlots = viewportPageSlots(scroller, track, width);
+      slot = pageSlots.find((node) => keyOf(node) === key) || null;
+      if (slot) return foundResult(slot, pageSlots, true);
+      const visibleSlots = pageSlots.length ? pageSlots : stableSlots?.length ? stableSlots.slice(0, width) : [];
+      const visibleCards = Object.freeze(visibleSlots.map((node) => {
+        const href = node.querySelector(NETFLIX_DOM_SELECTORS2.standardCard)?.href || "";
+        const itemIndex = netflixItemIndexFromSlot(node);
+        return Object.freeze({
+          href,
+          videoId: netflixDom.videoIdFromHref(href),
+          itemIndex: Number.isSafeInteger(itemIndex) && itemIndex >= 0 ? itemIndex : null
+        });
+      }));
+      const visibleIds = Object.freeze(visibleCards.map((card) => card.videoId).filter(Boolean));
+      if (visibleSlots.length < minimumSlots || visibleIds.length < minimumSlots) {
+        log(tLog("hoverExpectedPageUnknown"), {
+          reason: "expected-page-not-fully-mounted",
+          item: target,
+          expectedPage,
+          minimumSlots,
+          slots: visibleSlots.length,
+          visibleIds
+        });
+        guard();
+        return Object.freeze({ status: "unknown", reason: "expected-page-not-fully-mounted", visibleIds, visibleCards });
+      }
+      log(tLog("hoverExpectedPageMismatch"), { item: target, expectedPage, visibleIds });
+      guard();
+      return Object.freeze({ status: "mismatch", reason: "target-not-in-expected-page", visibleIds, visibleCards });
     }
     function getModel(section) {
       if (!section) return null;
@@ -7062,6 +7318,10 @@
       mountedBootstrap: collection.mountedBootstrap,
       anchorPageZero,
       visibleVideoIds: currentPageVideoIds,
+      resolveCard,
+      isSourceCurrent,
+      assertSource,
+      viewportSlots: viewportPageSlots,
       collect: (options) => options.mode === "mounted-single-page" ? collection.collectMounted(options) : collection.collect(options),
       resetSource() {
         clearBinding();
@@ -7227,7 +7487,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.17";
+    const SCRIPT_VERSION = "1.4.18";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -7310,6 +7570,7 @@
       createError: initializationError,
       log,
       warn,
+      trace,
       tLog,
       logTimeout: logOperationTimeout,
       describeSlot: slotDescriptor,
@@ -11431,17 +11692,7 @@
       return track ? findMountedSourceSlot(track, item, activeOnly) : null;
     }
     function viewportPageSlots(scroller, track, columns = sourceState?.layout?.columns || 1) {
-      const all = netflixDom.filledSlots(track);
-      if (!all.length) return [];
-      const count = Math.max(1, columns || 1);
-      const sr = scroller.getBoundingClientRect();
-      const visible = all.map((slot) => ({ slot, rect: slot.getBoundingClientRect() })).filter((entry) => {
-        const cx = entry.rect.left + entry.rect.width / 2;
-        return entry.rect.width > 1 && cx >= sr.left && cx <= sr.right;
-      }).sort((a, b) => a.rect.left - b.rect.left).map((entry) => entry.slot);
-      if (visible.length) return visible.slice(0, count);
-      const fallback = currentPageSlots(scroller, track).slice().sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-      return fallback.slice(0, count);
+      return nativeCarousel.viewportSlots(scroller, track, columns);
     }
     async function resolveExpectedPageSourceItem(item, expectedPage = item.page, token = null, sessionToken = null) {
       assertRouteSession(sessionToken);
@@ -11451,129 +11702,45 @@
       activeVideoId = null;
       activeClone = null;
       activePage = null;
-      let { section, scroller, track } = sourceState || {};
-      if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
-        return { status: "unknown", reason: "native-binding-unavailable" };
-      }
-      const columns = Math.max(1, sourceState?.layout?.columns || 1);
-      const legacyItemCount = sourceState?.items?.length ?? 0;
-      const expectedPageCount = Math.max(1, Math.ceil(Math.max(legacyItemCount, 1) / columns));
-      const nativePageCount = pageCount(section);
-      if (nativePageCount !== expectedPageCount || expectedPage < 0 || expectedPage >= nativePageCount) {
-        log(tLog("hoverExpectedPageUnknown"), {
-          reason: "page-count-not-converged",
-          item: itemSummary(item),
-          expectedPage,
-          nativePageCount,
-          expectedPageCount,
-          legacyItemCount,
-          columns
-        });
-        return { status: "unknown", reason: "page-count-not-converged" };
-      }
-      const selectedBefore = selectedPage(section);
-      const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
-      await goToPage(section, scroller, expectedPage, token, sessionToken, true);
-      if (token !== null && token !== hoverToken) {
-        return { status: "unknown", reason: "token-changed-after-page-move" };
-      }
-      ensureLiveNativeBinding("hover-expected-page-after-move");
-      ({ section, scroller, track } = sourceState || {});
-      if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
-        return { status: "unknown", reason: "native-binding-lost-after-page-move" };
-      }
-      if (selectedPage(section) !== expectedPage) {
-        log(tLog("hoverExpectedPageUnknown"), {
-          reason: "expected-page-not-reached",
-          item: itemSummary(item),
-          expectedPage,
-          selectedPage: selectedPage(section)
-        });
-        return { status: "unknown", reason: "expected-page-not-reached" };
-      }
-      let pageSlots = viewportPageSlots(scroller, track, columns);
-      let slot = pageSlots.find((sourceSlot) => {
-        const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-        return itemKeyFromCard(card) === itemKey(item);
-      }) || null;
-      if (slot) {
-        trace(() => [tLog("hoverExpectedPageMatch"), {
-          item: itemSummary(item),
-          expectedPage,
-          selectedPage: selectedPage(section),
-          source: slotDescriptor(slot)
-        }]);
-        return { status: "found", slot, page: expectedPage, slots: pageSlots };
-      }
-      const expectedPageItemCount = pageItemKeys(sourceState?.items || [], expectedPage).size;
-      const minimumSlots = Math.min(columns, Math.max(1, expectedPageItemCount));
-      const stableSlots = await waitStableCurrentPage(scroller, track, {
-        previousSignature: selectedBefore === expectedPage ? "" : beforeSignature,
-        requiredStableFrames: 2,
-        minimumSlots,
-        requiredKeys: /* @__PURE__ */ new Set([itemKey(item)]),
-        timeout: 650,
-        sessionToken,
-        hoverToken: token
+      const state = sourceState;
+      const result = await nativeCarousel.resolveCard({
+        section: state?.section,
+        scroller: state?.scroller,
+        track: state?.track,
+        item: { videoId: item.videoId, href: item.href },
+        expectedPage,
+        totalCount: state?.items?.length || 0,
+        columns: state?.layout?.columns || 1,
+        pageItemCount: pageItemKeys(state?.items || [], expectedPage).size,
+        hoverToken: token,
+        sessionToken
       });
-      if (token !== null && token !== hoverToken) {
-        return { status: "unknown", reason: "token-changed-after-stability-wait" };
-      }
-      if (selectedPage(section) !== expectedPage) {
-        return { status: "unknown", reason: "page-changed-during-stability-wait" };
-      }
-      pageSlots = viewportPageSlots(scroller, track, columns);
-      slot = pageSlots.find((sourceSlot) => {
-        const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-        return itemKeyFromCard(card) === itemKey(item);
-      }) || null;
-      if (slot) {
-        trace(() => [tLog("hoverExpectedPageMatch"), {
-          item: itemSummary(item),
-          expectedPage,
-          selectedPage: selectedPage(section),
-          source: slotDescriptor(slot),
-          afterStabilityWait: true
-        }]);
-        return { status: "found", slot, page: expectedPage, slots: pageSlots };
-      }
-      const visibleSlots = pageSlots.length ? pageSlots : stableSlots?.length ? stableSlots.slice(0, columns) : [];
-      const visibleIds = visibleSlots.map((sourceSlot) => videoIdFromHref(sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard)?.href || "")).filter(Boolean);
-      if (visibleSlots.length < minimumSlots || visibleIds.length < minimumSlots) {
-        log(tLog("hoverExpectedPageUnknown"), {
-          reason: "expected-page-not-fully-mounted",
-          item: itemSummary(item),
-          expectedPage,
-          minimumSlots,
-          slots: visibleSlots.length,
-          visibleIds
-        });
-        return { status: "unknown", reason: "expected-page-not-fully-mounted", visibleIds };
-      }
-      const positionMismatch = firstVisibleNativePositionMismatch(visibleSlots);
-      if (positionMismatch) {
-        log("Native My List position mismatch detected before source search", {
-          item: itemSummary(positionMismatch.item),
-          expectedPage,
-          expectedIndex: positionMismatch.deviation.expectedIndex,
-          actualIndex: positionMismatch.deviation.actualIndex,
-          delta: positionMismatch.deviation.delta,
-          threshold: ORDER_MISMATCH_POSITION_THRESHOLD,
-          visibleIds
-        });
+      assertRouteSession(sessionToken);
+      if (sourceState !== state) return { status: "unknown", reason: "native-binding-lost-after-page-move" };
+      if (result.status === "found") {
         return {
-          status: "mismatch",
-          reason: "position-deviation-before-source-search",
-          visibleIds,
-          positionMismatch
+          ...result,
+          get slot() {
+            return result.source.slot;
+          },
+          get slots() {
+            return nativeCarousel.sample(() => result.sources.map((source) => source.slot));
+          }
         };
       }
-      log(tLog("hoverExpectedPageMismatch"), {
-        item: itemSummary(item),
+      if (result.status !== "mismatch") return result;
+      const positionMismatch = firstVisibleNativePositionMismatch(result.visibleCards);
+      if (!positionMismatch) return result;
+      log("Native My List position mismatch detected before source search", {
+        item: itemSummary(positionMismatch.item),
         expectedPage,
-        visibleIds
+        expectedIndex: positionMismatch.deviation.expectedIndex,
+        actualIndex: positionMismatch.deviation.actualIndex,
+        delta: positionMismatch.deviation.delta,
+        threshold: ORDER_MISMATCH_POSITION_THRESHOLD,
+        visibleIds: result.visibleIds
       });
-      return { status: "mismatch", reason: "target-not-in-expected-page", visibleIds };
+      return { ...result, reason: "position-deviation-before-source-search", positionMismatch };
     }
     function nativePositionDeviation(item, slot) {
       if (!item || !slot || !sourceState?.items?.length) return null;
@@ -11590,12 +11757,17 @@
         absoluteDelta: Math.abs(actualIndex - expectedIndex)
       };
     }
-    function firstVisibleNativePositionMismatch(slots) {
-      for (const slot of slots || []) {
-        const visibleItem = findItemForSourceSlot(slot);
-        const deviation = nativePositionDeviation(visibleItem, slot);
-        if (!deviation || deviation.absoluteDelta < ORDER_MISMATCH_POSITION_THRESHOLD) continue;
-        return { item: visibleItem, slot, deviation };
+    function firstVisibleNativePositionMismatch(cards) {
+      for (const card of cards || []) {
+        const visibleItem = sourceState?.items?.find((item) => card.videoId ? String(item.videoId) === card.videoId : item.href === card.href);
+        if (!visibleItem) continue;
+        const expectedIndex = sourceState.items.indexOf(visibleItem);
+        const actualIndex = card.itemIndex;
+        if (!Number.isSafeInteger(actualIndex) || actualIndex < 0) continue;
+        const delta = actualIndex - expectedIndex;
+        const deviation = { expectedIndex, actualIndex, delta, absoluteDelta: Math.abs(delta) };
+        if (deviation.absoluteDelta < ORDER_MISMATCH_POSITION_THRESHOLD) continue;
+        return { item: visibleItem, deviation };
       }
       return null;
     }

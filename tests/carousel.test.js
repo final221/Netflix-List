@@ -413,6 +413,7 @@ function navigationEnvironment({ mode = 'logical', count = 3, onClick = null, ov
         card.setAttribute('tabindex', '0');
         return [slot];
     });
+    pages.forEach(slots => slots.forEach(slot => e.track.appendChild(slot)));
     let page = 0;
     const directions = [];
     const indicators = mode === 'indicator' ? pages.map(() => {
@@ -457,6 +458,7 @@ function navigationEnvironment({ mode = 'logical', count = 3, onClick = null, ov
 
 function mountedEnvironment(overrides = {}) {
     const e = navigationEnvironment({ count: 1, overrides });
+    e.pages[0].forEach(slot => slot.remove());
     e.scroller.classList.add('scroller');
     e.scroller.getBoundingClientRect = () => ({ left: 0, right: 300, width: 300, height: 100 });
     e.track.style.setProperty('display', 'flex');
@@ -480,6 +482,127 @@ function mountedEnvironment(overrides = {}) {
         qualify: () => e.settle(e.carousel.mountedBootstrap(options)),
         capture: bootstrap => e.carousel.collect({ ...options, mode: 'mounted-single-page', bootstrap, totalCount: 3, columns: 3 }) };
 }
+
+test('expected-page resolution returns native handles and truthful incomplete or mismatched observations', async () => {
+    for (const mode of ['logical', 'indicator']) {
+        const e = navigationEnvironment({ mode });
+        for (const [page, slots] of e.pages.entries()) {
+            slots[0].__reactFiber$source = { memoizedProps: { itemIndex: page, totalCount: 3 }, return: null };
+        }
+        const options = { section: e.section, scroller: e.scroller, track: e.track,
+            item: { videoId: '2', href: 'https://www.netflix.com/title/2' }, expectedPage: 1,
+            totalCount: 3, columns: 1, pageItemCount: 1, sessionToken: e.scope.token };
+        const found = await e.settle(e.carousel.resolveCard(options));
+        assert.equal(found.status, 'found');
+        assert.equal(found.source.slot, e.pages[1][0]);
+        assert.equal(found.source.itemIndex, 1);
+        assert.equal(found.source.isCurrent(), true);
+        assert.equal(Object.isFrozen(found.source), true);
+        assert.deepEqual(e.directions, [1]);
+        assert.equal(e.carousel.isSourceCurrent({ ...found.source }), false);
+        const mismatch = await e.settle(e.carousel.resolveCard({ ...options, item: { videoId: '99' } }), 100);
+        assert.equal(mismatch.status, 'mismatch');
+        assert.deepEqual(mismatch.visibleIds, ['2']);
+        assert.equal(mismatch.visibleCards[0].itemIndex, 1);
+        assert.equal((await e.carousel.resolveCard({ ...options, totalCount: 4 })).reason, 'page-count-not-converged');
+        const href = 'https://www.netflix.com/browse?native-card=unknown';
+        e.pages[1][0].querySelector('a').href = href;
+        const byHref = await e.settle(e.carousel.resolveCard({ ...options, item: { href } }));
+        assert.equal(byHref.status, 'found');
+        assert.equal(byHref.source.href, href);
+        assert.equal(byHref.source.videoId, '');
+        e.pageDom.filledSlots = () => [];
+        assert.equal((await e.settle(e.carousel.resolveCard(options), 100)).reason, 'expected-page-not-fully-mounted');
+        assert.equal(e.carousel.diagnostics().navigation.pendingWaits, 0);
+    }
+});
+
+test('source handles reject native recycling and mapping replacement without invalidating repeated observations', async () => {
+    for (const change of ['identity', 'index', 'mapping', 'binding', 'route']) {
+        const e = mountedEnvironment();
+        const result = await e.settle(e.carousel.resolveCard({ ...e.options, item: { videoId: '1' },
+            expectedPage: 0, totalCount: 3, columns: 3, pageItemCount: 3 }));
+        const source = result.source;
+        e.carousel.forcePage(e.section, e.carousel.signatureOf(e.slots), 0);
+        // The first forced observation can establish mapping; borrow after it.
+        const current = (await e.settle(e.carousel.resolveCard({ ...e.options, item: { videoId: '1' },
+            expectedPage: 0, totalCount: 3, columns: 3, pageItemCount: 3 }))).source;
+        e.carousel.forcePage(e.section, e.carousel.signatureOf(e.slots), 0);
+        assert.equal(current.isCurrent(), true, 'an identical observation retains ownership');
+        if (change === 'identity') e.slots[0].querySelector('a').href = 'https://www.netflix.com/title/99';
+        if (change === 'index') e.slots[0].__reactFiber$mounted.memoizedProps.itemIndex = 2;
+        if (change === 'mapping') e.carousel.anchorAfterDelta(e.section, { pageCount: 1, currentPage: 0, signature: e.carousel.signatureOf(e.slots) });
+        if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
+        if (change === 'route') e.scope.dispose();
+        assert.equal(current.isCurrent(), false, change);
+        assert.equal(source.isCurrent(), false, change);
+        assert.throws(() => current.slot, { code: 'NATIVE_SOURCE_REPLACED' });
+    }
+});
+
+test('source resolution stops old waits and never adopts a replacement with the same title', async () => {
+    for (const change of ['binding', 'route', 'hover']) {
+        const e = navigationEnvironment();
+        const pending = e.carousel.resolveCard({ section: e.section, scroller: e.scroller, track: e.track,
+            item: { videoId: '99' }, expectedPage: 0, totalCount: 3, columns: 1,
+            pageItemCount: 1, hoverToken: 1, sessionToken: e.scope.token });
+        const expected = change === 'hover' ? pending : assert.rejects(pending, {
+            code: change === 'route' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'NATIVE_SOURCE_REPLACED' });
+        await e.scheduler.flush();
+        if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
+        if (change === 'route') e.scope.dispose();
+        if (change === 'hover') e.cancelHover();
+        const result = await e.settle(expected, 100);
+        if (change === 'hover') assert.equal(result.status, 'unknown');
+        assert.deepEqual(e.directions, []);
+        assert.equal(e.scheduler.frames.size, 0);
+        assert.equal(e.scheduler.timers.size, 0);
+    }
+});
+
+test('source resolution accepts late hydration but rejects a remapped source during that wait', async () => {
+    for (const change of ['hydrate', 'anchor', 'model']) {
+        const e = navigationEnvironment();
+        const pending = e.carousel.resolveCard({ section: e.section, scroller: e.scroller, track: e.track,
+            item: { videoId: '99' }, expectedPage: 0, totalCount: 3, columns: 1,
+            pageItemCount: 1, sessionToken: e.scope.token });
+        const expected = change === 'hydrate' ? pending : assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' });
+        await e.scheduler.flush();
+        if (change === 'hydrate') e.pages[0][0].querySelector('a').href = 'https://www.netflix.com/title/99';
+        if (change === 'anchor') e.carousel.anchorAfterDelta(e.section, { pageCount: 3, currentPage: 0, signature: e.pages[0][0].querySelector('a').href });
+        if (change === 'model') e.carousel.resetModel(e.section);
+        let reads = 0;
+        const filled = e.pageDom.filledSlots;
+        e.pageDom.filledSlots = () => { reads++; return filled(); };
+        const result = await e.settle(expected, 100);
+        if (change === 'hydrate') { assert.equal(result.status, 'found'); assert.equal(result.source.videoId, '99'); }
+        else assert.equal(reads, 0, 'obsolete hydration must stop before another card read');
+        assert.deepEqual(e.directions, []);
+        assert.equal(e.scheduler.frames.size, 0);
+        assert.equal(e.scheduler.timers.size, 0);
+    }
+});
+
+test('a queued source-resolution move rejects a changed mapping before issuing another click', async () => {
+    let clicks = 0;
+    const e = navigationEnvironment({ mode: 'indicator', onClick({ page, direction, setPage }) {
+        if (++clicks > 1) setPage((page + direction + 3) % 3);
+    } });
+    const first = e.carousel.movePage(e.section, e.scroller, 1, null, e.scope.token);
+    await e.scheduler.flush();
+    const pending = e.carousel.resolveCard({ section: e.section, scroller: e.scroller, track: e.track,
+        item: { videoId: '3' }, expectedPage: 2, totalCount: 3, columns: 1,
+        pageItemCount: 1, sessionToken: e.scope.token });
+    const rejected = assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' });
+    e.carousel.anchorAfterDelta(e.section, { pageCount: 3, currentPage: 0, signature: 'new-mapping' });
+    e.setPage(1);
+    e.observers.forEach(observer => observer.callback([]));
+    await e.settle(first);
+    await e.settle(rejected);
+    assert.deepEqual(e.directions, [1]);
+    assert.equal(e.carousel.diagnostics().navigation.pendingMoves, 0);
+    assert.equal(e.carousel.diagnostics().navigation.pendingWaits, 0);
+});
 
 test('mounted bootstrap and capture use opaque native proof without navigation or extra snapshots', async () => {
     const e = mountedEnvironment();

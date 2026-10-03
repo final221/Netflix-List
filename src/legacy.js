@@ -115,7 +115,7 @@ export function startLegacy() {
         readListShape: section => sourceState?.section === section ? { totalCount: sourceState.totalCount,
             columns: Math.max(1, sourceState.layout?.columns || 1) } : null,
         readGraphqlCount: () => listData.readMyListTotalCount(), cardMarkup, createError: initializationError,
-        log, warn, tLog, logTimeout: logOperationTimeout, describeSlot: slotDescriptor, MutationObserver,
+        log, warn, trace, tLog, logTimeout: logOperationTimeout, describeSlot: slotDescriptor, MutationObserver,
         isHoverCancelled: hoverPreparationCancelled, readHoverToken: () => hoverToken,
         navigationDiagnostics: createNavigationDiagnosticSink,
         checkRoute: () => { if (location.href !== lastObservedUrl) handleRouteChange('MutationObserver-url'); },
@@ -4276,25 +4276,7 @@ export function startLegacy() {
     }
 
     function viewportPageSlots(scroller, track, columns = sourceState?.layout?.columns || 1) {
-        const all = netflixDom.filledSlots(track);
-        if (!all.length) return [];
-        const count = Math.max(1, columns || 1);
-        const sr = scroller.getBoundingClientRect();
-        const visible = all
-            .map(slot => ({ slot, rect: slot.getBoundingClientRect() }))
-            .filter(entry => {
-                const cx = entry.rect.left + entry.rect.width / 2;
-                return entry.rect.width > 1 && cx >= sr.left && cx <= sr.right;
-            })
-            .sort((a, b) => a.rect.left - b.rect.left)
-            .map(entry => entry.slot);
-
-        if (visible.length) return visible.slice(0, count);
-
-        const fallback = currentPageSlots(scroller, track)
-            .slice()
-            .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-        return fallback.slice(0, count);
+        return nativeCarousel.viewportSlots(scroller, track, columns);
     }
 
     async function resolveExpectedPageSourceItem(item, expectedPage = item.page, token = null, sessionToken = null) {
@@ -4305,140 +4287,25 @@ export function startLegacy() {
         activeVideoId = null;
         activeClone = null;
         activePage = null;
-        let { section, scroller, track } = sourceState || {};
-        if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
-            return { status: 'unknown', reason: 'native-binding-unavailable' };
+        const state = sourceState;
+        const result = await nativeCarousel.resolveCard({ section: state?.section, scroller: state?.scroller,
+            track: state?.track, item: { videoId: item.videoId, href: item.href }, expectedPage,
+            totalCount: state?.items?.length || 0, columns: state?.layout?.columns || 1,
+            pageItemCount: pageItemKeys(state?.items || [], expectedPage).size, hoverToken: token, sessionToken });
+        assertRouteSession(sessionToken);
+        if (sourceState !== state) return { status: 'unknown', reason: 'native-binding-lost-after-page-move' };
+        if (result.status === 'found') {
+            return { ...result, get slot() { return result.source.slot; },
+                get slots() { return nativeCarousel.sample(() => result.sources.map(source => source.slot)); } };
         }
-
-        const columns = Math.max(1, sourceState?.layout?.columns || 1);
-        const legacyItemCount = sourceState?.items?.length ?? 0;
-        const expectedPageCount = Math.max(1, Math.ceil(Math.max(legacyItemCount, 1) / columns));
-        const nativePageCount = pageCount(section);
-        if (nativePageCount !== expectedPageCount || expectedPage < 0 || expectedPage >= nativePageCount) {
-            log(tLog('hoverExpectedPageUnknown'), {
-                reason: 'page-count-not-converged',
-                item: itemSummary(item),
-                expectedPage,
-                nativePageCount,
-                expectedPageCount,
-                legacyItemCount,
-                columns
-            });
-            return { status: 'unknown', reason: 'page-count-not-converged' };
-        }
-
-        const selectedBefore = selectedPage(section);
-        const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
-        await goToPage(section, scroller, expectedPage, token, sessionToken, true);
-        if (token !== null && token !== hoverToken) {
-            return { status: 'unknown', reason: 'token-changed-after-page-move' };
-        }
-
-        ensureLiveNativeBinding('hover-expected-page-after-move');
-        ({ section, scroller, track } = sourceState || {});
-        if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
-            return { status: 'unknown', reason: 'native-binding-lost-after-page-move' };
-        }
-        if (selectedPage(section) !== expectedPage) {
-            log(tLog('hoverExpectedPageUnknown'), {
-                reason: 'expected-page-not-reached',
-                item: itemSummary(item),
-                expectedPage,
-                selectedPage: selectedPage(section)
-            });
-            return { status: 'unknown', reason: 'expected-page-not-reached' };
-        }
-
-        let pageSlots = viewportPageSlots(scroller, track, columns);
-        let slot = pageSlots.find(sourceSlot => {
-            const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-            return itemKeyFromCard(card) === itemKey(item);
-        }) || null;
-        if (slot) {
-            trace(() => [tLog('hoverExpectedPageMatch'), {
-                item: itemSummary(item),
-                expectedPage,
-                selectedPage: selectedPage(section),
-                source: slotDescriptor(slot)
-            }]);
-            return { status: 'found', slot, page: expectedPage, slots: pageSlots };
-        }
-
-        const expectedPageItemCount = pageItemKeys(sourceState?.items || [], expectedPage).size;
-        const minimumSlots = Math.min(columns, Math.max(1, expectedPageItemCount));
-        const stableSlots = await waitStableCurrentPage(scroller, track, {
-            previousSignature: selectedBefore === expectedPage ? '' : beforeSignature,
-            requiredStableFrames: 2,
-            minimumSlots,
-            requiredKeys: new Set([itemKey(item)]),
-            timeout: 650,
-            sessionToken,
-            hoverToken: token
-        });
-        if (token !== null && token !== hoverToken) {
-            return { status: 'unknown', reason: 'token-changed-after-stability-wait' };
-        }
-        if (selectedPage(section) !== expectedPage) {
-            return { status: 'unknown', reason: 'page-changed-during-stability-wait' };
-        }
-
-        pageSlots = viewportPageSlots(scroller, track, columns);
-        slot = pageSlots.find(sourceSlot => {
-            const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-            return itemKeyFromCard(card) === itemKey(item);
-        }) || null;
-        if (slot) {
-            trace(() => [tLog('hoverExpectedPageMatch'), {
-                item: itemSummary(item),
-                expectedPage,
-                selectedPage: selectedPage(section),
-                source: slotDescriptor(slot),
-                afterStabilityWait: true
-            }]);
-            return { status: 'found', slot, page: expectedPage, slots: pageSlots };
-        }
-
-        const visibleSlots = pageSlots.length ? pageSlots : (stableSlots?.length ? stableSlots.slice(0, columns) : []);
-        const visibleIds = visibleSlots
-            .map(sourceSlot => videoIdFromHref(sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard)?.href || ''))
-            .filter(Boolean);
-        if (visibleSlots.length < minimumSlots || visibleIds.length < minimumSlots) {
-            log(tLog('hoverExpectedPageUnknown'), {
-                reason: 'expected-page-not-fully-mounted',
-                item: itemSummary(item),
-                expectedPage,
-                minimumSlots,
-                slots: visibleSlots.length,
-                visibleIds
-            });
-            return { status: 'unknown', reason: 'expected-page-not-fully-mounted', visibleIds };
-        }
-
-        const positionMismatch = firstVisibleNativePositionMismatch(visibleSlots);
-        if (positionMismatch) {
-            log('Native My List position mismatch detected before source search', {
-                item: itemSummary(positionMismatch.item),
-                expectedPage,
-                expectedIndex: positionMismatch.deviation.expectedIndex,
-                actualIndex: positionMismatch.deviation.actualIndex,
-                delta: positionMismatch.deviation.delta,
-                threshold: ORDER_MISMATCH_POSITION_THRESHOLD,
-                visibleIds
-            });
-            return {
-                status: 'mismatch',
-                reason: 'position-deviation-before-source-search',
-                visibleIds,
-                positionMismatch
-            };
-        }
-
-        log(tLog('hoverExpectedPageMismatch'), {
-            item: itemSummary(item),
-            expectedPage,
-            visibleIds
-        });
-        return { status: 'mismatch', reason: 'target-not-in-expected-page', visibleIds };
+        if (result.status !== 'mismatch') return result;
+        const positionMismatch = firstVisibleNativePositionMismatch(result.visibleCards);
+        if (!positionMismatch) return result;
+        log('Native My List position mismatch detected before source search', {
+            item: itemSummary(positionMismatch.item), expectedPage,
+            expectedIndex: positionMismatch.deviation.expectedIndex, actualIndex: positionMismatch.deviation.actualIndex,
+            delta: positionMismatch.deviation.delta, threshold: ORDER_MISMATCH_POSITION_THRESHOLD, visibleIds: result.visibleIds });
+        return { ...result, reason: 'position-deviation-before-source-search', positionMismatch };
     }
 
     function nativePositionDeviation(item, slot) {
@@ -4460,12 +4327,18 @@ export function startLegacy() {
         };
     }
 
-    function firstVisibleNativePositionMismatch(slots) {
-        for (const slot of slots || []) {
-            const visibleItem = findItemForSourceSlot(slot);
-            const deviation = nativePositionDeviation(visibleItem, slot);
-            if (!deviation || deviation.absoluteDelta < ORDER_MISMATCH_POSITION_THRESHOLD) continue;
-            return { item: visibleItem, slot, deviation };
+    function firstVisibleNativePositionMismatch(cards) {
+        for (const card of cards || []) {
+            const visibleItem = sourceState?.items?.find(item => card.videoId
+                ? String(item.videoId) === card.videoId : item.href === card.href);
+            if (!visibleItem) continue;
+            const expectedIndex = sourceState.items.indexOf(visibleItem);
+            const actualIndex = card.itemIndex;
+            if (!Number.isSafeInteger(actualIndex) || actualIndex < 0) continue;
+            const delta = actualIndex - expectedIndex;
+            const deviation = { expectedIndex, actualIndex, delta, absoluteDelta: Math.abs(delta) };
+            if (deviation.absoluteDelta < ORDER_MISMATCH_POSITION_THRESHOLD) continue;
+            return { item: visibleItem, deviation };
         }
         return null;
     }

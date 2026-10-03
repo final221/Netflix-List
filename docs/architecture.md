@@ -34,7 +34,7 @@ src/main.js
      -> src/netflix/list-data.js: page bootstrap, requests, pagination and normalized records
      -> src/netflix/viewing-data.js: typed viewing requests and interpreted progress/coverage
      -> src/app/session-scope.js: route epochs and registered request/timer ownership
-     -> src/netflix/carousel/carousel.js: discovery, binding generations, reads and readiness
+     -> src/netflix/carousel/carousel.js: discovery, binding generations, reads, readiness and expected-card resolution
         -> page-model.js: private signature/page mapping and logical-window policies
         -> navigation.js: private movement, acknowledgement, hydration and restoration
         -> collection.js: private native traversal, mounted bootstrap proof/capture, material and counters
@@ -144,6 +144,16 @@ Carousel's mountedBootstrap command delegates to private collection. It requires
 The explicit mounted-single-page collect mode synchronously rechecks the proof, current source discovered in the DOM, current membership/layout and every card identity before cloning. It returns items/reason, preserving the existing no-await capture path and fresh-data fallback on rejected proof. Failed capture or binding replacement releases unpublished snapshots. Legacy's tryMountedSinglePageFastBootstrap and collectMountedSinglePageItems bridges supply entry policy and current source/count/layout hints; initial/manual/order-mismatch entry freshness and strategy/reuse counters stay outside carousel until P13. No writable DOM/session proof leaves the native owner.
 
 Carousel's anchorPageZero command owns fresh indicator page-zero validation and the existing normal adjacent-page round trip. It uses private navigation for return-to-zero, hydration and movement, retaining the 900-ms adjacent hydration and 1200-ms required-first-title checks. It captures one source generation and checks it after waits and diagnostic callbacks before further work or success. A missing first title after repair remains an explicit failure. Legacy supplies the fresh anchor and layout hint through ensureFreshIndicatorPageZeroAnchor; currentPageVideoIds forwards a bounded observation used by remapping until the remaining P10 transfer.
+
+## Native source-card resolution
+
+Carousel's resolveCard now owns expected-page navigation, geometric viewport selection, the existing 650-ms required-title hydration check and native identity/page validation. Inputs contain only identity, expected page/count/columns/page size and route/hover ownership. Results distinguish found, inconclusive and mismatch. Found results carry unforgeable frozen source handles; mismatch results carry copied visible href/videoId/index facts. Unknown or negative native indices become null facts rather than authoritative positions. Existing href-only identity fallback remains supported.
+
+Source handles retain private binding/session, native page-model ownership, card href/index and page facts. Borrowing the slot validates the handle; copying the public fields does not create a valid handle. Source replacement, recycling, disconnection and relevant model/profile/page changes invalidate it. Private page-model revisions track changed observations, while mapping generations track reinterpretation/rebuild. Repeating an identical mapping observation retains validity; normal late hydration can complete, while external remapping during that wait rejects the old resolution. Neither generation is a writable feature state bag or part of the public model view.
+
+Navigation accepts a narrow operation guard from the composed resolver. Queued movement checks it before issuing a click; hydration checks it after a frame and before reading cards. Existing generic navigation, queue/style ownership and timing budgets remain unchanged. The resolver also validates its owner after waits and diagnostics before returning. Successful-match details remain trace-only through the existing injected logger.
+
+Legacy resolveExpectedPageSourceItem now supplies membership hints, releases existing hover alignment and translates handles to guarded slot borrows for the still-legacy native interaction. Its firstVisibleNativePositionMismatch consumes native scalar facts and compares them with list-owned positions and the existing threshold; carousel does not write membership or decide order recovery. viewportPageSlots forwards a bounded observation to the remaining search/preparation callers. Mounted-card polling, preferred-page pulse/search, page-hint repair and logical remapping remain unfinished P10 work; hover/native interaction still transfers in P17/P18. This expected-page checkpoint does not complete the full carousel facade.
 
 ## Verification boundary
 

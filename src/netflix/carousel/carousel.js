@@ -12,7 +12,7 @@ import { GRID_ID as DEFAULT_GRID_ID, STATUS_ID as DEFAULT_STATUS_ID, LEGACY_EMPT
 export function createCarousel({ pageDom: netflixDom, scope, document, window, Element, getComputedStyle,
     performance, setTimeout, clearTimeout, requestAnimationFrame, cancelAnimationFrame,
     readListShape = () => null, readGraphqlCount = () => null, createError: initializationError,
-    log = () => {}, warn = () => {}, tLog = value => value, logTimeout: logOperationTimeout = () => {},
+    log = () => {}, warn = () => {}, trace = () => {}, tLog = value => value, logTimeout: logOperationTimeout = () => {},
     describeSlot: slotDescriptor = () => ({}), ownedUi = {}, MutationObserver,
     checkRoute = () => {}, onMutationDelivery = () => {}, isInitializationBlocked = () => false,
     onBlockedMutation = () => {}, isGridDetached = () => false, shouldCoalesce = () => false,
@@ -33,6 +33,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     let acceptedBinding = null;
     let bindingGeneration = 0;
     const bindingTickets = new WeakMap();
+    const sourceTickets = new WeakMap();
     let discoveryOwner = null, targetDocumentObserver = null, targetMutationFrame = null;
     let targetObservedBrowseHost = null, targetObservedMyListSection = null, targetObservedAncestors = [];
     let targetDocumentDiscoveryActive = false;
@@ -178,6 +179,145 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                 pageMode: profile.pageMode
             }
         );
+    }
+
+    function viewportPageSlots(scroller, track, columns = 1) {
+        return withNativeReadScope(() => {
+            const all = nativeFilledSlots(track);
+            if (!all.length) return [];
+            const count = Math.max(1, columns || 1);
+            const sr = nativeRect(scroller);
+            const visible = all.map(slot => ({ slot, rect: nativeRect(slot) })).filter(entry => {
+                const cx = entry.rect.left + entry.rect.width / 2;
+                return entry.rect.width > 1 && cx >= sr.left && cx <= sr.right;
+            }).sort((a, b) => a.rect.left - b.rect.left).map(entry => entry.slot);
+            return visible.length ? visible.slice(0, count) : currentPageSlots(scroller, track).slice()
+                .sort((a, b) => nativeRect(a).left - nativeRect(b).left).slice(0, count);
+        });
+    }
+    function isSourceCurrent(source) {
+        const ticket = sourceTickets.get(source);
+        if (!ticket || !isBindingCurrent(ticket.binding) || ticket.slot.isConnected === false ||
+            models.get(ticket.binding.section) !== ticket.model || ticket.model.revision !== ticket.revision) return false;
+        return withNativeReadScope(() => {
+            if (getModel(ticket.binding.section) !== ticket.model || ticket.model.revision !== ticket.revision) return false;
+            const card = ticket.slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
+            const href = card?.href || card?.getAttribute('href') || '';
+            if (href !== ticket.href || netflixItemIndexFromSlot(ticket.slot) !== ticket.itemIndex ||
+                !nativeFilledSlots(ticket.binding.track).includes(ticket.slot)) return false;
+            if (ticket.model.view.profile.pageMode === 'indicator') {
+                const indicators = nativeIndicatorItems(ticket.binding.section);
+                const page = Math.max(0, indicators.findIndex(node => node.getAttribute('data-indicator-selected') === 'true'));
+                if (page !== ticket.page) return false;
+            }
+            return isBindingCurrent(ticket.binding) && models.get(ticket.binding.section) === ticket.model &&
+                ticket.model.revision === ticket.revision;
+        });
+    }
+    function assertSource(source) {
+        if (!isSourceCurrent(source)) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-card',
+            'Native source card or its page ownership changed');
+    }
+    function sourceHandle(binding, slot, page) {
+        assertBinding(binding);
+        const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
+        const href = card?.href || card?.getAttribute('href') || '';
+        const itemIndex = netflixItemIndexFromSlot(slot);
+        const model = getModel(binding.section);
+        const source = Object.freeze({ href, videoId: netflixDom.videoIdFromHref(href),
+            itemIndex: Number.isSafeInteger(itemIndex) && itemIndex >= 0 ? itemIndex : null, page,
+            get slot() { assertSource(source); return slot; }, isCurrent: () => isSourceCurrent(source) });
+        sourceTickets.set(source, { binding, slot, href, itemIndex, page, model, revision: model.revision });
+        assertSource(source);
+        return source;
+    }
+    async function resolveCard({ section, scroller, track, item, expectedPage, totalCount, columns = 1,
+        pageItemCount = 1, hoverToken = null, sessionToken = null }) {
+        assertRouteSession(sessionToken);
+        if (isHoverCancelled(hoverToken)) return Object.freeze({ status: 'unknown', reason: 'hover-cancelled' });
+        if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
+            return Object.freeze({ status: 'unknown', reason: 'native-binding-unavailable' });
+        }
+        const binding = borrowBinding(section, scroller, track);
+        const model = getModel(section), mappingGeneration = model.mappingGeneration;
+        const guard = () => {
+            assertRouteSession(sessionToken); assertBinding(binding);
+            if (models.get(section) !== model || model.mappingGeneration !== mappingGeneration) {
+                throw initializationError('NATIVE_SOURCE_REPLACED', 'native-resolution', 'Native page mapping changed during source resolution');
+            }
+        };
+        guard();
+        const target = Object.freeze({ href: String(item?.href || ''), videoId: String(item?.videoId || '') });
+        const key = target.videoId ? 'v:' + target.videoId : 'h:' + target.href;
+        const keyOf = slot => {
+            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
+            const href = card?.href || card?.getAttribute('href') || '';
+            const id = netflixDom.videoIdFromHref(href);
+            return id ? 'v:' + id : 'h:' + href;
+        };
+        const width = Math.max(1, columns || 1);
+        const expectedPageCount = Math.max(1, Math.ceil(Math.max(totalCount || 0, 1) / width));
+        const nativePageCount = pageCount(section);
+        if (nativePageCount !== expectedPageCount || expectedPage < 0 || expectedPage >= nativePageCount) {
+            log(tLog('hoverExpectedPageUnknown'), { reason: 'page-count-not-converged', item: target,
+                expectedPage, nativePageCount, expectedPageCount, legacyItemCount: totalCount, columns: width });
+            guard();
+            return Object.freeze({ status: 'unknown', reason: 'page-count-not-converged' });
+        }
+        const selectedBefore = selectedPage(section);
+        const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
+        await navigation.navigate(section, scroller, expectedPage, hoverToken, sessionToken, true, guard);
+        guard();
+        if (hoverToken !== null && hoverToken !== readHoverToken()) {
+            return Object.freeze({ status: 'unknown', reason: 'token-changed-after-page-move' });
+        }
+        if (selectedPage(section) !== expectedPage) {
+            log(tLog('hoverExpectedPageUnknown'), { reason: 'expected-page-not-reached', item: target,
+                expectedPage, selectedPage: selectedPage(section) });
+            guard();
+            return Object.freeze({ status: 'unknown', reason: 'expected-page-not-reached' });
+        }
+        const foundResult = (slot, slots, afterStabilityWait = false) => withNativeReadScope(() => {
+            guard();
+            const sources = Object.freeze(slots.map(node => sourceHandle(binding, node, expectedPage)));
+            const source = sources[slots.indexOf(slot)];
+            trace(() => [tLog('hoverExpectedPageMatch'), { item: target, expectedPage, selectedPage: selectedPage(section),
+                source: slotDescriptor(slot), ...(afterStabilityWait ? { afterStabilityWait: true } : {}) }]);
+            guard(); assertSource(source);
+            return Object.freeze({ status: 'found', source, sources, page: expectedPage });
+        });
+        let pageSlots = viewportPageSlots(scroller, track, width);
+        let slot = pageSlots.find(node => keyOf(node) === key) || null;
+        if (slot) return foundResult(slot, pageSlots);
+        const minimumSlots = Math.min(width, Math.max(1, pageItemCount));
+        const stableSlots = await navigation.stable(scroller, track, {
+            previousSignature: selectedBefore === expectedPage ? '' : beforeSignature, requiredStableFrames: 2,
+            minimumSlots, requiredKeys: new Set([key]), timeout: 650, sessionToken, hoverToken, assertOperation: guard });
+        guard();
+        if (hoverToken !== null && hoverToken !== readHoverToken()) {
+            return Object.freeze({ status: 'unknown', reason: 'token-changed-after-stability-wait' });
+        }
+        if (selectedPage(section) !== expectedPage) return Object.freeze({ status: 'unknown', reason: 'page-changed-during-stability-wait' });
+        pageSlots = viewportPageSlots(scroller, track, width);
+        slot = pageSlots.find(node => keyOf(node) === key) || null;
+        if (slot) return foundResult(slot, pageSlots, true);
+        const visibleSlots = pageSlots.length ? pageSlots : (stableSlots?.length ? stableSlots.slice(0, width) : []);
+        const visibleCards = Object.freeze(visibleSlots.map(node => {
+            const href = node.querySelector(NETFLIX_DOM_SELECTORS.standardCard)?.href || '';
+            const itemIndex = netflixItemIndexFromSlot(node);
+            return Object.freeze({ href, videoId: netflixDom.videoIdFromHref(href),
+                itemIndex: Number.isSafeInteger(itemIndex) && itemIndex >= 0 ? itemIndex : null });
+        }));
+        const visibleIds = Object.freeze(visibleCards.map(card => card.videoId).filter(Boolean));
+        if (visibleSlots.length < minimumSlots || visibleIds.length < minimumSlots) {
+            log(tLog('hoverExpectedPageUnknown'), { reason: 'expected-page-not-fully-mounted', item: target,
+                expectedPage, minimumSlots, slots: visibleSlots.length, visibleIds });
+            guard();
+            return Object.freeze({ status: 'unknown', reason: 'expected-page-not-fully-mounted', visibleIds, visibleCards });
+        }
+        log(tLog('hoverExpectedPageMismatch'), { item: target, expectedPage, visibleIds });
+        guard();
+        return Object.freeze({ status: 'mismatch', reason: 'target-not-in-expected-page', visibleIds, visibleCards });
     }
 
     function getModel(section) {
@@ -1358,6 +1498,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                     options.canonicalTransform || '', options.sessionToken ?? null);
         },
         mountedBootstrap: collection.mountedBootstrap, anchorPageZero, visibleVideoIds: currentPageVideoIds,
+        resolveCard, isSourceCurrent, assertSource, viewportSlots: viewportPageSlots,
         collect: options => options.mode === 'mounted-single-page' ? collection.collectMounted(options) : collection.collect(options),
         resetSource() { clearBinding(); collection.resetDiagnostics(); models = new WeakMap(); nativeReadScope = null; },
         model: getCarouselDomRuntime, resetModel: resetCarouselDomRuntime,

@@ -206,7 +206,7 @@ function environment(names, overrides = {}) {
             columns: Math.max(1, c.sourceState.layout?.columns || 1) } : null,
         readGraphqlCount: () => c.listData?.readMyListTotalCount?.() ?? null, cardMarkup: c.cardMarkup,
         createError: (...args) => c.initializationError?.(...args) || Object.assign(new Error(args[2]), { code: args[0], stage: args[1] }),
-        log: (...args) => c.log(...args), warn: (...args) => c.warn(...args), tLog: (...args) => c.tLog(...args),
+        log: (...args) => c.log(...args), warn: (...args) => c.warn(...args), trace: (...args) => c.trace(...args), tLog: (...args) => c.tLog(...args),
         logTimeout: (...args) => c.logOperationTimeout?.(...args), describeSlot: (...args) => c.slotDescriptor?.(...args),
         ownedUi: { grid: c.GRID_ID, status: c.STATUS_ID, empty: c.LEGACY_EMPTY_STATE_ID, dialog: c.ORDER_MISMATCH_DIALOG_ID, fastMove: c.FAST_MOVE_CLASS },
         isHoverCancelled: token => c.hoverPreparationCancelled?.(token) || false, readHoverToken: () => c.hoverToken,
@@ -2670,6 +2670,38 @@ function nativeReadEnvironment(mode = 'logical') {
         }
     };
 }
+
+test('expected-source bridge consumes real native handles and keeps position mismatch policy with membership', async () => {
+    const e = nativeReadEnvironment();
+    const slots = e.mount([20, 21, 22, 23, 24, 25]);
+    e.c.videoIdFromHref = href => href?.split('/').at(-1) || '';
+    e.c.ORDER_MISMATCH_POSITION_THRESHOLD = 10;
+    e.c.sourceState.totalCount = 6;
+    e.c.sourceState.items = slots.map(slot => ({ videoId: String(slot.index), href: '/watch/' + slot.index, page: 0 }));
+    e.c.ensureLiveNativeBinding = () => {};
+    e.c.clearSourceAlignment = () => {};
+    for (const name of ['hoverPreparationCancelled', 'pageItemKeys', 'firstVisibleNativePositionMismatch', 'resolveExpectedPageSourceItem']) {
+        vm.runInContext(declaration(name), e.c);
+    }
+    const found = await e.c.resolveExpectedPageSourceItem(e.c.sourceState.items[0], 0, 1, 1);
+    assert.equal(found.status, 'found');
+    assert.equal(found.source.isCurrent(), true);
+    assert.equal(found.slot, slots[0]);
+    assert.deepEqual(found.slots, slots);
+    const pending = e.c.resolveExpectedPageSourceItem({ videoId: '99', href: '/watch/99', page: 0 }, 0, 1, 1);
+    for (let frame = 0; frame < 45; frame++) await e.frame();
+    const mismatch = await pending;
+    assert.equal(mismatch.status, 'mismatch');
+    assert.equal(mismatch.reason, 'position-deviation-before-source-search');
+    assert.equal(mismatch.positionMismatch.item, e.c.sourceState.items[0]);
+    assert.equal(mismatch.positionMismatch.deviation.expectedIndex, 0);
+    assert.equal(mismatch.positionMismatch.deviation.actualIndex, 20);
+    assert.equal(mismatch.positionMismatch.deviation.delta, 20);
+    assert.equal(e.frames.size, 0);
+    e.c.nativeCarousel.clearBinding();
+    e.c.nativeCarousel.bind(e.section, e.c.sourceState.scroller, e.c.sourceState.track);
+    assert.throws(() => found.slot, { code: 'NATIVE_SOURCE_REPLACED' });
+});
 
 
 
