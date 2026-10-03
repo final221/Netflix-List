@@ -2,9 +2,9 @@
 
 ## Current understanding
 
-This is the execution plan for the destination defined in [Migration.md](Migration.md). It divides that design's eight increments into **21 independently selected steps**, each suitable for a separate prompt and a working release checkpoint. Migration.md remains the authority for the target layout and architectural contracts; this file owns implementation order, bounded step scope and completion evidence. Selection and progress belong only in [findings.md](findings.md).
+This is the execution plan for the destination defined in [Migration.md](Migration.md). It divides that design's eight increments into **21 bounded steps**, normally selected through separate prompts and completed at working release checkpoints. A step may span several prompts when its ownership transfer or verification is unfinished. Migration.md remains the authority for the target layout and architectural contracts; this file owns implementation order, bounded step scope and completion evidence. Selection and progress belong only in [findings.md](findings.md).
 
-The planning baseline is revision `087e121`, userscript **1.4.5**, and the existing `tests/performance.test.cjs` suite. The readiness check on 2026-10-02 passed JavaScript syntax validation and all **326 tests**, with no failures, cancellations or skipped cases. The development host has Node **24.13.0**. These results establish the baseline control flow and regression coverage, not live Netflix compatibility of future releases.
+The planning baseline is revision `087e121`, userscript **1.4.5**, and the existing `tests/performance.test.cjs` suite. The readiness check on 2026-10-02 passed JavaScript syntax validation and all **326 tests**, with no failures, cancellations or skipped cases. The development host has Node **24.13.0**. This is historical baseline evidence; use findings.md and the current checkout for subsequent readiness and progress. These results establish the baseline control flow and regression coverage, not live Netflix compatibility of future releases.
 
 The final architecture has explicit owners for native source state, membership/order, viewing placement, rendered cards, interaction and application coordination. Existing behavior and resource bounds are preserved. The plan selects no additional feature, performance investigation, native popup bypass or storage migration.
 
@@ -35,6 +35,18 @@ Replace `P01` with the desired step ID. After a completed step, this shorter pro
 For any new prompt, read AGENTS.md, context.md, Migration.md, this plan and the migration progress section in findings.md. Inspect the current version and working tree rather than assuming the planning baseline is still HEAD. If earlier work is incomplete, finish or reconcile that selected step before proceeding to dependent work.
 
 When resuming an existing migration, select its first unfinished step from findings.md rather than restarting P01. A released checkpoint within a step does not satisfy that step's remaining acceptance conditions. Carry those conditions into the next prompt explicitly.
+
+### Handoff between prompts
+
+End each implementation prompt with a compact record in findings.md containing:
+
+- The selected step and checkpoint revision, with complete or in-progress status.
+- The state/resources transferred, their sole owner and the live callers switched to it.
+- Exact remaining bridges, their callers and the step that removes each bridge.
+- Verification results and hosted CI evidence, or the checks still outstanding.
+- The next concrete action: resume this step's unfinished acceptance conditions, or start the next ready step after its gate passes.
+
+The next prompt reads that record and inspects the checkout before editing. Keep progress records in findings.md; Migration.md defines the target and docs/architecture.md describes actual ownership.
 
 ### Common completion gate
 
@@ -82,7 +94,7 @@ Timing/image instrumentation checks move with P18/P19 into the suite for the wor
 
 ### Overview
 
-| Step | One-prompt outcome | Architectural increment |
+| Step | Completion checkpoint | Architectural increment |
 | --- | --- | --- |
 | P01 | Reproducible userscript build and transitional test entry | 1. Establish the build |
 | P02 | CI and generated-output/dependency checks | 1. Establish the build |
@@ -198,9 +210,9 @@ If a handoff fails, keep the affected step incomplete and resolve the boundary i
 ### P09 — Transfer serialized native navigation and restoration
 
 - **Outcome:** One carousel navigation owner contains the movement queue, acknowledgement waits, temporary styles and page restoration.
-- **Test First:** Retarget queued/superseded moves, logical/indicator acknowledgement, pointer-versus-route cancellation, settlement, style restoration and fast-restore repair cases. Inject failure after a native click and verify that old cleanup cannot overwrite a newer owner.
-- **Implementation:** Create netflix/carousel/navigation.js under the existing carousel facade. Move all native movement/restore algorithms and their owned temporary resources. Replace legacy click/transform/queue writes with declared facade operations, including calls from native collection and responsive/hover preparation. Keep current concurrency/ordering; do not add a universal queue for unrelated work.
-- **Evidence:** No movement queue/style-cleanup owner remains in legacy; baseline click/acknowledgement/settlement counts and cancellation paths pass; restore failure always releases its own resources. Remove P08 navigation bridges/exceptions. Complete the common gate.
+- **Test First:** Retarget queued/superseded moves, logical/indicator acknowledgement, pointer-versus-route cancellation, settlement, style restoration and fast-restore repair cases. Inject failure after a native click and verify that old cleanup cannot overwrite a newer owner, including when operations share the same connected native elements. Exercise shared animation suppression during collection/refresh and replacement while a move is queued or an acknowledgement callback is pending.
+- **Implementation:** Create netflix/carousel/navigation.js under the existing carousel facade. Move all native movement/restore algorithms and their owned temporary resources. Replace legacy click/transform/queue writes with declared facade operations, including calls from native collection and responsive/hover preparation. Collection and responsive callers borrow idempotently releasable motion-suppression leases; they no longer capture/restore navigation styles or register a competing cleanup owner. Capture binding ownership before queueing and revalidate it after waits and in observer callbacks. Navigation reports timings through narrow callbacks; hover timing state remains with its current owner until P18 rather than sharing writable counters. Keep current concurrency/ordering; do not add a universal queue for unrelated work.
+- **Evidence:** No movement queue/style-cleanup owner or direct temporary navigation-style writes remain in legacy, including collection/refresh callers; baseline click/acknowledgement/settlement counts and cancellation paths pass; restore failure always releases its own resources. Obsolete callbacks and lease release cannot acknowledge into or restore over a replacement operation. Remove P08 navigation bridges/exceptions. Complete the common gate.
 - **Dependencies:** P08 source/model/scope ownership.
 - **Depth:** Deepen the carousel through private navigation; callers request native operations without coordinating animation properties or polling details.
 
