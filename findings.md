@@ -846,7 +846,7 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | P07 | Viewing data adapter | Complete — 1.4.11; 3c6b48a; Windows/Linux CI verified |
 | P08 | Session scopes and native binding/page model | Complete — scope 1.4.12 / 848b95f; native transfer 1.4.13 / b2b64c3; Windows/Linux CI verified |
 | P09 | Navigation queue and restoration | Complete — 1.4.15; b18ec49; Windows/Linux CI verified |
-| P10 | Native collection and carousel facade | In progress — traversal/diagnostics 1.4.16 verified; mounted proof/page-zero anchoring 1.4.17 passes local gate, hosted CI pending; source resolution and remapping remain |
+| P10 | Native collection and carousel facade | In progress — mounted proof/page-zero anchoring 1.4.17 / 96652f6 verified on Windows/Linux; source resolution and remapping remain |
 | P11 | Frame/card registry and resources | Planned — authorized goal |
 | P12 | Groups, filters and controls | Planned — authorized goal |
 | P13 | Membership/order and collection strategy | Planned — authorized goal |
@@ -1153,3 +1153,5 @@ Eight added composed carousel scenarios exercise actual React metadata, DOM/card
 Local gate: **414 tests pass**, zero failures/cancellations/skips; reproducible build, read-only dependency/output check, userscript syntax and whitespace checks pass. Package/lock/metadata/internal version agree on patch **1.4.17**, greater than the verified published **1.4.16**. Commit/push and exact-revision Windows/Linux CI are the remaining checkpoint gate. Offline evidence does not establish live Netflix private DOM/React compatibility.
 
 **P10 remains in progress.** After this checkpoint's CI passes, resume source-card resolution/recovery and logical remapping, finish resolveCard/refreshMapping and remove the remaining P08/P09 technical bridges before P11. The full migration goal stays active with the rest of P10 and P11–P21 still required.
+
+Checkpoint **96652f6** (`96652f69fa885ded2515e8c509afe16f07155385`) is committed and pushed. [Hosted run 37131572276](https://github.com/final221/Netflix-List/actions/runs/37131572276) succeeds on **windows-latest** and **ubuntu-latest**, with every job step successful: locked installation, committed-output verification, all regression/bundle cases, reproducible generation, dependency/output checks, syntax, commit whitespace and unchanged tracked output. Mounted proof/capture and page-zero anchoring are a verified working release within P10. Next characterize and transfer expected-page/mounted-card resolution, then bounded source recovery and logical remapping. P10 remains unfinished until resolveCard/refreshMapping and their remaining ownership/caller gates pass; P11 must retain that dependency. The full migration goal remains active.
