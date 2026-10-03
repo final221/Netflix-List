@@ -32,6 +32,12 @@ Replace `P01` with the desired step ID. After a completed step, this shorter pro
 
 "Next ready" means the lowest-numbered unfinished step whose dependencies are complete. It selects one step, not the remainder of the plan. A status question or architectural discussion does not select another implementation step.
 
+Where a step defines numbered checkpoints, a prompt can select one checkpoint explicitly:
+
+> Implement checkpoint P10.4 from MigrationPlan.md only. Verify its dependencies against findings.md, complete its applicable evidence and release gate, update findings.md, and commit and push the change. Keep P10 in progress until all its checkpoints and parent acceptance conditions pass.
+
+Checkpoint IDs refine the scope of their parent step; they do not create another architectural increment or permit dependent steps to start early. Complete them in order, and use findings.md to avoid repeating an already verified transfer. Selecting the parent step resumes its first unfinished checkpoint. A checkpoint is a stopping point for review, not a guarantee that the work fits into one prompt.
+
 For any new prompt, read AGENTS.md, context.md, Migration.md, this plan and the migration progress section in findings.md. Inspect the current version and working tree rather than assuming the planning baseline is still HEAD. If earlier work is incomplete, finish or reconcile that selected step before proceeding to dependent work.
 
 When resuming an existing migration, select its first unfinished step from findings.md rather than restarting P01. A released checkpoint within a step does not satisfy that step's remaining acceptance conditions. Carry those conditions into the next prompt explicitly.
@@ -224,6 +230,22 @@ If a handoff fails, keep the affected step incomplete and resolve the boundary i
 - **Evidence:** Both native modes and existing fast/fallback routes pass; source generations govern the results; no legacy traversal or native-binding/model writes remain. Remove all P08 collection/source-read exceptions. Complete the common gate.
 - **Dependencies:** P09 navigation, P08 model/scopes and P05/P06 metadata/capture.
 - **Depth:** Complete the source capability around readiness, navigation, traversal and source-card resolution; strategy selection remains a distinct list responsibility.
+
+#### P10 prompt checkpoints
+
+P10 combines several different native workflows. Split it at complete ownership transfers rather than at function or file boundaries. Every checkpoint inherits P10's scope, depth and common completion gate; P10.1 requires P09, and each later checkpoint requires the preceding checkpoint's verified release. All use the existing target files under src/netflix/carousel/ and their real callers. No additional public capability or folder is introduced.
+
+| Checkpoint | Bounded implementation and observable outcome | Test first and completion evidence |
+| --- | --- | --- |
+| P10.1 — Native traversal | Create private collection.js and switch logical/indicator traversal to carousel.collect. Transfer stabilization, completeness checks, unpublished material and collection diagnostics; navigation retains movement/restoration. | Exercise both modes, overlap/tails, incomplete pages, cancellation and restoration through the real carousel. No legacy traversal algorithm, duplicate counter owner or successful cancelled partial collection remains. |
+| P10.2 — Mounted qualification and anchoring | Transfer single-page qualification/proof/capture to collection.js and fresh page-zero anchoring to carousel. Entry freshness and strategy admission stay outside native integration. | Exercise repeated mounted samples, copied/stale proof rejection, source replacement and indicator anchoring/adjacent recovery. Qualification adds no request, navigation or eager capture; failure retains the existing fresh-data fallback. |
+| P10.3 — Expected-card resolution | Move expected-page navigation, viewport matching and required-title hydration behind resolveCard. Return validated source handles or copied native mismatch facts; keep authoritative order comparisons outside carousel. | Exercise found, incomplete and wrong windows, href fallback, recycled cards, mapping/binding/route replacement and queued movement. Handles cannot be forged or adopted by obsolete work; matching a title alone cannot rescue a stale handle. |
+| P10.4 — Mounted lookup and polling | Move synchronous mounted-card lookup and its bounded wait behind the same source owner. Keep pre-call binding admission with composition; an admitted lookup cannot silently adopt a replacement source. | Exercise immediate and late mounting, active-page selection, hover/route cancellation and replacement during the wait through carousel and the live bridge. Preserve shared-read costs and existing timer bounds; cleanup closes only the admitted operation's resources. |
+| P10.5 — Preferred-page recovery and bounded search | Transfer the existing preferred-page pulse and nearby-page search to carousel. Carousel registers native mapping observations and returns validated handles/visible facts; the temporary caller publishes any remaining membership/card page hints until P13/P17. | Exercise preferred hit, pulse success/failure, ordered bounded-radius search, hydration fallback, cancellation during queued movement and source replacement. Preserve movement/wait bounds; native integration cannot mutate membership records, clone attributes or authoritative order. |
+| P10.6 — Native remapping | Implement refreshMapping around delta anchoring and responsive native reconstruction, count convergence, wrapped-tail validation and private mapping commit. Return interpreted observations to existing coordinators; responsive scheduling remains for P19. | Exercise unchanged/changed layout, incomplete convergence, wrapped tails, membership deltas and obsolete remapping during waits. A mapping commit validates its captured owners; old work cannot commit into a replacement, and membership order remains an external decision. |
+| P10.7 — Facade and caller audit | Replace remaining technical native read/model-command bridges with semantic operations or validated observations used by the actual strategy, preparation and responsive callers. Remove the obsolete P08/P09 source exceptions and audit all remaining native write sites. | Exercise the composed collection, preparation and remapping paths after bridge removal. Verify one binding/model/navigation/collection owner, handle invalidation and equivalent retained scenario coverage; run the full common gate. P10 is complete only when its parent evidence and the P10-to-P11 handoff also pass. |
+
+These checkpoints specify the destination of each remaining workflow, not its current status. Record selections, completed releases and exact remaining callers only in findings.md. A remaining composition import can stay until P20 when it only constructs/injects the carousel; it cannot justify keeping native algorithms or writable model access in legacy.
 
 ### P11 — Transfer grid frame, card registry and resources
 
