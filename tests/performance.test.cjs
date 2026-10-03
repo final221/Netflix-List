@@ -16,6 +16,7 @@ const { createViewingData } = require('../src/netflix/viewing-data.js');
 const { createSessionScope } = require('../src/app/session-scope.js');
 const { createCarousel } = require('../src/netflix/carousel/carousel.js');
 const { createNavigation } = require('../src/netflix/carousel/navigation.js');
+const { createCollection } = require('../src/netflix/carousel/collection.js');
 const { carouselPayload, atom, reference, viewingVideo } = require('./helpers/fixtures.js');
 
 // Exercise residual authored functions without executing Netflix startup.
@@ -203,7 +204,7 @@ function environment(names, overrides = {}) {
         cancelAnimationFrame: id => c.cancelAnimationFrame(id),
         readListShape: section => c.sourceState?.section === section ? { totalCount: c.sourceState.totalCount,
             columns: Math.max(1, c.sourceState.layout?.columns || 1) } : null,
-        readGraphqlCount: () => c.listData?.readMyListTotalCount?.() ?? null,
+        readGraphqlCount: () => c.listData?.readMyListTotalCount?.() ?? null, cardMarkup: c.cardMarkup,
         createError: (...args) => c.initializationError?.(...args) || Object.assign(new Error(args[2]), { code: args[0], stage: args[1] }),
         log: (...args) => c.log(...args), warn: (...args) => c.warn(...args), tLog: (...args) => c.tLog(...args),
         logTimeout: (...args) => c.logOperationTimeout?.(...args), describeSlot: (...args) => c.slotDescriptor?.(...args),
@@ -3715,9 +3716,31 @@ function nativeCollectionEnvironment(mode, windows, totalCount = 4) {
     e.c.sourceState.layout.columns = 3;
     e.track.style.setProperty('transition', 'original-transition');
     e.track.style.setProperty('animation', 'original-animation');
-    for (const name of ['visibleSignature', 'itemKeyFromCard', 'collectAllItemsLogical', 'collectAllItems']) {
+    for (const name of ['visibleSignature', 'itemKeyFromCard', 'collectAllItems']) {
         vm.runInContext(declaration(name), e.c);
     }
+    // Supplementary traversal characterization with controlled native windows.
+    // Composed controls, mapping, acknowledgement and lifetime run in carousel.test.js.
+    const actualCarousel = e.c.nativeCarousel;
+    const collector = createCollection({
+        native: { ...actualCarousel, model: section => e.c.getCarouselDomRuntime(section),
+            resetModel: section => e.c.resetCarouselDomRuntime(section),
+            profile: section => e.c.detectCarouselDomProfile(section), profileSummary: () => ({ pageMode: mode }),
+            currentSlots: (...args) => e.c.currentPageSlots(...args), signatureOf: (...args) => e.c.visibleSignature(...args),
+            selectedPage: () => currentPage, pageCount: () => pages.length,
+            logicalWindow: state, requireLogicalWindow: state,
+            forcePage: (...args) => actualCarousel.forcePage(...args),
+            navigationControl: () => ({ button: {}, selector: 'right' }), controlDisabled: () => false },
+        navigation: { move: (...args) => e.c.moveOnePage(...args), navigate: (...args) => e.c.goToPage(...args),
+            stable: (...args) => e.c.waitStableCurrentPage(...args), transform: (...args) => e.c.trackTransformValue(...args),
+            restoreFast: (...args) => e.c.restoreNativePageFast(...args) },
+        scope: { assertCurrent: token => e.c.assertRouteSession(token) }, performance: e.c.performance,
+        requestAnimationFrame: callback => e.c.requestAnimationFrame(callback), cancelAnimationFrame: id => e.c.cancelAnimationFrame(id),
+        captureItem: (...args) => e.c.itemFromSlot(...args), videoIdFromHref: href => e.c.videoIdFromHref(href),
+        cardSelector: 'card', createError: (...args) => e.c.initializationError(...args),
+        log: (...args) => e.c.log(...args), warn: (...args) => e.c.warn(...args), tLog: key => key, logTimeout() {} });
+    e.c.nativeCarousel = Object.freeze({ ...actualCarousel, collect: collector.collect,
+        diagnostics: () => ({ ...actualCarousel.diagnostics(), collection: collector.diagnostics() }) });
     return { ...e, pages, get runtime() { return e.c.nativeCarousel.model(e.section); }, async scan() {
         const pending = e.c.collectAllItems(e.section, e.scroller, e.track, totalCount, 1);
         let settled = false;

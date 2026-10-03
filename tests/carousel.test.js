@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCarousel } from '../src/netflix/carousel/carousel.js';
 import { createNetflixPageDom } from '../src/netflix/page-dom.js';
+import { createCardMarkup } from '../src/netflix/card-markup.js';
 import { createSessionScope } from '../src/app/session-scope.js';
 import { Element, createDocument } from './helpers/dom.js';
 import { createScheduler } from './helpers/scheduler.js';
@@ -30,6 +31,7 @@ function environment(overrides = {}) {
         nativeCardIdentity: () => 'same-title',
         videoIdFromHref: createNetflixPageDom({ document, Element, location: { origin: 'https://www.netflix.com' } }).videoIdFromHref };
     const carousel = createCarousel({ scope, pageDom, document, Element,
+        cardMarkup: createCardMarkup({ location: { href: 'https://www.netflix.com/browse/my-list' } }),
         window: { innerWidth: 1280 }, getComputedStyle: () => ({}), performance: scheduler.performance,
         setTimeout: scheduler.setTimeout, clearTimeout: scheduler.clearTimeout,
         requestAnimationFrame: scheduler.requestAnimationFrame, cancelAnimationFrame: scheduler.cancelAnimationFrame,
@@ -629,4 +631,163 @@ test('failed navigation diagnostic callbacks cannot reject or retry an admitted 
         assert.deepEqual(e.directions, [1]);
         assert.deepEqual(e.carousel.diagnostics().navigation, { pendingMoves: 0, pendingWaits: 0, motionLeases: 0 });
     }
+});
+
+function traversalEnvironment({ mode = 'logical', totalCount = 4, onClick = null, overrides = {} } = {}) {
+    const e = navigationEnvironment({ mode, count: 2, onClick, overrides });
+    const windows = [[0, 1, 2], [1, 2, 3]].map((indices, page) => indices.map((index, position) => {
+        const slot = new Element('div');
+        slot.classList.add('slot');
+        slot.setAttribute('native-variant', 'page-' + page + '-title-' + (index + 1));
+        slot.getBoundingClientRect = () => ({ left: position * 100, width: 100, right: (position + 1) * 100 });
+        slot.__reactFiber$test = { memoizedProps: { itemIndex: index, totalCount } };
+        const card = slot.appendChild(new Element('a'));
+        card.href = 'https://www.netflix.com/title/' + (index + 1);
+        card.setAttribute('data-uia', 'standard-card'); card.setAttribute('tabindex', '0');
+        card.setAttribute('aria-label', 'Title ' + (index + 1));
+        return slot;
+    }));
+    e.scroller.getBoundingClientRect = () => ({ left: 0, right: 300, width: 300 });
+    e.pageDom.filledSlots = () => windows[e.page()];
+    e.pageDom.directSlots = () => windows[e.page()];
+    e.track.style.setProperty('transition', 'original-transition');
+    e.track.style.setProperty('animation', 'original-animation');
+    return { ...e, windows, collect(options = {}) {
+        return e.carousel.collect({ section: e.section, scroller: e.scroller, track: e.track,
+            totalCount, columns: 3, sessionToken: e.scope.token, ...options });
+    } };
+}
+
+test('native traversal commands collect overlapping windows in both modes and restore the starting page', async () => {
+    for (const mode of ['logical', 'indicator']) {
+        const e = traversalEnvironment({ mode });
+        const progress = [];
+        const result = await e.settle(e.collect({ onProgress: facts => progress.push(facts) }));
+        assert.equal(result.complete, true);
+        assert.equal(result.initialPage, 0); assert.equal(e.page(), 0);
+        assert.deepEqual(result.items.map(item => item.videoId), ['1', '2', '3', '4']);
+        assert.deepEqual(result.items.map(item => item.page), [0, 0, 0, 1]);
+        assert.equal(result.items[1].snapshot.getAttribute('native-variant'), 'page-0-title-2');
+        assert.equal(result.items[3].snapshot.getAttribute('native-variant'), 'page-1-title-4');
+        assert.deepEqual(progress.filter(facts => facts.collectedCount !== undefined).map(facts => facts.collectedCount), [3, 4]);
+        const work = e.carousel.diagnostics().collection;
+        assert.deepEqual(work, { metadataReads: 6, snapshotsCaptured: 4, duplicateSnapshotsAvoided: 2,
+            invalidMetadata: 0, consistencyFailures: 0 });
+        work.metadataReads = 999;
+        assert.equal(e.carousel.diagnostics().collection.metadataReads, 6);
+        assert.equal(e.track.style.getPropertyValue('transition'), 'original-transition');
+        assert.equal(e.track.style.getPropertyValue('animation'), 'original-animation');
+        assert.equal(e.carousel.diagnostics().collectionOperations, 0);
+        assert.deepEqual(e.carousel.diagnostics().navigation, { pendingMoves: 0, pendingWaits: 0, motionLeases: 0 });
+    }
+});
+
+test('native traversal cancellation releases captured material and cannot return a successful partial collection', async () => {
+    for (const mode of ['logical', 'indicator']) {
+        const captured = [];
+        const markup = createCardMarkup({ location: { href: 'https://www.netflix.com/browse/my-list' } });
+        const e = traversalEnvironment({ mode, overrides: { cardMarkup: { capture(...args) {
+            const item = markup.capture(...args); captured.push(item); return item;
+        } } }, onClick({ setPage, e }) {
+            setPage(1); e.scope.dispose(); e.carousel.clearBinding();
+        } });
+        const rejected = assert.rejects(e.collect(), { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+        await e.settle(rejected);
+        assert.equal(captured.length, 3);
+        assert(captured.every(item => item.snapshot === null));
+        assert.equal(e.directions.length, 1);
+        assert.equal(e.scheduler.frames.size, 0); assert.equal(e.scheduler.timers.size, 0);
+        assert.equal(e.carousel.diagnostics().collectionOperations, 0);
+        assert.equal(e.track.style.getPropertyValue('transition'), 'original-transition');
+        assert.equal(e.carousel.diagnostics().navigation.motionLeases, 0);
+    }
+});
+
+test('collection progress cannot admit old native work or restore over a replacement style lease', async () => {
+    const e = traversalEnvironment();
+    let replacement;
+    const pending = e.collect({ onProgress(facts) {
+        if (facts.collectedCount !== 3) return;
+        e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track);
+        replacement = e.carousel.suppressMotion(e.section, e.track);
+    } });
+    await e.settle(assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' }));
+    assert.equal(e.directions.length, 0);
+    assert.equal(e.track.style.getPropertyValue('transition'), 'none');
+    assert.equal(e.carousel.diagnostics().navigation.motionLeases, 1);
+    replacement.release();
+    assert.equal(e.track.style.getPropertyValue('transition'), 'original-transition');
+    assert.equal(e.carousel.diagnostics().collectionOperations, 0);
+});
+
+test('incomplete indicator traversal returns an explicit unsuccessful result', async () => {
+    const e = traversalEnvironment({ mode: 'indicator', totalCount: 5 });
+    const result = await e.settle(e.collect(), 300);
+    assert.equal(result.complete, false);
+    assert.equal(result.items.length, 3);
+    assert.equal(e.carousel.diagnostics().collectionOperations, 0);
+    assert.equal(e.carousel.diagnostics().navigation.motionLeases, 0);
+});
+
+test('native capture failure releases earlier snapshots and traversal resources in both modes', async () => {
+    for (const mode of ['logical', 'indicator']) {
+        const captured = [];
+        const markup = createCardMarkup({ location: { href: 'https://www.netflix.com/browse/my-list' } });
+        const e = traversalEnvironment({ mode, overrides: { cardMarkup: { capture(...args) {
+            const item = markup.capture(...args); captured.push(item);
+            if (captured.length === 3) throw new Error('capture failed');
+            return item;
+        } } } });
+        await e.settle(assert.rejects(e.collect(), /capture failed/));
+        assert(captured.every(item => item.snapshot === null));
+        assert.equal(e.directions.length, 0);
+        assert.equal(e.carousel.diagnostics().collectionOperations, 0);
+        assert.equal(e.carousel.diagnostics().collection.snapshotsCaptured, 2);
+        assert.equal(e.track.style.getPropertyValue('transition'), 'original-transition');
+        assert.equal(e.track.style.getPropertyValue('animation'), 'original-animation');
+        assert.deepEqual(e.carousel.diagnostics().navigation, { pendingMoves: 0, pendingWaits: 0, motionLeases: 0 });
+    }
+});
+
+test('source replacement closes collection paint waits and rejects their obsolete callback', async () => {
+    const captured = [];
+    const markup = createCardMarkup({ location: { href: 'https://www.netflix.com/browse/my-list' } });
+    const e = traversalEnvironment({ mode: 'indicator', overrides: { cardMarkup: { capture(...args) {
+        const item = markup.capture(...args); captured.push(item); return item;
+    } } } });
+    const pending = e.collect();
+    for (let attempt = 0; attempt < 60; attempt++) {
+        await e.scheduler.flush();
+        if (e.directions.length === 2 && e.carousel.diagnostics().navigation.pendingWaits === 0 && e.scheduler.frames.size === 1) break;
+        await e.scheduler.frame(); await e.scheduler.advance(0);
+    }
+    assert.equal(e.directions.length, 2);
+    assert.equal(e.carousel.diagnostics().navigation.pendingWaits, 0);
+    assert.equal(e.scheduler.frames.size, 1);
+    const obsoleteFrame = [...e.scheduler.frames.values()][0];
+    const rejected = assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' });
+    e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track);
+    const replacement = e.carousel.suppressMotion(e.section, e.track);
+    obsoleteFrame(100);
+    await e.scheduler.flush(); await rejected;
+    assert(captured.every(item => item.snapshot === null));
+    assert.equal(e.scheduler.frames.size, 0);
+    assert.equal(e.carousel.diagnostics().collectionOperations, 0);
+    assert.equal(e.track.style.getPropertyValue('transition'), 'none');
+    replacement.release();
+    assert.equal(e.track.style.getPropertyValue('transition'), 'original-transition');
+});
+
+test('collection diagnostics belong to the current route scope and retain copied history', async () => {
+    const e = traversalEnvironment();
+    await e.settle(e.collect());
+    const previous = e.carousel.diagnostics().collection;
+    assert.equal(previous.metadataReads, 6);
+    e.scope.begin();
+    assert.deepEqual(e.carousel.diagnostics().collection, { metadataReads: 0, snapshotsCaptured: 0,
+        duplicateSnapshotsAvoided: 0, invalidMetadata: 0, consistencyFailures: 0 });
+    e.carousel.bind(e.section, e.scroller, e.track);
+    await e.settle(e.collect());
+    assert.equal(e.carousel.diagnostics().collection.metadataReads, 6);
+    assert.equal(previous.metadataReads, 6);
 });
