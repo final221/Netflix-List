@@ -3920,101 +3920,20 @@ export function startLegacy() {
         return nativeCarousel.readiness(...args);
     }
 
-    function readMountedSinglePageMembership(section, scroller, track) {
-        if (!section || !scroller || !track) return null;
-        return withNativeReadScope(() => {
-            const state = nativeCarouselReadiness(section, scroller, track);
-            const countState = nativeReactCarouselTotalCount(scroller, track);
-            const totalCount = countState.totalCount;
-            const slots = currentPageSlots(scroller, track);
-            const itemIndices = slots.map(netflixItemIndexFromSlot);
-            const videoIds = slots.map(nativeCardIdentity).filter(Boolean);
-            if (!state.connected || state.pageMode !== 'logical' || state.pages !== 1 ||
-                !Number.isSafeInteger(totalCount) || totalCount <= 0 || totalCount > state.columns ||
-                state.slots !== totalCount || state.cards !== totalCount || state.currentCards !== totalCount ||
-                countState.slots !== totalCount || countState.uniqueReadings.length !== 1 ||
-                countState.uniqueReadings[0] !== totalCount || itemIndices.length !== totalCount ||
-                !itemIndices.every((value, index) => value === index) || videoIds.length !== slots.length ||
-                new Set(videoIds).size !== videoIds.length) return null;
-            const signature = [totalCount, state.signature, itemIndices.join(','), videoIds.join('|')].join('||');
-            return { state, totalCount, slots, itemIndices, videoIds, signature };
-        });
-    }
-
     function collectMountedSinglePageItems(bootstrap, totalCount, columns, sessionToken = null) {
         assertRouteSession(sessionToken);
-        const proof = bootstrap.mountedSinglePageProof;
-        if (!proof || targetSessionEntryKind !== 'spa' || !targetSessionReason.startsWith('route:') ||
-            !isRouteSessionActive(proof.sessionToken) || proof.sessionToken !== sessionScope.token ||
-            bootstrap.totalCount !== totalCount || !Number.isSafeInteger(columns) || totalCount > columns) {
+        if (targetSessionEntryKind !== 'spa' || !targetSessionReason.startsWith('route:')) {
             return { items: null, reason: 'proof-or-entry-no-longer-valid' };
         }
-        const { section, scroller, track } = proof;
-        if (sourceState?.section !== section || sourceState.scroller !== scroller || sourceState.track !== track ||
-            findMyListSection() !== section || section.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller) !== scroller ||
-            netflixDom.findTrack(scroller) !== track) return { items: null, reason: 'native-source-replaced' };
-        return withNativeReadScope(() => {
-            const sample = readMountedSinglePageMembership(section, scroller, track);
-            if (!sample || sample.totalCount !== totalCount || sample.signature !== proof.signature) {
-                return { items: null, reason: 'native-membership-or-layout-changed' };
-            }
-            // Validate every identity before capturing native variants in the
-            // same synchronous sample. No navigation or await is needed here.
-            const items = sample.slots.map(slot => itemFromSlot(slot, 0, false));
-            if (!items.every((item, index) => item?.videoId === sample.videoIds[index])) {
-                return { items: null, reason: 'native-card-metadata-incomplete' };
-            }
-            items.forEach((item, index) => { item.snapshot = sample.slots[index].cloneNode(true); });
-            return { items, reason: null };
-        });
+        return nativeCarousel.collect({ mode: 'mounted-single-page', bootstrap, totalCount, columns, sessionToken,
+            section: sourceState?.section, scroller: sourceState?.scroller, track: sourceState?.track });
     }
 
     async function tryMountedSinglePageFastBootstrap(section, scroller, track, sessionToken = null) {
         assertRouteSession(sessionToken);
-
-        // Only a normal SPA route entry may bypass the fresh-network bootstrap.
-        // Manual order-mismatch reinitialization must keep the authoritative fresh
-        // first-item check because it may start from a shifted native window.
+        // Only normal SPA entry admits mounted reuse; manual recovery keeps fresh data.
         if (targetSessionEntryKind !== 'spa' || !targetSessionReason.startsWith('route:')) return null;
-        if (!section || !scroller || !track) return null;
-
-        const started = performance.now();
-        let previousSignature = '';
-
-        // Require two frame-separated identical samples. More importantly, require
-        // Netflix's mounted React metadata to agree on totalCount and itemIndex 0..N-1.
-        // A transient partial window from a larger list therefore cannot qualify.
-        for (let sample = 0; sample < 2; sample++) {
-            assertRouteSession(sessionToken);
-            const membership = readMountedSinglePageMembership(section, scroller, track);
-            if (!membership) return null;
-            const { state, totalCount, itemIndices, videoIds, signature } = membership;
-            if (previousSignature && signature === previousSignature) {
-                const result = {
-                    totalCount,
-                    firstVideoId: videoIds[0] || null,
-                    source: 'mounted-single-page-fast-path',
-                    elapsedMs: Math.round(performance.now() - started),
-                    mountedSinglePageProof: { section, scroller, track, signature, sessionToken: sessionScope.token }
-                };
-                log('Mounted single-page My List fast bootstrap confirmed', {
-                    totalCount, firstVideoId: result.firstVideoId, source: result.source, elapsedMs: result.elapsedMs,
-                    slots: state.slots,
-                    cards: state.cards,
-                    currentCards: state.currentCards,
-                    columns: state.columns,
-                    itemIndices
-                });
-                return result;
-            }
-
-            previousSignature = signature;
-            await new Promise(resolve => requestAnimationFrame(resolve));
-            assertRouteSession(sessionToken);
-            await new Promise(resolve => requestAnimationFrame(resolve));
-        }
-
-        return null;
+        return nativeCarousel.mountedBootstrap({ section, scroller, track, sessionToken });
     }
 
     function waitForNativeCarouselReady(...args) {
@@ -4066,109 +3985,13 @@ export function startLegacy() {
         return nativeCarousel.pageKeys(...args);
     }
 
-    function currentPageVideoIds(scroller, track) {
-        return currentPageSlots(scroller, track)
-            .map(slot => {
-                const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-                return card ? videoIdFromHref(card.getAttribute('href') || card.href || '') : '';
-            })
-            .filter(Boolean);
+    function currentPageVideoIds(...args) {
+        return nativeCarousel.visibleVideoIds(...args);
     }
 
     async function ensureFreshIndicatorPageZeroAnchor(section, scroller, track, firstVideoId, sessionToken = null) {
-        assertRouteSession(sessionToken);
-        const expectedFirstVideoId = String(firstVideoId || '');
-        if (!expectedFirstVideoId) return true;
-
-        const runtime = getCarouselDomRuntime(section);
-        const profile = runtime?.profile || detectCarouselDomProfile(section);
-        if (profile?.pageMode !== 'indicator') return true;
-
-        if (selectedPage(section) !== 0) {
-            const returned = await goToPage(section, scroller, 0, null, sessionToken, false);
-            assertRouteSession(sessionToken);
-            if (returned !== 0 || selectedPage(section) !== 0) {
-                throw initializationError(
-                    'NATIVE_PAGE_ZERO_NOT_REACHED',
-                    'normalize-native-page-zero',
-                    'Could not return the native My List carousel to page 0 before reinitialization',
-                    { returnedPage: returned, selectedPage: selectedPage(section), expectedFirstVideoId }
-                );
-            }
-        }
-
-        let visibleIds = currentPageVideoIds(scroller, track);
-        if (visibleIds[0] === expectedFirstVideoId) {
-            log('Fresh Netflix My List page-0 anchor confirmed', {
-                expectedFirstVideoId,
-                visibleIds,
-                selectedPage: selectedPage(section),
-                pageMode: profile.pageMode
-            });
-            return true;
-        }
-
-        log('Fresh Netflix My List page-0 anchor mismatch; refreshing native page 0', {
-            expectedFirstVideoId,
-            visibleIds,
-            selectedPage: selectedPage(section),
-            pages: pageCount(section),
-            pageMode: profile.pageMode
-        });
-
-        // A remove/add at index 0 can leave Netflix's legacy/indicator carousel with
-        // page 0 selected while the mounted six-card window is shifted by one item.
-        // Do one normal adjacent-page round trip before source-scan mode is enabled so
-        // React can repopulate the canonical page-0 window. Do not use FAST_MOVE here.
-        if (pageCount(section) > 1) {
-            const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
-            const adjacent = await moveOnePage(section, scroller, 1, null, sessionToken);
-            assertRouteSession(sessionToken);
-            if (adjacent !== 0) {
-                await waitStableCurrentPage(scroller, track, {
-                    previousSignature: beforeSignature,
-                    minimumSlots: Math.max(1, sourceState?.layout?.columns || currentPageSlots(scroller, track).length || 1),
-                    timeout: 900,
-                    sessionToken
-                });
-                await moveOnePage(section, scroller, -1, null, sessionToken);
-                assertRouteSession(sessionToken);
-            }
-        }
-
-        const requiredKey = `v:${expectedFirstVideoId}`;
-        await waitStableCurrentPage(scroller, track, {
-            minimumSlots: Math.max(1, sourceState?.layout?.columns || currentPageSlots(scroller, track).length || 1),
-            requiredKeys: new Set([requiredKey]),
-            requiredStableFrames: 2,
-            timeout: 1200,
-            sessionToken
-        });
-        assertRouteSession(sessionToken);
-
-        visibleIds = currentPageVideoIds(scroller, track);
-        if (selectedPage(section) === 0 && visibleIds[0] === expectedFirstVideoId) {
-            log('Fresh Netflix My List page-0 anchor restored', {
-                expectedFirstVideoId,
-                visibleIds,
-                selectedPage: selectedPage(section),
-                pageMode: profile.pageMode
-            });
-            return true;
-        }
-
-        throw initializationError(
-            'NATIVE_PAGE_ZERO_ANCHOR_MISMATCH',
-            'normalize-native-page-zero',
-            'Netflix My List page 0 is selected but its first mounted card does not match the fresh My List first item',
-            {
-                expectedFirstVideoId,
-                visibleIds,
-                selectedPage: selectedPage(section),
-                pages: pageCount(section),
-                pageMode: profile.pageMode
-            }
-        );
+        return nativeCarousel.anchorPageZero({ section, scroller, track, firstVideoId, sessionToken,
+            columns: sourceState?.layout?.columns });
     }
 
     // Reads the private React props needed to order and validate Netflix's logical carousel.

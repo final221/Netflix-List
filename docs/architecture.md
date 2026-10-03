@@ -37,7 +37,7 @@ src/main.js
      -> src/netflix/carousel/carousel.js: discovery, binding generations, reads and readiness
         -> page-model.js: private signature/page mapping and logical-window policies
         -> navigation.js: private movement, acknowledgement, hydration and restoration
-        -> collection.js: private logical/indicator traversal, material and collection counters
+        -> collection.js: private native traversal, mounted bootstrap proof/capture, material and counters
      -> existing settings, SPA hooks and route-session runtime
 ```
 
@@ -103,7 +103,7 @@ Scope mechanics have transferred to app/session-scope.js during P08. Scan/accoun
 
 The existing route start/suspend points call the scope. Remaining legacy validity/error/request bridges delegate to it; their caller composition moves in P20. Data adapters receive begin/finish/guard collaborators without importing application code. The viewing scan borrows each admitted controller for job-specific cancellation and requests its eight-second-or-remaining deadline through the scope. It still decides quotas, deadlines and network accounting; cancelling a viewing job leaves unrelated route requests registered. HTTP failure cleanup closes unread bodies through the same request owner.
 
-Native binding, discovery, shared-read caches and page-model state have their carousel owner. Native movement, acknowledgement, hydration and restoration also belong to that owner; traversal/source resolution still use transitional callers.
+Native binding, discovery, shared-read caches and page-model state have their carousel owner. Native movement, acknowledgement, hydration, restoration, traversal and mounted bootstrap proof/capture also belong to that owner; collection strategy and source resolution still use transitional callers.
 
 ## Native discovery, binding and page model
 
@@ -125,7 +125,7 @@ Hover cancellation still prevents a queued click and lets an issued click finish
 
 Movement, traversal collection and responsive mapping borrow motion-suppression leases from carousel. The owner captures the original inline values/priorities and restores them after the last lease releases. Binding replacement restores and retires its leases before admitting the next binding, including reuse of the same connected elements. Late cleanup checks the exact style owner and cannot restore over its replacement. Failed restoration attempts the remaining properties and releases ownership; repeated release is harmless. No animation-style snapshot, active cleanup registry or movement queue remains in legacy.
 
-The transitional whenNavigationIdle, suppressMotion and restoreMotion operations serve remapping and lifecycle callers; beginNavigation is removed. Four legacy forwarding functions preserve current caller signatures through carousel commands, including read-only pageKeys observations. Traversal now calls navigation privately; its former fast-restoration/transform forwarders and public trackTransform observation are removed. Mounted bootstrap/source-resolution/remapping remain for P10, native interaction for P17, responsive coordination for P19 and composition for P20. No navigation algorithm or queue/style owner remains in legacy.
+The transitional whenNavigationIdle, suppressMotion and restoreMotion operations serve remapping and lifecycle callers; beginNavigation is removed. Four legacy forwarding functions preserve current caller signatures through carousel commands, including read-only pageKeys observations. Traversal and page-zero anchoring now call navigation privately; former traversal fast-restoration/transform forwarders and public trackTransform observation are removed. Source resolution/remapping remain for P10, native interaction for P17, responsive coordination for P19 and composition for P20. No navigation algorithm or queue/style owner remains in legacy.
 
 Hover cancellation/token readers and a diagnostic-operation provider are injected into navigation. The provider captures the current counter owner and exposes bounded bump/record operations; navigation receives no writable timing/counter state. Diagnostic factory or callback failure cannot reject or retry an admitted native move. Hover timing ownership transfers in P18. These collaborators add no observer, request, polling loop or competing cancellation owner.
 
@@ -137,7 +137,13 @@ An operation captures its binding and counter owner before asynchronous work. Pr
 
 Collection owns the five existing metadata/snapshot/consistency counters and exposes copied scalar summaries. Source reset or a different parent route scope replaces the counter owner; obsolete operations retain only their old counters, and the report consumes copied values without writable access. Native motion suppression remains navigation-owned and borrowed for the whole traversal. The native budgets, overlapping-tail rules, snapshot-before-navigation ordering and restoration paths are retained; collection does not select GraphQL versus native, write list order, edit grid DOM or add requests.
 
-Legacy collectAllItems is a compatibility bridge that supplies captured layout/session facts, displays scalar progress for its current state and returns the collected items to the existing initialization/count validation. The logical traversal implementation and old collection counter bag are gone. Mounted fast bootstrap proof, source-card resolution and responsive remapping still live in legacy and remain unfinished P10 work. The collect command is implemented; this checkpoint does not claim the complete collect/resolveCard/refreshMapping facade.
+Legacy collectAllItems is a compatibility bridge that supplies captured layout/session facts, displays scalar progress for its current state and returns the collected items to the existing initialization/count validation. The logical traversal implementation and old collection counter bag are gone. Source-card resolution and responsive remapping still live in legacy and remain unfinished P10 work. This checkpoint does not claim the complete collect/resolveCard/refreshMapping facade.
+
+Carousel's mountedBootstrap command delegates to private collection. It requires complete logical single-page membership, consistent React counts/indices, unique identities and two identical samples separated by the existing two animation frames. Qualification captures no markup and initiates no requests or navigation. A frozen public snapshot carries only totalCount, firstVideoId, source and elapsedMs; a private WeakMap associates it with the binding/session and membership/layout signature. Copying the snapshot cannot recreate proof. Source reset clears proof and closes owned frame waits; a late callback cannot complete a replacement operation.
+
+The explicit mounted-single-page collect mode synchronously rechecks the proof, current source discovered in the DOM, current membership/layout and every card identity before cloning. It returns items/reason, preserving the existing no-await capture path and fresh-data fallback on rejected proof. Failed capture or binding replacement releases unpublished snapshots. Legacy's tryMountedSinglePageFastBootstrap and collectMountedSinglePageItems bridges supply entry policy and current source/count/layout hints; initial/manual/order-mismatch entry freshness and strategy/reuse counters stay outside carousel until P13. No writable DOM/session proof leaves the native owner.
+
+Carousel's anchorPageZero command owns fresh indicator page-zero validation and the existing normal adjacent-page round trip. It uses private navigation for return-to-zero, hydration and movement, retaining the 900-ms adjacent hydration and 1200-ms required-first-title checks. It captures one source generation and checks it after waits and diagnostic callbacks before further work or success. A missing first title after repair remains an explicit failure. Legacy supplies the fresh anchor and layout hint through ensureFreshIndicatorPageZeroAnchor; currentPageVideoIds forwards a bounded observation used by remapping until the remaining P10 transfer.
 
 ## Verification boundary
 

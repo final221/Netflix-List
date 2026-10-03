@@ -4,6 +4,7 @@ import { createCarousel } from '../src/netflix/carousel/carousel.js';
 import { createNetflixPageDom } from '../src/netflix/page-dom.js';
 import { createCardMarkup } from '../src/netflix/card-markup.js';
 import { createSessionScope } from '../src/app/session-scope.js';
+import { FAST_MOVE_CLASS } from '../src/dom-names.js';
 import { Element, createDocument } from './helpers/dom.js';
 import { createScheduler } from './helpers/scheduler.js';
 
@@ -453,6 +454,197 @@ function navigationEnvironment({ mode = 'logical', count = 3, onClick = null, ov
             return promise;
         } };
 }
+
+function mountedEnvironment(overrides = {}) {
+    const e = navigationEnvironment({ count: 1, overrides });
+    e.scroller.classList.add('scroller');
+    e.scroller.getBoundingClientRect = () => ({ left: 0, right: 300, width: 300, height: 100 });
+    e.track.style.setProperty('display', 'flex');
+    const slots = Array.from({ length: 3 }, (_, index) => {
+        const slot = e.track.appendChild(new Element('div'));
+        slot.classList.add('slot');
+        slot.setAttribute('native-variant', String(index));
+        slot.__reactFiber$mounted = { memoizedProps: { itemIndex: index, totalCount: 3 }, return: null };
+        slot.getBoundingClientRect = () => ({ left: index * 100, right: (index + 1) * 100, width: 100, height: 100 });
+        const card = slot.appendChild(new Element('a'));
+        card.href = 'https://www.netflix.com/title/' + (index + 1);
+        card.setAttribute('data-uia', 'standard-card');
+        card.setAttribute('tabindex', '0');
+        card.setAttribute('aria-label', 'Title ' + (index + 1));
+        return slot;
+    });
+    e.pageDom.directSlots = e.pageDom.filledSlots = () => e.track.children;
+    e.pageDom.nativeCardIdentity = slot => e.pageDom.videoIdFromHref(slot.querySelector('a')?.href || '');
+    const options = { section: e.section, scroller: e.scroller, track: e.track, sessionToken: e.scope.token };
+    return { ...e, slots, options,
+        qualify: () => e.settle(e.carousel.mountedBootstrap(options)),
+        capture: bootstrap => e.carousel.collect({ ...options, mode: 'mounted-single-page', bootstrap, totalCount: 3, columns: 3 }) };
+}
+
+test('mounted bootstrap and capture use opaque native proof without navigation or extra snapshots', async () => {
+    const e = mountedEnvironment();
+    let clones = 0;
+    for (const slot of e.slots) {
+        const clone = slot.cloneNode.bind(slot);
+        slot.cloneNode = deep => { clones++; return clone(deep); };
+    }
+    const bootstrap = await e.qualify();
+    assert.equal(Object.isFrozen(bootstrap), true);
+    assert.deepEqual(Object.keys(bootstrap).sort(), ['elapsedMs', 'firstVideoId', 'source', 'totalCount']);
+    assert.equal(bootstrap.firstVideoId, '1');
+    assert.equal(bootstrap.totalCount, 3);
+    assert.equal(clones, 0);
+    const result = await e.capture(bootstrap);
+    assert.equal(result.reason, null);
+    assert.deepEqual(result.items.map(item => item.videoId), ['1', '2', '3']);
+    assert.deepEqual(result.items.map(item => item.snapshot.getAttribute('native-variant')), ['0', '1', '2']);
+    assert.equal(clones, 3);
+    assert.deepEqual(e.directions, []);
+    assert.equal(e.carousel.diagnostics().collectionOperations, 0);
+    assert.equal(e.scheduler.frames.size, 0);
+});
+
+test('mounted proof rejects forgery, recycling and replacement before capturing material', async () => {
+    for (const scenario of ['copy', 'binding', 'membership', 'index', 'count', 'columns', 'discovered-track']) {
+        const e = mountedEnvironment();
+        let bootstrap = await e.qualify();
+        if (scenario === 'copy') bootstrap = { ...bootstrap };
+        if (scenario === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
+        if (scenario === 'membership') e.slots[2].querySelector('a').href = 'https://www.netflix.com/title/99';
+        if (scenario === 'index') e.slots[2].__reactFiber$mounted.memoizedProps.itemIndex = 0;
+        if (scenario === 'count') e.slots[2].__reactFiber$mounted.memoizedProps.totalCount = 4;
+        if (scenario === 'discovered-track') e.pageDom.findTrack = () => new Element('div');
+        for (const slot of e.slots) slot.cloneNode = () => { throw new Error('rejected proof must not clone'); };
+        const result = await e.carousel.collect({ ...e.options, mode: 'mounted-single-page', bootstrap,
+            totalCount: 3, columns: scenario === 'columns' ? 2 : 3 });
+        assert.equal(result.items, null, scenario);
+        assert.ok(result.reason, scenario);
+        assert.equal(e.carousel.diagnostics().collectionOperations, 0);
+    }
+});
+
+test('replacement closes mounted qualification frames and a late callback cannot complete the new proof', async () => {
+    const e = mountedEnvironment();
+    const pending = e.carousel.mountedBootstrap(e.options);
+    const rejected = assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' });
+    const oldFrame = [...e.scheduler.frames.values()][0];
+    e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track);
+    const replacement = e.carousel.mountedBootstrap(e.options);
+    let completed = false;
+    replacement.then(() => { completed = true; });
+    oldFrame();
+    await e.scheduler.flush();
+    await rejected;
+    assert.equal(completed, false);
+    assert.equal(e.scheduler.frames.size, 1);
+    assert.equal((await e.settle(replacement)).totalCount, 3);
+    assert.equal(e.scheduler.frames.size, 0);
+    assert.equal(e.carousel.diagnostics().collectionOperations, 0);
+});
+
+test('mounted capture releases unpublished snapshots after clone failure or binding replacement', async () => {
+    for (const scenario of ['clone-failure', 'replacement']) {
+        const captured = [];
+        const markup = createCardMarkup({ location: { href: 'https://www.netflix.com/browse/my-list' } });
+        const e = mountedEnvironment({ cardMarkup: { capture(...args) {
+            const item = markup.capture(...args); captured.push(item); return item;
+        } } });
+        const bootstrap = await e.qualify();
+        const clone = e.slots[1].cloneNode.bind(e.slots[1]);
+        e.slots[1].cloneNode = deep => {
+            if (scenario === 'clone-failure') throw new Error('clone failed');
+            e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track);
+            return clone(deep);
+        };
+        assert.throws(() => e.capture(bootstrap), scenario === 'clone-failure'
+            ? /clone failed/ : { code: 'NATIVE_SOURCE_REPLACED' });
+        assert.ok(captured.every(item => item.snapshot === null));
+        assert.equal(e.carousel.diagnostics().collectionOperations, 0);
+    }
+});
+
+test('mounted qualification rejects incomplete and unstable windows and stops at route cancellation', async () => {
+    for (const scenario of ['duplicate', 'partial', 'disconnected', 'changed', 'route']) {
+        const e = mountedEnvironment();
+        if (scenario === 'duplicate') e.slots[2].querySelector('a').href = e.slots[0].querySelector('a').href;
+        if (scenario === 'partial') for (const slot of e.slots) slot.__reactFiber$mounted.memoizedProps.totalCount = 4;
+        if (scenario === 'disconnected') e.track.remove();
+        const pending = e.carousel.mountedBootstrap(e.options);
+        const expected = scenario === 'route' ? assert.rejects(pending, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' }) : pending;
+        await e.scheduler.frame();
+        if (scenario === 'changed') e.slots[2].querySelector('a').href = 'https://www.netflix.com/title/99';
+        if (scenario === 'route') e.scope.dispose();
+        await e.scheduler.frame();
+        if (scenario === 'route') await expected;
+        else assert.equal(await e.settle(expected), null, scenario);
+        assert.equal(e.scheduler.frames.size, 0);
+        assert.equal(e.carousel.diagnostics().collectionOperations, 0);
+        assert.deepEqual(e.directions, []);
+    }
+});
+
+test('page-zero anchoring confirms the native first title and repairs a shifted indicator window', async () => {
+    const current = navigationEnvironment({ mode: 'indicator' });
+    const options = e => ({ section: e.section, scroller: e.scroller, track: e.track,
+        firstVideoId: '1', columns: 1, sessionToken: e.scope.token });
+    assert.equal(await current.carousel.anchorPageZero(options(current)), true);
+    assert.deepEqual(current.directions, []);
+    current.setPage(2);
+    assert.equal(await current.settle(current.carousel.anchorPageZero(options(current))), true);
+    assert.equal(current.page(), 0);
+    const moves = [];
+    const shifted = navigationEnvironment({ mode: 'indicator', overrides: { log(message, facts) {
+        if (message === 'carouselMoveStarted') moves.push(facts);
+    } }, onClick({ direction, page, setPage, e }) {
+        const next = (page + direction + 3) % 3;
+        setPage(next);
+        if (direction === -1 && next === 0) e.pageDom.filledSlots()[0].querySelector('a').href = 'https://www.netflix.com/title/1';
+    } });
+    shifted.pages[0][0].querySelector('a').href = 'https://www.netflix.com/title/99';
+    assert.equal(await shifted.settle(shifted.carousel.anchorPageZero(options(shifted))), true);
+    assert.deepEqual(shifted.directions, [1, -1]);
+    assert.deepEqual(moves.map(move => move.sharedFastMode), [false, false]);
+    assert.equal(shifted.section.classList.contains(FAST_MOVE_CLASS), false);
+    assert.equal(shifted.page(), 0);
+    assert.equal(shifted.carousel.diagnostics().navigation.pendingWaits, 0);
+    assert.equal(shifted.carousel.diagnostics().collectionOperations, 0);
+});
+
+test('page-zero anchoring rejects unresolved first-title mismatch and obsolete native work', async () => {
+    for (const scenario of ['mismatch', 'replacement', 'route']) {
+        const e = navigationEnvironment({ mode: 'indicator', onClick({ direction, page, setPage, e }) {
+            setPage((page + direction + 3) % 3);
+            if (scenario === 'replacement') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
+            if (scenario === 'route') e.scope.dispose();
+        } });
+        e.pages[0][0].querySelector('a').href = 'https://www.netflix.com/title/99';
+        const pending = e.carousel.anchorPageZero({ section: e.section, scroller: e.scroller, track: e.track,
+            firstVideoId: '1', columns: 1, sessionToken: e.scope.token });
+        const rejected = assert.rejects(pending, { code: scenario === 'mismatch' ? 'NATIVE_PAGE_ZERO_ANCHOR_MISMATCH'
+            : scenario === 'replacement' ? 'NATIVE_SOURCE_REPLACED' : 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+        await e.settle(rejected, 150);
+        assert.equal(e.carousel.diagnostics().navigation.pendingWaits, 0);
+        assert.equal(e.carousel.diagnostics().collectionOperations, 0);
+        assert.equal(e.scheduler.frames.size, 0);
+        assert.equal(e.scheduler.timers.size, 0);
+        if (scenario !== 'mismatch') assert.equal(e.directions.length, 1);
+    }
+});
+
+test('page-zero anchoring cannot confirm or start recovery after a diagnostic replaces its source', async () => {
+    for (const shifted of [false, true]) {
+        let e;
+        e = navigationEnvironment({ mode: 'indicator', overrides: { log(message) {
+            if (message.startsWith('Fresh Netflix My List page-0 anchor')) {
+                e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track);
+            }
+        } } });
+        if (shifted) e.pages[0][0].querySelector('a').href = 'https://www.netflix.com/title/99';
+        await assert.rejects(e.carousel.anchorPageZero({ section: e.section, scroller: e.scroller, track: e.track,
+            firstVideoId: '1', columns: 1, sessionToken: e.scope.token }), { code: 'NATIVE_SOURCE_REPLACED' });
+        assert.deepEqual(e.directions, []);
+    }
+});
 
 test('carousel movement and strict restoration run through the native navigation owner', async () => {
     const e = navigationEnvironment();

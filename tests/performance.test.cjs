@@ -3958,7 +3958,7 @@ function mountedSinglePageEnvironment(count = 6) {
         netflixItemIndexFromSlot: slot => slot.index,
         netflixDom: { findTrack: () => e.track, directSlots: track => track.children, filledSlots: track => track.children }
     });
-    for (const name of ['readMountedSinglePageMembership', 'collectMountedSinglePageItems',
+    for (const name of ['collectMountedSinglePageItems',
         'tryMountedSinglePageFastBootstrap']) vm.runInContext(declaration(name), e.c);
     const slots = e.items(count).map((item, index) => {
         const slot = item.snapshot;
@@ -3967,6 +3967,25 @@ function mountedSinglePageEnvironment(count = 6) {
         e.track.appendChild(slot);
         return slot;
     });
+    // Keep existing list-strategy assertions against the actual private collector.
+    // Native DOM/React interpretation and binding/frame lifetimes are composed in carousel.test.js.
+    const actualCarousel = e.c.nativeCarousel;
+    const mounted = createCollection({ native: { ...actualCarousel,
+        sample: read => e.c.withNativeReadScope(read),
+        readiness: (...args) => e.c.nativeCarouselReadiness(...args),
+        readCount: (...args) => e.c.nativeReactCarouselTotalCount(...args),
+        currentSlots: (...args) => e.c.currentPageSlots(...args),
+        itemIndex: slot => e.c.netflixItemIndexFromSlot(slot), cardIdentity: slot => e.c.nativeCardIdentity(slot),
+        matchesMountedSource: (section, scroller, track) => e.c.findMyListSection() === section &&
+            section.querySelector(e.c.NETFLIX_DOM_SELECTORS.carouselScroller) === scroller && e.c.netflixDom.findTrack(scroller) === track },
+        navigation: {}, scope: { get token() { return e.c.sessionScope.token; },
+            assertCurrent: token => e.c.assertRouteSession(token) }, performance: e.c.performance,
+        requestAnimationFrame: callback => e.c.requestAnimationFrame(callback), cancelAnimationFrame: id => e.c.cancelAnimationFrame(id),
+        captureItem: (...args) => e.c.itemFromSlot(...args), videoIdFromHref: href => e.c.videoIdFromHref(href),
+        cardSelector: 'card', createError: (...args) => e.c.initializationError(...args),
+        log: (...args) => e.c.log(...args) });
+    e.c.nativeCarousel = Object.freeze({ ...actualCarousel, mountedBootstrap: mounted.mountedBootstrap,
+        collect: options => options.mode === 'mounted-single-page' ? mounted.collectMounted(options) : actualCarousel.collect(options) });
     return { ...e, slots, async qualify() {
         const pending = e.c.tryMountedSinglePageFastBootstrap(e.section, e.scroller, e.track, 1);
         await e.flush();
@@ -4091,7 +4110,7 @@ test('mounted single-page reuse revalidates after readiness and fetches fresh da
         if (scenario === 'count') e.c.mountedCount = 7;
         if (scenario === 'source') e.c.netflixDom.findTrack = () => new ConstructionNode('replacement');
         if (scenario === 'manual') e.c.targetSessionReason = 'order-mismatch-reinitialize';
-        if (scenario === 'missing-proof') bootstrap = { ...bootstrap, mountedSinglePageProof: null };
+        if (scenario === 'missing-proof') bootstrap = { ...bootstrap };
         if (scenario === 'layout') {
             const read = e.c.nativeCarouselReadiness;
             e.c.nativeCarouselReadiness = (...args) => ({ ...read(...args), signature: 'changed-layout' });

@@ -54,7 +54,11 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         navigation, captureItem: (...args) => cardMarkup.capture(...args),
         videoIdFromHref: href => netflixDom.videoIdFromHref(href), cardSelector: NETFLIX_DOM_SELECTORS.standardCard,
         createError: initializationError, log, warn, tLog, logTimeout: logOperationTimeout,
-        native: { borrowBinding, assertBinding, model: getCarouselDomRuntime,
+        native: { borrowBinding, assertBinding, isBindingCurrent, model: getCarouselDomRuntime,
+            sample: withNativeReadScope, readiness: nativeCarouselReadiness,
+            readCount: nativeReactCarouselTotalCount, itemIndex: netflixItemIndexFromSlot, cardIdentity: nativeCardIdentity,
+            matchesMountedSource: (section, scroller, track) => findMyListSection() === section &&
+                section.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller) === scroller && netflixDom.findTrack(scroller) === track,
             resetModel: resetCarouselDomRuntime, profile: detectCarouselDomProfile,
             profileSummary: carouselDomProfileSummary, currentSlots: currentPageSlots, signatureOf: visibleSignature,
             selectedPage, pageCount, logicalWindow: nativeLogicalPageState,
@@ -65,6 +69,117 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
             notePage: (section, page) => modelForWrite(section)?.notePage(page),
             markCycle: section => modelForWrite(section)?.markCycle(),
             completeCollection: (section, pages) => modelForWrite(section)?.finishCollection(pages) } });
+    function currentPageVideoIds(scroller, track) {
+        return currentPageSlots(scroller, track)
+            .map(slot => {
+                const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
+                return card ? netflixDom.videoIdFromHref(card.getAttribute('href') || card.href || '') : '';
+            })
+            .filter(Boolean);
+    }
+
+    async function anchorPageZero({ section, scroller, track, firstVideoId, columns, sessionToken = null }) {
+        const owner = borrowBinding(section, scroller, track);
+        const assertSource = () => { assertRouteSession(sessionToken); assertBinding(owner); };
+        assertSource();
+        const expectedFirstVideoId = String(firstVideoId || '');
+        if (!expectedFirstVideoId) return true;
+
+        const runtime = getCarouselDomRuntime(section);
+        const profile = runtime?.profile || detectCarouselDomProfile(section);
+        if (profile?.pageMode !== 'indicator') return true;
+
+        if (selectedPage(section) !== 0) {
+            const returned = await navigation.navigate(section, scroller, 0, null, sessionToken, false);
+            assertSource();
+            if (returned !== 0 || selectedPage(section) !== 0) {
+                throw initializationError(
+                    'NATIVE_PAGE_ZERO_NOT_REACHED',
+                    'normalize-native-page-zero',
+                    'Could not return the native My List carousel to page 0 before reinitialization',
+                    { returnedPage: returned, selectedPage: selectedPage(section), expectedFirstVideoId }
+                );
+            }
+        }
+
+        let visibleIds = currentPageVideoIds(scroller, track);
+        if (visibleIds[0] === expectedFirstVideoId) {
+            log('Fresh Netflix My List page-0 anchor confirmed', {
+                expectedFirstVideoId,
+                visibleIds,
+                selectedPage: selectedPage(section),
+                pageMode: profile.pageMode
+            });
+            assertSource();
+            return true;
+        }
+
+        log('Fresh Netflix My List page-0 anchor mismatch; refreshing native page 0', {
+            expectedFirstVideoId,
+            visibleIds,
+            selectedPage: selectedPage(section),
+            pages: pageCount(section),
+            pageMode: profile.pageMode
+        });
+        assertSource();
+
+        // A remove/add at index 0 can leave Netflix's legacy/indicator carousel with
+        // page 0 selected while the mounted six-card window is shifted by one item.
+        // Do one normal adjacent-page round trip before source-scan mode is enabled so
+        // React can repopulate the canonical page-0 window. Do not use FAST_MOVE here.
+        if (pageCount(section) > 1) {
+            const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
+            const adjacent = await navigation.move(section, scroller, 1, null, sessionToken);
+            assertSource();
+            if (adjacent !== 0) {
+                await navigation.stable(scroller, track, {
+                    previousSignature: beforeSignature,
+                    minimumSlots: Math.max(1, columns || currentPageSlots(scroller, track).length || 1),
+                    timeout: 900,
+                    sessionToken
+                });
+                assertSource();
+                await navigation.move(section, scroller, -1, null, sessionToken);
+                assertSource();
+            }
+        }
+
+        const requiredKey = `v:${expectedFirstVideoId}`;
+        await navigation.stable(scroller, track, {
+            minimumSlots: Math.max(1, columns || currentPageSlots(scroller, track).length || 1),
+            requiredKeys: new Set([requiredKey]),
+            requiredStableFrames: 2,
+            timeout: 1200,
+            sessionToken
+        });
+        assertSource();
+
+        visibleIds = currentPageVideoIds(scroller, track);
+        if (selectedPage(section) === 0 && visibleIds[0] === expectedFirstVideoId) {
+            log('Fresh Netflix My List page-0 anchor restored', {
+                expectedFirstVideoId,
+                visibleIds,
+                selectedPage: selectedPage(section),
+                pageMode: profile.pageMode
+            });
+            assertSource();
+            return true;
+        }
+
+        throw initializationError(
+            'NATIVE_PAGE_ZERO_ANCHOR_MISMATCH',
+            'normalize-native-page-zero',
+            'Netflix My List page 0 is selected but its first mounted card does not match the fresh My List first item',
+            {
+                expectedFirstVideoId,
+                visibleIds,
+                selectedPage: selectedPage(section),
+                pages: pageCount(section),
+                pageMode: profile.pageMode
+            }
+        );
+    }
+
     function getModel(section) {
         if (!section) return null;
         let model = models.get(section);
@@ -1242,7 +1357,8 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                 : navigation.restoreFast(section, scroller, track, items, slots, page,
                     options.canonicalTransform || '', options.sessionToken ?? null);
         },
-        collect: collection.collect,
+        mountedBootstrap: collection.mountedBootstrap, anchorPageZero, visibleVideoIds: currentPageVideoIds,
+        collect: options => options.mode === 'mounted-single-page' ? collection.collectMounted(options) : collection.collect(options),
         resetSource() { clearBinding(); collection.resetDiagnostics(); models = new WeakMap(); nativeReadScope = null; },
         model: getCarouselDomRuntime, resetModel: resetCarouselDomRuntime,
         profile: detectCarouselDomProfile, profileSummary: carouselDomProfileSummary, logProfile: logCarouselDomProfile,

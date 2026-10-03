@@ -1,4 +1,4 @@
-// Private native traversal, captured material and bounded collection diagnostics.
+// Private native collection, bootstrap proof, captured material and diagnostics.
 export function createCollection({ native, navigation, scope, performance, requestAnimationFrame,
     cancelAnimationFrame, captureItem, videoIdFromHref, cardSelector, createError: initializationError,
     log = () => {}, warn = () => {}, tLog = value => value, logTimeout: logOperationTimeout = () => {} }) {
@@ -29,6 +29,7 @@ export function createCollection({ native, navigation, scope, performance, reque
         invalidMetadata: 0, consistencyFailures: 0 });
     let counters = newCounters();
     let counterSession = scope.token;
+    let mountedProofs = new WeakMap();
     const operations = new Set(), frames = new Set();
     function currentCounters() {
         if (counterSession !== scope.token) {
@@ -75,6 +76,99 @@ export function createCollection({ native, navigation, scope, performance, reque
     function reset() {
         for (const close of [...frames]) close();
         for (const operation of operations) releaseMaterial(operation);
+        mountedProofs = new WeakMap();
+    }
+    function readMountedMembership(section, scroller, track) {
+        if (!section || !scroller || !track) return null;
+        return native.sample(() => {
+            const state = native.readiness(section, scroller, track);
+            const countState = native.readCount(scroller, track);
+            const totalCount = countState.totalCount;
+            const slots = currentPageSlots(scroller, track);
+            const itemIndices = slots.map(native.itemIndex);
+            const videoIds = slots.map(native.cardIdentity).filter(Boolean);
+            if (!state.connected || state.pageMode !== 'logical' || state.pages !== 1 ||
+                !Number.isSafeInteger(totalCount) || totalCount <= 0 || totalCount > state.columns ||
+                state.slots !== totalCount || state.cards !== totalCount || state.currentCards !== totalCount ||
+                countState.slots !== totalCount || countState.uniqueReadings.length !== 1 ||
+                countState.uniqueReadings[0] !== totalCount || itemIndices.length !== totalCount ||
+                !itemIndices.every((value, index) => value === index) || videoIds.length !== slots.length ||
+                new Set(videoIds).size !== videoIds.length) return null;
+            const signature = [totalCount, state.signature, itemIndices.join(','), videoIds.join('|')].join('||');
+            return { state, totalCount, slots, itemIndices, videoIds, signature };
+        });
+    }
+    async function mountedBootstrap({ section, scroller, track, sessionToken = null }) {
+        assertRouteSession(sessionToken);
+        if (!section || !scroller || !track || section.isConnected === false ||
+            scroller.isConnected === false || track.isConnected === false) return null;
+        const operation = { binding: native.borrowBinding(section, scroller, track), sessionToken, material: new Set() };
+        assertOperation(operation);
+        operations.add(operation);
+        try {
+            const started = performance.now();
+            let previousSignature = '';
+            // Two identical mounted React samples, separated by the existing two frames.
+            for (let sample = 0; sample < 2; sample++) {
+                assertOperation(operation);
+                const membership = readMountedMembership(section, scroller, track);
+                if (!membership) return null;
+                const { state, totalCount, itemIndices, videoIds, signature } = membership;
+                if (previousSignature && signature === previousSignature) {
+                    const result = Object.freeze({ totalCount, firstVideoId: videoIds[0] || null,
+                        source: 'mounted-single-page-fast-path', elapsedMs: Math.round(performance.now() - started) });
+                    assertOperation(operation);
+                    mountedProofs.set(result, { binding: operation.binding, section, scroller, track, signature });
+                    log('Mounted single-page My List fast bootstrap confirmed', {
+                        ...result, slots: state.slots, cards: state.cards, currentCards: state.currentCards,
+                        columns: state.columns, itemIndices });
+                    assertOperation(operation);
+                    return result;
+                }
+                previousSignature = signature;
+                await nextFrame(operation);
+                assertOperation(operation);
+                await nextFrame(operation);
+            }
+            assertOperation(operation);
+            return null;
+        } finally { operations.delete(operation); }
+    }
+    function collectMounted({ bootstrap, totalCount, columns, section, scroller, track, sessionToken = null }) {
+        assertRouteSession(sessionToken);
+        const proof = mountedProofs.get(bootstrap);
+        if (!proof || bootstrap.totalCount !== totalCount || !Number.isSafeInteger(columns) || totalCount > columns) {
+            return { items: null, reason: 'proof-or-entry-no-longer-valid' };
+        }
+        if (!native.isBindingCurrent(proof.binding) || proof.section !== section || proof.scroller !== scroller ||
+            proof.track !== track || !native.matchesMountedSource(section, scroller, track)) {
+            return { items: null, reason: 'native-source-replaced' };
+        }
+        const operation = { binding: proof.binding, sessionToken, material: new Set() };
+        assertOperation(operation);
+        operations.add(operation);
+        try {
+            return native.sample(() => {
+                const sample = readMountedMembership(section, scroller, track);
+                assertOperation(operation);
+                if (!sample || sample.totalCount !== totalCount || sample.signature !== proof.signature) {
+                    return { items: null, reason: 'native-membership-or-layout-changed' };
+                }
+                // All metadata identities qualify before any native variant is cloned.
+                const items = sample.slots.map(slot => itemFromSlot(slot, 0, false));
+                assertOperation(operation);
+                if (!items.every((item, index) => item?.videoId === sample.videoIds[index])) {
+                    return { items: null, reason: 'native-card-metadata-incomplete' };
+                }
+                items.forEach((item, index) => captureMaterial(operation, item, sample.slots[index]));
+                assertOperation(operation);
+                operation.material.clear();
+                return { items, reason: null };
+            });
+        } catch (error) {
+            releaseMaterial(operation);
+            throw error;
+        } finally { operations.delete(operation); }
     }
     async function collect({ section, scroller, track, totalCount, columns, sessionToken = null, onProgress = () => {} }) {
         const binding = native.borrowBinding(section, scroller, track);
@@ -740,6 +834,6 @@ export function createCollection({ native, navigation, scope, performance, reque
         return items;
     }
 
-    return Object.freeze({ collect, reset, resetDiagnostics() { counterSession = scope.token; counters = newCounters(); },
+    return Object.freeze({ collect, mountedBootstrap, collectMounted, reset, resetDiagnostics() { counterSession = scope.token; counters = newCounters(); },
         diagnostics: () => ({ ...currentCounters() }), pending: () => operations.size });
 }
