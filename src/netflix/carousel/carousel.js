@@ -15,7 +15,8 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     describeSlot: slotDescriptor = () => ({}), ownedUi = {}, MutationObserver,
     checkRoute = () => {}, onMutationDelivery = () => {}, isInitializationBlocked = () => false,
     onBlockedMutation = () => {}, isGridDetached = () => false, shouldCoalesce = () => false,
-    onRelevantMutation = () => {} }) {
+    onRelevantMutation = () => {}, isHoverCancelled = () => false, readHoverToken = () => null,
+    navigationDiagnostics = () => ({ bump() {}, record: null }) }) {
     const NETFLIX_DOM_SELECTORS = netflixDom.selectors || DEFAULT_SELECTORS;
     const GRID_ID = ownedUi.grid || DEFAULT_GRID_ID, STATUS_ID = ownedUi.status || DEFAULT_STATUS_ID;
     const LEGACY_EMPTY_STATE_ID = ownedUi.empty || DEFAULT_EMPTY_ID, ORDER_MISMATCH_DIALOG_ID = ownedUi.dialog || DEFAULT_DIALOG_ID;
@@ -35,7 +36,19 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     let targetObservedBrowseHost = null, targetObservedMyListSection = null, targetObservedAncestors = [];
     let targetDocumentDiscoveryActive = false;
     const navigation = createNavigation({ borrowBinding, assertBinding, createError: initializationError,
-        fastMoveClass: ownedUi.fastMove || FAST_MOVE_CLASS });
+        bindingForSource: (scroller, track) => borrowBinding(acceptedBinding?.section || null, scroller, track),
+        fastMoveClass: ownedUi.fastMove || FAST_MOVE_CLASS, scope, performance, getComputedStyle,
+        setTimeout, clearTimeout, requestAnimationFrame, cancelAnimationFrame, MutationObserver,
+        cardSelector: NETFLIX_DOM_SELECTORS.standardCard,
+        videoIdFromHref: href => netflixDom.videoIdFromHref(href), isHoverCancelled, readHoverToken,
+        diagnosticsFor: navigationDiagnostics, log, warn, tLog, logTimeout: logOperationTimeout,
+        native: { model: getCarouselDomRuntime, profile: detectCarouselDomProfile,
+            registerPage: registerLogicalPageSignature, selectedPage, pageCount,
+            navigationControl: carouselMoveButton, controlDisabled: carouselMoveButtonDisabled,
+            currentSlots: currentPageSlots, signatureOf: visibleSignature,
+            notePage: (section, page, cycle) => modelForWrite(section)?.notePage(page, cycle),
+            track: scroller => acceptedBinding?.scroller === scroller && acceptedBinding.track?.isConnected
+                ? acceptedBinding.track : netflixDom.findTrack(scroller) } });
     function getModel(section) {
         if (!section) return null;
         let model = models.get(section);
@@ -1203,8 +1216,16 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
 
     return Object.freeze({ startDiscovery, stopDiscovery, refreshDiscovery, bind, clearBinding, borrowBinding, isBindingCurrent, assertBinding,
         currentBinding: () => acceptedBinding,
-        beginNavigation: navigation.begin, whenNavigationIdle: navigation.whenIdle,
+        whenNavigationIdle: navigation.whenIdle,
         suppressMotion: navigation.suppress, restoreMotion: navigation.restoreMotion,
+        movePage: navigation.move, navigateTo: navigation.navigate, stablePage: navigation.stable,
+        pageKeys: navigation.pageKeys, trackTransform: navigation.transform,
+        restorePage(section, scroller, track, items, slots, page, options = {}) {
+            return options.mode === 'strict'
+                ? navigation.restoreStrict(section, scroller, track, items, slots, page, options.sessionToken ?? null)
+                : navigation.restoreFast(section, scroller, track, items, slots, page,
+                    options.canonicalTransform || '', options.sessionToken ?? null);
+        },
         resetSource() { clearBinding(); models = new WeakMap(); nativeReadScope = null; },
         model: getCarouselDomRuntime, resetModel: resetCarouselDomRuntime,
         profile: detectCarouselDomProfile, profileSummary: carouselDomProfileSummary, logProfile: logCarouselDomProfile,

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCarousel } from '../src/netflix/carousel/carousel.js';
+import { createNetflixPageDom } from '../src/netflix/page-dom.js';
 import { createSessionScope } from '../src/app/session-scope.js';
 import { Element, createDocument } from './helpers/dom.js';
 import { createScheduler } from './helpers/scheduler.js';
@@ -26,7 +27,8 @@ function environment(overrides = {}) {
     }
     const pageDom = { selectors: { browseSections: '.browse', carouselScroller: '.scroller', standardCard: 'a', virtualSlot: '.slot' },
         findMyListSection: () => section, findTrack: () => track, directSlots: () => [], filledSlots: () => [],
-        nativeCardIdentity: () => 'same-title' };
+        nativeCardIdentity: () => 'same-title',
+        videoIdFromHref: createNetflixPageDom({ document, Element, location: { origin: 'https://www.netflix.com' } }).videoIdFromHref };
     const carousel = createCarousel({ scope, pageDom, document, Element,
         window: { innerWidth: 1280 }, getComputedStyle: () => ({}), performance: scheduler.performance,
         setTimeout: scheduler.setTimeout, clearTimeout: scheduler.clearTimeout,
@@ -353,21 +355,19 @@ test('shared motion suppression restores original priorities only after its last
 });
 
 test('old queue and motion cleanup cannot affect a replacement using the same connected elements', async () => {
-    const e = environment();
+    const e = navigationEnvironment({ onClick() {} });
     const { writes } = motionFixture(e);
-    const first = e.carousel.beginNavigation(e.section, e.scroller);
-    await first.ready;
-    const oldStyles = e.carousel.suppressMotion(e.section, e.track);
-    const queued = e.carousel.beginNavigation(e.section, e.scroller);
-    const rejected = assert.rejects(queued.ready, { code: 'NATIVE_SOURCE_REPLACED' });
+    const first = e.carousel.movePage(e.section, e.scroller, 1, null, e.scope.token);
+    await e.scheduler.flush();
+    const queued = e.carousel.movePage(e.section, e.scroller, 1, null, e.scope.token);
+    const rejected = [assert.rejects(first, { code: 'NATIVE_SOURCE_REPLACED' }), assert.rejects(queued, { code: 'NATIVE_SOURCE_REPLACED' })];
     e.carousel.resetSource();
     e.carousel.bind(e.section, e.scroller, e.track);
-    const latest = e.carousel.beginNavigation(e.section, e.scroller);
-    await latest.ready;
     const newStyles = e.carousel.suppressMotion(e.section, e.track);
+    const latest = e.carousel.movePage(e.section, e.scroller, 1, null, e.scope.token);
+    await e.scheduler.flush();
     const writeCount = writes.length;
-    oldStyles.release(); first.release(); queued.release();
-    await rejected;
+    await Promise.all(rejected);
     assert.equal(writes.length, writeCount, 'late cleanup cannot restore newer styles');
     assert.equal(e.track.isConnected, true);
     assert.equal(e.carousel.diagnostics().navigation.pendingMoves, 1);
@@ -375,8 +375,10 @@ test('old queue and motion cleanup cannot affect a replacement using the same co
     const pendingIdle = e.carousel.whenNavigationIdle().then(() => { idle = true; });
     await e.scheduler.flush();
     assert.equal(idle, false, 'old release cannot unlock the new queue');
-    newStyles.release(); latest.release();
+    e.setPage(1);
+    await e.settle(latest);
     await pendingIdle;
+    newStyles.release();
     assert.equal(e.carousel.diagnostics().navigation.pendingMoves, 0);
     assert.equal(e.track.style.getPropertyValue('transition'), 'transform 200ms');
 });
@@ -394,4 +396,237 @@ test('motion release attempts every restoration and releases ownership when one 
     assert.equal(e.track.style.getPropertyValue('animation'), 'pulse 1s');
     assert.equal(e.carousel.diagnostics().navigation.motionLeases, 0);
     assert.doesNotThrow(() => lease.release());
+});
+
+function navigationEnvironment({ mode = 'logical', count = 3, onClick = null, overrides = {} } = {}) {
+    let hoverToken = 1;
+    const e = environment({ ...overrides, readListShape: () => null, readHoverToken: () => hoverToken,
+        isHoverCancelled: token => token !== null && token !== hoverToken });
+    const pages = Array.from({ length: count }, (_, page) => {
+        const slot = new Element('div');
+        slot.classList.add('slot');
+        const card = slot.appendChild(new Element('a'));
+        card.href = 'https://www.netflix.com/title/' + (page + 1);
+        card.setAttribute('tabindex', '0');
+        return [slot];
+    });
+    let page = 0;
+    const directions = [];
+    const indicators = mode === 'indicator' ? pages.map(() => {
+        const indicator = e.section.appendChild(new Element('li'));
+        indicator.setAttribute('data-uia', 'carousel-page-indicator-item');
+        return indicator;
+    }) : [];
+    const setPage = next => {
+        page = next;
+        e.track.style.setProperty('transform', 'page-' + next);
+        indicators.forEach((indicator, index) => indicator.setAttribute('data-indicator-selected', String(index === next)));
+    };
+    e.pageDom.filledSlots = () => pages[page];
+    e.pageDom.directSlots = () => pages[page];
+    e.control.setAttribute('data-uia', mode === 'indicator' ? 'carousel-right-button' : 'carousel-hawkins-right-button');
+    const left = e.scroller.appendChild(new Element('button'));
+    left.setAttribute('data-uia', mode === 'indicator' ? 'carousel-left-button' : 'carousel-hawkins-left-button');
+    const click = direction => {
+        directions.push(direction);
+        if (onClick) onClick({ direction, page, setPage, e });
+        else setPage((page + direction + count) % count);
+    };
+    e.control.click = () => click(1); left.click = () => click(-1);
+    setPage(0);
+    e.carousel.bind(e.section, e.scroller, e.track);
+    pages.forEach((slots, index) => e.carousel.forcePage(e.section, slots[0].querySelector('a').href, index));
+    e.carousel.completeCollection(e.section, count);
+    e.carousel.notePage(e.section, 0);
+    return { ...e, pages, indicators, directions, setPage, page: () => page,
+        cancelHover: () => { hoverToken++; },
+        async settle(promise, limit = 80) {
+            let done = false;
+            promise.then(() => { done = true; }, () => { done = true; });
+            for (let i = 0; i < limit && !done; i++) {
+                await e.scheduler.flush();
+                if (!done) { await e.scheduler.frame(); await e.scheduler.advance(0); }
+            }
+            assert.equal(done, true, 'native operation settles within the controlled frames');
+            return promise;
+        } };
+}
+
+test('carousel movement and strict restoration run through the native navigation owner', async () => {
+    const e = navigationEnvironment();
+    const moved = e.carousel.movePage(e.section, e.scroller, 1, null, e.scope.token);
+    assert.equal(await e.settle(moved), 1);
+    assert.deepEqual(e.directions, [1]);
+    assert.equal(e.carousel.diagnostics().navigation.pendingMoves, 0);
+    const items = e.pages.map((slots, page) => ({ videoId: String(page + 1), page }));
+    const restored = e.carousel.restorePage(e.section, e.scroller, e.track, items, 1, 0,
+        { mode: 'strict', sessionToken: e.scope.token });
+    assert.equal((await e.settle(restored)).complete, true);
+    assert.equal(e.page(), 0);
+    assert.equal(e.carousel.diagnostics().navigation.motionLeases, 0);
+});
+
+test('an obsolete indicator acknowledgement cannot read or publish a replacement binding', async () => {
+    const e = navigationEnvironment({ mode: 'indicator', onClick() {} });
+    const pending = e.carousel.movePage(e.section, e.scroller, 1, null, e.scope.token);
+    await e.scheduler.flush();
+    const oldObserver = e.observers[0];
+    const rejected = assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' });
+    e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track);
+    e.setPage(1);
+    oldObserver.callback([]);
+    await e.scheduler.flush();
+    await rejected;
+    assert.equal(oldObserver.disconnects, 1);
+    assert.equal(e.scheduler.timers.size, 0);
+    assert.equal(e.carousel.diagnostics().navigation.pendingMoves, 0);
+    assert.equal(e.carousel.diagnostics().navigation.motionLeases, 0);
+});
+
+
+test('hover hydration stops before the next geometry read after cancellation', async () => {
+    const e = navigationEnvironment();
+    let reads = 0;
+    const filled = e.pageDom.filledSlots;
+    e.pageDom.filledSlots = () => { reads++; return filled(); };
+    const pending = e.carousel.stablePage(e.scroller, e.track, { hoverToken: 1, sessionToken: e.scope.token });
+    e.cancelHover();
+    await e.scheduler.frame();
+    assert.deepEqual(await pending, []);
+    assert.equal(reads, 0);
+});
+
+test('initialization stability waits remain independent of hover cancellation', async () => {
+    const e = navigationEnvironment();
+    const pending = e.carousel.stablePage(e.scroller, e.track, { sessionToken: e.scope.token });
+    e.cancelHover();
+    await e.scheduler.frame(); await e.scheduler.frame();
+    const slots = await pending;
+    assert.equal(slots.length, 1); assert.equal(slots[0], e.pages[0][0]);
+});
+
+test('route cancellation stops pending and queued native work and releases owned waits', async () => {
+    const e = navigationEnvironment({ onClick() {} });
+    const first = e.carousel.movePage(e.section, e.scroller, 1, 1, e.scope.token);
+    await e.scheduler.flush();
+    const queued = e.carousel.movePage(e.section, e.scroller, 1, 1, e.scope.token);
+    const rejected = [first, queued].map(pending => assert.rejects(pending, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' }));
+    e.scope.dispose(); e.carousel.clearBinding();
+    await Promise.all(rejected);
+    assert.equal(e.directions.length, 1);
+    assert.equal(e.scheduler.frames.size, 0); assert.equal(e.scheduler.timers.size, 0);
+    assert.deepEqual(e.carousel.diagnostics().navigation, { pendingMoves: 0, pendingWaits: 0, motionLeases: 0 });
+});
+
+
+test('fast restoration preserves the single right-cycle shortcut and verified target content', async () => {
+    const e = navigationEnvironment({ count: 4 });
+    e.setPage(3); e.carousel.notePage(e.section, 3);
+    const items = e.pages.map((slots, page) => ({ videoId: String(page + 1), page }));
+    const pending = e.carousel.restorePage(e.section, e.scroller, e.track, items, 1, 0,
+        { canonicalTransform: 'page-0', sessionToken: e.scope.token });
+    assert.equal(await e.settle(pending), true);
+    assert.deepEqual(e.directions, [1]);
+    assert.equal(e.page(), 0);
+    assert.deepEqual(e.carousel.diagnostics().navigation, { pendingMoves: 0, pendingWaits: 0, motionLeases: 0 });
+});
+
+test('fast restoration repairs a transform and content phase mismatch before its verification timeout', async () => {
+    let wrongPhase = true;
+    const logs = [];
+    const e = navigationEnvironment({ mode: 'indicator', onClick({ direction, page, setPage, e }) {
+        if (page === 2 && direction === 1) { setPage(0); e.track.style.setProperty('transform', 'wrong-phase'); }
+        else { wrongPhase = false; setPage((page + direction + 3) % 3); }
+    }, overrides: { log: (name, detail) => logs.push({ name, detail }) } });
+    e.pageDom.filledSlots = () => wrongPhase && e.page() === 0 ? e.pages[2] : e.pages[e.page()];
+    e.setPage(2);
+    const items = e.pages.map((slots, page) => ({ videoId: String(page + 1), page }));
+    const pending = e.carousel.restorePage(e.section, e.scroller, e.track, items, 1, 0,
+        { canonicalTransform: 'page-0', sessionToken: e.scope.token });
+    assert.equal(await e.settle(pending), true);
+    assert.deepEqual(e.directions, [1, 1, -1]);
+    const result = logs.find(entry => entry.name === 'nativeFastRestorationCompleted').detail;
+    assert.equal(result.completionPath, 'phase-repair-before-timeout');
+    assert.equal(result.initialVerificationWaitSkipped, true);
+    assert.equal(result.mountedKeys, 1);
+    assert.equal(result.missingKeys.length, 0);
+});
+
+test('fast restoration waits for verification before repairing content with the canonical transform', async () => {
+    let wrongPhase = true;
+    const logs = [];
+    const e = navigationEnvironment({ mode: 'indicator', onClick({ direction, page, setPage }) {
+        if (page === 2 && direction === 1) setPage(0);
+        else { wrongPhase = false; setPage((page + direction + 3) % 3); }
+    }, overrides: { log: (name, detail) => logs.push({ name, detail }) } });
+    e.pageDom.filledSlots = () => wrongPhase && e.page() === 0 ? e.pages[2] : e.pages[e.page()];
+    e.setPage(2);
+    const items = e.pages.map((slots, page) => ({ videoId: String(page + 1), page }));
+    const pending = e.carousel.restorePage(e.section, e.scroller, e.track, items, 1, 0,
+        { canonicalTransform: 'page-0', sessionToken: e.scope.token });
+    assert.equal(await e.settle(pending), true);
+    assert.deepEqual(e.directions, [1, 1, -1]);
+    const result = logs.find(entry => entry.name === 'nativeFastRestorationCompleted').detail;
+    assert.equal(result.completionPath, 'phase-repair-after-verification');
+    assert.equal(result.initialVerificationWaitSkipped, false);
+    assert.equal(result.complete, true);
+    assert(result.elapsedMs >= 260);
+});
+
+test('fast restoration falls back to strict verification and truthfully rejects unmounted target content', async () => {
+    const logs = [];
+    const e = navigationEnvironment({ mode: 'indicator', overrides: { log: (name, detail) => logs.push({ name, detail }),
+        warn: (name, detail) => logs.push({ name, detail }) } });
+    e.control.setAttribute('aria-disabled', 'true');
+    e.pageDom.filledSlots = () => e.pages[2];
+    e.setPage(2);
+    const items = e.pages.map((slots, page) => ({ videoId: String(page + 1), page }));
+    const pending = e.carousel.restorePage(e.section, e.scroller, e.track, items, 1, 0,
+        { sessionToken: e.scope.token });
+    assert.equal(await e.settle(pending, 400), false);
+    assert(logs.some(entry => entry.name === 'fastRestorationVerificationFailedUsingV49PageByPageFallback'));
+    assert.deepEqual(e.carousel.diagnostics().navigation, { pendingMoves: 0, pendingWaits: 0, motionLeases: 0 });
+});
+
+
+test('fast restoration cannot inspect a replacement binding from its move failure handler', async () => {
+    const e = navigationEnvironment({ mode: 'indicator' });
+    e.control.click = () => {
+        e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track);
+        for (const indicator of e.indicators) indicator.getAttribute = () => { throw new Error('replacement read'); };
+    };
+    e.setPage(2);
+    const items = e.pages.map((slots, page) => ({ videoId: String(page + 1), page }));
+    await assert.rejects(e.carousel.restorePage(e.section, e.scroller, e.track, items, 1, 0,
+        { sessionToken: e.scope.token }), { code: 'NATIVE_SOURCE_REPLACED' });
+    assert.deepEqual(e.carousel.diagnostics().navigation, { pendingMoves: 0, pendingWaits: 0, motionLeases: 0 });
+});
+
+
+test('navigation retries one genuine timeout at the existing delay without adding a retry loop', async () => {
+    let clicks = 0;
+    const logs = [];
+    const e = navigationEnvironment({ count: 2, onClick({ setPage }) {
+        clicks++; if (clicks === 2) setPage(1);
+    }, overrides: { log: (name, detail) => logs.push({ name, detail }) } });
+    const pending = e.carousel.navigateTo(e.section, e.scroller, 1, null, e.scope.token);
+    assert.equal(await e.settle(pending, 240), 1);
+    assert.deepEqual(e.directions, [1, 1]);
+    assert.equal(logs.filter(entry => entry.name === 'Retrying logical page move after transient timeout').length, 1);
+    assert(e.scheduler.performance.now() >= 3120);
+    assert.deepEqual(e.carousel.diagnostics().navigation, { pendingMoves: 0, pendingWaits: 0, motionLeases: 0 });
+});
+
+
+test('failed navigation diagnostic callbacks cannot reject or retry an admitted native move', async () => {
+    for (const factoryFailure of [true, false]) {
+        const e = navigationEnvironment({ overrides: { navigationDiagnostics() {
+            if (factoryFailure) throw new Error('diagnostic factory');
+            return { bump() { throw new Error('diagnostic counter'); }, record() { throw new Error('diagnostic timing'); } };
+        } } });
+        const pending = e.carousel.movePage(e.section, e.scroller, 1, 1, e.scope.token);
+        assert.equal(await e.settle(pending), 1);
+        assert.deepEqual(e.directions, [1]);
+        assert.deepEqual(e.carousel.diagnostics().navigation, { pendingMoves: 0, pendingWaits: 0, motionLeases: 0 });
+    }
 });

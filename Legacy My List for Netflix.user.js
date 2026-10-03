@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.14
+// @version      1.4.15
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -3448,12 +3448,119 @@
   }
 
   // src/netflix/carousel/navigation.js
-  function createNavigation({ borrowBinding, assertBinding, createError, fastMoveClass }) {
+  function createNavigation({
+    borrowBinding,
+    assertBinding,
+    bindingForSource,
+    createError,
+    fastMoveClass,
+    native = {},
+    scope,
+    performance: performance2,
+    getComputedStyle: getComputedStyle2,
+    setTimeout: setTimeout2,
+    clearTimeout: clearTimeout2,
+    requestAnimationFrame: requestAnimationFrame2,
+    cancelAnimationFrame: cancelAnimationFrame2,
+    MutationObserver: MutationObserver2,
+    cardSelector,
+    videoIdFromHref,
+    isHoverCancelled = () => false,
+    readHoverToken = () => null,
+    diagnosticsFor = () => ({ bump() {
+    }, record: null }),
+    log = () => {
+    },
+    warn = () => {
+    },
+    tLog = (value) => value,
+    logTimeout = () => {
+    }
+  }) {
+    const PAGE_CHANGE_TIMEOUT_MS = 3e3, PAGE_CHANGE_OBSERVER_PRIMARY_MS = 320;
+    const PAGE_STABLE_TIMEOUT_MS = 2e3, SCRIPT_MOVE_SETTLE_TIMEOUT_MS = 260;
+    const FAST_RESTORE_VERIFY_TIMEOUT_MS = 260, CANCELLED_MOVE_POLL_MS = 80;
+    const FAST_MOVE_CLASS2 = fastMoveClass;
+    const {
+      model: getCarouselDomRuntime,
+      profile: detectCarouselDomProfile,
+      registerPage: registerLogicalPageSignature,
+      selectedPage,
+      pageCount,
+      navigationControl: carouselMoveButton,
+      controlDisabled: carouselMoveButtonDisabled,
+      currentSlots: currentPageSlots,
+      signatureOf: visibleSignature
+    } = native;
+    const assertRouteSession = (token) => scope.assertCurrent(token);
+    const isRouteSessionActive = (token) => scope.isCurrent(token);
+    const isRouteSessionCancelledError = (error) => scope.isCancelled?.(error) || error?.code === "LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED";
+    const hoverPreparationCancelled = isHoverCancelled;
+    const NETFLIX_DOM_SELECTORS2 = { standardCard: cardSelector };
+    const logOperationTimeout = logTimeout;
+    const initializationTimeoutError = (stage, timeoutMs, details) => createError(
+      "INITIALIZATION_TIMEOUT",
+      stage,
+      "Timeout at " + stage + " after " + timeoutMs + " ms",
+      { timeoutMs, ...details }
+    );
+    const sleep = (ms) => scheduledWait((close) => setTimeout2(close, ms), clearTimeout2);
+    const itemKey = (item) => item.videoId ? "v:" + item.videoId : "h:" + item.href;
+    const itemKeyFromCard = (card) => {
+      const href = card?.href || card?.getAttribute?.("href") || "";
+      if (!href) return "";
+      const id = videoIdFromHref(href);
+      return id ? "v:" + id : "h:" + href;
+    };
     let epoch = 0;
     let sequence = 0;
     let tail = Promise.resolve();
     const moves = /* @__PURE__ */ new Set();
     const motionOwners = /* @__PURE__ */ new Map();
+    const waits = /* @__PURE__ */ new Set();
+    function diagnosticSink(token) {
+      let sink;
+      try {
+        sink = diagnosticsFor(token);
+      } catch (_) {
+      }
+      return {
+        bump(field) {
+          try {
+            sink?.bump(field);
+          } catch (_) {
+          }
+        },
+        record: typeof sink?.record === "function" ? (phase, started) => {
+          try {
+            return sink.record(phase, started);
+          } catch (_) {
+          }
+        } : null
+      };
+    }
+    function scheduledWait(schedule, cancel) {
+      return new Promise((resolve, reject) => {
+        let handle = null, closed = false;
+        const close = () => {
+          if (closed) return;
+          closed = true;
+          waits.delete(close);
+          try {
+            if (handle !== null) cancel(handle);
+          } catch (_) {
+          }
+          resolve();
+        };
+        waits.add(close);
+        try {
+          handle = schedule(close);
+        } catch (error) {
+          reject(error);
+          close();
+        }
+      });
+    }
     function begin(section, scroller) {
       const binding = borrowBinding(section, scroller);
       assertBinding(binding);
@@ -3466,6 +3573,7 @@
       let released = false;
       let startedSequence = null;
       const assertCurrent = () => {
+        scope.assertCurrent(binding.sessionToken);
         if (ownerEpoch !== epoch || released) {
           throw createError("NATIVE_SOURCE_REPLACED", "native-navigation", "Native navigation owner changed");
         }
@@ -3576,18 +3684,1217 @@
     }
     function reset() {
       epoch++;
+      for (const close of [...waits]) close();
       restoreMotion();
       for (const move of [...moves]) move.release();
       tail = Promise.resolve();
     }
+    function createLogicalMoveSignal(scroller, token, sessionToken, bindingOwner = bindingForSource(scroller, null)) {
+      const diagnostic = diagnosticSink(token);
+      const bump = diagnostic.bump;
+      if (typeof MutationObserver2 !== "function") {
+        bump("logicalMoveObserverUnsupported");
+        return null;
+      }
+      let observer = null, frame = null, timer = null, pending = null;
+      let closed = false, dirty = true;
+      const wake = (available) => {
+        const oldTimer = timer, oldFrame = frame;
+        timer = null;
+        frame = null;
+        dirty = false;
+        const resolve = pending;
+        pending = null;
+        try {
+          if (oldTimer !== null) clearTimeout2(oldTimer);
+        } catch (_) {
+          bump("logicalMoveObserverFailures");
+        }
+        try {
+          if (oldFrame !== null) cancelAnimationFrame2(oldFrame);
+        } catch (_) {
+          bump("logicalMoveObserverFailures");
+        }
+        resolve?.(available);
+      };
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        waits.delete(close);
+        try {
+          observer?.disconnect();
+        } catch (_) {
+          bump("logicalMoveObserverFailures");
+        }
+        observer = null;
+        wake(false);
+      };
+      waits.add(close);
+      const queueFrame = () => {
+        try {
+          assertBinding(bindingOwner);
+        } catch (_) {
+          close();
+          return;
+        }
+        if (closed || !pending || frame !== null || hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken)) return;
+        try {
+          frame = requestAnimationFrame2(() => {
+            frame = null;
+            if (closed) return;
+            bump("logicalMoveSignalFrames");
+            wake(true);
+          });
+        } catch (_) {
+          bump("logicalMoveObserverFailures");
+          close();
+        }
+      };
+      try {
+        observer = new MutationObserver2(() => {
+          if (closed) return;
+          bump("logicalMoveNotifications");
+          dirty = true;
+          queueFrame();
+        });
+        observer.observe(scroller, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["href", "style", "class", "tabindex"]
+        });
+        bump("logicalMoveObserverStarts");
+        return { close, wait: () => new Promise((resolve) => {
+          if (closed) {
+            resolve(false);
+            return;
+          }
+          pending = resolve;
+          timer = setTimeout2(() => {
+            if (closed) return;
+            bump("logicalMoveFallbackWakes");
+            wake(true);
+          }, CANCELLED_MOVE_POLL_MS);
+          if (dirty) queueFrame();
+        }) };
+      } catch (_) {
+        bump("logicalMoveObserverFailures");
+        close();
+        return null;
+      }
+    }
+    async function waitLogicalPageChange(section, scroller, track, beforePage, direction, beforeTransform, beforeSignature, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
+      assertRouteSession(sessionToken);
+      const bindingOwner = borrowBinding(section, scroller, track);
+      assertBinding(bindingOwner);
+      const runtime = getCarouselDomRuntime(section);
+      const started = performance2.now();
+      let lastTransform = beforeTransform;
+      let lastSignature = beforeSignature;
+      const diagnostic = diagnosticSink(token);
+      let signal = token === null || hoverPreparationCancelled(token) ? null : createLogicalMoveSignal(scroller, token, sessionToken, bindingOwner);
+      try {
+        while (performance2.now() - started < timeout) {
+          if (hoverPreparationCancelled(token)) {
+            signal?.close();
+            signal = null;
+            await sleep(CANCELLED_MOVE_POLL_MS);
+          } else {
+            let signalled = false;
+            try {
+              if (signal) signalled = await signal.wait();
+            } catch (_) {
+              diagnostic.bump("logicalMoveObserverFailures");
+            }
+            assertRouteSession(sessionToken);
+            assertBinding(bindingOwner);
+            if (!signalled) {
+              signal?.close();
+              signal = null;
+              await scheduledWait(requestAnimationFrame2, cancelAnimationFrame2);
+            }
+          }
+          assertRouteSession(sessionToken);
+          assertBinding(bindingOwner);
+          if (token !== null) diagnostic.bump("logicalMoveReads");
+          const transform = track.style.getPropertyValue("transform") || getComputedStyle2(track).transform;
+          const signature = visibleSignature(currentPageSlots(scroller, track));
+          const signatureChanged = Boolean(signature) && signature !== beforeSignature;
+          lastTransform = transform;
+          lastSignature = signature;
+          if (!signatureChanged) continue;
+          const existingPage = runtime?.signatureToPage.get(signature);
+          const proposedPage = Math.max(0, beforePage + (direction < 0 ? -1 : 1));
+          const mapped = Number.isFinite(existingPage) ? existingPage : registerLogicalPageSignature(section, signature, proposedPage);
+          if (runtime) {
+            native.notePage(section, mapped, Number.isFinite(existingPage) && existingPage !== beforePage);
+          }
+          return {
+            page: mapped,
+            changed: true,
+            transform,
+            signature,
+            transformChanged: transform !== beforeTransform,
+            signatureChanged: true,
+            cycleDetected: Boolean(runtime?.cycleDetected)
+          };
+        }
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+        if (hoverPreparationCancelled(token)) {
+          return { page: beforePage, changed: false, transform: lastTransform, signature: lastSignature };
+        }
+        const details = {
+          direction: direction < 0 ? "left" : "right",
+          beforePage,
+          beforeTransform,
+          lastTransform,
+          beforeSignature,
+          lastSignature,
+          domGeneration: runtime?.profile?.generation || null,
+          navigationMode: runtime?.profile?.navigationMode || null,
+          pageMode: runtime?.profile?.pageMode || null
+        };
+        logOperationTimeout("logical-page-change", timeout, details);
+        throw initializationTimeoutError("logical-page-change", timeout, details);
+      } finally {
+        signal?.close();
+      }
+    }
+    async function waitPageByPolling(section, before, timeout, sessionToken = null, token = null) {
+      const bindingOwner = borrowBinding(section);
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      const start = performance2.now();
+      while (performance2.now() - start < timeout) {
+        await sleep(hoverPreparationCancelled(token) ? CANCELLED_MOVE_POLL_MS : 12);
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+        const now = selectedPage(section);
+        if (now !== before) return now;
+      }
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      return selectedPage(section);
+    }
+    async function waitPage(section, before, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
+      const bindingOwner = borrowBinding(section);
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      const immediate = selectedPage(section);
+      if (immediate !== before) return immediate;
+      if (timeout <= 0) return immediate;
+      if (typeof MutationObserver2 !== "function") {
+        return waitPageByPolling(section, before, timeout, sessionToken, token);
+      }
+      const started = performance2.now();
+      const observerBudget = Math.min(timeout, PAGE_CHANGE_OBSERVER_PRIMARY_MS);
+      const observedPage = await new Promise((resolve, reject) => {
+        let observer = null;
+        let timer = null;
+        let finished = false;
+        const finish = (value) => {
+          if (finished) return;
+          finished = true;
+          waits.delete(close);
+          try {
+            if (timer !== null) clearTimeout2(timer);
+          } catch (_) {
+          }
+          try {
+            observer?.disconnect();
+          } catch (_) {
+          }
+          resolve(value);
+        };
+        const close = () => finish(null);
+        waits.add(close);
+        const check = () => {
+          if (finished) return;
+          try {
+            assertRouteSession(sessionToken);
+            assertBinding(bindingOwner);
+          } catch (_) {
+            close();
+            return;
+          }
+          const now = selectedPage(section);
+          if (now !== before) finish(now);
+        };
+        try {
+          observer = new MutationObserver2(check);
+          observer.observe(section, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: ["data-indicator-selected"]
+          });
+          check();
+          if (!finished) timer = setTimeout2(() => finish(null), observerBudget);
+        } catch (error) {
+          reject(error);
+          close();
+        }
+      });
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      if (observedPage !== null) return observedPage;
+      const elapsed = performance2.now() - started;
+      const remaining = Math.max(0, timeout - elapsed);
+      return waitPageByPolling(section, before, remaining, sessionToken, token);
+    }
+    async function waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, timeout = SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken = null) {
+      const bindingOwner = bindingForSource(scroller, track);
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      const started = performance2.now();
+      let currentTransform = track.style.getPropertyValue("transform") || getComputedStyle2(track).transform;
+      let currentSignature = visibleSignature(currentPageSlots(scroller, track));
+      let observedChange = currentTransform !== beforeTransform || Boolean(beforeSignature) && Boolean(currentSignature) && currentSignature !== beforeSignature;
+      let stableFrames = 0;
+      let previousSignature = currentSignature;
+      while (performance2.now() - started < timeout) {
+        await scheduledWait(requestAnimationFrame2, cancelAnimationFrame2);
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+        currentTransform = track.style.getPropertyValue("transform") || getComputedStyle2(track).transform;
+        currentSignature = visibleSignature(currentPageSlots(scroller, track));
+        if (currentTransform !== beforeTransform || Boolean(beforeSignature) && Boolean(currentSignature) && currentSignature !== beforeSignature) {
+          observedChange = true;
+        }
+        if (observedChange && currentSignature && currentSignature === previousSignature) {
+          stableFrames++;
+          if (stableFrames >= 2) break;
+        } else {
+          stableFrames = 0;
+        }
+        previousSignature = currentSignature;
+      }
+      await scheduledWait(requestAnimationFrame2, cancelAnimationFrame2);
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      return {
+        transform: currentTransform,
+        signature: currentSignature,
+        observedChange
+      };
+    }
+    async function moveOnePage(section, scroller, direction, token = null, sessionToken = null) {
+      const hoverTiming = diagnosticSink(token).record;
+      const queueStarted = hoverTiming ? performance2.now() : 0;
+      let moveStarted = null;
+      const moveOwner = begin(section, scroller);
+      try {
+        await moveOwner.ready;
+        if (hoverTiming) hoverTiming("queue", queueStarted);
+        assertRouteSession(sessionToken);
+        if (token !== null && token !== readHoverToken()) {
+          log(tLog("carouselMoveCancelledBeforeStart"), {
+            token,
+            hoverToken: readHoverToken(),
+            direction: direction < 0 ? "left" : "right",
+            selectedPage: selectedPage(section)
+          });
+          return selectedPage(section);
+        }
+        const seq = moveOwner.start();
+        const before = selectedPage(section);
+        const runtime = getCarouselDomRuntime(section);
+        const profile = runtime?.profile || detectCarouselDomProfile(section);
+        const { button, selector } = carouselMoveButton(section, scroller, direction);
+        const track = native.track(scroller);
+        if (!button || !track) {
+          warn(tLog("carouselMoveControlNotFound"), {
+            seq,
+            direction,
+            before,
+            selector,
+            buttonFound: Boolean(button),
+            trackFound: Boolean(track)
+          });
+          return before;
+        }
+        if (profile.pageMode === "logical" && carouselMoveButtonDisabled(button)) {
+          return before;
+        }
+        const started = performance2.now();
+        moveStarted = started;
+        const beforeTransform = track.style.getPropertyValue("transform") || getComputedStyle2(track).transform;
+        const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
+        const sharedFastMode = section.classList.contains(FAST_MOVE_CLASS2);
+        const nativeTransition = sharedFastMode ? "suppressed-by-scan" : track.style.getPropertyValue("transition");
+        let motionLease = null;
+        let after = before;
+        let afterTransform = beforeTransform;
+        let afterSignature = beforeSignature;
+        let settleObservedChange = false;
+        let acknowledgementMs = null;
+        let settlementMs = null;
+        log(tLog("carouselMoveStarted"), {
+          seq,
+          direction: direction < 0 ? "left" : "right",
+          before,
+          pages: pageCount(section),
+          animationDisabled: true,
+          sharedFastMode,
+          beforeTransform,
+          nativeTransition,
+          token
+        });
+        try {
+          if (!sharedFastMode) motionLease = suppress(section, track);
+          assertRouteSession(sessionToken);
+          moveOwner.assertCurrent();
+          button.click();
+          moveOwner.assertCurrent();
+          const acknowledgementStarted = hoverTiming ? performance2.now() : 0;
+          try {
+            if (profile.pageMode === "logical") {
+              const logicalMove = await waitLogicalPageChange(
+                section,
+                scroller,
+                track,
+                before,
+                direction,
+                beforeTransform,
+                beforeSignature,
+                PAGE_CHANGE_TIMEOUT_MS,
+                sessionToken,
+                token
+              );
+              after = logicalMove.page;
+              afterTransform = logicalMove.transform;
+              afterSignature = logicalMove.signature;
+              settleObservedChange = logicalMove.changed;
+            } else {
+              after = await waitPage(section, before, PAGE_CHANGE_TIMEOUT_MS, sessionToken, token);
+            }
+          } finally {
+            if (hoverTiming) acknowledgementMs = hoverTiming("acknowledgement", acknowledgementStarted) ?? null;
+          }
+          assertRouteSession(sessionToken);
+          moveOwner.assertCurrent();
+          const settlementStarted = hoverTiming ? performance2.now() : 0;
+          try {
+            if (sharedFastMode) {
+              if (profile.pageMode !== "logical") {
+                await scheduledWait(requestAnimationFrame2, cancelAnimationFrame2);
+                assertRouteSession(sessionToken);
+              }
+              moveOwner.assertCurrent();
+              afterTransform = track.style.getPropertyValue("transform") || getComputedStyle2(track).transform;
+              afterSignature = visibleSignature(currentPageSlots(scroller, track));
+              settleObservedChange = settleObservedChange || after !== before;
+            } else {
+              const settled = await waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken);
+              moveOwner.assertCurrent();
+              afterTransform = settled.transform;
+              afterSignature = settled.signature;
+              settleObservedChange = settled.observedChange;
+            }
+          } finally {
+            if (hoverTiming) settlementMs = hoverTiming("settlement", settlementStarted) ?? null;
+          }
+        } finally {
+          motionLease?.release();
+        }
+        moveOwner.assertCurrent();
+        log(tLog("carouselMoveCompleted"), {
+          seq,
+          direction: direction < 0 ? "left" : "right",
+          before,
+          after,
+          changed: after !== before,
+          transformChanged: afterTransform !== beforeTransform,
+          contentChanged: Boolean(beforeSignature) && Boolean(afterSignature) && afterSignature !== beforeSignature,
+          settleObservedChange,
+          sharedFastMode,
+          beforeTransform,
+          afterTransform,
+          elapsedMs: Math.round(performance2.now() - started),
+          ...hoverTiming ? { acknowledgementMs, settlementMs } : {},
+          animationRestored: sharedFastMode ? false : Boolean(motionLease?.restored()),
+          token
+        });
+        return after;
+      } finally {
+        if (hoverTiming && moveStarted !== null) hoverTiming("move", moveStarted);
+        moveOwner.release();
+      }
+    }
+    async function goToPage(section, scroller, target, token = null, sessionToken = null, preferCyclicShortest = false) {
+      const bindingOwner = borrowBinding(section, scroller);
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      const diagnostic = diagnosticSink(token);
+      const total = pageCount(section);
+      target = Math.max(0, Math.min(total - 1, target));
+      const startPage = selectedPage(section);
+      const profile = getCarouselDomRuntime(section)?.profile;
+      const cyclicShortestUsed = preferCyclicShortest && !(profile?.navigationMode === "hawkins" && profile.pageMode === "logical");
+      if (preferCyclicShortest && !cyclicShortestUsed && startPage !== target) {
+        const rightDistance = (target - startPage + total) % total;
+        const leftDistance = (startPage - target + total) % total;
+        if ((rightDistance <= leftDistance ? 1 : -1) !== (startPage < target ? 1 : -1)) {
+          diagnostic.bump("boundaryDetoursAvoided");
+        }
+      }
+      if (startPage !== target) {
+        log(tLog("pageMoveRequested"), { from: startPage, target, total, token, preferCyclicShortest, cyclicShortestUsed });
+      }
+      let guard = total + 5;
+      let cancelled = false;
+      let forcedDirection = null;
+      let pageChangeRetryCount = 0;
+      while (true) {
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+        const current = selectedPage(section);
+        if (current === target || guard-- <= 0) break;
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+        if (token !== null && token !== readHoverToken()) {
+          cancelled = true;
+          break;
+        }
+        if (token !== null) diagnostic.bump("duplicatePageReadsAvoided");
+        let direction = forcedDirection ?? (current < target ? 1 : -1);
+        if (forcedDirection === null && cyclicShortestUsed && total > 1) {
+          const rightDistance = (target - current + total) % total;
+          const leftDistance = (current - target + total) % total;
+          if (rightDistance !== 0 || leftDistance !== 0) {
+            direction = rightDistance <= leftDistance ? 1 : -1;
+          }
+        }
+        let next;
+        try {
+          next = await moveOnePage(section, scroller, direction, token, sessionToken);
+          pageChangeRetryCount = 0;
+        } catch (error) {
+          if (isRouteSessionCancelledError(error)) throw error;
+          if (error?.code === "INITIALIZATION_TIMEOUT" && pageChangeRetryCount < 1) {
+            pageChangeRetryCount++;
+            log("Retrying logical page move after transient timeout", {
+              current,
+              target,
+              direction: direction < 0 ? "left" : "right",
+              token
+            });
+            await sleep(120);
+            assertRouteSession(sessionToken);
+            assertBinding(bindingOwner);
+            continue;
+          }
+          throw error;
+        }
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+        if (token !== null && token !== readHoverToken()) {
+          cancelled = true;
+          break;
+        }
+        if (next === current && cyclicShortestUsed && total > 1) {
+          const directDirection = current < target ? 1 : -1;
+          if (directDirection !== direction) {
+            log("Logical page boundary fallback", {
+              current,
+              target,
+              attemptedDirection: direction < 0 ? "left" : "right",
+              fallbackDirection: directDirection < 0 ? "left" : "right",
+              token
+            });
+            const retried = await moveOnePage(section, scroller, directDirection, token, sessionToken);
+            assertRouteSession(sessionToken);
+            assertBinding(bindingOwner);
+            if (token !== null && token !== readHoverToken()) {
+              cancelled = true;
+              break;
+            }
+            if (retried !== current) {
+              forcedDirection = directDirection;
+              continue;
+            }
+          }
+          break;
+        }
+        if (next === current) break;
+      }
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      const result = selectedPage(section);
+      if (startPage !== target || result !== target || cancelled) {
+        log(tLog("pageMoveResult"), {
+          from: startPage,
+          target,
+          result,
+          reached: result === target,
+          cancelled,
+          token,
+          hoverToken: readHoverToken(),
+          preferCyclicShortest,
+          cyclicShortestUsed,
+          guardRemaining: guard
+        });
+      }
+      return result;
+    }
+    async function waitStableCurrentPage(scroller, track, options = {}) {
+      const timeout = options.timeout ?? PAGE_STABLE_TIMEOUT_MS;
+      const previousSignature = options.previousSignature ?? "";
+      const requiredStableFrames = options.requiredStableFrames ?? 2;
+      const minimumSlots = Math.max(0, options.minimumSlots ?? 0);
+      const minimumNewItems = Math.max(0, options.minimumNewItems ?? 0);
+      const seenKeys = options.seenKeys instanceof Set ? options.seenKeys : null;
+      const requiredKeys = options.requiredKeys instanceof Set ? options.requiredKeys : null;
+      const sessionToken = options.sessionToken ?? null;
+      const token = options.hoverToken ?? null;
+      const bindingOwner = bindingForSource(scroller, track);
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      if (hoverPreparationCancelled(token)) return [];
+      const start = performance2.now();
+      let lastSignature = "";
+      let stableFrames = 0;
+      let best = [];
+      let bestNewItems = 0;
+      let bestRequiredMatches = 0;
+      let freshContentSeen = !previousSignature;
+      const slotKeys = (slots) => {
+        const keys = /* @__PURE__ */ new Set();
+        for (const slot of slots) {
+          const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+          const key = itemKeyFromCard(card);
+          if (key) keys.add(key);
+        }
+        return keys;
+      };
+      const countRequiredMatches = (slots) => {
+        if (!requiredKeys || requiredKeys.size === 0) return 0;
+        const keys = slotKeys(slots);
+        let matches = 0;
+        for (const key of requiredKeys) {
+          if (keys.has(key)) matches++;
+        }
+        return matches;
+      };
+      const countNewItems = (slots) => {
+        if (!seenKeys || minimumNewItems <= 0) return 0;
+        const keys = /* @__PURE__ */ new Set();
+        for (const slot of slots) {
+          const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+          const key = itemKeyFromCard(card);
+          if (key && !seenKeys.has(key)) keys.add(key);
+        }
+        return keys.size;
+      };
+      while (performance2.now() - start < timeout) {
+        await scheduledWait(requestAnimationFrame2, cancelAnimationFrame2);
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+        if (hoverPreparationCancelled(token)) return [];
+        const slots = currentPageSlots(scroller, track);
+        const newItems = countNewItems(slots);
+        const requiredMatches = countRequiredMatches(slots);
+        if (requiredMatches > bestRequiredMatches || requiredMatches === bestRequiredMatches && (slots.length > best.length || slots.length === best.length && newItems >= bestNewItems)) {
+          best = slots;
+          bestNewItems = newItems;
+          bestRequiredMatches = requiredMatches;
+        }
+        const signature = visibleSignature(slots);
+        if (!signature) continue;
+        if (!freshContentSeen && signature !== previousSignature) {
+          freshContentSeen = true;
+          stableFrames = 0;
+          lastSignature = "";
+        }
+        if (!freshContentSeen) continue;
+        const slotCountReady = slots.length >= minimumSlots;
+        const newItemCountReady = !seenKeys || minimumNewItems <= 0 || newItems >= minimumNewItems;
+        const requiredKeysReady = !requiredKeys || requiredKeys.size === 0 || requiredMatches >= requiredKeys.size;
+        if (!slotCountReady || !newItemCountReady || !requiredKeysReady) {
+          stableFrames = 0;
+          lastSignature = signature;
+          continue;
+        }
+        if (signature === lastSignature) {
+          stableFrames++;
+          if (stableFrames >= requiredStableFrames) return slots;
+        } else {
+          lastSignature = signature;
+          stableFrames = 1;
+          if (requiredStableFrames <= 1) return slots;
+        }
+      }
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      if (hoverPreparationCancelled(token)) return [];
+      return best;
+    }
+    function pageItemKeys(items, page) {
+      return new Set(
+        items.filter((item) => item.page === page).map(itemKey).filter(Boolean)
+      );
+    }
+    function mountedItemKeys(slots) {
+      const keys = /* @__PURE__ */ new Set();
+      for (const slot of slots) {
+        const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+        const key = itemKeyFromCard(card);
+        if (key) keys.add(key);
+      }
+      return keys;
+    }
+    function trackTransformValue(track) {
+      if (!track) return "";
+      return track.style.getPropertyValue("transform") || getComputedStyle2(track).transform || "";
+    }
+    function immediateRestoredPageState(scroller, track, items, targetPage) {
+      const requiredPageKeys = pageItemKeys(items, targetPage);
+      const slots = currentPageSlots(scroller, track);
+      const mountedKeys = mountedItemKeys(slots);
+      const missingKeys = [...requiredPageKeys].filter((key) => !mountedKeys.has(key));
+      return {
+        expectedKeys: requiredPageKeys.size,
+        mountedKeys: requiredPageKeys.size - missingKeys.length,
+        slots: slots.length,
+        missingKeys
+      };
+    }
+    async function verifyRestoredPage(section, scroller, track, items, expectedPageSlots, targetPage, previousSignature = "", timeout = PAGE_STABLE_TIMEOUT_MS, sessionToken = null) {
+      const bindingOwner = borrowBinding(section, scroller, track);
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      const requiredPageKeys = pageItemKeys(items, targetPage);
+      const started = performance2.now();
+      const restoredSlots = await waitStableCurrentPage(scroller, track, {
+        previousSignature,
+        minimumSlots: Math.min(expectedPageSlots, Math.max(1, requiredPageKeys.size)),
+        requiredKeys: requiredPageKeys,
+        requiredStableFrames: 2,
+        timeout,
+        sessionToken
+      });
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      const restoredKeys = mountedItemKeys(restoredSlots);
+      const missingKeys = [...requiredPageKeys].filter((key) => !restoredKeys.has(key));
+      return {
+        ok: selectedPage(section) === targetPage && missingKeys.length === 0,
+        selectedPage: selectedPage(section),
+        expectedKeys: requiredPageKeys.size,
+        mountedKeys: requiredPageKeys.size - missingKeys.length,
+        slots: restoredSlots.length,
+        missingKeys,
+        elapsedMs: Math.round(performance2.now() - started)
+      };
+    }
+    async function restoreNativePageByPage(section, scroller, track, items, expectedPageSlots, targetPage, sessionToken = null) {
+      const bindingOwner = borrowBinding(section, scroller, track);
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      const started = performance2.now();
+      let currentRestorePage = selectedPage(section);
+      let restorationComplete = true;
+      if (currentRestorePage === targetPage) {
+        const directCheck = await verifyRestoredPage(
+          section,
+          scroller,
+          track,
+          items,
+          expectedPageSlots,
+          targetPage,
+          "",
+          PAGE_STABLE_TIMEOUT_MS,
+          sessionToken
+        );
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+        if (directCheck.ok) return { complete: true, elapsedMs: directCheck.elapsedMs };
+        const total = pageCount(section);
+        const repairDirection = targetPage < total - 1 ? 1 : targetPage > 0 ? -1 : 0;
+        if (repairDirection !== 0) {
+          const moved = await moveOnePage(section, scroller, repairDirection, null, sessionToken);
+          assertRouteSession(sessionToken);
+          assertBinding(bindingOwner);
+          if (moved !== targetPage + repairDirection) {
+            return { complete: false, elapsedMs: Math.round(performance2.now() - started) };
+          }
+          currentRestorePage = moved;
+        } else {
+          return { complete: false, elapsedMs: Math.round(performance2.now() - started) };
+        }
+      }
+      const direction = targetPage < currentRestorePage ? -1 : 1;
+      log(tLog("nativePageByPageRestorationStarted"), {
+        from: currentRestorePage,
+        target: targetPage,
+        direction: direction < 0 ? "left" : "right"
+      });
+      while (currentRestorePage !== targetPage) {
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+        const nextPage = currentRestorePage + direction;
+        const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
+        const stepStarted = performance2.now();
+        const movedPage = await moveOnePage(section, scroller, direction, null, sessionToken);
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+        if (movedPage !== nextPage) {
+          restorationComplete = false;
+          warn(tLog("nativePageRestorationMoveFailed"), {
+            from: currentRestorePage,
+            target: nextPage,
+            result: movedPage
+          });
+          break;
+        }
+        const verification = await verifyRestoredPage(
+          section,
+          scroller,
+          track,
+          items,
+          expectedPageSlots,
+          nextPage,
+          beforeSignature,
+          PAGE_STABLE_TIMEOUT_MS,
+          sessionToken
+        );
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+        log(tLog("nativeRestorationPageStabilized"), {
+          requestedPage: nextPage,
+          selectedPage: verification.selectedPage,
+          expectedKeys: verification.expectedKeys,
+          mountedKeys: verification.mountedKeys,
+          slots: verification.slots,
+          missingKeys: verification.missingKeys,
+          elapsedMs: Math.round(performance2.now() - stepStarted)
+        });
+        if (!verification.ok) {
+          restorationComplete = false;
+          warn(tLog("nativeRestorationStoppedBecauseTheTargetPageDidNotFullyMount"), {
+            requestedPage: nextPage,
+            selectedPage: verification.selectedPage,
+            missingKeys: verification.missingKeys,
+            timeoutMs: PAGE_STABLE_TIMEOUT_MS
+          });
+          break;
+        }
+        currentRestorePage = nextPage;
+      }
+      const complete = restorationComplete && selectedPage(section) === targetPage;
+      log(tLog("nativePageByPageRestorationCompleted"), {
+        target: targetPage,
+        selectedPage: selectedPage(section),
+        complete,
+        elapsedMs: Math.round(performance2.now() - started)
+      });
+      return { complete, elapsedMs: Math.round(performance2.now() - started) };
+    }
+    async function repairFastRestoredPage(section, scroller, track, items, expectedPageSlots, targetPage, canonicalTargetTransform = "", reason = "verification-failed", sessionToken = null) {
+      const bindingOwner = borrowBinding(section, scroller, track);
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      const started = performance2.now();
+      const total = pageCount(section);
+      const repairDirection = targetPage < total - 1 ? 1 : targetPage > 0 ? -1 : 0;
+      if (repairDirection === 0) {
+        return {
+          complete: false,
+          verification: null,
+          elapsedMs: Math.round(performance2.now() - started)
+        };
+      }
+      const adjacentPage = targetPage + repairDirection;
+      const beforeTransform = trackTransformValue(track);
+      const beforeState = immediateRestoredPageState(scroller, track, items, targetPage);
+      log(tLog("nativeFastRestorationPhaseRepairStarted"), {
+        reason,
+        target: targetPage,
+        adjacentPage,
+        direction: repairDirection < 0 ? "left" : "right",
+        selectedPage: selectedPage(section),
+        canonicalTargetTransform,
+        beforeTransform,
+        transformMatchesCanonical: Boolean(canonicalTargetTransform) && beforeTransform === canonicalTargetTransform,
+        expectedKeys: beforeState.expectedKeys,
+        mountedKeys: beforeState.mountedKeys,
+        missingKeys: beforeState.missingKeys
+      });
+      const outwardSignature = visibleSignature(currentPageSlots(scroller, track));
+      const movedOut = await moveOnePage(section, scroller, repairDirection, null, sessionToken);
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      if (movedOut !== adjacentPage) {
+        warn(tLog("nativeFastRestorationPhaseRepairMoveFailed"), {
+          reason,
+          from: targetPage,
+          target: adjacentPage,
+          result: movedOut,
+          transform: trackTransformValue(track)
+        });
+        return {
+          complete: false,
+          verification: null,
+          elapsedMs: Math.round(performance2.now() - started)
+        };
+      }
+      const adjacentVerification = await verifyRestoredPage(
+        section,
+        scroller,
+        track,
+        items,
+        expectedPageSlots,
+        adjacentPage,
+        outwardSignature,
+        FAST_RESTORE_VERIFY_TIMEOUT_MS,
+        sessionToken
+      );
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      const adjacentTransform = trackTransformValue(track);
+      log(tLog("nativeFastRestorationPhaseRepairAdjacentPageVerified"), {
+        reason,
+        requestedPage: adjacentPage,
+        selectedPage: adjacentVerification.selectedPage,
+        complete: adjacentVerification.ok,
+        expectedKeys: adjacentVerification.expectedKeys,
+        mountedKeys: adjacentVerification.mountedKeys,
+        missingKeys: adjacentVerification.missingKeys,
+        transform: adjacentTransform,
+        verificationElapsedMs: adjacentVerification.elapsedMs
+      });
+      if (!adjacentVerification.ok) {
+        warn(tLog("nativeFastRestorationPhaseRepairAdjacentPageDidNotStabilize"), {
+          requestedPage: adjacentPage,
+          selectedPage: adjacentVerification.selectedPage,
+          expectedKeys: adjacentVerification.expectedKeys,
+          mountedKeys: adjacentVerification.mountedKeys,
+          missingKeys: adjacentVerification.missingKeys
+        });
+        return {
+          complete: false,
+          verification: adjacentVerification,
+          elapsedMs: Math.round(performance2.now() - started)
+        };
+      }
+      const returnSignature = visibleSignature(currentPageSlots(scroller, track));
+      const movedBack = await moveOnePage(section, scroller, -repairDirection, null, sessionToken);
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      if (movedBack !== targetPage) {
+        warn(tLog("nativeFastRestorationPhaseRepairMoveFailed"), {
+          reason,
+          from: adjacentPage,
+          target: targetPage,
+          result: movedBack,
+          transform: trackTransformValue(track)
+        });
+        return {
+          complete: false,
+          verification: null,
+          elapsedMs: Math.round(performance2.now() - started)
+        };
+      }
+      const targetVerification = await verifyRestoredPage(
+        section,
+        scroller,
+        track,
+        items,
+        expectedPageSlots,
+        targetPage,
+        returnSignature,
+        FAST_RESTORE_VERIFY_TIMEOUT_MS,
+        sessionToken
+      );
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      const complete = targetVerification.ok;
+      const finalTransform = trackTransformValue(track);
+      log(tLog("nativeFastRestorationPhaseRepairCompleted"), {
+        reason,
+        target: targetPage,
+        selectedPage: targetVerification.selectedPage,
+        complete,
+        expectedKeys: targetVerification.expectedKeys,
+        mountedKeys: targetVerification.mountedKeys,
+        missingKeys: targetVerification.missingKeys,
+        canonicalTargetTransform,
+        finalTransform,
+        transformMatchesCanonical: Boolean(canonicalTargetTransform) && finalTransform === canonicalTargetTransform,
+        adjacentVerificationElapsedMs: adjacentVerification.elapsedMs,
+        targetVerificationElapsedMs: targetVerification.elapsedMs,
+        elapsedMs: Math.round(performance2.now() - started)
+      });
+      return {
+        complete,
+        verification: targetVerification,
+        elapsedMs: Math.round(performance2.now() - started)
+      };
+    }
+    async function restoreNativePageFast(section, scroller, track, items, expectedPageSlots, targetPage, canonicalTargetTransform = "", sessionToken = null) {
+      const bindingOwner = borrowBinding(section, scroller, track);
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      const started = performance2.now();
+      const originalFromPage = selectedPage(section);
+      const pages = pageCount(section);
+      const adjacentDirection = targetPage < originalFromPage ? -1 : 1;
+      const adjacentMoveCount = Math.abs(originalFromPage - targetPage);
+      let direction = adjacentDirection;
+      let moveCount = adjacentMoveCount;
+      let restorationStrategy = "adjacent";
+      let currentPage = originalFromPage;
+      let previousSignature = "";
+      let fastComplete = true;
+      let verification = null;
+      let completionPath = "strict-verify";
+      let phaseMismatchDetected = false;
+      let initialVerificationWaitSkipped = false;
+      let cycleShortcutAttempted = false;
+      let cycleShortcutSucceeded = false;
+      const cycleShortcutEligible = pages > 1 && targetPage === 0 && originalFromPage === pages - 1;
+      log(tLog("nativeFastRestorationStarted"), {
+        from: originalFromPage,
+        target: targetPage,
+        direction: cycleShortcutEligible ? "right" : direction < 0 ? "left" : "right",
+        strategy: cycleShortcutEligible ? "cycle-right-once-preferred" : "adjacent",
+        cycleShortcutEligible,
+        pages,
+        pageCountParity: pages % 2 === 0 ? "even" : "odd",
+        moveCount: cycleShortcutEligible ? 1 : moveCount,
+        moveCountParity: (cycleShortcutEligible ? 1 : moveCount) % 2 === 0 ? "even" : "odd",
+        canonicalTargetTransform
+      });
+      if (cycleShortcutEligible) {
+        const rightControl = carouselMoveButton(section, scroller, 1);
+        if (rightControl.button && !carouselMoveButtonDisabled(rightControl.button)) {
+          cycleShortcutAttempted = true;
+          previousSignature = visibleSignature(currentPageSlots(scroller, track));
+          try {
+            const movedPage = await moveOnePage(section, scroller, 1, null, sessionToken);
+            assertRouteSession(sessionToken);
+            assertBinding(bindingOwner);
+            if (movedPage === targetPage && selectedPage(section) === targetPage) {
+              cycleShortcutSucceeded = true;
+              restorationStrategy = "cycle-right-once";
+              direction = 1;
+              moveCount = 1;
+              currentPage = targetPage;
+            } else {
+              warn(tLog("nativeFastRestorationMoveFailed"), {
+                strategy: "cycle-right-once",
+                from: originalFromPage,
+                target: targetPage,
+                result: movedPage,
+                selectedPage: selectedPage(section)
+              });
+            }
+          } catch (error) {
+            if (isRouteSessionCancelledError(error)) throw error;
+            assertRouteSession(sessionToken);
+            assertBinding(bindingOwner);
+            warn(tLog("nativeFastRestorationMoveFailed"), {
+              strategy: "cycle-right-once",
+              from: originalFromPage,
+              target: targetPage,
+              selectedPage: selectedPage(section),
+              error
+            });
+          }
+          if (!cycleShortcutSucceeded && selectedPage(section) !== originalFromPage) {
+            try {
+              await goToPage(section, scroller, originalFromPage, null, sessionToken);
+              assertRouteSession(sessionToken);
+              assertBinding(bindingOwner);
+            } catch (error) {
+              if (isRouteSessionCancelledError(error)) throw error;
+              assertRouteSession(sessionToken);
+              assertBinding(bindingOwner);
+              warn(tLog("nativeFastRestorationMoveFailed"), {
+                strategy: "cycle-restage-before-adjacent-fallback",
+                from: selectedPage(section),
+                target: originalFromPage,
+                error
+              });
+            }
+          }
+          currentPage = selectedPage(section);
+          previousSignature = "";
+        }
+      }
+      if (!cycleShortcutSucceeded) {
+        direction = targetPage < currentPage ? -1 : 1;
+        moveCount = Math.abs(currentPage - targetPage);
+        restorationStrategy = cycleShortcutAttempted ? "adjacent-after-cycle-fallback" : "adjacent";
+      }
+      while (!cycleShortcutSucceeded && currentPage !== targetPage) {
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+        const nextPage = currentPage + direction;
+        previousSignature = visibleSignature(currentPageSlots(scroller, track));
+        const movedPage = await moveOnePage(section, scroller, direction, null, sessionToken);
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+        if (movedPage !== nextPage) {
+          fastComplete = false;
+          completionPath = "move-failed";
+          warn(tLog("nativeFastRestorationMoveFailed"), {
+            strategy: restorationStrategy,
+            from: currentPage,
+            target: nextPage,
+            result: movedPage
+          });
+          break;
+        }
+        currentPage = nextPage;
+      }
+      if (fastComplete && selectedPage(section) === targetPage) {
+        const diagnosisStarted = performance2.now();
+        const immediateState = immediateRestoredPageState(scroller, track, items, targetPage);
+        const arrivalTransform = trackTransformValue(track);
+        const hasCanonicalTransform = Boolean(canonicalTargetTransform);
+        const transformMatchesCanonical = !hasCanonicalTransform || arrivalTransform === canonicalTargetTransform;
+        phaseMismatchDetected = hasCanonicalTransform && !transformMatchesCanonical && immediateState.missingKeys.length > 0;
+        log(tLog("nativeFastRestorationPhaseDiagnosis"), {
+          from: originalFromPage,
+          target: targetPage,
+          selectedPage: selectedPage(section),
+          pages: pageCount(section),
+          pageCountParity: pageCount(section) % 2 === 0 ? "even" : "odd",
+          moveCount,
+          moveCountParity: moveCount % 2 === 0 ? "even" : "odd",
+          canonicalTargetTransform,
+          arrivalTransform,
+          transformMatchesCanonical,
+          expectedKeys: immediateState.expectedKeys,
+          mountedKeys: immediateState.mountedKeys,
+          missingKeys: immediateState.missingKeys,
+          phaseMismatchDetected,
+          diagnosisElapsedMs: Math.round(performance2.now() - diagnosisStarted)
+        });
+        if (phaseMismatchDetected) {
+          initialVerificationWaitSkipped = true;
+          completionPath = "phase-repair-before-timeout";
+          const repair = await repairFastRestoredPage(
+            section,
+            scroller,
+            track,
+            items,
+            expectedPageSlots,
+            targetPage,
+            canonicalTargetTransform,
+            "transform-mismatch-with-missing-target-keys",
+            sessionToken
+          );
+          assertRouteSession(sessionToken);
+          assertBinding(bindingOwner);
+          verification = repair.verification;
+          fastComplete = repair.complete;
+        } else {
+          verification = await verifyRestoredPage(
+            section,
+            scroller,
+            track,
+            items,
+            expectedPageSlots,
+            targetPage,
+            previousSignature,
+            FAST_RESTORE_VERIFY_TIMEOUT_MS,
+            sessionToken
+          );
+          assertRouteSession(sessionToken);
+          assertBinding(bindingOwner);
+          fastComplete = verification.ok;
+          if (!fastComplete && selectedPage(section) === targetPage) {
+            completionPath = "phase-repair-after-verification";
+            const repair = await repairFastRestoredPage(
+              section,
+              scroller,
+              track,
+              items,
+              expectedPageSlots,
+              targetPage,
+              canonicalTargetTransform,
+              "strict-verification-failed",
+              sessionToken
+            );
+            assertRouteSession(sessionToken);
+            assertBinding(bindingOwner);
+            verification = repair.verification || verification;
+            fastComplete = repair.complete;
+          }
+        }
+      }
+      const finalTransform = trackTransformValue(track);
+      log(tLog("nativeFastRestorationCompleted"), {
+        from: originalFromPage,
+        target: targetPage,
+        selectedPage: selectedPage(section),
+        complete: fastComplete,
+        strategy: restorationStrategy,
+        cycleShortcutAttempted,
+        cycleShortcutSucceeded,
+        completionPath,
+        phaseMismatchDetected,
+        initialVerificationWaitSkipped,
+        expectedKeys: verification?.expectedKeys ?? null,
+        mountedKeys: verification?.mountedKeys ?? null,
+        missingKeys: verification?.missingKeys ?? [],
+        canonicalTargetTransform,
+        finalTransform,
+        transformMatchesCanonical: Boolean(canonicalTargetTransform) && finalTransform === canonicalTargetTransform,
+        elapsedMs: Math.round(performance2.now() - started)
+      });
+      if (fastComplete) return true;
+      warn(tLog("fastRestorationVerificationFailedUsingV49PageByPageFallback"), {
+        from: originalFromPage,
+        target: targetPage,
+        selectedPage: selectedPage(section),
+        strategy: restorationStrategy,
+        cycleShortcutAttempted,
+        cycleShortcutSucceeded,
+        completionPath,
+        phaseMismatchDetected,
+        canonicalTargetTransform,
+        finalTransform
+      });
+      if (selectedPage(section) !== originalFromPage) {
+        await goToPage(section, scroller, originalFromPage, null, sessionToken);
+        assertRouteSession(sessionToken);
+        assertBinding(bindingOwner);
+      }
+      const fallback = await restoreNativePageByPage(
+        section,
+        scroller,
+        track,
+        items,
+        expectedPageSlots,
+        targetPage,
+        sessionToken
+      );
+      assertRouteSession(sessionToken);
+      assertBinding(bindingOwner);
+      return fallback.complete;
+    }
     return Object.freeze({
-      begin,
       suppress,
       restoreMotion,
       reset,
       whenIdle: () => tail,
+      move: moveOnePage,
+      navigate: goToPage,
+      stable: waitStableCurrentPage,
+      restoreStrict: restoreNativePageByPage,
+      restoreFast: restoreNativePageFast,
+      pageKeys: pageItemKeys,
+      transform: trackTransformValue,
+      acknowledgeLogical: waitLogicalPageChange,
+      acknowledgeIndicator: waitPage,
+      logicalSignal: createLogicalMoveSignal,
       diagnostics: () => ({
         pendingMoves: moves.size,
+        pendingWaits: waits.size,
         motionLeases: [...motionOwners.values()].reduce((count, owner) => count + owner.leases.size, 0)
       })
     });
@@ -3629,7 +4936,11 @@
     isGridDetached = () => false,
     shouldCoalesce = () => false,
     onRelevantMutation = () => {
-    }
+    },
+    isHoverCancelled = () => false,
+    readHoverToken = () => null,
+    navigationDiagnostics = () => ({ bump() {
+    }, record: null })
   }) {
     const NETFLIX_DOM_SELECTORS2 = netflixDom.selectors || NETFLIX_DOM_SELECTORS;
     const GRID_ID2 = ownedUi.grid || GRID_ID, STATUS_ID2 = ownedUi.status || STATUS_ID;
@@ -3653,7 +4964,38 @@
       borrowBinding,
       assertBinding,
       createError: initializationError,
-      fastMoveClass: ownedUi.fastMove || FAST_MOVE_CLASS
+      bindingForSource: (scroller, track) => borrowBinding(acceptedBinding?.section || null, scroller, track),
+      fastMoveClass: ownedUi.fastMove || FAST_MOVE_CLASS,
+      scope,
+      performance: performance2,
+      getComputedStyle: getComputedStyle2,
+      setTimeout: setTimeout2,
+      clearTimeout: clearTimeout2,
+      requestAnimationFrame: requestAnimationFrame2,
+      cancelAnimationFrame: cancelAnimationFrame2,
+      MutationObserver: MutationObserver2,
+      cardSelector: NETFLIX_DOM_SELECTORS2.standardCard,
+      videoIdFromHref: (href) => netflixDom.videoIdFromHref(href),
+      isHoverCancelled,
+      readHoverToken,
+      diagnosticsFor: navigationDiagnostics,
+      log,
+      warn,
+      tLog,
+      logTimeout: logOperationTimeout,
+      native: {
+        model: getCarouselDomRuntime,
+        profile: detectCarouselDomProfile,
+        registerPage: registerLogicalPageSignature,
+        selectedPage,
+        pageCount,
+        navigationControl: carouselMoveButton,
+        controlDisabled: carouselMoveButtonDisabled,
+        currentSlots: currentPageSlots,
+        signatureOf: visibleSignature,
+        notePage: (section, page, cycle) => modelForWrite(section)?.notePage(page, cycle),
+        track: (scroller) => acceptedBinding?.scroller === scroller && acceptedBinding.track?.isConnected ? acceptedBinding.track : netflixDom.findTrack(scroller)
+      }
     });
     function getModel(section) {
       if (!section) return null;
@@ -4689,10 +6031,26 @@
       isBindingCurrent,
       assertBinding,
       currentBinding: () => acceptedBinding,
-      beginNavigation: navigation.begin,
       whenNavigationIdle: navigation.whenIdle,
       suppressMotion: navigation.suppress,
       restoreMotion: navigation.restoreMotion,
+      movePage: navigation.move,
+      navigateTo: navigation.navigate,
+      stablePage: navigation.stable,
+      pageKeys: navigation.pageKeys,
+      trackTransform: navigation.transform,
+      restorePage(section, scroller, track, items, slots, page, options = {}) {
+        return options.mode === "strict" ? navigation.restoreStrict(section, scroller, track, items, slots, page, options.sessionToken ?? null) : navigation.restoreFast(
+          section,
+          scroller,
+          track,
+          items,
+          slots,
+          page,
+          options.canonicalTransform || "",
+          options.sessionToken ?? null
+        );
+      },
       resetSource() {
         clearBinding();
         models = /* @__PURE__ */ new WeakMap();
@@ -4790,11 +6148,8 @@
       formatInitializationTime
     } = createI18n({ readLanguage: getNetflixLanguage });
     const TARGET_PATH = "/browse/my-list";
-    const PAGE_CHANGE_TIMEOUT_MS = 3e3;
-    const PAGE_CHANGE_OBSERVER_PRIMARY_MS = 320;
     const PAGE_STABLE_TIMEOUT_MS = 2e3;
     const PARTIAL_PAGE_RECOVERY_TIMEOUT_MS = 2500;
-    const FAST_RESTORE_VERIFY_TIMEOUT_MS = 260;
     const NATIVE_READY_TIMEOUT_MS = 3e3;
     const NATIVE_SINGLE_PAGE_STABLE_MS = 700;
     const NATIVE_EMPTY_STABLE_MS = 1200;
@@ -4802,13 +6157,11 @@
     const NATIVE_LOGICAL_STABLE_MS = 120;
     const DELTA_MUTATION_TIMEOUT_MS = 1800;
     const UNDO_ENTRY_TTL_MS = 3e4;
-    const SCRIPT_MOVE_SETTLE_TIMEOUT_MS = 260;
     const HOVER_SOURCE_TIMEOUT_MS = 500;
     const HOVER_SOURCE_INTERVAL_MS = 10;
     const HOVER_ACTIVATION_DELAY_MS = 120;
     const HOVER_SCROLL_QUIET_MS = 180;
     const HOVER_RETRY_DELAY_MS = 180;
-    const CANCELLED_MOVE_POLL_MS = 80;
     const ORDER_MISMATCH_POSITION_THRESHOLD = 10;
     const LOGICAL_COLLECTION_TIMEOUT_MS = 12e4;
     const TOTAL_COUNT_TIMEOUT_MS = 5e3;
@@ -4861,7 +6214,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.14";
+    const SCRIPT_VERSION = "1.4.15";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -4947,6 +6300,9 @@
       logTimeout: logOperationTimeout,
       describeSlot: slotDescriptor,
       MutationObserver,
+      isHoverCancelled: hoverPreparationCancelled,
+      readHoverToken: () => hoverToken,
+      navigationDiagnostics: createNavigationDiagnosticSink,
       checkRoute: () => {
         if (location.href !== lastObservedUrl) handleRouteChange("MutationObserver-url");
       },
@@ -5277,6 +6633,16 @@
         popupInvestigation: popupInspection.diagnostics(),
         ...snapshots
       };
+    }
+    function createNavigationDiagnosticSink(token) {
+      const lifecycle = performanceDiagnostics.hoverLifecycle;
+      const timing = token === null ? null : performanceDiagnostics.hoverTiming;
+      return Object.freeze({
+        bump(field) {
+          if (performanceDiagnostics.hoverLifecycle === lifecycle) lifecycle[field]++;
+        },
+        record: timing ? (phase, started) => recordHoverTiming(timing, phase, started) : null
+      });
     }
     function recordHoverTiming(counters, phase, started) {
       if (performanceDiagnostics.hoverTiming !== counters) return;
@@ -8730,495 +10096,11 @@
     function carouselMoveButtonDisabled(...args) {
       return nativeCarousel.controlDisabled(...args);
     }
-    function createLogicalMoveSignal(scroller, token, sessionToken) {
-      const counters = performanceDiagnostics.hoverLifecycle;
-      const bump = (field) => {
-        if (performanceDiagnostics.hoverLifecycle === counters) counters[field]++;
-      };
-      if (typeof MutationObserver !== "function") {
-        bump("logicalMoveObserverUnsupported");
-        return null;
-      }
-      let observer = null, frame = null, timer = null, pending = null;
-      let closed = false, dirty = true;
-      const wake = (available) => {
-        const oldTimer = timer, oldFrame = frame;
-        timer = null;
-        frame = null;
-        dirty = false;
-        const resolve = pending;
-        pending = null;
-        try {
-          if (oldTimer !== null) clearTimeout(oldTimer);
-        } catch (_) {
-          bump("logicalMoveObserverFailures");
-        }
-        try {
-          if (oldFrame !== null) cancelAnimationFrame(oldFrame);
-        } catch (_) {
-          bump("logicalMoveObserverFailures");
-        }
-        resolve?.(available);
-      };
-      const close = () => {
-        if (closed) return;
-        closed = true;
-        try {
-          observer?.disconnect();
-        } catch (_) {
-          bump("logicalMoveObserverFailures");
-        }
-        observer = null;
-        wake(false);
-      };
-      const queueFrame = () => {
-        if (closed || !pending || frame !== null || hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken)) return;
-        try {
-          frame = requestAnimationFrame(() => {
-            frame = null;
-            if (closed) return;
-            bump("logicalMoveSignalFrames");
-            wake(true);
-          });
-        } catch (_) {
-          bump("logicalMoveObserverFailures");
-          close();
-        }
-      };
-      try {
-        observer = new MutationObserver(() => {
-          if (closed) return;
-          bump("logicalMoveNotifications");
-          dirty = true;
-          queueFrame();
-        });
-        observer.observe(scroller, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ["href", "style", "class", "tabindex"]
-        });
-        bump("logicalMoveObserverStarts");
-        return { close, wait: () => new Promise((resolve) => {
-          if (closed) {
-            resolve(false);
-            return;
-          }
-          pending = resolve;
-          timer = setTimeout(() => {
-            if (closed) return;
-            bump("logicalMoveFallbackWakes");
-            wake(true);
-          }, CANCELLED_MOVE_POLL_MS);
-          if (dirty) queueFrame();
-        }) };
-      } catch (_) {
-        bump("logicalMoveObserverFailures");
-        close();
-        return null;
-      }
+    function moveOnePage(...args) {
+      return nativeCarousel.movePage(...args);
     }
-    async function waitLogicalPageChange(section, scroller, track, beforePage, direction, beforeTransform, beforeSignature, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
-      assertRouteSession(sessionToken);
-      const bindingOwner = nativeCarousel.borrowBinding(section, scroller, track);
-      nativeCarousel.assertBinding(bindingOwner);
-      const runtime = getCarouselDomRuntime(section);
-      const started = performance.now();
-      let lastTransform = beforeTransform;
-      let lastSignature = beforeSignature;
-      const counters = token === null ? null : performanceDiagnostics.hoverLifecycle;
-      let signal = token === null || hoverPreparationCancelled(token) ? null : createLogicalMoveSignal(scroller, token, sessionToken);
-      try {
-        while (performance.now() - started < timeout) {
-          if (hoverPreparationCancelled(token)) {
-            signal?.close();
-            signal = null;
-            await sleep(CANCELLED_MOVE_POLL_MS);
-          } else {
-            let signalled = false;
-            try {
-              if (signal) signalled = await signal.wait();
-            } catch (_) {
-              if (performanceDiagnostics.hoverLifecycle === counters) counters.logicalMoveObserverFailures++;
-            }
-            if (!signalled) {
-              signal?.close();
-              signal = null;
-              await new Promise((resolve) => requestAnimationFrame(resolve));
-            }
-          }
-          assertRouteSession(sessionToken);
-          nativeCarousel.assertBinding(bindingOwner);
-          if (performanceDiagnostics.hoverLifecycle === counters) counters.logicalMoveReads++;
-          const transform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
-          const signature = visibleSignature(currentPageSlots(scroller, track));
-          const signatureChanged = Boolean(signature) && signature !== beforeSignature;
-          lastTransform = transform;
-          lastSignature = signature;
-          if (!signatureChanged) continue;
-          const existingPage = runtime?.signatureToPage.get(signature);
-          const proposedPage = Math.max(0, beforePage + (direction < 0 ? -1 : 1));
-          const mapped = Number.isFinite(existingPage) ? existingPage : registerLogicalPageSignature(section, signature, proposedPage);
-          if (runtime) {
-            nativeCarousel.notePage(section, mapped, Number.isFinite(existingPage) && existingPage !== beforePage);
-          }
-          return {
-            page: mapped,
-            changed: true,
-            transform,
-            signature,
-            transformChanged: transform !== beforeTransform,
-            signatureChanged: true,
-            cycleDetected: Boolean(runtime?.cycleDetected)
-          };
-        }
-        assertRouteSession(sessionToken);
-        nativeCarousel.assertBinding(bindingOwner);
-        if (hoverPreparationCancelled(token)) {
-          return { page: beforePage, changed: false, transform: lastTransform, signature: lastSignature };
-        }
-        const details = {
-          direction: direction < 0 ? "left" : "right",
-          beforePage,
-          beforeTransform,
-          lastTransform,
-          beforeSignature,
-          lastSignature,
-          domGeneration: runtime?.profile?.generation || null,
-          navigationMode: runtime?.profile?.navigationMode || null,
-          pageMode: runtime?.profile?.pageMode || null
-        };
-        logOperationTimeout("logical-page-change", timeout, details);
-        throw initializationTimeoutError("logical-page-change", timeout, details);
-      } finally {
-        signal?.close();
-      }
-    }
-    async function waitPageByPolling(section, before, timeout, sessionToken = null, token = null) {
-      const start = performance.now();
-      while (performance.now() - start < timeout) {
-        await sleep(hoverPreparationCancelled(token) ? CANCELLED_MOVE_POLL_MS : 12);
-        assertRouteSession(sessionToken);
-        const now = selectedPage(section);
-        if (now !== before) return now;
-      }
-      assertRouteSession(sessionToken);
-      return selectedPage(section);
-    }
-    async function waitPage(section, before, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
-      assertRouteSession(sessionToken);
-      const immediate = selectedPage(section);
-      if (immediate !== before) return immediate;
-      if (timeout <= 0) return immediate;
-      if (typeof MutationObserver !== "function") {
-        return waitPageByPolling(section, before, timeout, sessionToken, token);
-      }
-      const started = performance.now();
-      const observerBudget = Math.min(timeout, PAGE_CHANGE_OBSERVER_PRIMARY_MS);
-      const observedPage = await new Promise((resolve) => {
-        let observer = null;
-        let timer = null;
-        let finished = false;
-        const finish = (value) => {
-          if (finished) return;
-          finished = true;
-          if (timer !== null) clearTimeout(timer);
-          observer?.disconnect();
-          resolve(value);
-        };
-        const check = () => {
-          const now = selectedPage(section);
-          if (now !== before) finish(now);
-        };
-        observer = new MutationObserver(check);
-        observer.observe(section, {
-          subtree: true,
-          childList: true,
-          attributes: true,
-          attributeFilter: ["data-indicator-selected"]
-        });
-        check();
-        timer = setTimeout(() => finish(null), observerBudget);
-      });
-      assertRouteSession(sessionToken);
-      if (observedPage !== null) return observedPage;
-      const elapsed = performance.now() - started;
-      const remaining = Math.max(0, timeout - elapsed);
-      return waitPageByPolling(section, before, remaining, sessionToken, token);
-    }
-    async function waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, timeout = SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken = null) {
-      assertRouteSession(sessionToken);
-      const started = performance.now();
-      let currentTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
-      let currentSignature = visibleSignature(currentPageSlots(scroller, track));
-      let observedChange = currentTransform !== beforeTransform || Boolean(beforeSignature) && Boolean(currentSignature) && currentSignature !== beforeSignature;
-      let stableFrames = 0;
-      let previousSignature = currentSignature;
-      while (performance.now() - started < timeout) {
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-        assertRouteSession(sessionToken);
-        currentTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
-        currentSignature = visibleSignature(currentPageSlots(scroller, track));
-        if (currentTransform !== beforeTransform || Boolean(beforeSignature) && Boolean(currentSignature) && currentSignature !== beforeSignature) {
-          observedChange = true;
-        }
-        if (observedChange && currentSignature && currentSignature === previousSignature) {
-          stableFrames++;
-          if (stableFrames >= 2) break;
-        } else {
-          stableFrames = 0;
-        }
-        previousSignature = currentSignature;
-      }
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      assertRouteSession(sessionToken);
-      return {
-        transform: currentTransform,
-        signature: currentSignature,
-        observedChange
-      };
-    }
-    async function moveOnePage(section, scroller, direction, token = null, sessionToken = null) {
-      const hoverTiming = token === null ? null : performanceDiagnostics.hoverTiming;
-      const queueStarted = hoverTiming ? performance.now() : 0;
-      let moveStarted = null;
-      const moveOwner = nativeCarousel.beginNavigation(section, scroller);
-      try {
-        await moveOwner.ready;
-        if (hoverTiming) recordHoverTiming(hoverTiming, "queue", queueStarted);
-        assertRouteSession(sessionToken);
-        if (token !== null && token !== hoverToken) {
-          log(tLog("carouselMoveCancelledBeforeStart"), {
-            token,
-            hoverToken,
-            direction: direction < 0 ? "left" : "right",
-            selectedPage: selectedPage(section)
-          });
-          return selectedPage(section);
-        }
-        const seq = moveOwner.start();
-        const before = selectedPage(section);
-        const runtime = getCarouselDomRuntime(section);
-        const profile = runtime?.profile || detectCarouselDomProfile(section);
-        const { button, selector } = carouselMoveButton(section, scroller, direction);
-        const track = sourceState?.track?.isConnected ? sourceState.track : netflixDom.findTrack(scroller);
-        if (!button || !track) {
-          warn(tLog("carouselMoveControlNotFound"), {
-            seq,
-            direction,
-            before,
-            selector,
-            buttonFound: Boolean(button),
-            trackFound: Boolean(track)
-          });
-          return before;
-        }
-        if (profile.pageMode === "logical" && carouselMoveButtonDisabled(button)) {
-          return before;
-        }
-        const started = performance.now();
-        moveStarted = started;
-        const beforeTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
-        const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
-        const sharedFastMode = section.classList.contains(FAST_MOVE_CLASS);
-        const nativeTransition = sharedFastMode ? "suppressed-by-scan" : track.style.getPropertyValue("transition");
-        let motionLease = null;
-        let after = before;
-        let afterTransform = beforeTransform;
-        let afterSignature = beforeSignature;
-        let settleObservedChange = false;
-        let acknowledgementMs = null;
-        let settlementMs = null;
-        log(tLog("carouselMoveStarted"), {
-          seq,
-          direction: direction < 0 ? "left" : "right",
-          before,
-          pages: pageCount(section),
-          animationDisabled: true,
-          sharedFastMode,
-          beforeTransform,
-          nativeTransition,
-          token
-        });
-        try {
-          if (!sharedFastMode) motionLease = nativeCarousel.suppressMotion(section, track);
-          assertRouteSession(sessionToken);
-          moveOwner.assertCurrent();
-          button.click();
-          const acknowledgementStarted = hoverTiming ? performance.now() : 0;
-          try {
-            if (profile.pageMode === "logical") {
-              const logicalMove = await waitLogicalPageChange(
-                section,
-                scroller,
-                track,
-                before,
-                direction,
-                beforeTransform,
-                beforeSignature,
-                PAGE_CHANGE_TIMEOUT_MS,
-                sessionToken,
-                token
-              );
-              after = logicalMove.page;
-              afterTransform = logicalMove.transform;
-              afterSignature = logicalMove.signature;
-              settleObservedChange = logicalMove.changed;
-            } else {
-              after = await waitPage(section, before, PAGE_CHANGE_TIMEOUT_MS, sessionToken, token);
-            }
-          } finally {
-            if (hoverTiming) acknowledgementMs = recordHoverTiming(hoverTiming, "acknowledgement", acknowledgementStarted) ?? null;
-          }
-          assertRouteSession(sessionToken);
-          const settlementStarted = hoverTiming ? performance.now() : 0;
-          try {
-            if (sharedFastMode) {
-              if (profile.pageMode !== "logical") {
-                await new Promise((resolve) => requestAnimationFrame(resolve));
-                assertRouteSession(sessionToken);
-              }
-              afterTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
-              afterSignature = visibleSignature(currentPageSlots(scroller, track));
-              settleObservedChange = settleObservedChange || after !== before;
-            } else {
-              const settled = await waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken);
-              afterTransform = settled.transform;
-              afterSignature = settled.signature;
-              settleObservedChange = settled.observedChange;
-            }
-          } finally {
-            if (hoverTiming) settlementMs = recordHoverTiming(hoverTiming, "settlement", settlementStarted) ?? null;
-          }
-        } finally {
-          motionLease?.release();
-        }
-        log(tLog("carouselMoveCompleted"), {
-          seq,
-          direction: direction < 0 ? "left" : "right",
-          before,
-          after,
-          changed: after !== before,
-          transformChanged: afterTransform !== beforeTransform,
-          contentChanged: Boolean(beforeSignature) && Boolean(afterSignature) && afterSignature !== beforeSignature,
-          settleObservedChange,
-          sharedFastMode,
-          beforeTransform,
-          afterTransform,
-          elapsedMs: Math.round(performance.now() - started),
-          ...hoverTiming ? { acknowledgementMs, settlementMs } : {},
-          animationRestored: sharedFastMode ? false : Boolean(motionLease?.restored()),
-          token
-        });
-        return after;
-      } finally {
-        if (hoverTiming && moveStarted !== null) recordHoverTiming(hoverTiming, "move", moveStarted);
-        moveOwner.release();
-      }
-    }
-    async function goToPage(section, scroller, target, token = null, sessionToken = null, preferCyclicShortest = false) {
-      assertRouteSession(sessionToken);
-      const total = pageCount(section);
-      target = Math.max(0, Math.min(total - 1, target));
-      const startPage = selectedPage(section);
-      const profile = getCarouselDomRuntime(section)?.profile;
-      const cyclicShortestUsed = preferCyclicShortest && !(profile?.navigationMode === "hawkins" && profile.pageMode === "logical");
-      if (preferCyclicShortest && !cyclicShortestUsed && startPage !== target) {
-        const rightDistance = (target - startPage + total) % total;
-        const leftDistance = (startPage - target + total) % total;
-        if ((rightDistance <= leftDistance ? 1 : -1) !== (startPage < target ? 1 : -1)) {
-          performanceDiagnostics.hoverLifecycle.boundaryDetoursAvoided++;
-        }
-      }
-      if (startPage !== target) {
-        log(tLog("pageMoveRequested"), { from: startPage, target, total, token, preferCyclicShortest, cyclicShortestUsed });
-      }
-      let guard = total + 5;
-      let cancelled = false;
-      let forcedDirection = null;
-      let pageChangeRetryCount = 0;
-      while (true) {
-        const current = selectedPage(section);
-        if (current === target || guard-- <= 0) break;
-        assertRouteSession(sessionToken);
-        if (token !== null && token !== hoverToken) {
-          cancelled = true;
-          break;
-        }
-        if (token !== null) performanceDiagnostics.hoverLifecycle.duplicatePageReadsAvoided++;
-        let direction = forcedDirection ?? (current < target ? 1 : -1);
-        if (forcedDirection === null && cyclicShortestUsed && total > 1) {
-          const rightDistance = (target - current + total) % total;
-          const leftDistance = (current - target + total) % total;
-          if (rightDistance !== 0 || leftDistance !== 0) {
-            direction = rightDistance <= leftDistance ? 1 : -1;
-          }
-        }
-        let next;
-        try {
-          next = await moveOnePage(section, scroller, direction, token, sessionToken);
-          pageChangeRetryCount = 0;
-        } catch (error) {
-          if (isRouteSessionCancelledError(error)) throw error;
-          if (error?.code === "INITIALIZATION_TIMEOUT" && pageChangeRetryCount < 1) {
-            pageChangeRetryCount++;
-            log("Retrying logical page move after transient timeout", {
-              current,
-              target,
-              direction: direction < 0 ? "left" : "right",
-              token
-            });
-            await sleep(120);
-            continue;
-          }
-          throw error;
-        }
-        assertRouteSession(sessionToken);
-        if (token !== null && token !== hoverToken) {
-          cancelled = true;
-          break;
-        }
-        if (next === current && cyclicShortestUsed && total > 1) {
-          const directDirection = current < target ? 1 : -1;
-          if (directDirection !== direction) {
-            log("Logical page boundary fallback", {
-              current,
-              target,
-              attemptedDirection: direction < 0 ? "left" : "right",
-              fallbackDirection: directDirection < 0 ? "left" : "right",
-              token
-            });
-            const retried = await moveOnePage(section, scroller, directDirection, token, sessionToken);
-            assertRouteSession(sessionToken);
-            if (token !== null && token !== hoverToken) {
-              cancelled = true;
-              break;
-            }
-            if (retried !== current) {
-              forcedDirection = directDirection;
-              continue;
-            }
-          }
-          break;
-        }
-        if (next === current) break;
-      }
-      const result = selectedPage(section);
-      if (startPage !== target || result !== target || cancelled) {
-        log(tLog("pageMoveResult"), {
-          from: startPage,
-          target,
-          result,
-          reached: result === target,
-          cancelled,
-          token,
-          hoverToken,
-          preferCyclicShortest,
-          cyclicShortestUsed,
-          guardRemaining: guard
-        });
-      }
-      return result;
+    function goToPage(...args) {
+      return nativeCarousel.navigateTo(...args);
     }
     function currentPageSlots(...args) {
       return nativeCarousel.currentSlots(...args);
@@ -9308,93 +10190,8 @@
     function waitForNativeCarouselReady(...args) {
       return nativeCarousel.ready(...args);
     }
-    async function waitStableCurrentPage(scroller, track, options = {}) {
-      const timeout = options.timeout ?? PAGE_STABLE_TIMEOUT_MS;
-      const previousSignature = options.previousSignature ?? "";
-      const requiredStableFrames = options.requiredStableFrames ?? 2;
-      const minimumSlots = Math.max(0, options.minimumSlots ?? 0);
-      const minimumNewItems = Math.max(0, options.minimumNewItems ?? 0);
-      const seenKeys = options.seenKeys instanceof Set ? options.seenKeys : null;
-      const requiredKeys = options.requiredKeys instanceof Set ? options.requiredKeys : null;
-      const sessionToken = options.sessionToken ?? null;
-      const token = options.hoverToken ?? null;
-      assertRouteSession(sessionToken);
-      if (hoverPreparationCancelled(token)) return [];
-      const start = performance.now();
-      let lastSignature = "";
-      let stableFrames = 0;
-      let best = [];
-      let bestNewItems = 0;
-      let bestRequiredMatches = 0;
-      let freshContentSeen = !previousSignature;
-      const slotKeys = (slots) => {
-        const keys = /* @__PURE__ */ new Set();
-        for (const slot of slots) {
-          const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-          const key = itemKeyFromCard(card);
-          if (key) keys.add(key);
-        }
-        return keys;
-      };
-      const countRequiredMatches = (slots) => {
-        if (!requiredKeys || requiredKeys.size === 0) return 0;
-        const keys = slotKeys(slots);
-        let matches = 0;
-        for (const key of requiredKeys) {
-          if (keys.has(key)) matches++;
-        }
-        return matches;
-      };
-      const countNewItems = (slots) => {
-        if (!seenKeys || minimumNewItems <= 0) return 0;
-        const keys = /* @__PURE__ */ new Set();
-        for (const slot of slots) {
-          const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-          const key = itemKeyFromCard(card);
-          if (key && !seenKeys.has(key)) keys.add(key);
-        }
-        return keys.size;
-      };
-      while (performance.now() - start < timeout) {
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-        assertRouteSession(sessionToken);
-        if (hoverPreparationCancelled(token)) return [];
-        const slots = currentPageSlots(scroller, track);
-        const newItems = countNewItems(slots);
-        const requiredMatches = countRequiredMatches(slots);
-        if (requiredMatches > bestRequiredMatches || requiredMatches === bestRequiredMatches && (slots.length > best.length || slots.length === best.length && newItems >= bestNewItems)) {
-          best = slots;
-          bestNewItems = newItems;
-          bestRequiredMatches = requiredMatches;
-        }
-        const signature = visibleSignature(slots);
-        if (!signature) continue;
-        if (!freshContentSeen && signature !== previousSignature) {
-          freshContentSeen = true;
-          stableFrames = 0;
-          lastSignature = "";
-        }
-        if (!freshContentSeen) continue;
-        const slotCountReady = slots.length >= minimumSlots;
-        const newItemCountReady = !seenKeys || minimumNewItems <= 0 || newItems >= minimumNewItems;
-        const requiredKeysReady = !requiredKeys || requiredKeys.size === 0 || requiredMatches >= requiredKeys.size;
-        if (!slotCountReady || !newItemCountReady || !requiredKeysReady) {
-          stableFrames = 0;
-          lastSignature = signature;
-          continue;
-        }
-        if (signature === lastSignature) {
-          stableFrames++;
-          if (stableFrames >= requiredStableFrames) return slots;
-        } else {
-          lastSignature = signature;
-          stableFrames = 1;
-          if (requiredStableFrames <= 1) return slots;
-        }
-      }
-      assertRouteSession(sessionToken);
-      if (hoverPreparationCancelled(token)) return [];
-      return best;
+    function waitStableCurrentPage(...args) {
+      return nativeCarousel.stablePage(...args);
     }
     function createItemClone(item) {
       const source = cardSourceForItem(item);
@@ -9425,506 +10222,22 @@
       const videoId = videoIdFromHref(href);
       return videoId ? `v:${videoId}` : `h:${href}`;
     }
-    function pageItemKeys(items, page) {
-      return new Set(
-        items.filter((item) => item.page === page).map(itemKey).filter(Boolean)
-      );
+    function pageItemKeys(...args) {
+      return nativeCarousel.pageKeys(...args);
     }
-    function mountedItemKeys(slots) {
-      const keys = /* @__PURE__ */ new Set();
-      for (const slot of slots) {
-        const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-        const key = itemKeyFromCard(card);
-        if (key) keys.add(key);
-      }
-      return keys;
+    function trackTransformValue(...args) {
+      return nativeCarousel.trackTransform(...args);
     }
-    function trackTransformValue(track) {
-      if (!track) return "";
-      return track.style.getPropertyValue("transform") || getComputedStyle(track).transform || "";
-    }
-    function immediateRestoredPageState(scroller, track, items, targetPage) {
-      const requiredPageKeys = pageItemKeys(items, targetPage);
-      const slots = currentPageSlots(scroller, track);
-      const mountedKeys = mountedItemKeys(slots);
-      const missingKeys = [...requiredPageKeys].filter((key) => !mountedKeys.has(key));
-      return {
-        expectedKeys: requiredPageKeys.size,
-        mountedKeys: requiredPageKeys.size - missingKeys.length,
-        slots: slots.length,
-        missingKeys
-      };
-    }
-    async function verifyRestoredPage(section, scroller, track, items, expectedPageSlots, targetPage, previousSignature = "", timeout = PAGE_STABLE_TIMEOUT_MS, sessionToken = null) {
-      const requiredPageKeys = pageItemKeys(items, targetPage);
-      const started = performance.now();
-      const restoredSlots = await waitStableCurrentPage(scroller, track, {
-        previousSignature,
-        minimumSlots: Math.min(expectedPageSlots, Math.max(1, requiredPageKeys.size)),
-        requiredKeys: requiredPageKeys,
-        requiredStableFrames: 2,
-        timeout,
-        sessionToken
-      });
-      assertRouteSession(sessionToken);
-      const restoredKeys = mountedItemKeys(restoredSlots);
-      const missingKeys = [...requiredPageKeys].filter((key) => !restoredKeys.has(key));
-      return {
-        ok: selectedPage(section) === targetPage && missingKeys.length === 0,
-        selectedPage: selectedPage(section),
-        expectedKeys: requiredPageKeys.size,
-        mountedKeys: requiredPageKeys.size - missingKeys.length,
-        slots: restoredSlots.length,
-        missingKeys,
-        elapsedMs: Math.round(performance.now() - started)
-      };
-    }
-    async function restoreNativePageByPage(section, scroller, track, items, expectedPageSlots, targetPage, sessionToken = null) {
-      assertRouteSession(sessionToken);
-      const started = performance.now();
-      let currentRestorePage = selectedPage(section);
-      let restorationComplete = true;
-      if (currentRestorePage === targetPage) {
-        const directCheck = await verifyRestoredPage(
-          section,
-          scroller,
-          track,
-          items,
-          expectedPageSlots,
-          targetPage,
-          "",
-          PAGE_STABLE_TIMEOUT_MS,
-          sessionToken
-        );
-        if (directCheck.ok) return { complete: true, elapsedMs: directCheck.elapsedMs };
-        const total = pageCount(section);
-        const repairDirection = targetPage < total - 1 ? 1 : targetPage > 0 ? -1 : 0;
-        if (repairDirection !== 0) {
-          const moved = await moveOnePage(section, scroller, repairDirection, null, sessionToken);
-          if (moved !== targetPage + repairDirection) {
-            return { complete: false, elapsedMs: Math.round(performance.now() - started) };
-          }
-          currentRestorePage = moved;
-        } else {
-          return { complete: false, elapsedMs: Math.round(performance.now() - started) };
-        }
-      }
-      const direction = targetPage < currentRestorePage ? -1 : 1;
-      log(tLog("nativePageByPageRestorationStarted"), {
-        from: currentRestorePage,
-        target: targetPage,
-        direction: direction < 0 ? "left" : "right"
-      });
-      while (currentRestorePage !== targetPage) {
-        assertRouteSession(sessionToken);
-        const nextPage = currentRestorePage + direction;
-        const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
-        const stepStarted = performance.now();
-        const movedPage = await moveOnePage(section, scroller, direction, null, sessionToken);
-        if (movedPage !== nextPage) {
-          restorationComplete = false;
-          warn(tLog("nativePageRestorationMoveFailed"), {
-            from: currentRestorePage,
-            target: nextPage,
-            result: movedPage
-          });
-          break;
-        }
-        const verification = await verifyRestoredPage(
-          section,
-          scroller,
-          track,
-          items,
-          expectedPageSlots,
-          nextPage,
-          beforeSignature,
-          PAGE_STABLE_TIMEOUT_MS,
-          sessionToken
-        );
-        log(tLog("nativeRestorationPageStabilized"), {
-          requestedPage: nextPage,
-          selectedPage: verification.selectedPage,
-          expectedKeys: verification.expectedKeys,
-          mountedKeys: verification.mountedKeys,
-          slots: verification.slots,
-          missingKeys: verification.missingKeys,
-          elapsedMs: Math.round(performance.now() - stepStarted)
-        });
-        if (!verification.ok) {
-          restorationComplete = false;
-          warn(tLog("nativeRestorationStoppedBecauseTheTargetPageDidNotFullyMount"), {
-            requestedPage: nextPage,
-            selectedPage: verification.selectedPage,
-            missingKeys: verification.missingKeys,
-            timeoutMs: PAGE_STABLE_TIMEOUT_MS
-          });
-          break;
-        }
-        currentRestorePage = nextPage;
-      }
-      const complete = restorationComplete && selectedPage(section) === targetPage;
-      log(tLog("nativePageByPageRestorationCompleted"), {
-        target: targetPage,
-        selectedPage: selectedPage(section),
-        complete,
-        elapsedMs: Math.round(performance.now() - started)
-      });
-      return { complete, elapsedMs: Math.round(performance.now() - started) };
-    }
-    async function repairFastRestoredPage(section, scroller, track, items, expectedPageSlots, targetPage, canonicalTargetTransform = "", reason = "verification-failed", sessionToken = null) {
-      assertRouteSession(sessionToken);
-      const started = performance.now();
-      const total = pageCount(section);
-      const repairDirection = targetPage < total - 1 ? 1 : targetPage > 0 ? -1 : 0;
-      if (repairDirection === 0) {
-        return {
-          complete: false,
-          verification: null,
-          elapsedMs: Math.round(performance.now() - started)
-        };
-      }
-      const adjacentPage = targetPage + repairDirection;
-      const beforeTransform = trackTransformValue(track);
-      const beforeState = immediateRestoredPageState(scroller, track, items, targetPage);
-      log(tLog("nativeFastRestorationPhaseRepairStarted"), {
-        reason,
-        target: targetPage,
-        adjacentPage,
-        direction: repairDirection < 0 ? "left" : "right",
-        selectedPage: selectedPage(section),
-        canonicalTargetTransform,
-        beforeTransform,
-        transformMatchesCanonical: Boolean(canonicalTargetTransform) && beforeTransform === canonicalTargetTransform,
-        expectedKeys: beforeState.expectedKeys,
-        mountedKeys: beforeState.mountedKeys,
-        missingKeys: beforeState.missingKeys
-      });
-      const outwardSignature = visibleSignature(currentPageSlots(scroller, track));
-      const movedOut = await moveOnePage(section, scroller, repairDirection, null, sessionToken);
-      if (movedOut !== adjacentPage) {
-        warn(tLog("nativeFastRestorationPhaseRepairMoveFailed"), {
-          reason,
-          from: targetPage,
-          target: adjacentPage,
-          result: movedOut,
-          transform: trackTransformValue(track)
-        });
-        return {
-          complete: false,
-          verification: null,
-          elapsedMs: Math.round(performance.now() - started)
-        };
-      }
-      const adjacentVerification = await verifyRestoredPage(
-        section,
-        scroller,
-        track,
-        items,
-        expectedPageSlots,
-        adjacentPage,
-        outwardSignature,
-        FAST_RESTORE_VERIFY_TIMEOUT_MS,
-        sessionToken
-      );
-      const adjacentTransform = trackTransformValue(track);
-      log(tLog("nativeFastRestorationPhaseRepairAdjacentPageVerified"), {
-        reason,
-        requestedPage: adjacentPage,
-        selectedPage: adjacentVerification.selectedPage,
-        complete: adjacentVerification.ok,
-        expectedKeys: adjacentVerification.expectedKeys,
-        mountedKeys: adjacentVerification.mountedKeys,
-        missingKeys: adjacentVerification.missingKeys,
-        transform: adjacentTransform,
-        verificationElapsedMs: adjacentVerification.elapsedMs
-      });
-      if (!adjacentVerification.ok) {
-        warn(tLog("nativeFastRestorationPhaseRepairAdjacentPageDidNotStabilize"), {
-          requestedPage: adjacentPage,
-          selectedPage: adjacentVerification.selectedPage,
-          expectedKeys: adjacentVerification.expectedKeys,
-          mountedKeys: adjacentVerification.mountedKeys,
-          missingKeys: adjacentVerification.missingKeys
-        });
-        return {
-          complete: false,
-          verification: adjacentVerification,
-          elapsedMs: Math.round(performance.now() - started)
-        };
-      }
-      const returnSignature = visibleSignature(currentPageSlots(scroller, track));
-      const movedBack = await moveOnePage(section, scroller, -repairDirection, null, sessionToken);
-      if (movedBack !== targetPage) {
-        warn(tLog("nativeFastRestorationPhaseRepairMoveFailed"), {
-          reason,
-          from: adjacentPage,
-          target: targetPage,
-          result: movedBack,
-          transform: trackTransformValue(track)
-        });
-        return {
-          complete: false,
-          verification: null,
-          elapsedMs: Math.round(performance.now() - started)
-        };
-      }
-      const targetVerification = await verifyRestoredPage(
+    function restoreNativePageFast(section, scroller, track, items, expectedPageSlots, targetPage, canonicalTargetTransform = "", sessionToken = null) {
+      return nativeCarousel.restorePage(
         section,
         scroller,
         track,
         items,
         expectedPageSlots,
         targetPage,
-        returnSignature,
-        FAST_RESTORE_VERIFY_TIMEOUT_MS,
-        sessionToken
+        { mode: "fast", canonicalTransform: canonicalTargetTransform, sessionToken }
       );
-      const complete = targetVerification.ok;
-      const finalTransform = trackTransformValue(track);
-      log(tLog("nativeFastRestorationPhaseRepairCompleted"), {
-        reason,
-        target: targetPage,
-        selectedPage: targetVerification.selectedPage,
-        complete,
-        expectedKeys: targetVerification.expectedKeys,
-        mountedKeys: targetVerification.mountedKeys,
-        missingKeys: targetVerification.missingKeys,
-        canonicalTargetTransform,
-        finalTransform,
-        transformMatchesCanonical: Boolean(canonicalTargetTransform) && finalTransform === canonicalTargetTransform,
-        adjacentVerificationElapsedMs: adjacentVerification.elapsedMs,
-        targetVerificationElapsedMs: targetVerification.elapsedMs,
-        elapsedMs: Math.round(performance.now() - started)
-      });
-      return {
-        complete,
-        verification: targetVerification,
-        elapsedMs: Math.round(performance.now() - started)
-      };
-    }
-    async function restoreNativePageFast(section, scroller, track, items, expectedPageSlots, targetPage, canonicalTargetTransform = "", sessionToken = null) {
-      assertRouteSession(sessionToken);
-      const started = performance.now();
-      const originalFromPage = selectedPage(section);
-      const pages = pageCount(section);
-      const adjacentDirection = targetPage < originalFromPage ? -1 : 1;
-      const adjacentMoveCount = Math.abs(originalFromPage - targetPage);
-      let direction = adjacentDirection;
-      let moveCount = adjacentMoveCount;
-      let restorationStrategy = "adjacent";
-      let currentPage = originalFromPage;
-      let previousSignature = "";
-      let fastComplete = true;
-      let verification = null;
-      let completionPath = "strict-verify";
-      let phaseMismatchDetected = false;
-      let initialVerificationWaitSkipped = false;
-      let cycleShortcutAttempted = false;
-      let cycleShortcutSucceeded = false;
-      const cycleShortcutEligible = pages > 1 && targetPage === 0 && originalFromPage === pages - 1;
-      log(tLog("nativeFastRestorationStarted"), {
-        from: originalFromPage,
-        target: targetPage,
-        direction: cycleShortcutEligible ? "right" : direction < 0 ? "left" : "right",
-        strategy: cycleShortcutEligible ? "cycle-right-once-preferred" : "adjacent",
-        cycleShortcutEligible,
-        pages,
-        pageCountParity: pages % 2 === 0 ? "even" : "odd",
-        moveCount: cycleShortcutEligible ? 1 : moveCount,
-        moveCountParity: (cycleShortcutEligible ? 1 : moveCount) % 2 === 0 ? "even" : "odd",
-        canonicalTargetTransform
-      });
-      if (cycleShortcutEligible) {
-        const rightControl = carouselMoveButton(section, scroller, 1);
-        if (rightControl.button && !carouselMoveButtonDisabled(rightControl.button)) {
-          cycleShortcutAttempted = true;
-          previousSignature = visibleSignature(currentPageSlots(scroller, track));
-          try {
-            const movedPage = await moveOnePage(section, scroller, 1, null, sessionToken);
-            assertRouteSession(sessionToken);
-            if (movedPage === targetPage && selectedPage(section) === targetPage) {
-              cycleShortcutSucceeded = true;
-              restorationStrategy = "cycle-right-once";
-              direction = 1;
-              moveCount = 1;
-              currentPage = targetPage;
-            } else {
-              warn(tLog("nativeFastRestorationMoveFailed"), {
-                strategy: "cycle-right-once",
-                from: originalFromPage,
-                target: targetPage,
-                result: movedPage,
-                selectedPage: selectedPage(section)
-              });
-            }
-          } catch (error) {
-            if (isRouteSessionCancelledError(error)) throw error;
-            warn(tLog("nativeFastRestorationMoveFailed"), {
-              strategy: "cycle-right-once",
-              from: originalFromPage,
-              target: targetPage,
-              selectedPage: selectedPage(section),
-              error
-            });
-          }
-          if (!cycleShortcutSucceeded && selectedPage(section) !== originalFromPage) {
-            try {
-              await goToPage(section, scroller, originalFromPage, null, sessionToken);
-              assertRouteSession(sessionToken);
-            } catch (error) {
-              if (isRouteSessionCancelledError(error)) throw error;
-              warn(tLog("nativeFastRestorationMoveFailed"), {
-                strategy: "cycle-restage-before-adjacent-fallback",
-                from: selectedPage(section),
-                target: originalFromPage,
-                error
-              });
-            }
-          }
-          currentPage = selectedPage(section);
-          previousSignature = "";
-        }
-      }
-      if (!cycleShortcutSucceeded) {
-        direction = targetPage < currentPage ? -1 : 1;
-        moveCount = Math.abs(currentPage - targetPage);
-        restorationStrategy = cycleShortcutAttempted ? "adjacent-after-cycle-fallback" : "adjacent";
-      }
-      while (!cycleShortcutSucceeded && currentPage !== targetPage) {
-        assertRouteSession(sessionToken);
-        const nextPage = currentPage + direction;
-        previousSignature = visibleSignature(currentPageSlots(scroller, track));
-        const movedPage = await moveOnePage(section, scroller, direction, null, sessionToken);
-        if (movedPage !== nextPage) {
-          fastComplete = false;
-          completionPath = "move-failed";
-          warn(tLog("nativeFastRestorationMoveFailed"), {
-            strategy: restorationStrategy,
-            from: currentPage,
-            target: nextPage,
-            result: movedPage
-          });
-          break;
-        }
-        currentPage = nextPage;
-      }
-      if (fastComplete && selectedPage(section) === targetPage) {
-        const diagnosisStarted = performance.now();
-        const immediateState = immediateRestoredPageState(scroller, track, items, targetPage);
-        const arrivalTransform = trackTransformValue(track);
-        const hasCanonicalTransform = Boolean(canonicalTargetTransform);
-        const transformMatchesCanonical = !hasCanonicalTransform || arrivalTransform === canonicalTargetTransform;
-        phaseMismatchDetected = hasCanonicalTransform && !transformMatchesCanonical && immediateState.missingKeys.length > 0;
-        log(tLog("nativeFastRestorationPhaseDiagnosis"), {
-          from: originalFromPage,
-          target: targetPage,
-          selectedPage: selectedPage(section),
-          pages: pageCount(section),
-          pageCountParity: pageCount(section) % 2 === 0 ? "even" : "odd",
-          moveCount,
-          moveCountParity: moveCount % 2 === 0 ? "even" : "odd",
-          canonicalTargetTransform,
-          arrivalTransform,
-          transformMatchesCanonical,
-          expectedKeys: immediateState.expectedKeys,
-          mountedKeys: immediateState.mountedKeys,
-          missingKeys: immediateState.missingKeys,
-          phaseMismatchDetected,
-          diagnosisElapsedMs: Math.round(performance.now() - diagnosisStarted)
-        });
-        if (phaseMismatchDetected) {
-          initialVerificationWaitSkipped = true;
-          completionPath = "phase-repair-before-timeout";
-          const repair = await repairFastRestoredPage(
-            section,
-            scroller,
-            track,
-            items,
-            expectedPageSlots,
-            targetPage,
-            canonicalTargetTransform,
-            "transform-mismatch-with-missing-target-keys",
-            sessionToken
-          );
-          verification = repair.verification;
-          fastComplete = repair.complete;
-        } else {
-          verification = await verifyRestoredPage(
-            section,
-            scroller,
-            track,
-            items,
-            expectedPageSlots,
-            targetPage,
-            previousSignature,
-            FAST_RESTORE_VERIFY_TIMEOUT_MS,
-            sessionToken
-          );
-          fastComplete = verification.ok;
-          if (!fastComplete && selectedPage(section) === targetPage) {
-            completionPath = "phase-repair-after-verification";
-            const repair = await repairFastRestoredPage(
-              section,
-              scroller,
-              track,
-              items,
-              expectedPageSlots,
-              targetPage,
-              canonicalTargetTransform,
-              "strict-verification-failed",
-              sessionToken
-            );
-            verification = repair.verification || verification;
-            fastComplete = repair.complete;
-          }
-        }
-      }
-      const finalTransform = trackTransformValue(track);
-      log(tLog("nativeFastRestorationCompleted"), {
-        from: originalFromPage,
-        target: targetPage,
-        selectedPage: selectedPage(section),
-        complete: fastComplete,
-        strategy: restorationStrategy,
-        cycleShortcutAttempted,
-        cycleShortcutSucceeded,
-        completionPath,
-        phaseMismatchDetected,
-        initialVerificationWaitSkipped,
-        expectedKeys: verification?.expectedKeys ?? null,
-        mountedKeys: verification?.mountedKeys ?? null,
-        missingKeys: verification?.missingKeys ?? [],
-        canonicalTargetTransform,
-        finalTransform,
-        transformMatchesCanonical: Boolean(canonicalTargetTransform) && finalTransform === canonicalTargetTransform,
-        elapsedMs: Math.round(performance.now() - started)
-      });
-      if (fastComplete) return true;
-      warn(tLog("fastRestorationVerificationFailedUsingV49PageByPageFallback"), {
-        from: originalFromPage,
-        target: targetPage,
-        selectedPage: selectedPage(section),
-        strategy: restorationStrategy,
-        cycleShortcutAttempted,
-        cycleShortcutSucceeded,
-        completionPath,
-        phaseMismatchDetected,
-        canonicalTargetTransform,
-        finalTransform
-      });
-      if (selectedPage(section) !== originalFromPage) {
-        await goToPage(section, scroller, originalFromPage, null, sessionToken);
-      }
-      const fallback = await restoreNativePageByPage(
-        section,
-        scroller,
-        track,
-        items,
-        expectedPageSlots,
-        targetPage,
-        sessionToken
-      );
-      return fallback.complete;
     }
     function currentPageVideoIds(scroller, track) {
       return currentPageSlots(scroller, track).map((slot) => {

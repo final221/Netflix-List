@@ -15,11 +15,13 @@ const { createListData } = require('../src/netflix/list-data.js');
 const { createViewingData } = require('../src/netflix/viewing-data.js');
 const { createSessionScope } = require('../src/app/session-scope.js');
 const { createCarousel } = require('../src/netflix/carousel/carousel.js');
+const { createNavigation } = require('../src/netflix/carousel/navigation.js');
 const { carouselPayload, atom, reference, viewingVideo } = require('./helpers/fixtures.js');
 
 // Exercise residual authored functions without executing Netflix startup.
 // Generated-bundle startup and lifecycle are covered separately in bundle.test.js.
 const { source, declaration } = require('./helpers/legacy-source.cjs');
+const privateNavigationFunctions = new Set(['createLogicalMoveSignal', 'waitLogicalPageChange', 'waitPageByPolling', 'waitPage', 'waitForScriptMoveSettle']);
 const migratedAdapterFunctions = new Set(['getHtmlLanguage', 'getNetflixLanguage', 'netflixModelData',
     'graphqlData', 'viewingRequestContext', 'nativeCardIdentity', 'videoIdFromHref', 'decodeTrackingContext',
     'videoIdFromToggleContext', 'findMyListSection', 'itemFromSlot']);
@@ -140,7 +142,7 @@ function environment(names, overrides = {}) {
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
         'hoverScrollElapsed', 'recordHoverCancellation', 'advanceHoverToken', 'hoverIntentDiagnosticSnapshot', 'hoverScrollStateSnapshot',
-        'createLogicalMoveSignal',
+        'createLogicalMoveSignal', 'createNavigationDiagnosticSink',
         'finishNativePreviewDiagnostic', 'inspectNativePreviewDiagnostic', 'scheduleNativePreviewDiagnostic',
         'nativePreviewNodeVideoId', 'decodeTrackingContext', 'findNativeHoverPreview', 'retainNativeHoverForPreview', 'clearNativePreviewTransfer',
         'releaseNativePreview', 'nativePreviewOwnerMatches', 'handleTargetPreviewPointerOut', 'gridHoverReplacementUnderPointer',
@@ -149,7 +151,7 @@ function environment(names, overrides = {}) {
         'startImageResourceDiagnostics', 'stopImageResourceDiagnostics', 'recordImageResourceEntries',
         'responsiveViewportSignature', 'responsiveLayoutMatches',
         'cancelResizeHover', 'handleTargetResize', 'handleRelevantTargetDocumentMutation', 'recoverNativeInitialization', ...names]) {
-        if (!migratedAdapterFunctions.has(name)) vm.runInContext(declaration(name), c);
+        if (!migratedAdapterFunctions.has(name) && !privateNavigationFunctions.has(name)) vm.runInContext(declaration(name), c);
     }
     const location = c.location || { origin: 'https://www.netflix.com', href: 'https://www.netflix.com/browse/my-list' };
     const document = c.document || {};
@@ -175,6 +177,7 @@ function environment(names, overrides = {}) {
         readSourceCard: () => c.sourceState?.track?.querySelector(c.NETFLIX_DOM_SELECTORS?.standardCard) });
     const nativePageDom = { get selectors() { return c.NETFLIX_DOM_SELECTORS || pageDom.selectors; },
         findMyListSection: (...args) => c.findMyListSection(...args),
+        videoIdFromHref: href => c.videoIdFromHref(href),
         findTrack: (...args) => c.netflixDom.findTrack ? c.netflixDom.findTrack(...args) : pageDom.findTrack(...args),
         filledSlots: (...args) => c.netflixDom.filledSlots ? c.netflixDom.filledSlots(...args) : pageDom.filledSlots(...args),
         directSlots: (...args) => c.netflixDom.directSlots ? c.netflixDom.directSlots(...args) : pageDom.directSlots(...args),
@@ -205,6 +208,8 @@ function environment(names, overrides = {}) {
         log: (...args) => c.log(...args), warn: (...args) => c.warn(...args), tLog: (...args) => c.tLog(...args),
         logTimeout: (...args) => c.logOperationTimeout?.(...args), describeSlot: (...args) => c.slotDescriptor?.(...args),
         ownedUi: { grid: c.GRID_ID, status: c.STATUS_ID, empty: c.LEGACY_EMPTY_STATE_ID, dialog: c.ORDER_MISMATCH_DIALOG_ID, fastMove: c.FAST_MOVE_CLASS },
+        isHoverCancelled: token => c.hoverPreparationCancelled?.(token) || false, readHoverToken: () => c.hoverToken,
+        navigationDiagnostics: token => c.createNavigationDiagnosticSink(token),
         checkRoute: () => { if (c.location?.href !== c.lastObservedUrl) c.handleRouteChange?.('MutationObserver-url'); },
         onMutationDelivery: () => { if (c.activeNativeHover?.previewRoot && !c.activeNativeHover.previewRoot.isConnected)
             c.releaseNativePreview(c.activeNativeHover, 'preview-removed'); },
@@ -219,6 +224,30 @@ function environment(names, overrides = {}) {
     };
     if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
     Object.defineProperty(c, 'nativeReadScope', { get: () => c.nativeCarousel.diagnostics().readScopeActive ? true : null });
+    // Supplementary characterization of private acknowledgement resources. Full
+    // movement/restoration and binding disposal run through carousel.test.js.
+    let privateAcknowledgement;
+    const acknowledgement = () => privateAcknowledgement ||= createNavigation({
+        borrowBinding: (...args) => c.nativeCarousel.borrowBinding(...args),
+        assertBinding: handle => c.nativeCarousel.assertBinding(handle),
+        bindingForSource: (scroller, track) => c.nativeCarousel.borrowBinding(c.nativeCarousel.currentBinding()?.section || null, scroller, track),
+        createError: (...args) => c.initializationError?.(...args) || Object.assign(new Error(args[2]), { code: args[0] }),
+        fastMoveClass: c.FAST_MOVE_CLASS, scope: { isCurrent: token => c.isRouteSessionActive(token),
+            assertCurrent: token => c.assertRouteSession(token), isCancelled: error => c.isRouteSessionCancelledError(error) },
+        native: { model: section => c.getCarouselDomRuntime?.(section) || c.nativeCarousel.model(section),
+            profile: section => c.nativeCarousel.profile(section), registerPage: (...args) => c.nativeCarousel.registerPage(...args),
+            notePage: (...args) => c.nativeCarousel.notePage(...args),
+            selectedPage: section => c.selectedPage(section), pageCount: section => c.pageCount(section),
+            currentSlots: (...args) => c.currentPageSlots(...args), signatureOf: (...args) => c.visibleSignature(...args) },
+        performance: { now: () => c.performance.now() }, getComputedStyle: (...args) => c.getComputedStyle?.(...args) || {},
+        setTimeout: (...args) => c.setTimeout(...args), clearTimeout: id => c.clearTimeout(id),
+        requestAnimationFrame: callback => c.requestAnimationFrame(callback), cancelAnimationFrame: id => c.cancelAnimationFrame(id),
+        MutationObserver: c.MutationObserver, isHoverCancelled: token => c.hoverPreparationCancelled(token),
+        diagnosticsFor: token => c.createNavigationDiagnosticSink(token),
+        logTimeout: (...args) => c.logOperationTimeout(...args) });
+    c.createLogicalMoveSignal = (...args) => acknowledgement().logicalSignal(...args);
+    c.waitLogicalPageChange = (...args) => acknowledgement().acknowledgeLogical(...args);
+    c.waitPage = (...args) => acknowledgement().acknowledgeIndicator(...args);
     c.performanceDiagnostics = c.createPerformanceDiagnostics();
     c.listData ||= fixtureListData(c);
     async function flush() { for (let i = 0; i < 24; i++) await Promise.resolve(); }
@@ -1952,30 +1981,6 @@ test('an order-mismatch dialog stops preparation without an extra hover retry', 
     assert.equal(e.timers.size, 0);
 });
 
-test('hover hydration stops before the next geometry read after cancellation', async () => {
-    let reads = 0;
-    const e = environment(['hoverPreparationCancelled', 'waitStableCurrentPage'], {
-        currentPageSlots: () => { reads++; return []; }
-    });
-    const wait = e.c.waitStableCurrentPage({}, {}, { hoverToken: 1, sessionToken: 1 });
-    e.c.hoverToken = 2;
-    await e.frame();
-    assert.equal((await wait).length, 0);
-    assert.equal(reads, 0);
-});
-
-test('initialization stability waits remain independent of hover cancellation', async () => {
-    const slots = [new Element()];
-    const e = environment(['hoverPreparationCancelled', 'waitStableCurrentPage'], {
-        currentPageSlots: () => slots, visibleSignature: () => 'same'
-    });
-    const wait = e.c.waitStableCurrentPage({}, {}, { sessionToken: 1 });
-    e.c.hoverToken = 2;
-    await e.frame();
-    await e.frame();
-    assert.equal(await wait, slots);
-});
-
 test('mounted-source polling stops after cancellation without a final binding or card scan', async () => {
     let bindings = 0, probes = 0;
     const e = environment(['hoverPreparationCancelled', 'sleep', 'waitForMountedSourceItem'], {
@@ -2275,11 +2280,35 @@ test('cancelled indicator polling still acknowledges the clicked page at a lower
     assert.equal(await wait, 1);
 });
 
+
+function nativeMotionFacts(e, section, scroller, track, signature, click, { mode = 'logical', count = 10, page = () => 0 } = {}) {
+    const slot = new Element('slot', track);
+    const card = new Element('card', slot);
+    Object.defineProperty(card, 'href', { get: signature });
+    slot.querySelector = () => card;
+    const previousQuery = section.querySelector?.bind(section) || (() => null);
+    const right = new Element('right', section), left = new Element('left', section);
+    right.click = () => click(1); left.click = () => click(-1);
+    const prefix = mode === 'indicator' ? 'carousel-' : 'carousel-hawkins-';
+    section.querySelector = selector => selector === '[data-uia="' + prefix + 'right-button"]' ? right
+        : selector === '[data-uia="' + prefix + 'left-button"]' ? left : previousQuery(selector);
+    const indicators = mode === 'indicator' ? Array.from({ length: count }, (_, index) => {
+        const indicator = new Element('indicator', section);
+        indicator.getAttribute = key => key === 'data-indicator-selected' ? String(index === page()) : null;
+        return indicator;
+    }) : [];
+    section.querySelectorAll = selector => selector === '[data-uia="carousel-page-indicator-item"]' ? indicators : [];
+    track.querySelectorAll = () => [];
+    let reads = 0;
+    e.c.netflixDom = { ...e.c.netflixDom, findTrack: () => track, filledSlots: () => { reads++; return [slot]; }, directSlots: () => [slot] };
+    e.c.sourceState = e.c.attachNativeBinding({}, section, scroller, track);
+    e.c.nativeCarousel.confirmPageCount(section, count);
+    return { right, left, reads: () => reads };
+}
+
 test('clicked moves remain serialized through native settlement and restore their styles', async () => {
-    const acknowledgement = deferred();
-    const settlement = deferred();
     const logs = [];
-    let clicks = 0, page = 0, restorations = 0;
+    let clicks = 0, restorations = 0;
     const classes = new Set();
     const section = { classList: { contains: key => classes.has(key), add: key => classes.add(key), remove: key => classes.delete(key) } };
     const properties = new Map([['transform', 'before'], ['transition', 'original'], ['animation', 'original']]);
@@ -2291,28 +2320,25 @@ test('clicked moves remain serialized through native settlement and restore thei
     const e = environment(['moveOnePage'], {
         sourceState: { track },
         FAST_MOVE_CLASS: 'fast', PAGE_CHANGE_TIMEOUT_MS: 3000, SCRIPT_MOVE_SETTLE_TIMEOUT_MS: 260,
-        selectedPage: () => page, pageCount: () => 10,
-        getCarouselDomRuntime: () => ({ profile: { pageMode: 'logical' } }),
-        carouselMoveButton: () => ({ button: { click: () => clicks++ } }), carouselMoveButtonDisabled: () => false,
-        currentPageSlots: () => [], visibleSignature: () => 'before',
-        log: (name, details) => logs.push({ name, details }),
-        waitLogicalPageChange: () => clicks === 1 ? acknowledgement.promise : Promise.resolve({ page: 2, transform: 'after', signature: 'after', changed: true }),
-        waitForScriptMoveSettle: () => clicks === 1 ? settlement.promise : Promise.resolve({ transform: 'after', signature: 'after', observedChange: true })
+        log: (name, details) => logs.push({ name, details })
     });
-    const first = e.c.moveOnePage(section, {}, 1, 1, 1);
+    const scroller = new Element('scroller', section);
+    let signature = 'before';
+    nativeMotionFacts(e, section, scroller, track, () => signature, () => { clicks++; if (clicks === 2) signature = 'after-2'; });
+    const first = e.c.moveOnePage(section, scroller, 1, 1, 1);
     await e.flush();
     assert.equal(clicks, 1);
     e.c.hoverToken = 2;
-    const obsoleteQueued = e.c.moveOnePage(section, {}, 1, 1, 1);
-    const latest = e.c.moveOnePage(section, {}, 1, 2, 1);
+    const obsoleteQueued = e.c.moveOnePage(section, scroller, 1, 1, 1);
+    const latest = e.c.moveOnePage(section, scroller, 1, 2, 1);
+    signature = 'after-1';
     await e.advance(80);
-    page = 1;
-    acknowledgement.resolve({ page: 1, transform: 'after', signature: 'after', changed: true });
     await e.flush();
     assert.equal(clicks, 1);
     assert.equal(classes.has('fast'), true);
-    await e.advance(40);
-    settlement.resolve({ transform: 'after', signature: 'after', observedChange: true });
+    await e.frame(13); await e.frame(13); await e.frame(14);
+    await e.flush();
+    for (let i = 0; i < 4; i++) await e.frame(0);
     await Promise.all([first, obsoleteQueued, latest]);
     assert.equal(clicks, 2);
     assert.equal(classes.has('fast'), false);
@@ -2338,13 +2364,8 @@ test('signal-acknowledged clicks remain serialized through native settling after
     let clicks = 0, restorations = 0;
     const classes = new Set();
     const section = { classList: { contains: key => classes.has(key), add: key => classes.add(key), remove: key => classes.delete(key) } };
-    const settlement = deferred();
     const e = logicalMoveEnvironment({
         FAST_MOVE_CLASS: 'fast', SCRIPT_MOVE_SETTLE_TIMEOUT_MS: 260,
-        selectedPage: () => e.runtime.currentPage || 0, pageCount: () => 10,
-        carouselMoveButton: () => ({ button: { click: () => { clicks++; if (clicks === 2) e.change('second'); } } }),
-        carouselMoveButtonDisabled: () => false,
-        waitForScriptMoveSettle: () => clicks === 1 ? settlement.promise : Promise.resolve({ transform: 'transform', signature: 'second', observedChange: true })
     });
     Object.assign(e.section, { classList: section.classList });
     const properties = new Map([['transform', 'transform'], ['transition', 'original'], ['animation', 'original']]);
@@ -2352,7 +2373,8 @@ test('signal-acknowledged clicks remain serialized through native settling after
         getPropertyValue: key => properties.get(key) || '', getPropertyPriority: () => '',
         setProperty: (key, value) => { if (value === 'original') restorations++; properties.set(key, value); }
     } });
-    e.c.sourceState = e.c.attachNativeBinding({}, e.section, e.scroller, e.track);
+    nativeMotionFacts(e, e.section, e.scroller, e.track, () => e.c.visibleSignature([]),
+        () => { clicks++; if (clicks === 2) e.change('second'); });
     vm.runInContext(declaration('moveOnePage'), e.c);
     const first = e.c.moveOnePage(e.section, e.scroller, 1, 1, 1);
     await e.flush();
@@ -2367,11 +2389,10 @@ test('signal-acknowledged clicks remain serialized through native settling after
     assert.equal(e.runtime.currentPage, 1);
     assert.equal(clicks, 1, 'acknowledgement alone cannot release the move queue');
     assert.equal(classes.has('fast'), true);
-    await e.advance(40);
-    settlement.resolve({ transform: 'transform', signature: 'first', observedChange: true });
+    await e.frame(13); await e.frame(13); await e.frame(14);
     await e.flush();
     assert.equal(clicks, 2);
-    await e.frame();
+    for (let i = 0; i < 4; i++) await e.frame(0);
     await Promise.all([first, obsolete, latest]);
     assert.equal(clicks, 2);
     assert.equal(restorations, 4);
@@ -2386,23 +2407,29 @@ test('signal-acknowledged clicks remain serialized through native settling after
 
 test('page navigation avoids the duplicate selected-page read while retaining cancellation and loop guards', async () => {
     for (const mode of ['normal', 'cancelled', 'guard']) {
-        let page = 0, reads = 0, moves = 0;
+        let page = 0, moves = 0;
         const logs = [];
         const e = environment(['goToPage'], {
-            pageCount: () => 5, selectedPage: () => { reads++; return page; },
-            getCarouselDomRuntime: () => ({ profile: { navigationMode: 'hawkins', pageMode: 'logical' } }),
-            moveOnePage: async () => {
-                moves++;
-                page = mode === 'guard' ? (page === 0 ? 1 : 0) : page + 1;
-                return page;
-            },
             log: (name, details) => logs.push({ name, details })
         });
         if (mode === 'cancelled') e.c.hoverToken = 2;
-        const result = await e.c.goToPage({}, {}, 3, 1, 1);
+        const section = new Element('section'), scroller = new Element('scroller', section);
+        const styles = new Map();
+        const track = { style: { getPropertyValue: key => styles.get(key) || '', getPropertyPriority: () => '',
+            setProperty: (key, value) => styles.set(key, value), removeProperty: key => styles.delete(key) } };
+        section.classList = { contains: () => false, add() {}, remove() {} };
+        const facts = nativeMotionFacts(e, section, scroller, track, () => 'page-' + page, () => {
+            moves++; page = mode === 'guard' ? (page === 0 ? 1 : 0) : page + 1;
+        }, { count: 5 });
+        for (let index = 0; index < 5; index++) e.c.nativeCarousel.forcePage(section, 'page-' + index, index);
+        e.c.nativeCarousel.notePage(section, 0);
+        const pending = e.c.goToPage(section, scroller, 3, 1, 1);
+        let done = false; pending.then(() => { done = true; }, () => { done = true; });
+        for (let i = 0; i < 60 && !done; i++) await e.frame();
+        const result = await pending;
         const count = mode === 'normal' ? 3 : mode === 'guard' ? 10 : 0;
         assert.equal(moves, count, mode);
-        assert.equal(reads, count + 3, mode);
+        assert.equal(facts.reads(), count * 7 + 3, mode, 'bounded native reads include actual acknowledgement and settlement');
         assert.equal(e.c.performanceDiagnostics.hoverLifecycle.duplicatePageReadsAvoided, count, mode);
         assert.equal(result, mode === 'normal' ? 3 : 0, mode);
         const logged = logs.find(entry => entry.name === 'pageMoveResult').details;
@@ -2415,16 +2442,21 @@ test('Hawkins logical hover navigation avoids boundary detours while legacy cycl
     for (const [start, target, hawkins, avoided] of [[0, 6, true, 1], [6, 0, true, 1], [1, 6, true, 1], [0, 1, true, 0], [0, 6, false, 0]]) {
         let page = start;
         const directions = [];
-        const e = environment(['goToPage'], {
-            getCarouselDomRuntime: () => ({ profile: { navigationMode: hawkins ? 'hawkins' : 'legacy', pageMode: hawkins ? 'logical' : 'indicator' } }),
-            pageCount: () => 7, selectedPage: () => page,
-            moveOnePage: async (_, __, direction) => {
-                directions.push(direction);
-                page = hawkins ? Math.max(0, Math.min(6, page + direction)) : (page + direction + 7) % 7;
-                return page;
-            }
-        });
-        assert.equal(await e.c.goToPage({}, {}, target, 1, 1, true), target);
+        const e = environment(['goToPage']);
+        const section = new Element('section'), scroller = new Element('scroller', section);
+        const styles = new Map();
+        const track = { style: { getPropertyValue: key => styles.get(key) || '', getPropertyPriority: () => '',
+            setProperty: (key, value) => styles.set(key, value), removeProperty: key => styles.delete(key) } };
+        section.classList = { contains: () => false, add() {}, remove() {} };
+        nativeMotionFacts(e, section, scroller, track, () => 'page-' + page, direction => {
+            directions.push(direction);
+            page = hawkins ? Math.max(0, Math.min(6, page + direction)) : (page + direction + 7) % 7;
+        }, { count: 7, mode: hawkins ? 'logical' : 'indicator', page: () => page });
+        e.c.nativeCarousel.notePage(section, start);
+        const pending = e.c.goToPage(section, scroller, target, 1, 1, true);
+        let done = false; pending.then(() => { done = true; }, () => { done = true; });
+        for (let i = 0; i < 60 && !done; i++) await e.frame();
+        assert.equal(await pending, target);
         assert.deepEqual(directions, hawkins ? Array(Math.abs(target - start)).fill(target > start ? 1 : -1) : [-1]);
         assert.equal(e.c.performanceDiagnostics.hoverLifecycle.boundaryDetoursAvoided, avoided);
     }
@@ -7812,7 +7844,7 @@ test('a failed issued click cannot restore motion styles acquired by its replace
             throw new Error('issued click failed');
         } } })
     });
-    e.c.sourceState = e.c.attachNativeBinding({}, section, scroller, track);
+    nativeMotionFacts(e, section, scroller, track, () => 'before', e.c.carouselMoveButton().button.click);
     await assert.rejects(e.c.moveOnePage(section, scroller, 1, null, 1), /issued click failed/);
     assert.equal(properties.get('transition'), 'none');
     assert.equal(classes.has('fast'), true);
