@@ -4341,176 +4341,48 @@ export function startLegacy() {
     async function refreshStaleSourceOnPreferredPage(item, preferredPage = item.page, token = null, sessionToken = null) {
         assertRouteSession(sessionToken);
         if (hoverPreparationCancelled(token)) return null;
-        const rebound = ensureLiveNativeBinding('hover-stale-refresh-start');
-        let section = rebound?.section || sourceState?.section;
-        let scroller = rebound?.scroller || sourceState?.scroller;
-        let track = rebound?.track || sourceState?.track;
-        if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) return null;
-
-        const total = pageCount(section);
-        if (total <= 0) return null;
-        await goToPage(section, scroller, preferredPage, token, sessionToken, true);
-        if (token !== null && token !== hoverToken) return null;
-
-        let slot = findMountedSourceSlot(track, item, true);
-        if (slot) return { slot, page: selectedPage(section), refreshed: false };
-
-        // A My List delta can leave the preferred Hawkins page temporarily empty
-        // even though its logical page number is already selected. Nudge the ring by
-        // one page and return immediately; this is enough to make React commit the
-        // new virtual itemIndex set without scanning the whole carousel.
-        if (total > 1 && selectedPage(section) === preferredPage) {
-            const from = selectedPage(section);
-            const moved = await moveOnePage(section, scroller, 1, token, sessionToken);
-            if (token !== null && token !== hoverToken) return null;
-            if (moved !== from) {
-                await moveOnePage(section, scroller, -1, token, sessionToken);
-                if (token !== null && token !== hoverToken) return null;
-            }
-        }
-
-        const live = ensureLiveNativeBinding('hover-stale-refresh-after-pulse');
-        section = live?.section || sourceState?.section;
-        scroller = live?.scroller || sourceState?.scroller;
-        track = live?.track || sourceState?.track;
-        if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) return null;
-
-        await goToPage(section, scroller, preferredPage, token, sessionToken, true);
-        if (token !== null && token !== hoverToken) return null;
-        slot = await waitForMountedSourceItem(item, 700, true, sessionToken, token);
-        if (token !== null && token !== hoverToken) return null;
-        if (!slot) return null;
-
-        trace(() => ['Hover stale logical page refreshed without full carousel scan', {
-            item: itemSummary(item),
-            preferredPage,
-            selectedPage: selectedPage(section),
-            source: slotDescriptor(slot)
-        }]);
-        return { slot, page: selectedPage(section), refreshed: true };
+        ensureLiveNativeBinding('hover-stale-refresh-start');
+        const state = sourceState;
+        const result = await nativeCarousel.resolveCard({ mode: 'preferred-refresh', section: state?.section,
+            scroller: state?.scroller, track: state?.track, item: itemSummary(item), preferredPage,
+            hoverToken: token, sessionToken });
+        assertRouteSession(sessionToken);
+        if (hoverPreparationCancelled(token) || sourceState !== state || result.status !== 'found') return null;
+        return { ...result, get slot() { return result.source.slot; } };
     }
 
     async function locateActiveSourceItem(item, preferredPage = item.page, token = null, sessionToken = null, repairLogicalMapping = true, maxRadius = null) {
         assertRouteSession(sessionToken);
         if (hoverPreparationCancelled(token)) return null;
         ensureLiveNativeBinding('hover-locate-start');
-        let { section, scroller, track } = sourceState || {};
-        if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) return null;
-        const total = pageCount(section);
-        const tried = new Set();
-        const order = [];
-
-        const push = p => {
-            if (p < 0 || p >= total || tried.has(p)) return;
-            tried.add(p);
-            order.push(p);
-        };
-
-        push(preferredPage);
-        const radiusLimit = Number.isFinite(maxRadius)
-            ? Math.min(Math.max(0, Math.floor(maxRadius)), Math.max(0, total - 1))
-            : Math.max(0, total - 1);
-        for (let delta = 1; delta <= radiusLimit; delta++) {
-            push(preferredPage + delta);
-            push(preferredPage - delta);
-        }
-
-        log(tLog('hoverSourceSearchStarted'), {
-            item: itemSummary(item),
-            preferredPage,
-            selectedPage: selectedPage(section),
-            pages: total,
-            order
-        });
-
-        for (const page of order) {
+        const state = sourceState;
+        const result = await nativeCarousel.resolveCard({ mode: 'search', section: state?.section,
+            scroller: state?.scroller, track: state?.track, item: itemSummary(item), preferredPage,
+            columns: state?.layout?.columns || 1, repairLogicalMapping, maxRadius, hoverToken: token, sessionToken });
+        assertRouteSession(sessionToken);
+        if (hoverPreparationCancelled(token) || sourceState !== state || result.status !== 'found') return null;
+        return nativeCarousel.sample(() => {
+            if (repairLogicalMapping) {
+                for (let index = 0; index < result.visibleCards.length; index++) {
+                    assertRouteSession(sessionToken);
+                    if (hoverPreparationCancelled(token) || sourceState !== state) return null;
+                    nativeCarousel.assertSource(result.source);
+                    nativeCarousel.assertSource(result.sources[index]);
+                    const visibleItem = state.itemMap?.get(itemKey(result.visibleCards[index]));
+                    if (!visibleItem || visibleItem.page === result.page) continue;
+                    const oldPage = visibleItem.page;
+                    visibleItem.page = result.page;
+                    const visibleClone = findGridClone(visibleItem);
+                    if (visibleClone) visibleClone.setAttribute('data-tm-item-page', String(result.page));
+                    log(tLog('itemPageMappingCorrected'), { item: itemSummary(visibleItem), oldPage,
+                        actualPage: result.page, reason: 'logical-visible-page-repair' });
+                }
+            }
             assertRouteSession(sessionToken);
-            if (hoverPreparationCancelled(token)) return null;
-            const rebound = ensureLiveNativeBinding('hover-locate-page');
-            if (rebound?.section && rebound?.scroller && rebound?.track) {
-                section = rebound.section;
-                scroller = rebound.scroller;
-                track = rebound.track;
-            }
-            if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) return null;
-            const beforeSig = visibleSignature(currentPageSlots(scroller, track));
-            log(tLog('hoverSourceSearchPage'), {
-                item: itemSummary(item),
-                page,
-                selectedBefore: selectedPage(section)
-            });
-
-            await goToPage(section, scroller, page, token, sessionToken, true);
-            if (token !== null && token !== hoverToken) {
-                log(tLog('hoverSourceSearchCancelled'), { reason: 'token-changed-after-page-move', token, hoverToken });
-                return null;
-            }
-
-            let slot = await waitForMountedSourceItem(
-                item,
-                page === preferredPage ? HOVER_SOURCE_TIMEOUT_MS : 280,
-                true,
-                sessionToken,
-                token
-            );
-            if (token !== null && token !== hoverToken) {
-                log(tLog('hoverSourceSearchCancelled'), { reason: 'token-changed-after-mount-wait', token, hoverToken });
-                return null;
-            }
-
-            if (!slot) {
-                await waitStableCurrentPage(scroller, track, {
-                    previousSignature: beforeSig,
-                    minElapsed: 120,
-                    timeout: 520,
-                    sessionToken,
-                    hoverToken: token
-                });
-                if (hoverPreparationCancelled(token)) return null;
-                slot = findMountedSourceSlot(track, item, true);
-            }
-
-            if (slot) {
-                const actual = selectedPage(section);
-                const runtime = getCarouselDomRuntime(section);
-                const visibleSlots = viewportPageSlots(scroller, track, Math.max(1, sourceState?.layout?.columns || 1));
-                const signature = visibleSignature(visibleSlots);
-                if (repairLogicalMapping && runtime?.profile?.pageMode === 'logical' && signature) {
-                    registerLogicalPageSignature(section, signature, actual);
-                }
-                if (repairLogicalMapping) {
-                    for (const visibleSlot of visibleSlots) {
-                        const visibleItem = findItemForSourceSlot(visibleSlot);
-                        if (!visibleItem) continue;
-                        const oldPage = visibleItem.page;
-                        if (oldPage === actual) continue;
-                        visibleItem.page = actual;
-                        const visibleClone = findGridClone(visibleItem);
-                        if (visibleClone) visibleClone.setAttribute('data-tm-item-page', String(actual));
-                        log(tLog('itemPageMappingCorrected'), {
-                            item: itemSummary(visibleItem),
-                            oldPage,
-                            actualPage: actual,
-                            reason: 'logical-visible-page-repair'
-                        });
-                    }
-                }
-                trace(() => [tLog('hoverSourceFound'), {
-                    item: itemSummary(item),
-                    actualPage: actual,
-                    source: slotDescriptor(slot)
-                }]);
-                return { slot, page: actual };
-            }
-        }
-
-        warn(tLog('hoverSourceSearchFailed'), {
-            item: itemSummary(item),
-            preferredPage,
-            selectedPage: selectedPage(section),
-            pages: total
+            if (hoverPreparationCancelled(token) || sourceState !== state) return null;
+            nativeCarousel.assertSource(result.source);
+            return { ...result, get slot() { return result.source.slot; } };
         });
-        return null;
     }
 
     function copyItemAttributes(target, item, index = null) {

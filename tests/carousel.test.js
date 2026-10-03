@@ -622,6 +622,157 @@ test('expected-page resolution returns native handles and truthful incomplete or
     }
 });
 
+test('preferred-page recovery preserves direct hits and the normal adjacent-page pulse', async () => {
+    for (const mode of ['logical', 'indicator']) {
+        let returned = false;
+        const moves = [];
+        const e = navigationEnvironment({ mode, overrides: { log(name, facts) {
+            if (name === 'carouselMoveStarted') moves.push(facts);
+        } }, onClick({ direction, page, setPage }) {
+            setPage((page + direction + 3) % 3);
+            if (direction < 0) {
+                returned = true;
+                e.pages[0][0].querySelector('a').href = 'https://www.netflix.com/title/1';
+            }
+        } });
+        const options = { section: e.section, scroller: e.scroller, track: e.track,
+            mode: 'preferred-refresh', item: Object.freeze({ videoId: '1', page: 0 }), preferredPage: 0,
+            sessionToken: e.scope.token, hoverToken: 1 };
+        const immediate = await e.settle(e.carousel.resolveCard(options));
+        assert.equal(immediate.status, 'found');
+        assert.equal(immediate.refreshed, false);
+        assert.deepEqual(e.directions, []);
+        e.pages[0][0].querySelector('a').href = 'https://www.netflix.com/title/99';
+        const refreshed = await e.settle(e.carousel.resolveCard(options), 140);
+        assert.equal(returned, true);
+        assert.equal(refreshed.status, 'found');
+        assert.equal(refreshed.refreshed, true);
+        assert.equal(refreshed.page, 0);
+        assert.equal(refreshed.source.slot, e.pages[0][0]);
+        assert.deepEqual(e.directions, [1, -1]);
+        assert.equal(e.scheduler.timers.size, 0);
+        assert.deepEqual(moves.map(move => move.sharedFastMode), [false, false]);
+        assert.equal(e.carousel.diagnostics().navigation.motionLeases, 0);
+    }
+});
+
+test('preferred-page recovery keeps the 700-ms deadline and cancelled searches stop before another sample', async () => {
+    const e = navigationEnvironment({ count: 1 });
+    const options = { section: e.section, scroller: e.scroller, track: e.track, item: { videoId: '99' },
+        preferredPage: 0, sessionToken: e.scope.token, hoverToken: 1 };
+    const start = e.scheduler.performance.now();
+    const failed = await e.settle(e.carousel.resolveCard({ ...options, mode: 'preferred-refresh' }), 70);
+    assert.equal(failed.reason, 'target-not-mounted');
+    const elapsed = e.scheduler.performance.now() - start;
+    assert.ok(elapsed >= 700 && elapsed < 730, 'the existing single-page recovery deadline is bounded');
+    assert.deepEqual(e.directions, []);
+    let reads = 0;
+    e.pageDom.filledSlots = () => { reads++; return e.pages[0]; };
+    const pending = e.carousel.resolveCard({ ...options, mode: 'search' });
+    await e.scheduler.flush();
+    const before = reads;
+    e.cancelHover();
+    await e.scheduler.advance(10);
+    assert.equal((await pending).reason, 'hover-cancelled');
+    assert.equal(reads, before);
+    assert.equal(e.scheduler.timers.size, 0);
+    assert.equal(e.scheduler.frames.size, 0);
+});
+
+test('native source search preserves ordered radius bounds and returns observations without record writes', async () => {
+    for (const mode of ['logical', 'indicator']) for (const scenario of ['nearby', 'zero-radius', 'full']) {
+        const attempts = [];
+        const e = navigationEnvironment({ mode, count: 5, overrides: { log(name, detail) {
+            if (name === 'hoverSourceSearchPage') attempts.push(detail.page);
+        } } });
+        e.setPage(2); e.carousel.notePage(e.section, 2);
+        const target = scenario === 'nearby' ? '2' : scenario === 'full' ? '1' : '99';
+        const item = Object.freeze({ videoId: target, href: 'https://www.netflix.com/title/' + target, page: 77, ariaLabel: 'Title' });
+        const result = await e.settle(e.carousel.resolveCard({ section: e.section, scroller: e.scroller, track: e.track,
+            mode: 'search', item, preferredPage: 2, maxRadius: scenario === 'nearby' ? 1 : scenario === 'zero-radius' ? 0 : null,
+            repairLogicalMapping: true, columns: 1, hoverToken: 1, sessionToken: e.scope.token }), 600);
+        assert.deepEqual(attempts, scenario === 'nearby' ? [2, 3, 1] : scenario === 'zero-radius' ? [2] : [2, 3, 1, 4, 0]);
+        if (scenario === 'zero-radius') assert.equal(result.reason, 'source-search-exhausted');
+        else {
+            assert.equal(result.status, 'found');
+            assert.equal(result.page, scenario === 'nearby' ? 1 : 0);
+            assert.equal(result.source.isCurrent(), true, 'signature repair finishes before handle publication');
+            assert.equal(result.sources[0].isCurrent(), true);
+            assert.deepEqual(Object.keys(result.visibleCards[0]).sort(), ['href', 'itemIndex', 'videoId']);
+            assert.equal(result.visibleCards[0].videoId, target);
+            assert.equal(Object.isFrozen(result.visibleCards), true);
+        }
+        assert.equal(item.page, 77);
+        assert.equal(e.scheduler.timers.size, 0);
+        assert.equal(e.carousel.diagnostics().navigation.pendingMoves, 0);
+    }
+});
+
+test('queued recovery cannot click after mapping or route replacement', async () => {
+    for (const mode of ['preferred-refresh', 'search']) for (const change of ['mapping', 'route']) {
+        let e;
+        e = navigationEnvironment({ onClick() {} });
+        const first = e.carousel.movePage(e.section, e.scroller, 1, null, e.scope.token);
+        const firstOutcome = first.catch(error => error);
+        await e.scheduler.flush();
+        const pending = e.carousel.resolveCard({ section: e.section, scroller: e.scroller, track: e.track,
+            mode, item: { videoId: '3' }, preferredPage: 2, maxRadius: 0, hoverToken: 1, sessionToken: e.scope.token });
+        const rejected = assert.rejects(pending, { code: change === 'route' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'NATIVE_SOURCE_REPLACED' });
+        await e.scheduler.flush();
+        if (change === 'mapping') e.carousel.anchorAfterDelta(e.section, { pageCount: 3, currentPage: 0, signature: 'new' });
+        else e.scope.begin();
+        e.setPage(1);
+        e.observers.forEach(observer => observer.callback([]));
+        await e.settle(firstOutcome);
+        await e.settle(rejected);
+        assert.deepEqual(e.directions, [1]);
+        assert.equal(e.carousel.diagnostics().navigation.pendingMoves, 0);
+        assert.equal(e.scheduler.timers.size, 0);
+    }
+});
+
+test('source-search diagnostic callbacks cannot admit a replacement source or publish stale handles', async () => {
+    for (const callback of ['page-log', 'found-trace']) {
+        let e;
+        e = navigationEnvironment({ overrides: {
+            log(name) { if (callback === 'page-log' && name === 'hoverSourceSearchPage') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); } },
+            trace(event) { if (callback === 'found-trace') { event(); e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); } }
+        } });
+        const pending = e.carousel.resolveCard({ section: e.section, scroller: e.scroller, track: e.track,
+            mode: 'search', item: { videoId: '1' }, preferredPage: 0, maxRadius: 0, sessionToken: e.scope.token });
+        await assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' });
+        assert.deepEqual(e.directions, []);
+        assert.equal(e.scheduler.timers.size, 0);
+    }
+});
+
+test('search hydration fallback finds a late title but rejects mapping replacement before another scan', async () => {
+    for (const change of ['hydrate', 'remap']) {
+        const e = navigationEnvironment({ count: 1 });
+        let replaced = false, obsoleteReads = 0;
+        e.pageDom.filledSlots = () => { if (replaced) obsoleteReads++; return e.pages[0]; };
+        e.scheduler.setTimeout(() => {
+            if (change === 'hydrate') e.pages[0][0].querySelector('a').href = 'https://www.netflix.com/title/99';
+            else {
+                replaced = true;
+                e.carousel.anchorAfterDelta(e.section, { pageCount: 1, currentPage: 0, signature: 'replacement' });
+            }
+        }, 600);
+        const pending = e.carousel.resolveCard({ section: e.section, scroller: e.scroller, track: e.track,
+            mode: 'search', item: { videoId: '99' }, preferredPage: 0, maxRadius: 0, sessionToken: e.scope.token });
+        if (change === 'hydrate') {
+            const result = await e.settle(pending, 100);
+            assert.equal(result.source.videoId, '99');
+            assert.equal(result.source.isCurrent(), true);
+            assert.ok(e.scheduler.performance.now() >= 600);
+        } else await e.settle(assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' }), 100);
+        assert.equal(obsoleteReads, 0);
+        assert.equal(e.scheduler.timers.size, 0);
+        assert.equal(e.scheduler.frames.size, 0);
+        assert.deepEqual(e.directions, []);
+    }
+});
+
 test('source handles reject native recycling and mapping replacement without invalidating repeated observations', async () => {
     for (const change of ['identity', 'index', 'mapping', 'binding', 'route']) {
         const e = mountedEnvironment();

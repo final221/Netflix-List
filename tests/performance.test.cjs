@@ -2043,6 +2043,53 @@ test('mounted-source bridges borrow real cards and reject replacement parent or 
     assert.equal(e.timers.size, 0);
 });
 
+test('recovery bridges consume native observations and own only transitional list/card hint publication', async () => {
+    const e = nativeReadEnvironment();
+    for (const name of ['hoverPreparationCancelled', 'itemSummary', 'itemKey', 'refreshStaleSourceOnPreferredPage', 'locateActiveSourceItem']) {
+        vm.runInContext(declaration(name), e.c);
+    }
+    e.c.videoIdFromHref = href => href?.split('/').at(-1);
+    const slots = e.mount([6, 7, 8, 9, 10, 11]);
+    const items = slots.map(slot => ({ videoId: String(slot.index), href: '/watch/' + slot.index, page: 77 }));
+    const clones = items.map(() => new Element('clone'));
+    e.c.sourceState.items = items;
+    e.c.sourceState.itemMap = new Map(items.map(item => ['v:' + item.videoId, item]));
+    e.c.findGridClone = item => clones[items.indexOf(item)];
+    let bindings = 0;
+    e.c.ensureLiveNativeBinding = () => bindings++;
+    assert.equal(e.c.nativeCarousel.selectedPage(e.section), 1);
+    const native = await e.c.nativeCarousel.resolveCard({ mode: 'search', section: e.section,
+        scroller: e.c.sourceState.scroller, track: e.c.sourceState.track, item: e.c.itemSummary(items[0]),
+        columns: 6, preferredPage: 1, maxRadius: 0, repairLogicalMapping: true, sessionToken: 1 });
+    assert.equal(native.source.slot, slots[0]);
+    assert.deepEqual(items.map(item => item.page), [77, 77, 77, 77, 77, 77]);
+    assert.ok(clones.every(clone => clone.getAttribute('data-tm-item-page') === null));
+
+    const located = await e.c.locateActiveSourceItem(items[0], 1, 1, 1, true, 0);
+    assert.equal(located.slot, slots[0]);
+    assert.equal(bindings, 1, 'one composition admission for the complete search');
+    assert.deepEqual(items.map(item => item.page), [1, 1, 1, 1, 1, 1]);
+    assert.ok(clones.every(clone => clone.getAttribute('data-tm-item-page') === '1'));
+    for (const item of items) item.page = 77;
+    bindings = 0;
+    const direct = await e.c.refreshStaleSourceOnPreferredPage(items[0], 1, 1, 1);
+    assert.equal(direct.slot, slots[0]);
+    assert.equal(direct.refreshed, false);
+    assert.equal(bindings, 1);
+    const noRepair = await e.c.locateActiveSourceItem(items[0], 1, 1, 1, false, 0);
+    assert.equal(noRepair.slot, slots[0]);
+    assert.deepEqual(items.map(item => item.page), [77, 77, 77, 77, 77, 77]);
+
+    const old = e.c.locateActiveSourceItem(items[0], 1, 1, 1, true, 0);
+    e.c.sourceState = { ...e.c.sourceState };
+    assert.equal(await old, null);
+    assert.deepEqual(items.map(item => item.page), [77, 77, 77, 77, 77, 77]);
+    e.c.log = name => { if (name === 'itemPageMappingCorrected') e.c.sourceState = { ...e.c.sourceState }; };
+    assert.equal(await e.c.locateActiveSourceItem(items[0], 1, 1, 1, true, 0), null);
+    assert.deepEqual(items.map(item => item.page), [1, 77, 77, 77, 77, 77], 'old publication stops after parent replacement');
+    assert.equal(e.timers.size, 0);
+});
+
 test('cancelled expected-page and recovery retries stop before native binding work', async () => {
     const e = environment([
         'hoverPreparationCancelled', 'resolveExpectedPageSourceItem',

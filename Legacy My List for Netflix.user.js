@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.19
+// @version      1.4.20
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -6129,32 +6129,36 @@
       assertSource(source);
       return source;
     }
-    function mountedOperation({
-      section,
-      scroller,
-      track,
-      item,
-      activeOnly = true,
-      hoverToken = null,
-      sessionToken = null
-    }) {
+    function resolutionOperation({ section, scroller, track, item, mode = null, hoverToken = null, sessionToken = null }) {
       assertRouteSession(sessionToken);
       const binding = borrowBinding(section, scroller, track);
       assertBinding(binding);
-      const model = getModel(section), page = selectedPage(section), mappingGeneration = model.mappingGeneration;
+      const model = getModel(section), mappingGeneration = model.mappingGeneration;
       const target = Object.freeze({ href: String(item?.href || ""), videoId: String(item?.videoId || "") });
+      const diagnosticItem = mode === "preferred-refresh" || mode === "search" ? Object.freeze({ ...target, page: item?.page, ariaLabel: String(item?.ariaLabel || "") }) : null;
       const guard = () => {
         assertRouteSession(sessionToken);
         assertBinding(binding);
         if (models.get(section) !== model || model.mappingGeneration !== mappingGeneration) {
-          throw initializationError(
-            "NATIVE_SOURCE_REPLACED",
-            "native-mounted-card",
-            "Native source page or mapping changed during mounted-card resolution"
-          );
+          throw initializationError("NATIVE_SOURCE_REPLACED", "native-resolution", "Native page mapping changed during source resolution");
         }
+      };
+      return { binding, target, diagnosticItem, hoverToken, sessionToken, guard };
+    }
+    function mountedOperation(options, assertOperation = () => {
+    }) {
+      assertOperation();
+      const operation = resolutionOperation(options);
+      const { binding, guard: assertOwner } = operation;
+      const page = selectedPage(binding.section);
+      const guard = () => {
+        assertOperation();
+        assertOwner();
+        const section = binding.section;
         const currentPage = selectedPage(section);
-        if (models.get(section) !== model || model.mappingGeneration !== mappingGeneration || currentPage !== page) {
+        assertOwner();
+        assertOperation();
+        if (currentPage !== page) {
           throw initializationError(
             "NATIVE_SOURCE_REPLACED",
             "native-mounted-card",
@@ -6162,7 +6166,7 @@
           );
         }
       };
-      return { binding, target, activeOnly, hoverToken, sessionToken, page, guard };
+      return { ...operation, activeOnly: options.activeOnly ?? true, page, guard };
     }
     function lookupMountedCard(operation) {
       operation.guard();
@@ -6199,7 +6203,8 @@
     function resetMountedWaits() {
       for (const ticket of mountedWaits) ticket.close();
     }
-    async function resolveMountedCard(options) {
+    async function resolveMountedCard(options, assertOperation = () => {
+    }) {
       assertRouteSession(options.sessionToken);
       if (isHoverCancelled(options.hoverToken ?? null)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
       if (!options.section?.isConnected || !options.scroller?.isConnected || !options.track?.isConnected) {
@@ -6208,7 +6213,7 @@
       const start = performance2.now(), timeout = Number.isFinite(options.timeout) ? Math.max(0, options.timeout) : 500;
       let operation;
       let source = withNativeReadScope(() => {
-        operation = mountedOperation(options);
+        operation = mountedOperation(options, assertOperation);
         return lookupMountedCard(operation);
       });
       while (!source && performance2.now() - start < timeout) {
@@ -6219,13 +6224,156 @@
       }
       return source ? Object.freeze({ status: "found", source, page: source.page }) : Object.freeze({ status: "unknown", reason: "target-not-mounted" });
     }
+    function mountedHints(operation) {
+      const { binding, target, hoverToken, sessionToken } = operation;
+      return {
+        section: binding.section,
+        scroller: binding.scroller,
+        track: binding.track,
+        item: target,
+        activeOnly: true,
+        hoverToken,
+        sessionToken
+      };
+    }
+    async function resolvePreferredCard(options) {
+      const operation = withNativeReadScope(() => resolutionOperation(options));
+      const { binding, guard, hoverToken: token, sessionToken, diagnosticItem } = operation;
+      const { section, scroller, track } = binding;
+      const preferredPage = options.preferredPage ?? options.item?.page ?? 0;
+      const total = pageCount(section);
+      guard();
+      if (total <= 0) return Object.freeze({ status: "unknown", reason: "native-pages-unavailable" });
+      const hints = mountedHints(operation);
+      await navigation.navigate(section, scroller, preferredPage, token, sessionToken, true, guard);
+      guard();
+      if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+      const current = withNativeReadScope(() => lookupMountedCard(mountedOperation(hints, guard)));
+      if (current) return Object.freeze({ status: "found", source: current, page: current.page, refreshed: false });
+      if (total > 1 && selectedPage(section) === preferredPage) {
+        const from = selectedPage(section);
+        const moved = await navigation.move(section, scroller, 1, token, sessionToken, guard);
+        guard();
+        if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+        if (moved !== from) {
+          await navigation.move(section, scroller, -1, token, sessionToken, guard);
+          guard();
+          if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+        }
+      }
+      await navigation.navigate(section, scroller, preferredPage, token, sessionToken, true, guard);
+      guard();
+      if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+      const result = await resolveMountedCard({ ...hints, timeout: 700 }, guard);
+      guard();
+      if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+      if (result.status !== "found") return result;
+      trace(() => ["Hover stale logical page refreshed without full carousel scan", {
+        item: diagnosticItem,
+        preferredPage,
+        selectedPage: result.page,
+        source: slotDescriptor(result.source.slot)
+      }]);
+      guard();
+      assertSource(result.source);
+      return Object.freeze({ ...result, refreshed: true });
+    }
+    async function searchSourceCard(options) {
+      const operation = withNativeReadScope(() => resolutionOperation(options));
+      const { binding, guard, hoverToken: token, sessionToken, diagnosticItem } = operation;
+      const { section, scroller, track } = binding;
+      const preferredPage = options.preferredPage ?? options.item?.page ?? 0;
+      const columns = Math.max(1, options.columns || 1), repair = options.repairLogicalMapping ?? true;
+      const total = pageCount(section), tried = /* @__PURE__ */ new Set(), order = [];
+      guard();
+      const push = (page) => {
+        if (page < 0 || page >= total || tried.has(page)) return;
+        tried.add(page);
+        order.push(page);
+      };
+      push(preferredPage);
+      const radius = Number.isFinite(options.maxRadius) ? Math.min(Math.max(0, Math.floor(options.maxRadius)), Math.max(0, total - 1)) : Math.max(0, total - 1);
+      for (let delta = 1; delta <= radius; delta++) {
+        push(preferredPage + delta);
+        push(preferredPage - delta);
+      }
+      Object.freeze(order);
+      const hints = mountedHints(operation);
+      const cancelled = (reason) => {
+        if (!isHoverCancelled(token)) return null;
+        if (reason) log(tLog("hoverSourceSearchCancelled"), { reason, token, hoverToken: readHoverToken() });
+        guard();
+        return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+      };
+      log(tLog("hoverSourceSearchStarted"), { item: diagnosticItem, preferredPage, selectedPage: selectedPage(section), pages: total, order });
+      guard();
+      for (const page of order) {
+        guard();
+        const beforePage = cancelled();
+        if (beforePage) return beforePage;
+        const beforeSignature = withNativeReadScope(() => visibleSignature(currentPageSlots(scroller, track)));
+        log(tLog("hoverSourceSearchPage"), { item: diagnosticItem, page, selectedBefore: selectedPage(section) });
+        guard();
+        const beforeMove = cancelled();
+        if (beforeMove) return beforeMove;
+        await navigation.navigate(section, scroller, page, token, sessionToken, true, guard);
+        guard();
+        const afterMove = cancelled("token-changed-after-page-move");
+        if (afterMove) return afterMove;
+        let result = await resolveMountedCard({ ...hints, timeout: page === preferredPage ? 500 : 280 }, guard);
+        guard();
+        const afterMount = cancelled("token-changed-after-mount-wait");
+        if (afterMount) return afterMount;
+        if (result.status !== "found") {
+          await navigation.stable(scroller, track, {
+            previousSignature: beforeSignature,
+            minElapsed: 120,
+            timeout: 520,
+            sessionToken,
+            hoverToken: token,
+            assertOperation: guard
+          });
+          guard();
+          const afterHydration = cancelled();
+          if (afterHydration) return afterHydration;
+          const source = withNativeReadScope(() => lookupMountedCard(mountedOperation(hints, guard)));
+          if (source) result = { status: "found", source };
+        }
+        if (result.status !== "found") continue;
+        const found = withNativeReadScope(() => {
+          guard();
+          const slot = result.source.slot, actual = selectedPage(section);
+          const visible = viewportPageSlots(scroller, track, columns), signature = visibleSignature(visible);
+          if (repair && getModel(section).view.profile.pageMode === "logical" && signature) {
+            registerLogicalPageSignature(section, signature, actual);
+          }
+          guard();
+          const sources = Object.freeze(visible.map((node) => sourceHandle(binding, node, actual)));
+          const source = sources.find((handle) => sourceTickets.get(handle).slot === slot) || sourceHandle(binding, slot, actual);
+          const visibleCards = Object.freeze(sources.map((handle) => Object.freeze({
+            href: handle.href,
+            videoId: handle.videoId,
+            itemIndex: handle.itemIndex
+          })));
+          guard();
+          assertSource(source);
+          return Object.freeze({ status: "found", source, sources, visibleCards, page: actual });
+        });
+        trace(() => [tLog("hoverSourceFound"), { item: diagnosticItem, actualPage: found.page, source: slotDescriptor(found.source.slot) }]);
+        guard();
+        assertSource(found.source);
+        return found;
+      }
+      warn(tLog("hoverSourceSearchFailed"), { item: diagnosticItem, preferredPage, selectedPage: selectedPage(section), pages: total });
+      guard();
+      return cancelled() || Object.freeze({ status: "unknown", reason: "source-search-exhausted" });
+    }
     async function resolveCard(options) {
       if (options.mode === "mounted") return resolveMountedCard(options);
       const {
         section,
         scroller,
         track,
-        item,
         expectedPage,
         totalCount,
         columns = 1,
@@ -6238,17 +6386,10 @@
       if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
         return Object.freeze({ status: "unknown", reason: "native-binding-unavailable" });
       }
-      const binding = borrowBinding(section, scroller, track);
-      const model = getModel(section), mappingGeneration = model.mappingGeneration;
-      const guard = () => {
-        assertRouteSession(sessionToken);
-        assertBinding(binding);
-        if (models.get(section) !== model || model.mappingGeneration !== mappingGeneration) {
-          throw initializationError("NATIVE_SOURCE_REPLACED", "native-resolution", "Native page mapping changed during source resolution");
-        }
-      };
+      if (options.mode === "preferred-refresh") return resolvePreferredCard(options);
+      if (options.mode === "search") return searchSourceCard(options);
+      const { binding, guard, target } = resolutionOperation(options);
       guard();
-      const target = Object.freeze({ href: String(item?.href || ""), videoId: String(item?.videoId || "") });
       const key = target.videoId ? "v:" + target.videoId : "h:" + target.href;
       const keyOf = (slot2) => {
         const card = slot2.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
@@ -7583,7 +7724,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.19";
+    const SCRIPT_VERSION = "1.4.20";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -11879,154 +12020,72 @@
     async function refreshStaleSourceOnPreferredPage(item, preferredPage = item.page, token = null, sessionToken = null) {
       assertRouteSession(sessionToken);
       if (hoverPreparationCancelled(token)) return null;
-      const rebound = ensureLiveNativeBinding("hover-stale-refresh-start");
-      let section = rebound?.section || sourceState?.section;
-      let scroller = rebound?.scroller || sourceState?.scroller;
-      let track = rebound?.track || sourceState?.track;
-      if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) return null;
-      const total = pageCount(section);
-      if (total <= 0) return null;
-      await goToPage(section, scroller, preferredPage, token, sessionToken, true);
-      if (token !== null && token !== hoverToken) return null;
-      let slot = findMountedSourceSlot(track, item, true);
-      if (slot) return { slot, page: selectedPage(section), refreshed: false };
-      if (total > 1 && selectedPage(section) === preferredPage) {
-        const from = selectedPage(section);
-        const moved = await moveOnePage(section, scroller, 1, token, sessionToken);
-        if (token !== null && token !== hoverToken) return null;
-        if (moved !== from) {
-          await moveOnePage(section, scroller, -1, token, sessionToken);
-          if (token !== null && token !== hoverToken) return null;
-        }
-      }
-      const live = ensureLiveNativeBinding("hover-stale-refresh-after-pulse");
-      section = live?.section || sourceState?.section;
-      scroller = live?.scroller || sourceState?.scroller;
-      track = live?.track || sourceState?.track;
-      if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) return null;
-      await goToPage(section, scroller, preferredPage, token, sessionToken, true);
-      if (token !== null && token !== hoverToken) return null;
-      slot = await waitForMountedSourceItem(item, 700, true, sessionToken, token);
-      if (token !== null && token !== hoverToken) return null;
-      if (!slot) return null;
-      trace(() => ["Hover stale logical page refreshed without full carousel scan", {
+      ensureLiveNativeBinding("hover-stale-refresh-start");
+      const state = sourceState;
+      const result = await nativeCarousel.resolveCard({
+        mode: "preferred-refresh",
+        section: state?.section,
+        scroller: state?.scroller,
+        track: state?.track,
         item: itemSummary(item),
         preferredPage,
-        selectedPage: selectedPage(section),
-        source: slotDescriptor(slot)
-      }]);
-      return { slot, page: selectedPage(section), refreshed: true };
+        hoverToken: token,
+        sessionToken
+      });
+      assertRouteSession(sessionToken);
+      if (hoverPreparationCancelled(token) || sourceState !== state || result.status !== "found") return null;
+      return { ...result, get slot() {
+        return result.source.slot;
+      } };
     }
     async function locateActiveSourceItem(item, preferredPage = item.page, token = null, sessionToken = null, repairLogicalMapping = true, maxRadius = null) {
       assertRouteSession(sessionToken);
       if (hoverPreparationCancelled(token)) return null;
       ensureLiveNativeBinding("hover-locate-start");
-      let { section, scroller, track } = sourceState || {};
-      if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) return null;
-      const total = pageCount(section);
-      const tried = /* @__PURE__ */ new Set();
-      const order = [];
-      const push = (p) => {
-        if (p < 0 || p >= total || tried.has(p)) return;
-        tried.add(p);
-        order.push(p);
-      };
-      push(preferredPage);
-      const radiusLimit = Number.isFinite(maxRadius) ? Math.min(Math.max(0, Math.floor(maxRadius)), Math.max(0, total - 1)) : Math.max(0, total - 1);
-      for (let delta = 1; delta <= radiusLimit; delta++) {
-        push(preferredPage + delta);
-        push(preferredPage - delta);
-      }
-      log(tLog("hoverSourceSearchStarted"), {
+      const state = sourceState;
+      const result = await nativeCarousel.resolveCard({
+        mode: "search",
+        section: state?.section,
+        scroller: state?.scroller,
+        track: state?.track,
         item: itemSummary(item),
         preferredPage,
-        selectedPage: selectedPage(section),
-        pages: total,
-        order
+        columns: state?.layout?.columns || 1,
+        repairLogicalMapping,
+        maxRadius,
+        hoverToken: token,
+        sessionToken
       });
-      for (const page of order) {
+      assertRouteSession(sessionToken);
+      if (hoverPreparationCancelled(token) || sourceState !== state || result.status !== "found") return null;
+      return nativeCarousel.sample(() => {
+        if (repairLogicalMapping) {
+          for (let index = 0; index < result.visibleCards.length; index++) {
+            assertRouteSession(sessionToken);
+            if (hoverPreparationCancelled(token) || sourceState !== state) return null;
+            nativeCarousel.assertSource(result.source);
+            nativeCarousel.assertSource(result.sources[index]);
+            const visibleItem = state.itemMap?.get(itemKey(result.visibleCards[index]));
+            if (!visibleItem || visibleItem.page === result.page) continue;
+            const oldPage = visibleItem.page;
+            visibleItem.page = result.page;
+            const visibleClone = findGridClone(visibleItem);
+            if (visibleClone) visibleClone.setAttribute("data-tm-item-page", String(result.page));
+            log(tLog("itemPageMappingCorrected"), {
+              item: itemSummary(visibleItem),
+              oldPage,
+              actualPage: result.page,
+              reason: "logical-visible-page-repair"
+            });
+          }
+        }
         assertRouteSession(sessionToken);
-        if (hoverPreparationCancelled(token)) return null;
-        const rebound = ensureLiveNativeBinding("hover-locate-page");
-        if (rebound?.section && rebound?.scroller && rebound?.track) {
-          section = rebound.section;
-          scroller = rebound.scroller;
-          track = rebound.track;
-        }
-        if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) return null;
-        const beforeSig = visibleSignature(currentPageSlots(scroller, track));
-        log(tLog("hoverSourceSearchPage"), {
-          item: itemSummary(item),
-          page,
-          selectedBefore: selectedPage(section)
-        });
-        await goToPage(section, scroller, page, token, sessionToken, true);
-        if (token !== null && token !== hoverToken) {
-          log(tLog("hoverSourceSearchCancelled"), { reason: "token-changed-after-page-move", token, hoverToken });
-          return null;
-        }
-        let slot = await waitForMountedSourceItem(
-          item,
-          page === preferredPage ? HOVER_SOURCE_TIMEOUT_MS : 280,
-          true,
-          sessionToken,
-          token
-        );
-        if (token !== null && token !== hoverToken) {
-          log(tLog("hoverSourceSearchCancelled"), { reason: "token-changed-after-mount-wait", token, hoverToken });
-          return null;
-        }
-        if (!slot) {
-          await waitStableCurrentPage(scroller, track, {
-            previousSignature: beforeSig,
-            minElapsed: 120,
-            timeout: 520,
-            sessionToken,
-            hoverToken: token
-          });
-          if (hoverPreparationCancelled(token)) return null;
-          slot = findMountedSourceSlot(track, item, true);
-        }
-        if (slot) {
-          const actual = selectedPage(section);
-          const runtime = getCarouselDomRuntime(section);
-          const visibleSlots = viewportPageSlots(scroller, track, Math.max(1, sourceState?.layout?.columns || 1));
-          const signature = visibleSignature(visibleSlots);
-          if (repairLogicalMapping && runtime?.profile?.pageMode === "logical" && signature) {
-            registerLogicalPageSignature(section, signature, actual);
-          }
-          if (repairLogicalMapping) {
-            for (const visibleSlot of visibleSlots) {
-              const visibleItem = findItemForSourceSlot(visibleSlot);
-              if (!visibleItem) continue;
-              const oldPage = visibleItem.page;
-              if (oldPage === actual) continue;
-              visibleItem.page = actual;
-              const visibleClone = findGridClone(visibleItem);
-              if (visibleClone) visibleClone.setAttribute("data-tm-item-page", String(actual));
-              log(tLog("itemPageMappingCorrected"), {
-                item: itemSummary(visibleItem),
-                oldPage,
-                actualPage: actual,
-                reason: "logical-visible-page-repair"
-              });
-            }
-          }
-          trace(() => [tLog("hoverSourceFound"), {
-            item: itemSummary(item),
-            actualPage: actual,
-            source: slotDescriptor(slot)
-          }]);
-          return { slot, page: actual };
-        }
-      }
-      warn(tLog("hoverSourceSearchFailed"), {
-        item: itemSummary(item),
-        preferredPage,
-        selectedPage: selectedPage(section),
-        pages: total
+        if (hoverPreparationCancelled(token) || sourceState !== state) return null;
+        nativeCarousel.assertSource(result.source);
+        return { ...result, get slot() {
+          return result.source.slot;
+        } };
       });
-      return null;
     }
     function copyItemAttributes(target, item, index = null) {
       if (index !== null) target.setAttribute("data-tm-item-order", String(index));

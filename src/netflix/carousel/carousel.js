@@ -232,26 +232,38 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         assertSource(source);
         return source;
     }
-    function mountedOperation({ section, scroller, track, item, activeOnly = true,
-        hoverToken = null, sessionToken = null }) {
+    function resolutionOperation({ section, scroller, track, item, mode = null, hoverToken = null, sessionToken = null }) {
         assertRouteSession(sessionToken);
         const binding = borrowBinding(section, scroller, track);
         assertBinding(binding);
-        const model = getModel(section), page = selectedPage(section), mappingGeneration = model.mappingGeneration;
+        const model = getModel(section), mappingGeneration = model.mappingGeneration;
         const target = Object.freeze({ href: String(item?.href || ''), videoId: String(item?.videoId || '') });
+        const diagnosticItem = mode === 'preferred-refresh' || mode === 'search'
+            ? Object.freeze({ ...target, page: item?.page, ariaLabel: String(item?.ariaLabel || '') }) : null;
         const guard = () => {
             assertRouteSession(sessionToken); assertBinding(binding);
             if (models.get(section) !== model || model.mappingGeneration !== mappingGeneration) {
-                throw initializationError('NATIVE_SOURCE_REPLACED', 'native-mounted-card',
-                    'Native source page or mapping changed during mounted-card resolution');
+                throw initializationError('NATIVE_SOURCE_REPLACED', 'native-resolution', 'Native page mapping changed during source resolution');
             }
+        };
+        return { binding, target, diagnosticItem, hoverToken, sessionToken, guard };
+    }
+    function mountedOperation(options, assertOperation = () => {}) {
+        assertOperation();
+        const operation = resolutionOperation(options);
+        const { binding, guard: assertOwner } = operation;
+        const page = selectedPage(binding.section);
+        const guard = () => {
+            assertOperation(); assertOwner();
+            const section = binding.section;
             const currentPage = selectedPage(section);
-            if (models.get(section) !== model || model.mappingGeneration !== mappingGeneration || currentPage !== page) {
+            assertOwner(); assertOperation();
+            if (currentPage !== page) {
                 throw initializationError('NATIVE_SOURCE_REPLACED', 'native-mounted-card',
                     'Native source page or mapping changed during mounted-card resolution');
             }
         };
-        return { binding, target, activeOnly, hoverToken, sessionToken, page, guard };
+        return { ...operation, activeOnly: options.activeOnly ?? true, page, guard };
     }
     function lookupMountedCard(operation) {
         operation.guard();
@@ -288,7 +300,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         });
     }
     function resetMountedWaits() { for (const ticket of mountedWaits) ticket.close(); }
-    async function resolveMountedCard(options) {
+    async function resolveMountedCard(options, assertOperation = () => {}) {
         assertRouteSession(options.sessionToken);
         if (isHoverCancelled(options.hoverToken ?? null)) return Object.freeze({ status: 'unknown', reason: 'hover-cancelled' });
         if (!options.section?.isConnected || !options.scroller?.isConnected || !options.track?.isConnected) {
@@ -297,7 +309,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         const start = performance.now(), timeout = Number.isFinite(options.timeout) ? Math.max(0, options.timeout) : 500;
         let operation;
         let source = withNativeReadScope(() => {
-            operation = mountedOperation(options);
+            operation = mountedOperation(options, assertOperation);
             return lookupMountedCard(operation);
         });
         while (!source && performance.now() - start < timeout) {
@@ -309,25 +321,136 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         return source ? Object.freeze({ status: 'found', source, page: source.page }) :
             Object.freeze({ status: 'unknown', reason: 'target-not-mounted' });
     }
+    function mountedHints(operation) {
+        const { binding, target, hoverToken, sessionToken } = operation;
+        return { section: binding.section, scroller: binding.scroller, track: binding.track,
+            item: target, activeOnly: true, hoverToken, sessionToken };
+    }
+    async function resolvePreferredCard(options) {
+        const operation = withNativeReadScope(() => resolutionOperation(options));
+        const { binding, guard, hoverToken: token, sessionToken, diagnosticItem } = operation;
+        const { section, scroller, track } = binding;
+        const preferredPage = options.preferredPage ?? options.item?.page ?? 0;
+        const total = pageCount(section);
+        guard();
+        if (total <= 0) return Object.freeze({ status: 'unknown', reason: 'native-pages-unavailable' });
+        const hints = mountedHints(operation);
+        await navigation.navigate(section, scroller, preferredPage, token, sessionToken, true, guard);
+        guard();
+        if (isHoverCancelled(token)) return Object.freeze({ status: 'unknown', reason: 'hover-cancelled' });
+        const current = withNativeReadScope(() => lookupMountedCard(mountedOperation(hints, guard)));
+        if (current) return Object.freeze({ status: 'found', source: current, page: current.page, refreshed: false });
+
+        // Preserve the normal adjacent-page pulse before trying the bounded wait.
+        if (total > 1 && selectedPage(section) === preferredPage) {
+            const from = selectedPage(section);
+            const moved = await navigation.move(section, scroller, 1, token, sessionToken, guard);
+            guard();
+            if (isHoverCancelled(token)) return Object.freeze({ status: 'unknown', reason: 'hover-cancelled' });
+            if (moved !== from) {
+                await navigation.move(section, scroller, -1, token, sessionToken, guard);
+                guard();
+                if (isHoverCancelled(token)) return Object.freeze({ status: 'unknown', reason: 'hover-cancelled' });
+            }
+        }
+        await navigation.navigate(section, scroller, preferredPage, token, sessionToken, true, guard);
+        guard();
+        if (isHoverCancelled(token)) return Object.freeze({ status: 'unknown', reason: 'hover-cancelled' });
+        const result = await resolveMountedCard({ ...hints, timeout: 700 }, guard);
+        guard();
+        if (isHoverCancelled(token)) return Object.freeze({ status: 'unknown', reason: 'hover-cancelled' });
+        if (result.status !== 'found') return result;
+        trace(() => ['Hover stale logical page refreshed without full carousel scan', {
+            item: diagnosticItem, preferredPage, selectedPage: result.page, source: slotDescriptor(result.source.slot)
+        }]);
+        guard(); assertSource(result.source);
+        return Object.freeze({ ...result, refreshed: true });
+    }
+    async function searchSourceCard(options) {
+        const operation = withNativeReadScope(() => resolutionOperation(options));
+        const { binding, guard, hoverToken: token, sessionToken, diagnosticItem } = operation;
+        const { section, scroller, track } = binding;
+        const preferredPage = options.preferredPage ?? options.item?.page ?? 0;
+        const columns = Math.max(1, options.columns || 1), repair = options.repairLogicalMapping ?? true;
+        const total = pageCount(section), tried = new Set(), order = [];
+        guard();
+        const push = page => {
+            if (page < 0 || page >= total || tried.has(page)) return;
+            tried.add(page); order.push(page);
+        };
+        push(preferredPage);
+        const radius = Number.isFinite(options.maxRadius)
+            ? Math.min(Math.max(0, Math.floor(options.maxRadius)), Math.max(0, total - 1)) : Math.max(0, total - 1);
+        for (let delta = 1; delta <= radius; delta++) { push(preferredPage + delta); push(preferredPage - delta); }
+        Object.freeze(order);
+        const hints = mountedHints(operation);
+        const cancelled = reason => {
+            if (!isHoverCancelled(token)) return null;
+            if (reason) log(tLog('hoverSourceSearchCancelled'), { reason, token, hoverToken: readHoverToken() });
+            guard();
+            return Object.freeze({ status: 'unknown', reason: 'hover-cancelled' });
+        };
+        log(tLog('hoverSourceSearchStarted'), { item: diagnosticItem, preferredPage, selectedPage: selectedPage(section), pages: total, order });
+        guard();
+        for (const page of order) {
+            guard();
+            const beforePage = cancelled(); if (beforePage) return beforePage;
+            const beforeSignature = withNativeReadScope(() => visibleSignature(currentPageSlots(scroller, track)));
+            log(tLog('hoverSourceSearchPage'), { item: diagnosticItem, page, selectedBefore: selectedPage(section) });
+            guard();
+            const beforeMove = cancelled(); if (beforeMove) return beforeMove;
+            await navigation.navigate(section, scroller, page, token, sessionToken, true, guard);
+            guard();
+            const afterMove = cancelled('token-changed-after-page-move'); if (afterMove) return afterMove;
+            let result = await resolveMountedCard({ ...hints, timeout: page === preferredPage ? 500 : 280 }, guard);
+            guard();
+            const afterMount = cancelled('token-changed-after-mount-wait'); if (afterMount) return afterMount;
+            if (result.status !== 'found') {
+                await navigation.stable(scroller, track, { previousSignature: beforeSignature, minElapsed: 120,
+                    timeout: 520, sessionToken, hoverToken: token, assertOperation: guard });
+                guard();
+                const afterHydration = cancelled(); if (afterHydration) return afterHydration;
+                const source = withNativeReadScope(() => lookupMountedCard(mountedOperation(hints, guard)));
+                if (source) result = { status: 'found', source };
+            }
+            if (result.status !== 'found') continue;
+            const found = withNativeReadScope(() => {
+                guard();
+                const slot = result.source.slot, actual = selectedPage(section);
+                const visible = viewportPageSlots(scroller, track, columns), signature = visibleSignature(visible);
+                if (repair && getModel(section).view.profile.pageMode === 'logical' && signature) {
+                    registerLogicalPageSignature(section, signature, actual);
+                }
+                guard();
+                const sources = Object.freeze(visible.map(node => sourceHandle(binding, node, actual)));
+                const source = sources.find(handle => sourceTickets.get(handle).slot === slot) || sourceHandle(binding, slot, actual);
+                const visibleCards = Object.freeze(sources.map(handle => Object.freeze({
+                    href: handle.href, videoId: handle.videoId, itemIndex: handle.itemIndex
+                })));
+                guard(); assertSource(source);
+                return Object.freeze({ status: 'found', source, sources, visibleCards, page: actual });
+            });
+            trace(() => [tLog('hoverSourceFound'), { item: diagnosticItem, actualPage: found.page, source: slotDescriptor(found.source.slot) }]);
+            guard(); assertSource(found.source);
+            return found;
+        }
+        warn(tLog('hoverSourceSearchFailed'), { item: diagnosticItem, preferredPage, selectedPage: selectedPage(section), pages: total });
+        guard();
+        return cancelled() || Object.freeze({ status: 'unknown', reason: 'source-search-exhausted' });
+    }
     async function resolveCard(options) {
         if (options.mode === 'mounted') return resolveMountedCard(options);
-        const { section, scroller, track, item, expectedPage, totalCount, columns = 1,
+        const { section, scroller, track, expectedPage, totalCount, columns = 1,
             pageItemCount = 1, hoverToken = null, sessionToken = null } = options;
         assertRouteSession(sessionToken);
         if (isHoverCancelled(hoverToken)) return Object.freeze({ status: 'unknown', reason: 'hover-cancelled' });
         if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
             return Object.freeze({ status: 'unknown', reason: 'native-binding-unavailable' });
         }
-        const binding = borrowBinding(section, scroller, track);
-        const model = getModel(section), mappingGeneration = model.mappingGeneration;
-        const guard = () => {
-            assertRouteSession(sessionToken); assertBinding(binding);
-            if (models.get(section) !== model || model.mappingGeneration !== mappingGeneration) {
-                throw initializationError('NATIVE_SOURCE_REPLACED', 'native-resolution', 'Native page mapping changed during source resolution');
-            }
-        };
+        if (options.mode === 'preferred-refresh') return resolvePreferredCard(options);
+        if (options.mode === 'search') return searchSourceCard(options);
+        const { binding, guard, target } = resolutionOperation(options);
         guard();
-        const target = Object.freeze({ href: String(item?.href || ''), videoId: String(item?.videoId || '') });
         const key = target.videoId ? 'v:' + target.videoId : 'h:' + target.href;
         const keyOf = slot => {
             const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
