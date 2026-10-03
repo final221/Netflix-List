@@ -846,7 +846,7 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | P07 | Viewing data adapter | Complete — 1.4.11; 3c6b48a; Windows/Linux CI verified |
 | P08 | Session scopes and native binding/page model | Complete — scope 1.4.12 / 848b95f; native transfer 1.4.13 / b2b64c3; Windows/Linux CI verified |
 | P09 | Navigation queue and restoration | Complete — 1.4.15; b18ec49; Windows/Linux CI verified |
-| P10 | Native collection and carousel facade | In progress — expected-card resolution/handles 1.4.18 passes local gate, hosted CI pending; mounted polling/search/recovery and remapping remain |
+| P10 | Native collection and carousel facade | In progress — expected-card resolution/handles 1.4.18 / 22cf06e verified on Windows/Linux; mounted polling/search/recovery and remapping remain |
 | P11 | Frame/card registry and resources | Planned — authorized goal |
 | P12 | Groups, filters and controls | Planned — authorized goal |
 | P13 | Membership/order and collection strategy | Planned — authorized goal |
@@ -1183,3 +1183,5 @@ Five composed carousel scenarios exercise actual controls, DOM/React metadata, m
 Local gate: **420 tests pass**, zero failures/cancellations/skips; reproducible build, read-only dependency/output check, userscript syntax and whitespace pass. Package/lock/metadata/internal version agree on **1.4.18**, above the verified published **1.4.17**. Authored and generated changes are reviewed together. Commit/push and exact-revision Windows/Linux CI remain this checkpoint's final gate. Offline evidence does not establish live Netflix DOM/React compatibility.
 
 **P10 remains in progress.** After the checkpoint's CI passes, transfer mounted polling and preferred-page/search recovery through the same validated-handle boundary, then complete refreshMapping and retire the remaining technical native bridges before P11. The full migration goal remains active with P10's remainder and P11–P21 still required.
+
+Checkpoint **22cf06e** (`22cf06eb86a9295af4f60b09e88d27392f4cd862`) is committed and pushed. [Hosted run 37146943838](https://github.com/final221/Netflix-List/actions/runs/37146943838) succeeds on **windows-latest** and **ubuntu-latest**, with every job step successful: locked installation, committed-output verification, all regression/bundle cases, reproducible generation, dependency/output checks, syntax, commit whitespace and unchanged tracked output. Expected-page resolution and source-handle ownership are a verified working release inside P10. Next transfer mounted-card lookup/polling, preferred-page pulse and bounded search behind the same facade; preserve cancellation/read bounds and keep membership page-hint publication outside native integration. Then finish logical remapping and the remaining technical observation/command retirement before P11. P10 and the full migration goal remain active/incomplete.
