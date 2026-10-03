@@ -846,7 +846,7 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | P07 | Viewing data adapter | Complete — 1.4.11; 3c6b48a; Windows/Linux CI verified |
 | P08 | Session scopes and native binding/page model | Complete — scope 1.4.12 / 848b95f; native transfer 1.4.13 / b2b64c3; Windows/Linux CI verified |
 | P09 | Navigation queue and restoration | Complete — 1.4.15; b18ec49; Windows/Linux CI verified |
-| P10 | Native collection and carousel facade | In progress — traversal/diagnostics transferred locally; bootstrap proof, source resolution and remapping remain |
+| P10 | Native collection and carousel facade | In progress — traversal/diagnostics checkpoint 1.4.16 / a9c5faa verified on Windows/Linux; bootstrap proof, source resolution and remapping remain |
 | P11 | Frame/card registry and resources | Planned — authorized goal |
 | P12 | Groups, filters and controls | Planned — authorized goal |
 | P13 | Membership/order and collection strategy | Planned — authorized goal |
@@ -1123,3 +1123,5 @@ The initial composed carousel scenarios fail at the missing public collect comma
 Local gate passes **406 tests**, with zero failures/cancellations/skips; reproducible build, read-only output/dependency check, userscript syntax and whitespace verification pass. Package/lock/metadata/internal version agree on patch **1.4.16**, above the verified published **1.4.15**. Authored/generated diffs and live caller/state ownership are reviewed together. README/implemented architecture describe this actual partial transfer; Migration.md/MigrationPlan.md need no target change and context.md has no durable change. Commit/push and hosted Windows/Linux CI remain this checkpoint's final gate.
 
 **P10 remains in progress.** After this checkpoint's CI succeeds, resume mounted bootstrap proof, page-zero anchoring/source-card resolution/recovery and logical remapping; finish the collect/resolveCard/refreshMapping facade and remove their P08/P09 technical bridges before P11. The full migration goal remains active with the rest of P10 and P11–P21 required. Offline evidence does not establish live Netflix private DOM/React compatibility.
+
+Checkpoint **a9c5faa** (`a9c5faaa831f81919062ec113e24cc666dc2e8b2`) is committed and pushed. [Hosted run 37129781136](https://github.com/final221/Netflix-List/actions/runs/37129781136) succeeds on **windows-latest** and **ubuntu-latest**, with every job step successful: locked dependency installation, committed-output verification, all regression/bundle cases, reproducible generation, dependency/output checks, syntax, commit whitespace and unchanged tracked output. Traversal/material/collection-counter ownership is a verified working release inside P10. Next resume its mounted bootstrap proof and source-resolution/remapping transfers; this checkpoint does not complete P10 or permit P11 to skip its remaining acceptance conditions.
