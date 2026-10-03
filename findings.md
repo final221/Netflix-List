@@ -848,7 +848,7 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | P07 | Viewing data adapter | Complete — 1.4.11; 3c6b48a; Windows/Linux CI verified |
 | P08 | Session scopes and native binding/page model | Complete — scope 1.4.12 / 848b95f; native transfer 1.4.13 / b2b64c3; Windows/Linux CI verified |
 | P09 | Navigation queue and restoration | Complete — 1.4.15; b18ec49; Windows/Linux CI verified |
-| P10 | Native collection and carousel facade | In progress — P10.6 1.4.21 / e11be88 verified; P10.7 initialization admission/acceptance 1.4.22 passes locally, hosted Windows evidence pending; remaining facade/caller audit required |
+| P10 | Native collection and carousel facade | In progress — P10.7 initialization admission/acceptance 1.4.22 / 2bc86a0 verified on Windows; remaining facade/caller/write audit required before P11 |
 | P11 | Frame/card registry and resources | Planned — authorized goal |
 | P12 | Groups, filters and controls | Planned — authorized goal |
 | P13 | Membership/order and collection strategy | Planned — authorized goal |
@@ -1307,3 +1307,8 @@ Seven new carousel scenarios cover both modes, reset/readiness ownership, immuta
 The full local gate passes **452 tests**, with no failures, cancellations or skips. Read-only output/dependency verification, generated syntax and whitespace checks pass. Package/lock/metadata/internal versions agree on **1.4.22**, above published **1.4.21**. Authored/generated diffs and actual caller/state/resource ownership are reviewed together. README and docs/architecture.md describe the actual transfer and remaining facade audit. Commit/push and exact-revision Windows CI are the final release gate. Live Netflix private DOM/React compatibility remains user-owned.
 
 Resume the remaining P10.7 facade/caller/write audit after this release is verified. P10.7, P10 and the full migration remain in progress; P11–P21 are still required. The two optional CI cost suggestions from the Windows tooling discussion are unselected and unchanged.
+
+
+Checkpoint **2bc86a0** (`2bc86a042ba8ec5d0e063103345dd8c202072f10`) is committed and pushed. [Hosted run 37155238047](https://github.com/final221/Netflix-List/actions/runs/37155238047) completes successfully for that exact revision, with one job labelled **windows-latest** and every setup/verification/cleanup step successful. Native initialization admission/acceptance is a verified release checkpoint within **unfinished P10.7**.
+
+The next actual caller transfer is prepareMountedPage's logicalSlotPositions/wrappedTailLogicalPageInfo/viewportPageSlots interpretation and the model observations consumed by reindexLegacyItemsAfterDelta, remapItemsByOrder, refreshResponsiveLayout and scheduleResponsiveRefresh. slotDescriptor and nativePositionDeviation still consume technical native index facts, and orderMismatchPromptSuppressionState reads native count facts. A current declaration/caller audit also identifies unused native forwarding functions; retire them with equivalent fixture/policy coverage rather than treating unused-helper deletion as the remaining ownership transfer. Audit native marker/restoration writes, then prove the full P10 parent evidence and P10-to-P11 handoff. **P10.7, P10 and the full migration remain in progress; P11–P21 remain required.**
