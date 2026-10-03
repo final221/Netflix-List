@@ -4,6 +4,8 @@
 
 This document defines the proposed destination for an incremental migration from the single Netflix My List userscript to modular JavaScript source and a reproducible build. It is a design proposal for review, not a description of an already implemented structure or authorization to implement every increment.
 
+The migration targets the user's personal Windows environment. Implementation, tooling and verification are scoped to Windows; Linux compatibility work and Linux CI are outside this destination. Expanding platform support requires a new user request.
+
 The baseline is `Legacy My List for Netflix.user.js` version **1.4.5**, revision `76b7d11`. The source has 13,328 lines and 377 top-level function declarations. The existing regression suite is `tests/performance.test.cjs`. Later source changes require revisiting the relevant mappings and contracts below.
 
 The architectural goal is to make a behavior understandable and changeable through its owning capability, with explicit dependencies and lifetimes. File length alone does not establish a boundary. The number of past discussions, reported issues, or entries in `context.md` and `findings.md` does not give a feature architectural priority. Existing preferences and findings constrain behavior that the migration must preserve; boundaries are justified by current responsibilities, shared state, resource lifetimes, and call paths.

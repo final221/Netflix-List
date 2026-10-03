@@ -8,9 +8,9 @@ Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released u
 
 ## Development
 
-Use Node **24.13.0** and npm **11.6.2**, as declared in package.json. Install the locked build dependency with `npm ci`.
+Development and verification target Windows. Use Node **24.13.0** and npm **11.6.2**, as declared in package.json. Install the locked build dependency with `npm ci`.
 
-```sh
+```powershell
 npm run check
 npm test
 npm run build
@@ -21,7 +21,7 @@ git diff --check
 
 Check verifies the current committed artifact without writing it. Run it before rebuilding when verifying a checkout; otherwise rebuilding could hide stale output. After editing authored source or release metadata, build creates the reviewed release artifact and check verifies it.
 
-The same command order runs in GitHub Actions on Windows and Linux. CI takes its exact Node version from package.json, installs locked dependencies, checks committed output before testing/building, then checks syntax, commit whitespace and absence of tracked build changes. Check also verifies reachable production modules, the declared public import boundaries and absence of cycles. Temporary legacy import exceptions are exact edges with removal steps recorded in findings.md.
+The same command order runs in one GitHub Actions job on Windows. CI takes its exact Node version from package.json, installs locked dependencies, checks committed output before testing/building, then checks syntax, commit whitespace and absence of tracked build changes. Check also verifies reachable production modules, the declared public import boundaries and absence of cycles. Temporary legacy import exceptions are exact edges with removal steps recorded in findings.md.
 
 Edit `src/` rather than the generated root userscript. `package.json` is the single release-version source; `userscript.meta.json` supplies the other metadata. Build generates a readable, self-contained userscript at the original filename. No runtime npm installation or external module fetch is needed in Tampermonkey.
 

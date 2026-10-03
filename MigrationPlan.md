@@ -10,6 +10,7 @@ The final architecture has explicit owners for native source state, membership/o
 
 ## Boundaries
 
+- Target Windows only for implementation, tooling and verification, as defined in Migration.md. Linux compatibility work and Linux CI runs are outside this plan.
 - Implement only the step selected by the user's prompt, after its dependencies are complete. Saving this plan does not select P01 or authorize executing all steps in one run.
 - Preserve the target paths and ownership contracts in Migration.md. Explain evidence-based deviations and update the affected documents before applying them. A change to the target responsibility/layout must be explicit rather than hidden in an implementation detail.
 - Each extraction switches the running userscript's callers to the new owner in the same step. Do not declare completion for an unused module, copied implementation, second mutable state owner, or public export of every helper.
@@ -72,7 +73,7 @@ Every implementation step must:
 3. After P01, once runtime edits and any required version update are ready, run `npm run build`, `npm run check`, `npm test`, `node --check "Legacy My List for Netflix.user.js"`, and `git diff --check`. Build before the full regression run because bundle scenarios execute the generated userscript. This local sequence follows the read-only starting-checkout check above; hosted CI still checks the committed artifact before rebuilding. For documentation-only checkpoints, review document consistency and whitespace without rebuilding unchanged runtime output. Repeated broad runs need a new change/failure to justify them.
 4. Review the authored-source and generated-output diffs together. Check metadata/internal/package version agreement and verify the release version exceeds the newest published version if output changed.
 5. Update docs/architecture.md to describe the architecture actually present. Update findings.md with outcome, evidence, remaining bridges, retained/moved baseline scenarios and any needed user-owned live check. Do not describe later steps as implemented.
-6. Commit and push according to the standing repository workflow. For runtime/build changes, confirm that the pushed revision passes the Windows and Linux CI jobs before starting a dependent step; record the revision and run link in findings.md. A pending or failed run does not satisfy this gate. Report the step ID, resulting behavior/ownership, version/commit, verification and any real limitation. Then stop at the checkpoint.
+6. Commit and push according to the standing repository workflow. For runtime/build changes, confirm that the pushed revision passes the Windows CI job before starting a dependent step; record the revision and run link in findings.md. A pending or failed run does not satisfy this gate. Report the step ID, resulting behavior/ownership, version/commit, verification and any real limitation. Then stop at the checkpoint.
 
 P01 establishes these commands. Until they exist, use the current `node --check` and `node --test tests/performance.test.cjs` checks alongside the new build verification.
 
@@ -161,9 +162,9 @@ If a handoff fails, keep the affected step incomplete and resolve the boundary i
 
 ### P02 — Establish CI and boundary verification
 
-- **Outcome:** A clean checkout can verify the committed release and migrated dependencies automatically, and cannot pass by rebuilding over stale output.
+- **Outcome:** A clean Windows checkout can verify the committed release and migrated dependencies automatically, and cannot pass by rebuilding over stale output.
 - **Test First:** Exercise check.mjs with stale source/output, mismatched version/grants, a forbidden production import and a cyclic feature dependency. Reuse P01 generation tests; avoid duplicating its implementation.
-- **Implementation:** Deepen scripts/check.mjs using the build's dependency metadata, create .github/workflows/check.yml, extend .gitignore for any temporary tooling output, and document npm commands. CI uses the declared Node runtime and npm ci, checks committed output before write-producing builds, runs tests/syntax/whitespace checks, and verifies no tracked generated change is left behind. Start a narrowly scoped legacy-exception ledger in findings.md.
+- **Implementation:** Deepen scripts/check.mjs using the build's dependency metadata, create .github/workflows/check.yml, extend .gitignore for any temporary tooling output, and document npm commands. CI runs one windows-latest job with the declared Node runtime and npm ci, checks committed output before write-producing builds, runs tests/syntax/whitespace checks, and verifies no tracked generated change is left behind. Start a narrowly scoped legacy-exception ledger in findings.md.
 - **Evidence:** The normal clean-checkout command sequence passes; the negative verification scenarios fail for the stated reasons; only explicitly scoped legacy edges are exempt. CI configuration matches the locally verified commands. Complete the common gate; change version only if the output actually changes.
 - **Dependencies:** P01's generation, commands and bundle suite.
 - **Depth:** Deepen the existing check boundary; CI orchestrates that boundary rather than reimplementing it.

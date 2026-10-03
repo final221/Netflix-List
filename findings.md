@@ -835,6 +835,8 @@ Plan/document consistency and whitespace checks pass: all 21 steps have the requ
 
 The subsequent persistent user goal, **Do the migration**, authorizes the full saved migration in dependency order. This supersedes the need to select each step again; retain the individual verification/release checkpoints and bounded scope. Current execution status is recorded below.
 
+**Platform scope, revised 2026-10-03:** the user limits this personal-script migration to Windows. Future implementation, compatibility work and required hosted verification target Windows only. Historical Windows/Linux CI records below describe completed past runs; Linux success is no longer an acceptance condition for any remaining step. P10.7 remains the next migration checkpoint.
+
 | Step | Outcome | Status |
 | --- | --- | --- |
 | P01 | Reproducible build and transitional test entry | Complete — 1.4.6; commit ffb31df |
@@ -1270,3 +1272,11 @@ Eight composed carousel scenarios cover synchronous delta fallback, unchanged/ch
 Local gate passes **443 tests**, with zero failures, cancellations or skips. Reproducible generation, read-only output/dependency verification, userscript syntax and whitespace checks pass. Package/lock/metadata/internal versions agree on **1.4.21**, above the verified published **1.4.20**. Authored/generated diffs, live caller cutover and state/resource ownership are reviewed together. README and docs/architecture.md describe the actual transfer and distinguish the remaining facade audit. Commit/push and exact-revision Windows/Linux CI are the final P10.6 gate; P10.7 waits for that evidence. Live Netflix private DOM/React compatibility remains user-owned. P10 and the full migration remain in progress; P10.7 and P11–P21 are still required.
 
 Checkpoint **e11be88** (`e11be88b9c312ba735e69cfa27041a0b81096205`) is committed and pushed. [Hosted run 37152595612](https://github.com/final221/Netflix-List/actions/runs/37152595612) succeeds on **windows-latest** and **ubuntu-latest**, with every job step successful: locked installation, committed-output verification, all regression/bundle cases, reproducible build, dependency/output checks, syntax, commit whitespace and unchanged tracked output. **P10.6 is complete.** Next resume P10.7, auditing the actual collection/preparation/remapping callers and retiring obsolete technical reads/model commands and source exceptions in favor of semantic operations or validated observations. P10's parent evidence and P10-to-P11 handoff must pass before P11. P10 and the full migration goal remain active/incomplete.
+
+### Windows-only migration scope — 2026-10-03
+
+The user limits this personal-script migration to Windows and stops pursuing Linux support. Migration.md now defines that target scope; MigrationPlan.md applies it to implementation/tooling, P02 and every future release gate. context.md records the lasting user preference while preserving its protected instructions. README and docs/architecture.md describe the actual Windows verification environment. Historical Linux CI results remain records of completed runs, not requirements for remaining work.
+
+The workflow now has one windows-latest job instead of a Windows/Linux matrix. Its installation, committed-output check, regression/bundle tests, reproducibility build, dependency/output check, syntax, whitespace and tracked-output checks are identical. Inspection finds no Linux-specific implementation branch in authored runtime, tooling or tests. This scope change adds no runtime transfer; P10.7 remains next.
+
+Local read-only output/dependency verification and userscript syntax pass. Workflow/document review confirms the single Windows runner, preserved verification steps, unchanged 21-step sequence and protected context; whitespace checks pass. Runtime source, generated userscript, dependencies, tests and version remain unchanged at **1.4.21**. Commit/push and hosted Windows CI will verify the revised workflow; the full migration remains in progress.

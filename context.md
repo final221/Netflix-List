@@ -30,6 +30,7 @@ what it should not contain
 
 ## User working preferences
 
+- The user uses this personal script on Windows and wants work limited to Windows. Linux and other operating-system support are out of scope unless explicitly requested.
 - For this repository, the user authorizes commits and pushes of changes to `origin` without per-commit confirmation. Use the configured GitHub SSH remote, which is authenticated without requiring the user to supply credentials. This is user authorization; it does not bypass the app's sandbox or automated-review gates. Follow those system gates without asking the user to repeat the standing authorization.
 - A request to discuss, assess, or suggest optional work is not approval to implement it. Explain tradeoffs and work only on the selected step; do not add speculative changes just to finish a plan.
 - For multi-step code reviews, the user prefers a clear ordered plan with progress reported as each step is completed.
