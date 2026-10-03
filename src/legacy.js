@@ -217,8 +217,6 @@ export function startLegacy() {
     let pendingGridHoverClone = null;
     let pendingGridHoverDiagnostic = null;
     let activeHoverPreparationDiagnostic = null;
-    let pageMoveSequence = 0;
-    let carouselMoveQueue = Promise.resolve();
     const graftedGridClones = new Set();
     let hoverSequence = 0;
     let responsiveSequence = 0;
@@ -229,7 +227,6 @@ export function startLegacy() {
     let targetSessionEntryKind = 'initial';
     let targetSessionReason = 'route:initial';
     let targetListenersActive = false;
-    let activeCarouselStyleCleanup = null;
     let viewOriginalMyList = true;
     let viewOriginalMenuId = null;
     let logFeedbackTimer = null;
@@ -673,18 +670,8 @@ export function startLegacy() {
         if (retryMutations) retryPendingMyListMutations('after-initialization');
     }
 
-    function registerActiveCarouselStyleCleanup(cleanup) {
-        activeCarouselStyleCleanup = cleanup;
-    }
-
-    function unregisterActiveCarouselStyleCleanup(cleanup) {
-        if (activeCarouselStyleCleanup === cleanup) activeCarouselStyleCleanup = null;
-    }
-
     function restoreActiveCarouselStyles() {
-        const cleanup = activeCarouselStyleCleanup;
-        activeCarouselStyleCleanup = null;
-        try { cleanup?.(); } catch (_) {}
+        nativeCarousel.restoreMotion();
     }
 
     function resetDetachedTargetState() {
@@ -782,7 +769,6 @@ export function startLegacy() {
         responsiveRefreshing = false;
         activeResponsiveReason = '';
         myListCountConvergencePending = false;
-        carouselMoveQueue = Promise.resolve();
         nativeCarousel.resetSource();
         clearPendingMyListMutations();
         clearUndoEntries();
@@ -3749,7 +3735,7 @@ export function startLegacy() {
 
         try {
             try { await Promise.resolve(responsiveRefreshPromise); } catch (_) {}
-            try { await carouselMoveQueue; } catch (_) {}
+            await nativeCarousel.whenNavigationIdle();
             if (!isRouteSessionActive(sessionToken)) return;
 
             // Reinitialization must begin from Netflix's first native My List page.
@@ -4120,21 +4106,6 @@ export function startLegacy() {
         return waitPageByPolling(section, before, remaining, sessionToken, token);
     }
 
-    function captureInlineStyleProperty(element, property) {
-        return {
-            value: element.style.getPropertyValue(property),
-            priority: element.style.getPropertyPriority(property)
-        };
-    }
-
-    function restoreInlineStyleProperty(element, property, saved) {
-        if (!saved.value) {
-            element.style.removeProperty(property);
-            return;
-        }
-        element.style.setProperty(property, saved.value, saved.priority || '');
-    }
-
     async function waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, timeout = SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken = null) {
         assertRouteSession(sessionToken);
         const started = performance.now();
@@ -4180,12 +4151,10 @@ export function startLegacy() {
         const hoverTiming = token === null ? null : performanceDiagnostics.hoverTiming;
         const queueStarted = hoverTiming ? performance.now() : 0;
         let moveStarted = null;
-        const previousMove = carouselMoveQueue;
-        let releaseMove;
-        carouselMoveQueue = new Promise(resolve => { releaseMove = resolve; });
+        const moveOwner = nativeCarousel.beginNavigation(section, scroller);
 
         try {
-            await previousMove.catch(() => {});
+            await moveOwner.ready;
             if (hoverTiming) recordHoverTiming(hoverTiming, 'queue', queueStarted);
             assertRouteSession(sessionToken);
 
@@ -4199,7 +4168,7 @@ export function startLegacy() {
                 return selectedPage(section);
             }
 
-            const seq = ++pageMoveSequence;
+            const seq = moveOwner.start();
             const before = selectedPage(section);
             const runtime = getCarouselDomRuntime(section);
             const profile = runtime?.profile || detectCarouselDomProfile(section);
@@ -4226,8 +4195,8 @@ export function startLegacy() {
             const beforeTransform = track.style.getPropertyValue('transform') || getComputedStyle(track).transform;
             const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
             const sharedFastMode = section.classList.contains(FAST_MOVE_CLASS);
-            const savedTransition = sharedFastMode ? null : captureInlineStyleProperty(track, 'transition');
-            const savedAnimation = sharedFastMode ? null : captureInlineStyleProperty(track, 'animation');
+            const nativeTransition = sharedFastMode ? 'suppressed-by-scan' : track.style.getPropertyValue('transition');
+            let motionLease = null;
             let after = before;
             let afterTransform = beforeTransform;
             let afterSignature = beforeSignature;
@@ -4243,30 +4212,15 @@ export function startLegacy() {
                 animationDisabled: true,
                 sharedFastMode,
                 beforeTransform,
-                nativeTransition: sharedFastMode ? 'suppressed-by-scan' : savedTransition.value,
+                nativeTransition,
                 token
             });
 
-            const restoreMoveStyles = () => {
-                if (sharedFastMode) return;
-                section.classList.remove(FAST_MOVE_CLASS);
-                restoreInlineStyleProperty(track, 'transition', savedTransition);
-                restoreInlineStyleProperty(track, 'animation', savedAnimation);
-                void track.offsetWidth;
-            };
-
             try {
-                if (!sharedFastMode) {
-                    // Use both a temporary CSS override and inline suppression. The CSS class
-                    // remains effective even if Netflix rewrites the track style during React updates.
-                    section.classList.add(FAST_MOVE_CLASS);
-                    track.style.setProperty('transition', 'none', 'important');
-                    track.style.setProperty('animation', 'none', 'important');
-                    void track.offsetWidth;
-                    registerActiveCarouselStyleCleanup(restoreMoveStyles);
-                }
+                if (!sharedFastMode) motionLease = nativeCarousel.suppressMotion(section, track);
 
                 assertRouteSession(sessionToken);
+                moveOwner.assertCurrent();
                 button.click();
                 const acknowledgementStarted = hoverTiming ? performance.now() : 0;
                 try {
@@ -4314,8 +4268,7 @@ export function startLegacy() {
                     }
                 } finally { if (hoverTiming) settlementMs = recordHoverTiming(hoverTiming, 'settlement', settlementStarted) ?? null; }
             } finally {
-                restoreMoveStyles();
-                unregisterActiveCarouselStyleCleanup(restoreMoveStyles);
+                motionLease?.release();
             }
 
             log(tLog('carouselMoveCompleted'), {
@@ -4332,15 +4285,13 @@ export function startLegacy() {
                 afterTransform,
                 elapsedMs: Math.round(performance.now() - started),
                 ...(hoverTiming ? { acknowledgementMs, settlementMs } : {}),
-                animationRestored: sharedFastMode ? false : (!section.classList.contains(FAST_MOVE_CLASS) &&
-                    track.style.getPropertyValue('transition') === savedTransition.value &&
-                    track.style.getPropertyPriority('transition') === savedTransition.priority),
+                animationRestored: sharedFastMode ? false : Boolean(motionLease?.restored()),
                 token
             });
             return after;
         } finally {
             if (hoverTiming && moveStarted !== null) recordHoverTiming(hoverTiming, 'move', moveStarted);
-            releaseMove();
+            moveOwner.release();
         }
     }
 
@@ -5476,8 +5427,6 @@ export function startLegacy() {
         const responsiveColumns = sourceState?.layout?.columns || currentPageSlots(scroller, track).length || 1;
         const estimatedPages = Math.max(1, Math.ceil(totalCount / Math.max(1, responsiveColumns)));
         const started = performance.now();
-        const scanSavedTransition = captureInlineStyleProperty(track, 'transition');
-        const scanSavedAnimation = captureInlineStyleProperty(track, 'animation');
         const stablePageTransforms = new Map();
         let initialPage = null;
         let endingPage = 0;
@@ -5530,18 +5479,7 @@ export function startLegacy() {
             internalIndicator: 'netflix-react-item-index'
         });
 
-        const restoreScanStyles = () => {
-            section.classList.remove(FAST_MOVE_CLASS);
-            restoreInlineStyleProperty(track, 'transition', scanSavedTransition);
-            restoreInlineStyleProperty(track, 'animation', scanSavedAnimation);
-            void track.offsetWidth;
-        };
-
-        section.classList.add(FAST_MOVE_CLASS);
-        track.style.setProperty('transition', 'none', 'important');
-        track.style.setProperty('animation', 'none', 'important');
-        void track.offsetWidth;
-        registerActiveCarouselStyleCleanup(restoreScanStyles);
+        const motionLease = nativeCarousel.suppressMotion(section, track);
 
         try {
             let guard = estimatedPages * 3 + 12;
@@ -5879,8 +5817,7 @@ export function startLegacy() {
             });
             return items;
         } finally {
-            restoreScanStyles();
-            unregisterActiveCarouselStyleCleanup(restoreScanStyles);
+            motionLease.release();
         }
     }
 
@@ -5927,25 +5864,12 @@ export function startLegacy() {
             expectedPageSlots
         });
 
-        const scanSavedTransition = captureInlineStyleProperty(track, 'transition');
-        const scanSavedAnimation = captureInlineStyleProperty(track, 'animation');
         const stablePageTransforms = new Map();
         let endingPage = initialPage;
 
         // Keep animation suppression active for the whole scan. This avoids paying a
         // second DOM-settle wait in moveOnePage() while still preventing native slide animation.
-        const restoreScanStyles = () => {
-            section.classList.remove(FAST_MOVE_CLASS);
-            restoreInlineStyleProperty(track, 'transition', scanSavedTransition);
-            restoreInlineStyleProperty(track, 'animation', scanSavedAnimation);
-            void track.offsetWidth;
-        };
-
-        section.classList.add(FAST_MOVE_CLASS);
-        track.style.setProperty('transition', 'none', 'important');
-        track.style.setProperty('animation', 'none', 'important');
-        void track.offsetWidth;
-        registerActiveCarouselStyleCleanup(restoreScanStyles);
+        const motionLease = nativeCarousel.suppressMotion(section, track);
 
         try {
             assertRouteSession(sessionToken);
@@ -6103,8 +6027,7 @@ export function startLegacy() {
                 }
             }
         } finally {
-            restoreScanStyles();
-            unregisterActiveCarouselStyleCleanup(restoreScanStyles);
+            motionLease.release();
         }
 
         assertRouteSession(sessionToken);
@@ -8145,31 +8068,20 @@ export function startLegacy() {
         nativeCarousel.assertBinding(bindingOwner);
         const columns = Math.max(1, layout?.columns || sourceState?.layout?.columns || 1);
         const pages = Math.max(1, Math.ceil(Math.max(items.length, 1) / columns));
-        const savedTransition = captureInlineStyleProperty(track, 'transition');
-        const savedAnimation = captureInlineStyleProperty(track, 'animation');
-        const restoreFastStyles = () => {
-            section.classList.remove(FAST_MOVE_CLASS);
-            restoreInlineStyleProperty(track, 'transition', savedTransition);
-            restoreInlineStyleProperty(track, 'animation', savedAnimation);
-            void track.offsetWidth;
-        };
+        let motionLease = null;
 
         let runtime = getCarouselDomRuntime(section);
         nativeCarousel.markMappingStale(section);
 
         try {
-            try { await carouselMoveQueue; } catch (_) {}
+            await nativeCarousel.whenNavigationIdle();
             assertRouteSession(sessionToken);
             nativeCarousel.assertBinding(bindingOwner);
 
             // Keep the finalized runtime until the current Hawkins page has been
             // validated. A My List mutation can briefly expose a wrapped virtual
             // tail; a transient read must not collapse pageCount() for hover.
-            section.classList.add(FAST_MOVE_CLASS);
-            track.style.setProperty('transition', 'none', 'important');
-            track.style.setProperty('animation', 'none', 'important');
-            void track.offsetWidth;
-            registerActiveCarouselStyleCleanup(restoreFastStyles);
+            motionLease = nativeCarousel.suppressMotion(section, track);
 
             const nativeCountState = nativeReactCarouselTotalCount(scroller, track);
             const nativeCountHasReadings = nativeCountState.uniqueReadings.length > 0;
@@ -8274,8 +8186,7 @@ export function startLegacy() {
             });
             return changed;
         } finally {
-            restoreFastStyles();
-            unregisterActiveCarouselStyleCleanup(restoreFastStyles);
+            motionLease?.release();
         }
     }
 

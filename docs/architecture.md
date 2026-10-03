@@ -36,6 +36,7 @@ src/main.js
      -> src/app/session-scope.js: route epochs and registered request/timer ownership
      -> src/netflix/carousel/carousel.js: discovery, binding generations, reads and readiness
         -> page-model.js: private signature/page mapping and logical-window policies
+        -> navigation.js: private movement queue and temporary motion-style leases
      -> existing settings, SPA hooks and route-session runtime
 ```
 
@@ -101,7 +102,7 @@ Scope mechanics have transferred to app/session-scope.js during P08. Scan/accoun
 
 The existing route start/suspend points call the scope. Remaining legacy validity/error/request bridges delegate to it; their caller composition moves in P20. Data adapters receive begin/finish/guard collaborators without importing application code. The viewing scan borrows each admitted controller for job-specific cancellation and requests its eight-second-or-remaining deadline through the scope. It still decides quotas, deadlines and network accounting; cancelling a viewing job leaves unrelated route requests registered. HTTP failure cleanup closes unread bodies through the same request owner.
 
-The remaining P08 transfer now gives native binding, discovery, shared-read caches and page-model state their carousel owner. Native movement/queue/style restoration and traversal/source resolution remain scheduled for P09/P10.
+Native binding, discovery, shared-read caches and page-model state have their carousel owner. Native movement resources also belong to that owner; acknowledgement/navigation/restoration algorithms and traversal/source resolution still use transitional callers.
 
 ## Native discovery, binding and page model
 
@@ -114,6 +115,14 @@ Profile/indicator/slot/rectangle/index caches belong to synchronous samples. Eve
 Native source/readiness polls reject obsolete handles before returning success. Residual asynchronous navigation acknowledgement, collection and responsive remapping revalidate borrowed owners after awaits before mapping/publication. A late fast collection cannot finalize a replacement model or bind its old source again; it discards the result and requests recovery while retaining deferred membership work. Missing positive-count sources remain timeouts, distinct from a connected empty carousel that has stabilized.
 
 Until P09/P10, exact legacy forwarding functions and mapping commands serve remaining navigation/collection/source-resolution algorithms. They expose bounded observations or controlled owner operations, never writable binding/model/cache state. P10 completes the semantic collect/resolveCard/refreshMapping facade; this transitional query surface is not its final API. Membership shape and GraphQL count arrive through narrow readers, and scope/logging/diagnostic callbacks are injected without Netflix-to-app imports. Application composition moves in P20; findings.md records the bridge callers and retirement steps.
+
+## Native navigation resources
+
+The private `netflix/carousel/navigation.js` module owns the movement queue, move sequence and shared motion suppression. Legacy movement requests a ticket through carousel, awaits its predecessor, checks its captured binding before issuing the click and releases that ticket in finally. Queue reset invalidates and releases old tickets; late release cannot unlock a newer queue. Existing hover cancellation still prevents a queued click and lets an issued click finish acknowledgement/settlement.
+
+Movement, traversal collection and responsive mapping borrow motion-suppression leases from carousel. The owner captures the original inline values/priorities and restores them after the last lease releases. Binding replacement restores and retires its leases before admitting the next binding, including reuse of the same connected elements. Late cleanup checks the exact style owner and cannot restore over its replacement. Failed restoration attempts the remaining properties and releases ownership; repeated release is harmless. No animation-style snapshot, active cleanup registry or movement queue remains in legacy.
+
+The transitional `beginNavigation`, `whenNavigationIdle`, `suppressMotion` and `restoreMotion` operations are explicit resource bridges. Acknowledgement, settlement, navigation and fast/page-by-page restoration algorithms remain in legacy until the rest of P09 transfers them into navigation.js. Collection algorithms remain for P10 and responsive coordination for P19. This resource checkpoint does not claim those algorithms or P09 as a whole are complete.
 
 ## Verification boundary
 

@@ -318,3 +318,80 @@ test('logical page windows preserve exact membership and overlapping tails acros
         assert.equal(e.carousel.pageForPositions(positions(indices), 12, 6), null);
     }
 });
+
+function motionFixture(e) {
+    const values = new Map([['transition', { value: 'transform 200ms', priority: 'important' }],
+        ['animation', { value: 'pulse 1s', priority: '' }]]);
+    const writes = [];
+    e.track.style = {
+        getPropertyValue: key => values.get(key)?.value || '',
+        getPropertyPriority: key => values.get(key)?.priority || '',
+        setProperty(key, value, priority = '') { writes.push([key, value, priority]); values.set(key, { value, priority }); },
+        removeProperty(key) { writes.push([key, '', '']); values.delete(key); }
+    };
+    e.carousel.bind(e.section, e.scroller, e.track);
+    return { values, writes };
+}
+
+test('shared motion suppression restores original priorities only after its last lease releases', () => {
+    const e = environment();
+    motionFixture(e);
+    const scan = e.carousel.suppressMotion(e.section, e.track);
+    const move = e.carousel.suppressMotion(e.section, e.track);
+    assert.equal(e.track.style.getPropertyValue('transition'), 'none');
+    assert.equal(e.track.style.getPropertyPriority('animation'), 'important');
+    assert.equal(e.carousel.diagnostics().navigation.motionLeases, 2);
+    scan.release(); scan.release();
+    assert.equal(e.track.style.getPropertyValue('transition'), 'none');
+    move.release();
+    assert.equal(e.track.style.getPropertyValue('transition'), 'transform 200ms');
+    assert.equal(e.track.style.getPropertyPriority('transition'), 'important');
+    assert.equal(e.track.style.getPropertyValue('animation'), 'pulse 1s');
+    assert.equal(e.track.style.getPropertyPriority('animation'), '');
+    assert.equal(move.restored(), true);
+    assert.equal(e.carousel.diagnostics().navigation.motionLeases, 0);
+});
+
+test('old queue and motion cleanup cannot affect a replacement using the same connected elements', async () => {
+    const e = environment();
+    const { writes } = motionFixture(e);
+    const first = e.carousel.beginNavigation(e.section, e.scroller);
+    await first.ready;
+    const oldStyles = e.carousel.suppressMotion(e.section, e.track);
+    const queued = e.carousel.beginNavigation(e.section, e.scroller);
+    const rejected = assert.rejects(queued.ready, { code: 'NATIVE_SOURCE_REPLACED' });
+    e.carousel.resetSource();
+    e.carousel.bind(e.section, e.scroller, e.track);
+    const latest = e.carousel.beginNavigation(e.section, e.scroller);
+    await latest.ready;
+    const newStyles = e.carousel.suppressMotion(e.section, e.track);
+    const writeCount = writes.length;
+    oldStyles.release(); first.release(); queued.release();
+    await rejected;
+    assert.equal(writes.length, writeCount, 'late cleanup cannot restore newer styles');
+    assert.equal(e.track.isConnected, true);
+    assert.equal(e.carousel.diagnostics().navigation.pendingMoves, 1);
+    let idle = false;
+    const pendingIdle = e.carousel.whenNavigationIdle().then(() => { idle = true; });
+    await e.scheduler.flush();
+    assert.equal(idle, false, 'old release cannot unlock the new queue');
+    newStyles.release(); latest.release();
+    await pendingIdle;
+    assert.equal(e.carousel.diagnostics().navigation.pendingMoves, 0);
+    assert.equal(e.track.style.getPropertyValue('transition'), 'transform 200ms');
+});
+
+test('motion release attempts every restoration and releases ownership when one style write fails', () => {
+    const e = environment();
+    motionFixture(e);
+    const lease = e.carousel.suppressMotion(e.section, e.track);
+    const write = e.track.style.setProperty;
+    e.track.style.setProperty = (key, value, priority) => {
+        if (key === 'transition' && value !== 'none') throw new Error('restore failed');
+        write(key, value, priority);
+    };
+    assert.throws(() => lease.release(), /restore failed/);
+    assert.equal(e.track.style.getPropertyValue('animation'), 'pulse 1s');
+    assert.equal(e.carousel.diagnostics().navigation.motionLeases, 0);
+    assert.doesNotThrow(() => lease.release());
+});

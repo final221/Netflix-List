@@ -101,7 +101,7 @@ function environment(names, overrides = {}) {
     const frames = new Map();
     const c = vm.createContext({
         Element, Set, Map, Promise,
-        nativeReadScope: null, VERBOSE_INTERACTION_LOGS: false,
+        nativeReadScope: null, VERBOSE_INTERACTION_LOGS: false, FAST_MOVE_CLASS: 'fast',
         BUILD_CHUNK_MAX_ITEMS: 24, BUILD_CHUNK_BUDGET_MS: 6,
         performance: { now: () => now },
         setTimeout(callback, delay) { const key = ++id; timers.set(key, { callback, due: now + delay }); return key; },
@@ -204,7 +204,7 @@ function environment(names, overrides = {}) {
         createError: (...args) => c.initializationError?.(...args) || Object.assign(new Error(args[2]), { code: args[0], stage: args[1] }),
         log: (...args) => c.log(...args), warn: (...args) => c.warn(...args), tLog: (...args) => c.tLog(...args),
         logTimeout: (...args) => c.logOperationTimeout?.(...args), describeSlot: (...args) => c.slotDescriptor?.(...args),
-        ownedUi: { grid: c.GRID_ID, status: c.STATUS_ID, empty: c.LEGACY_EMPTY_STATE_ID, dialog: c.ORDER_MISMATCH_DIALOG_ID },
+        ownedUi: { grid: c.GRID_ID, status: c.STATUS_ID, empty: c.LEGACY_EMPTY_STATE_ID, dialog: c.ORDER_MISMATCH_DIALOG_ID, fastMove: c.FAST_MOVE_CLASS },
         checkRoute: () => { if (c.location?.href !== c.lastObservedUrl) c.handleRouteChange?.('MutationObserver-url'); },
         onMutationDelivery: () => { if (c.activeNativeHover?.previewRoot && !c.activeNativeHover.previewRoot.isConnected)
             c.releaseNativePreview(c.activeNativeHover, 'preview-removed'); },
@@ -221,7 +221,7 @@ function environment(names, overrides = {}) {
     Object.defineProperty(c, 'nativeReadScope', { get: () => c.nativeCarousel.diagnostics().readScopeActive ? true : null });
     c.performanceDiagnostics = c.createPerformanceDiagnostics();
     c.listData ||= fixtureListData(c);
-    async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
+    async function flush() { for (let i = 0; i < 24; i++) await Promise.resolve(); }
     return {
         c, timers, frames, flush,
         async advance(ms) {
@@ -2285,18 +2285,16 @@ test('clicked moves remain serialized through native settlement and restore thei
     const properties = new Map([['transform', 'before'], ['transition', 'original'], ['animation', 'original']]);
     const track = {
         isConnected: true, offsetWidth: 100,
-        style: { getPropertyValue: key => properties.get(key) || '', getPropertyPriority: () => '', setProperty: (key, value) => properties.set(key, value) }
+        style: { getPropertyValue: key => properties.get(key) || '', getPropertyPriority: () => '',
+            setProperty: (key, value) => { if (value === 'original') restorations++; properties.set(key, value); } }
     };
     const e = environment(['moveOnePage'], {
-        carouselMoveQueue: Promise.resolve(), pageMoveSequence: 0, sourceState: { track },
+        sourceState: { track },
         FAST_MOVE_CLASS: 'fast', PAGE_CHANGE_TIMEOUT_MS: 3000, SCRIPT_MOVE_SETTLE_TIMEOUT_MS: 260,
         selectedPage: () => page, pageCount: () => 10,
         getCarouselDomRuntime: () => ({ profile: { pageMode: 'logical' } }),
         carouselMoveButton: () => ({ button: { click: () => clicks++ } }), carouselMoveButtonDisabled: () => false,
         currentPageSlots: () => [], visibleSignature: () => 'before',
-        captureInlineStyleProperty: (node, key) => ({ value: node.style.getPropertyValue(key), priority: '' }),
-        restoreInlineStyleProperty: (node, key, saved) => { restorations++; node.style.setProperty(key, saved.value); },
-        registerActiveCarouselStyleCleanup: () => {}, unregisterActiveCarouselStyleCleanup: () => {},
         log: (name, details) => logs.push({ name, details }),
         waitLogicalPageChange: () => clicks === 1 ? acknowledgement.promise : Promise.resolve({ page: 2, transform: 'after', signature: 'after', changed: true }),
         waitForScriptMoveSettle: () => clicks === 1 ? settlement.promise : Promise.resolve({ transform: 'after', signature: 'after', observedChange: true })
@@ -2342,21 +2340,17 @@ test('signal-acknowledged clicks remain serialized through native settling after
     const section = { classList: { contains: key => classes.has(key), add: key => classes.add(key), remove: key => classes.delete(key) } };
     const settlement = deferred();
     const e = logicalMoveEnvironment({
-        carouselMoveQueue: Promise.resolve(), pageMoveSequence: 0,
         FAST_MOVE_CLASS: 'fast', SCRIPT_MOVE_SETTLE_TIMEOUT_MS: 260,
         selectedPage: () => e.runtime.currentPage || 0, pageCount: () => 10,
         carouselMoveButton: () => ({ button: { click: () => { clicks++; if (clicks === 2) e.change('second'); } } }),
         carouselMoveButtonDisabled: () => false,
-        captureInlineStyleProperty: (node, key) => ({ value: node.style.getPropertyValue(key), priority: '' }),
-        restoreInlineStyleProperty: (node, key, saved) => { restorations++; node.style.setProperty(key, saved.value); },
-        registerActiveCarouselStyleCleanup: () => {}, unregisterActiveCarouselStyleCleanup: () => {},
         waitForScriptMoveSettle: () => clicks === 1 ? settlement.promise : Promise.resolve({ transform: 'transform', signature: 'second', observedChange: true })
     });
     Object.assign(e.section, { classList: section.classList });
     const properties = new Map([['transform', 'transform'], ['transition', 'original'], ['animation', 'original']]);
     Object.assign(e.track, { isConnected: true, offsetWidth: 100, style: {
         getPropertyValue: key => properties.get(key) || '', getPropertyPriority: () => '',
-        setProperty: (key, value) => properties.set(key, value)
+        setProperty: (key, value) => { if (value === 'original') restorations++; properties.set(key, value); }
     } });
     e.c.sourceState = e.c.attachNativeBinding({}, e.section, e.scroller, e.track);
     vm.runInContext(declaration('moveOnePage'), e.c);
@@ -3652,7 +3646,6 @@ function nativeCollectionEnvironment(mode, windows, totalCount = 4) {
     const e = constructionEnvironment();
     let currentPage = 0;
     mountNativeControls(e.section, mode);
-    const cleanup = new Set();
     const pages = windows.map((entries, page) => entries.map(entry => {
         const slot = e.template.cloneNode(true);
         const card = slot.querySelector('card');
@@ -3681,17 +3674,11 @@ function nativeCollectionEnvironment(mode, windows, totalCount = 4) {
         restoreNativePageFast: async (_, __, ___, ____, _____, page) => { currentPage = page; return true; },
         forceLogicalPageSignature: (section, signature, page) => e.c.nativeCarousel.forcePage(section, signature, page),
         carouselMoveButton: () => ({ button: {}, selector: 'right' }), carouselMoveButtonDisabled: () => false,
-        captureInlineStyleProperty: (node, key) => ({ value: node.style.getPropertyValue(key) }),
-        restoreInlineStyleProperty: (node, key, saved) => {
-            if (saved.value) node.style.setProperty(key, saved.value);
-            else node.style.removeProperty(key);
-        },
-        registerActiveCarouselStyleCleanup: callback => cleanup.add(callback), unregisterActiveCarouselStyleCleanup: callback => cleanup.delete(callback),
         logOperationTimeout() {}, initializationTimeoutError: (stage, _, details) => e.c.initializationError('TIMEOUT', stage, 'timeout', details)
     });
     const styles = new Map(), classes = new Set();
     e.track.style = { setProperty: (key, value) => styles.set(key, value),
-        getPropertyValue: key => styles.get(key) || '', removeProperty: key => styles.delete(key) };
+        getPropertyValue: key => styles.get(key) || '', getPropertyPriority: () => '', removeProperty: key => styles.delete(key) };
     e.section.classList = { add: value => classes.add(value), remove: value => classes.delete(value), contains: value => classes.has(value) };
     e.c.sourceState.layout.columns = 3;
     e.track.style.setProperty('transition', 'original-transition');
@@ -3699,7 +3686,7 @@ function nativeCollectionEnvironment(mode, windows, totalCount = 4) {
     for (const name of ['visibleSignature', 'itemKeyFromCard', 'collectAllItemsLogical', 'collectAllItems']) {
         vm.runInContext(declaration(name), e.c);
     }
-    return { ...e, pages, get runtime() { return e.c.nativeCarousel.model(e.section); }, cleanup, async scan() {
+    return { ...e, pages, get runtime() { return e.c.nativeCarousel.model(e.section); }, async scan() {
         const pending = e.c.collectAllItems(e.section, e.scroller, e.track, totalCount, 1);
         let settled = false;
         pending.then(() => { settled = true; }, () => { settled = true; });
@@ -3738,7 +3725,7 @@ test('native collection snapshots accepted cards once across overlapping logical
         assert.equal(e.track.style.getPropertyValue('transition'), 'original-transition');
         assert.equal(e.track.style.getPropertyValue('animation'), 'original-animation');
         assert.equal(e.section.classList.contains('fast'), false);
-        assert.equal(e.cleanup.size, 0);
+        assert.equal(e.c.nativeCarousel.diagnostics().navigation.motionLeases, 0);
     }
 });
 
@@ -3755,7 +3742,7 @@ test('logical native collection rejects changed indices and moved titles before 
         assert.equal(e.template.cloneCounter.count - before, 3);
         assert.equal(e.c.collectPerformanceDiagnostics().nativeCollection.consistencyFailures, 1);
         assert.equal(e.track.style.getPropertyValue('transition'), 'original-transition');
-        assert.equal(e.cleanup.size, 0);
+        assert.equal(e.c.nativeCarousel.diagnostics().navigation.motionLeases, 0);
     }
 });
 
@@ -3786,7 +3773,7 @@ test('native collection cancellation preserves cleanup and takes no snapshots fr
         const before = e.template.cloneCounter.count;
         await assert.rejects(e.scan(), error => e.c.isRouteSessionCancelledError(error));
         assert.equal(e.template.cloneCounter.count - before, 3);
-        assert.equal(e.cleanup.size, 0);
+        assert.equal(e.c.nativeCarousel.diagnostics().navigation.motionLeases, 0);
         assert.equal(e.track.style.getPropertyValue('transition'), 'original-transition');
         assert.equal(e.frames.size, 0);
     }
@@ -7800,4 +7787,39 @@ test('a throwing preview diagnostic cannot reject an admitted native transfer', 
     assert.equal(e.c.performanceDiagnostics.hoverLifecycle.previewRejected, 0);
     assert.equal(e.c.performanceDiagnostics.hoverInteraction.diagnosticFailures, 1);
     assert.equal(e.events.length, 4);
+});
+
+
+test('a failed issued click cannot restore motion styles acquired by its replacement owner', async () => {
+    const section = new Element('section');
+    const scroller = new Element('scroller', section);
+    const classes = new Set();
+    section.classList = { contains: key => classes.has(key), add: key => classes.add(key), remove: key => classes.delete(key) };
+    const properties = new Map([['transform', 'before'], ['transition', 'original'], ['animation', 'original']]);
+    const track = { isConnected: true, offsetWidth: 100, style: {
+        getPropertyValue: key => properties.get(key) || '', getPropertyPriority: () => '',
+        setProperty: (key, value) => properties.set(key, value), removeProperty: key => properties.delete(key)
+    } };
+    let replacementLease;
+    const e = environment(['moveOnePage'], {
+        selectedPage: () => 0, pageCount: () => 2,
+        getCarouselDomRuntime: () => ({ profile: { pageMode: 'logical' } }),
+        currentPageSlots: () => [], visibleSignature: () => 'before', carouselMoveButtonDisabled: () => false,
+        carouselMoveButton: () => ({ button: { click() {
+            e.c.nativeCarousel.resetSource();
+            e.c.nativeCarousel.bind(section, scroller, track);
+            replacementLease = e.c.nativeCarousel.suppressMotion(section, track);
+            throw new Error('issued click failed');
+        } } })
+    });
+    e.c.sourceState = e.c.attachNativeBinding({}, section, scroller, track);
+    await assert.rejects(e.c.moveOnePage(section, scroller, 1, null, 1), /issued click failed/);
+    assert.equal(properties.get('transition'), 'none');
+    assert.equal(classes.has('fast'), true);
+    assert.equal(e.c.nativeCarousel.diagnostics().navigation.motionLeases, 1);
+    assert.equal(e.c.nativeCarousel.diagnostics().navigation.pendingMoves, 0);
+    replacementLease.release();
+    assert.equal(properties.get('transition'), 'original');
+    assert.equal(properties.get('animation'), 'original');
+    assert.equal(classes.has('fast'), false);
 });

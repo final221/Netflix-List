@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.13
+// @version      1.4.14
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -3447,6 +3447,152 @@
     return wasAtCompatibleTail ? info : null;
   }
 
+  // src/netflix/carousel/navigation.js
+  function createNavigation({ borrowBinding, assertBinding, createError, fastMoveClass }) {
+    let epoch = 0;
+    let sequence = 0;
+    let tail = Promise.resolve();
+    const moves = /* @__PURE__ */ new Set();
+    const motionOwners = /* @__PURE__ */ new Map();
+    function begin(section, scroller) {
+      const binding = borrowBinding(section, scroller);
+      assertBinding(binding);
+      const ownerEpoch = epoch;
+      const previous = tail;
+      let resolve;
+      tail = new Promise((done) => {
+        resolve = done;
+      });
+      let released = false;
+      let startedSequence = null;
+      const assertCurrent = () => {
+        if (ownerEpoch !== epoch || released) {
+          throw createError("NATIVE_SOURCE_REPLACED", "native-navigation", "Native navigation owner changed");
+        }
+        assertBinding(binding);
+      };
+      const release = () => {
+        if (released) return;
+        released = true;
+        moves.delete(ticket);
+        resolve();
+      };
+      const ticket = Object.freeze({
+        ready: previous.catch(() => {
+        }).then(assertCurrent),
+        assertCurrent,
+        start() {
+          assertCurrent();
+          return startedSequence ??= ++sequence;
+        },
+        release
+      });
+      moves.add(ticket);
+      return ticket;
+    }
+    function capture(track, property) {
+      return Object.freeze({
+        value: track.style.getPropertyValue(property),
+        priority: track.style.getPropertyPriority(property)
+      });
+    }
+    function restore(track, property, saved) {
+      if (!saved.value) track.style.removeProperty(property);
+      else track.style.setProperty(property, saved.value, saved.priority || "");
+    }
+    function restoreOwner(owner) {
+      if (motionOwners.get(owner.track) !== owner) return;
+      motionOwners.delete(owner.track);
+      owner.leases.clear();
+      let failure;
+      for (const operation of [
+        () => {
+          if (!owner.hadClass) owner.section.classList.remove(fastMoveClass);
+        },
+        () => restore(owner.track, "transition", owner.transition),
+        () => restore(owner.track, "animation", owner.animation),
+        () => {
+          void owner.track.offsetWidth;
+        }
+      ]) {
+        try {
+          operation();
+        } catch (error) {
+          failure ??= error;
+        }
+      }
+      if (failure) throw failure;
+    }
+    function suppress(section, track) {
+      const binding = borrowBinding(section, null, track);
+      assertBinding(binding);
+      let owner = motionOwners.get(track);
+      if (owner) assertBinding(owner.binding);
+      else {
+        owner = {
+          section,
+          track,
+          binding,
+          leases: /* @__PURE__ */ new Set(),
+          hadClass: section.classList.contains(fastMoveClass),
+          transition: capture(track, "transition"),
+          animation: capture(track, "animation")
+        };
+        motionOwners.set(track, owner);
+        try {
+          section.classList.add(fastMoveClass);
+          track.style.setProperty("transition", "none", "important");
+          track.style.setProperty("animation", "none", "important");
+          void track.offsetWidth;
+        } catch (error) {
+          try {
+            restoreOwner(owner);
+          } catch (_) {
+          }
+          throw error;
+        }
+      }
+      let released = false;
+      const lease = Object.freeze({
+        release() {
+          if (released) return;
+          released = true;
+          if (motionOwners.get(track) !== owner) return;
+          owner.leases.delete(lease);
+          if (!owner.leases.size) restoreOwner(owner);
+        },
+        restored: () => track.style.getPropertyValue("transition") === owner.transition.value && track.style.getPropertyPriority("transition") === owner.transition.priority && section.classList.contains(fastMoveClass) === owner.hadClass
+      });
+      owner.leases.add(lease);
+      return lease;
+    }
+    function restoreMotion() {
+      for (const owner of [...motionOwners.values()]) {
+        try {
+          restoreOwner(owner);
+        } catch (_) {
+        }
+      }
+    }
+    function reset() {
+      epoch++;
+      restoreMotion();
+      for (const move of [...moves]) move.release();
+      tail = Promise.resolve();
+    }
+    return Object.freeze({
+      begin,
+      suppress,
+      restoreMotion,
+      reset,
+      whenIdle: () => tail,
+      diagnostics: () => ({
+        pendingMoves: moves.size,
+        motionLeases: [...motionOwners.values()].reduce((count, owner) => count + owner.leases.size, 0)
+      })
+    });
+  }
+
   // src/netflix/carousel/carousel.js
   function createCarousel({
     pageDom: netflixDom,
@@ -3503,6 +3649,12 @@
     let discoveryOwner = null, targetDocumentObserver = null, targetMutationFrame = null;
     let targetObservedBrowseHost = null, targetObservedMyListSection = null, targetObservedAncestors = [];
     let targetDocumentDiscoveryActive = false;
+    const navigation = createNavigation({
+      borrowBinding,
+      assertBinding,
+      createError: initializationError,
+      fastMoveClass: ownedUi.fastMove || FAST_MOVE_CLASS
+    });
     function getModel(section) {
       if (!section) return null;
       let model = models.get(section);
@@ -3559,6 +3711,7 @@
     }
     function bind(section, scroller = null, track = null) {
       if (acceptedBinding && acceptedBinding.section === section && acceptedBinding.scroller === scroller && acceptedBinding.track === track && isBindingCurrent(acceptedBinding)) return acceptedBinding;
+      navigation.reset();
       bindingGeneration++;
       invalidateNativeReadScope();
       if (section) models.delete(section);
@@ -3566,6 +3719,7 @@
       return acceptedBinding;
     }
     function clearBinding() {
+      navigation.reset();
       bindingGeneration++;
       acceptedBinding = null;
       invalidateNativeReadScope();
@@ -4535,6 +4689,10 @@
       isBindingCurrent,
       assertBinding,
       currentBinding: () => acceptedBinding,
+      beginNavigation: navigation.begin,
+      whenNavigationIdle: navigation.whenIdle,
+      suppressMotion: navigation.suppress,
+      restoreMotion: navigation.restoreMotion,
       resetSource() {
         clearBinding();
         models = /* @__PURE__ */ new WeakMap();
@@ -4595,6 +4753,7 @@
       diagnostics: () => ({
         bindingGeneration,
         readScopeActive: Boolean(nativeReadScope),
+        navigation: navigation.diagnostics(),
         discoveryActive: Boolean(targetDocumentObserver),
         pendingMutationFrame: targetMutationFrame !== null
       })
@@ -4702,7 +4861,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.13";
+    const SCRIPT_VERSION = "1.4.14";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -4872,8 +5031,6 @@
     let pendingGridHoverClone = null;
     let pendingGridHoverDiagnostic = null;
     let activeHoverPreparationDiagnostic = null;
-    let pageMoveSequence = 0;
-    let carouselMoveQueue = Promise.resolve();
     const graftedGridClones = /* @__PURE__ */ new Set();
     let hoverSequence = 0;
     let responsiveSequence = 0;
@@ -4884,7 +5041,6 @@
     let targetSessionEntryKind = "initial";
     let targetSessionReason = "route:initial";
     let targetListenersActive = false;
-    let activeCarouselStyleCleanup = null;
     let viewOriginalMyList = true;
     let viewOriginalMenuId = null;
     let logFeedbackTimer = null;
@@ -5506,19 +5662,8 @@
       runningSessionToken = null;
       if (retryMutations) retryPendingMyListMutations("after-initialization");
     }
-    function registerActiveCarouselStyleCleanup(cleanup) {
-      activeCarouselStyleCleanup = cleanup;
-    }
-    function unregisterActiveCarouselStyleCleanup(cleanup) {
-      if (activeCarouselStyleCleanup === cleanup) activeCarouselStyleCleanup = null;
-    }
     function restoreActiveCarouselStyles() {
-      const cleanup = activeCarouselStyleCleanup;
-      activeCarouselStyleCleanup = null;
-      try {
-        cleanup?.();
-      } catch (_) {
-      }
+      nativeCarousel.restoreMotion();
     }
     function resetDetachedTargetState() {
       if (completedSection?.isConnected && document.getElementById(GRID_ID)) return;
@@ -5606,7 +5751,6 @@
       responsiveRefreshing = false;
       activeResponsiveReason = "";
       myListCountConvergencePending = false;
-      carouselMoveQueue = Promise.resolve();
       nativeCarousel.resetSource();
       clearPendingMyListMutations();
       clearUndoEntries();
@@ -8452,10 +8596,7 @@
           await Promise.resolve(responsiveRefreshPromise);
         } catch (_) {
         }
-        try {
-          await carouselMoveQueue;
-        } catch (_) {
-        }
+        await nativeCarousel.whenNavigationIdle();
         if (!isRouteSessionActive(sessionToken)) return;
         const section = sourceState?.section;
         const scroller = sourceState?.scroller;
@@ -8805,19 +8946,6 @@
       const remaining = Math.max(0, timeout - elapsed);
       return waitPageByPolling(section, before, remaining, sessionToken, token);
     }
-    function captureInlineStyleProperty(element, property) {
-      return {
-        value: element.style.getPropertyValue(property),
-        priority: element.style.getPropertyPriority(property)
-      };
-    }
-    function restoreInlineStyleProperty(element, property, saved) {
-      if (!saved.value) {
-        element.style.removeProperty(property);
-        return;
-      }
-      element.style.setProperty(property, saved.value, saved.priority || "");
-    }
     async function waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, timeout = SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken = null) {
       assertRouteSession(sessionToken);
       const started = performance.now();
@@ -8854,14 +8982,9 @@
       const hoverTiming = token === null ? null : performanceDiagnostics.hoverTiming;
       const queueStarted = hoverTiming ? performance.now() : 0;
       let moveStarted = null;
-      const previousMove = carouselMoveQueue;
-      let releaseMove;
-      carouselMoveQueue = new Promise((resolve) => {
-        releaseMove = resolve;
-      });
+      const moveOwner = nativeCarousel.beginNavigation(section, scroller);
       try {
-        await previousMove.catch(() => {
-        });
+        await moveOwner.ready;
         if (hoverTiming) recordHoverTiming(hoverTiming, "queue", queueStarted);
         assertRouteSession(sessionToken);
         if (token !== null && token !== hoverToken) {
@@ -8873,7 +8996,7 @@
           });
           return selectedPage(section);
         }
-        const seq = ++pageMoveSequence;
+        const seq = moveOwner.start();
         const before = selectedPage(section);
         const runtime = getCarouselDomRuntime(section);
         const profile = runtime?.profile || detectCarouselDomProfile(section);
@@ -8898,8 +9021,8 @@
         const beforeTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
         const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
         const sharedFastMode = section.classList.contains(FAST_MOVE_CLASS);
-        const savedTransition = sharedFastMode ? null : captureInlineStyleProperty(track, "transition");
-        const savedAnimation = sharedFastMode ? null : captureInlineStyleProperty(track, "animation");
+        const nativeTransition = sharedFastMode ? "suppressed-by-scan" : track.style.getPropertyValue("transition");
+        let motionLease = null;
         let after = before;
         let afterTransform = beforeTransform;
         let afterSignature = beforeSignature;
@@ -8914,25 +9037,13 @@
           animationDisabled: true,
           sharedFastMode,
           beforeTransform,
-          nativeTransition: sharedFastMode ? "suppressed-by-scan" : savedTransition.value,
+          nativeTransition,
           token
         });
-        const restoreMoveStyles = () => {
-          if (sharedFastMode) return;
-          section.classList.remove(FAST_MOVE_CLASS);
-          restoreInlineStyleProperty(track, "transition", savedTransition);
-          restoreInlineStyleProperty(track, "animation", savedAnimation);
-          void track.offsetWidth;
-        };
         try {
-          if (!sharedFastMode) {
-            section.classList.add(FAST_MOVE_CLASS);
-            track.style.setProperty("transition", "none", "important");
-            track.style.setProperty("animation", "none", "important");
-            void track.offsetWidth;
-            registerActiveCarouselStyleCleanup(restoreMoveStyles);
-          }
+          if (!sharedFastMode) motionLease = nativeCarousel.suppressMotion(section, track);
           assertRouteSession(sessionToken);
+          moveOwner.assertCurrent();
           button.click();
           const acknowledgementStarted = hoverTiming ? performance.now() : 0;
           try {
@@ -8980,8 +9091,7 @@
             if (hoverTiming) settlementMs = recordHoverTiming(hoverTiming, "settlement", settlementStarted) ?? null;
           }
         } finally {
-          restoreMoveStyles();
-          unregisterActiveCarouselStyleCleanup(restoreMoveStyles);
+          motionLease?.release();
         }
         log(tLog("carouselMoveCompleted"), {
           seq,
@@ -8997,13 +9107,13 @@
           afterTransform,
           elapsedMs: Math.round(performance.now() - started),
           ...hoverTiming ? { acknowledgementMs, settlementMs } : {},
-          animationRestored: sharedFastMode ? false : !section.classList.contains(FAST_MOVE_CLASS) && track.style.getPropertyValue("transition") === savedTransition.value && track.style.getPropertyPriority("transition") === savedTransition.priority,
+          animationRestored: sharedFastMode ? false : Boolean(motionLease?.restored()),
           token
         });
         return after;
       } finally {
         if (hoverTiming && moveStarted !== null) recordHoverTiming(hoverTiming, "move", moveStarted);
-        releaseMove();
+        moveOwner.release();
       }
     }
     async function goToPage(section, scroller, target, token = null, sessionToken = null, preferCyclicShortest = false) {
@@ -9986,8 +10096,6 @@
       const responsiveColumns = sourceState?.layout?.columns || currentPageSlots(scroller, track).length || 1;
       const estimatedPages = Math.max(1, Math.ceil(totalCount / Math.max(1, responsiveColumns)));
       const started = performance.now();
-      const scanSavedTransition = captureInlineStyleProperty(track, "transition");
-      const scanSavedAnimation = captureInlineStyleProperty(track, "animation");
       const stablePageTransforms = /* @__PURE__ */ new Map();
       let initialPage = null;
       let endingPage = 0;
@@ -10035,17 +10143,7 @@
         expectedPageSlots: responsiveColumns,
         internalIndicator: "netflix-react-item-index"
       });
-      const restoreScanStyles = () => {
-        section.classList.remove(FAST_MOVE_CLASS);
-        restoreInlineStyleProperty(track, "transition", scanSavedTransition);
-        restoreInlineStyleProperty(track, "animation", scanSavedAnimation);
-        void track.offsetWidth;
-      };
-      section.classList.add(FAST_MOVE_CLASS);
-      track.style.setProperty("transition", "none", "important");
-      track.style.setProperty("animation", "none", "important");
-      void track.offsetWidth;
-      registerActiveCarouselStyleCleanup(restoreScanStyles);
+      const motionLease = nativeCarousel.suppressMotion(section, track);
       try {
         let guard = estimatedPages * 3 + 12;
         let previousPageSignature = "";
@@ -10366,8 +10464,7 @@
         });
         return items;
       } finally {
-        restoreScanStyles();
-        unregisterActiveCarouselStyleCleanup(restoreScanStyles);
+        motionLease.release();
       }
     }
     async function collectAllItems(section, scroller, track, totalCount, sessionToken = null) {
@@ -10405,21 +10502,9 @@
         currentPageCards: currentPageSlots(scroller, track).length,
         expectedPageSlots
       });
-      const scanSavedTransition = captureInlineStyleProperty(track, "transition");
-      const scanSavedAnimation = captureInlineStyleProperty(track, "animation");
       const stablePageTransforms = /* @__PURE__ */ new Map();
       let endingPage = initialPage;
-      const restoreScanStyles = () => {
-        section.classList.remove(FAST_MOVE_CLASS);
-        restoreInlineStyleProperty(track, "transition", scanSavedTransition);
-        restoreInlineStyleProperty(track, "animation", scanSavedAnimation);
-        void track.offsetWidth;
-      };
-      section.classList.add(FAST_MOVE_CLASS);
-      track.style.setProperty("transition", "none", "important");
-      track.style.setProperty("animation", "none", "important");
-      void track.offsetWidth;
-      registerActiveCarouselStyleCleanup(restoreScanStyles);
+      const motionLease = nativeCarousel.suppressMotion(section, track);
       try {
         assertRouteSession(sessionToken);
         nativeCarousel.assertBinding(bindingOwner);
@@ -10562,8 +10647,7 @@
           }
         }
       } finally {
-        restoreScanStyles();
-        unregisterActiveCarouselStyleCleanup(restoreScanStyles);
+        motionLease.release();
       }
       assertRouteSession(sessionToken);
       nativeCarousel.assertBinding(bindingOwner);
@@ -12446,28 +12530,14 @@
       nativeCarousel.assertBinding(bindingOwner);
       const columns = Math.max(1, layout?.columns || sourceState?.layout?.columns || 1);
       const pages = Math.max(1, Math.ceil(Math.max(items.length, 1) / columns));
-      const savedTransition = captureInlineStyleProperty(track, "transition");
-      const savedAnimation = captureInlineStyleProperty(track, "animation");
-      const restoreFastStyles = () => {
-        section.classList.remove(FAST_MOVE_CLASS);
-        restoreInlineStyleProperty(track, "transition", savedTransition);
-        restoreInlineStyleProperty(track, "animation", savedAnimation);
-        void track.offsetWidth;
-      };
+      let motionLease = null;
       let runtime = getCarouselDomRuntime(section);
       nativeCarousel.markMappingStale(section);
       try {
-        try {
-          await carouselMoveQueue;
-        } catch (_) {
-        }
+        await nativeCarousel.whenNavigationIdle();
         assertRouteSession(sessionToken);
         nativeCarousel.assertBinding(bindingOwner);
-        section.classList.add(FAST_MOVE_CLASS);
-        track.style.setProperty("transition", "none", "important");
-        track.style.setProperty("animation", "none", "important");
-        void track.offsetWidth;
-        registerActiveCarouselStyleCleanup(restoreFastStyles);
+        motionLease = nativeCarousel.suppressMotion(section, track);
         const nativeCountState = nativeReactCarouselTotalCount(scroller, track);
         const nativeCountHasReadings = nativeCountState.uniqueReadings.length > 0;
         const nativeCountConverged = Number.isSafeInteger(nativeCountState.totalCount) && nativeCountState.totalCount === items.length;
@@ -12560,8 +12630,7 @@
         });
         return changed;
       } finally {
-        restoreFastStyles();
-        unregisterActiveCarouselStyleCleanup(restoreFastStyles);
+        motionLease?.release();
       }
     }
     async function remapItemsByOrder(layout, sessionToken = sessionScope.token) {

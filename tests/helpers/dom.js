@@ -20,10 +20,12 @@ export class Element extends EventTarget {
         this.children = [];
         this.parentElement = null;
         this.textContent = '';
+        const stylePriorities = new Map();
         this.style = {
-            setProperty(name, value) { this[name] = String(value); },
-            removeProperty(name) { delete this[name]; },
-            getPropertyValue(name) { return this[name] || ''; }
+            setProperty(name, value, priority = '') { this[name] = String(value); stylePriorities.set(name, priority); },
+            removeProperty(name) { delete this[name]; stylePriorities.delete(name); },
+            getPropertyValue(name) { return this[name] || ''; },
+            getPropertyPriority(name) { return stylePriorities.get(name) || ''; }
         };
         this.classList = {
             add: (...names) => { this.className = [...new Set([...this.classList, ...names])].join(' '); },

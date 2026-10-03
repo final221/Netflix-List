@@ -1,8 +1,10 @@
 import { createPageModel, normalizeNetflixLogicalIndex, expectedLogicalIndicesForPage,
     logicalPageFromSlotPositions, wrappedTailLogicalPageInfo, wrappedTailLogicalPageForRebuild } from './page-model.js';
 import { NETFLIX_DOM_SELECTORS as DEFAULT_SELECTORS } from '../page-dom.js';
+import { createNavigation } from './navigation.js';
 import { GRID_ID as DEFAULT_GRID_ID, STATUS_ID as DEFAULT_STATUS_ID, LEGACY_EMPTY_STATE_ID as DEFAULT_EMPTY_ID,
-    ORDER_MISMATCH_DIALOG_ID as DEFAULT_DIALOG_ID, SYNTHETIC_SECTION_ID, ORIGINAL_HIDDEN_CLASS, ORIGINAL_VISIBILITY_ATTR } from '../../dom-names.js';
+    ORDER_MISMATCH_DIALOG_ID as DEFAULT_DIALOG_ID, SYNTHETIC_SECTION_ID, ORIGINAL_HIDDEN_CLASS, ORIGINAL_VISIBILITY_ATTR,
+    FAST_MOVE_CLASS } from '../../dom-names.js';
 
 // Native binding and mapping are owned here. Composition supplies interpreted
 // membership shape and lifecycle operations, never a mutable feature state bag.
@@ -32,6 +34,8 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     let discoveryOwner = null, targetDocumentObserver = null, targetMutationFrame = null;
     let targetObservedBrowseHost = null, targetObservedMyListSection = null, targetObservedAncestors = [];
     let targetDocumentDiscoveryActive = false;
+    const navigation = createNavigation({ borrowBinding, assertBinding, createError: initializationError,
+        fastMoveClass: ownedUi.fastMove || FAST_MOVE_CLASS });
     function getModel(section) {
         if (!section) return null;
         let model = models.get(section);
@@ -74,12 +78,13 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     function bind(section, scroller = null, track = null) {
         if (acceptedBinding && acceptedBinding.section === section && acceptedBinding.scroller === scroller &&
             acceptedBinding.track === track && isBindingCurrent(acceptedBinding)) return acceptedBinding;
+        navigation.reset();
         bindingGeneration++; invalidateNativeReadScope();
         if (section) models.delete(section);
         acceptedBinding = borrowBinding(section, scroller, track);
         return acceptedBinding;
     }
-    function clearBinding() { bindingGeneration++; acceptedBinding = null; invalidateNativeReadScope(); }
+    function clearBinding() { navigation.reset(); bindingGeneration++; acceptedBinding = null; invalidateNativeReadScope(); }
     function median(values) {
         if (!values.length) return 0;
         const sorted = [...values].sort((a, b) => a - b);
@@ -1198,6 +1203,8 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
 
     return Object.freeze({ startDiscovery, stopDiscovery, refreshDiscovery, bind, clearBinding, borrowBinding, isBindingCurrent, assertBinding,
         currentBinding: () => acceptedBinding,
+        beginNavigation: navigation.begin, whenNavigationIdle: navigation.whenIdle,
+        suppressMotion: navigation.suppress, restoreMotion: navigation.restoreMotion,
         resetSource() { clearBinding(); models = new WeakMap(); nativeReadScope = null; },
         model: getCarouselDomRuntime, resetModel: resetCarouselDomRuntime,
         profile: detectCarouselDomProfile, profileSummary: carouselDomProfileSummary, logProfile: logCarouselDomProfile,
@@ -1224,7 +1231,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         pageForPositions: logicalPageFromSlotPositions, wrappedTail: wrappedTailLogicalPageInfo,
         wrappedTailForRebuild: wrappedTailLogicalPageForRebuild,
         diagnoseIndices: logVirtualRawIndexDiagnostic,
-        diagnostics: () => ({ bindingGeneration, readScopeActive: Boolean(nativeReadScope),
+        diagnostics: () => ({ bindingGeneration, readScopeActive: Boolean(nativeReadScope), navigation: navigation.diagnostics(),
             discoveryActive: Boolean(targetDocumentObserver), pendingMutationFrame: targetMutationFrame !== null })
     });
 }
