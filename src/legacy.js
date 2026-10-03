@@ -16,6 +16,7 @@ import { installStyles, removeStyles } from './grid/styles.js';
 import { createListData } from './netflix/list-data.js';
 import { createViewingData } from './netflix/viewing-data.js';
 import { createSessionScope } from './app/session-scope.js';
+import { createCarousel } from './netflix/carousel/carousel.js';
 
 // Transitional runtime; responsibilities move to their declared owners in P03-P20.
 export function startLegacy() {
@@ -120,6 +121,30 @@ export function startLegacy() {
         beginRequest: createRouteFetch, finishRequest: finishRouteFetch, runChunks: runConstructionChunks,
         inspection: popupInspection, log, warn, tLog, requestTimeoutMs: FRESH_MY_LIST_FETCH_TIMEOUT_MS });
 
+    const nativeCarousel = createCarousel({ pageDom: netflixDom, scope: sessionScope, document, window, Element,
+        getComputedStyle, performance, setTimeout, clearTimeout, requestAnimationFrame, cancelAnimationFrame,
+        readListShape: section => sourceState?.section === section ? { totalCount: sourceState.totalCount,
+            columns: Math.max(1, sourceState.layout?.columns || 1) } : null,
+        readGraphqlCount: () => listData.readMyListTotalCount(), createError: initializationError,
+        log, warn, tLog, logTimeout: logOperationTimeout, describeSlot: slotDescriptor, MutationObserver,
+        checkRoute: () => { if (location.href !== lastObservedUrl) handleRouteChange('MutationObserver-url'); },
+        onMutationDelivery: () => { if (activeNativeHover?.previewRoot && !activeNativeHover.previewRoot.isConnected)
+            releaseNativePreview(activeNativeHover, 'preview-removed'); },
+        isInitializationBlocked: () => initializationBlockedSessionToken === sessionScope.token,
+        onBlockedMutation: token => recoverNativeInitialization(token, 'document-mutation'),
+        isGridDetached: () => Boolean(completedSection && sourceState?.grid && !sourceState.grid.isConnected),
+        shouldCoalesce: () => Boolean(completedSection || (waitingForNativeEmpty && sourceState?.empty)),
+        onRelevantMutation: handleRelevantTargetDocumentMutation });
+
+    // Temporary publication bridge: sourceState may borrow native references,
+    // but only the carousel can accept a binding or invalidate its generation.
+    function attachNativeBinding(state, section, scroller = null, track = null) {
+        const binding = nativeCarousel.bind(section, scroller, track);
+        for (const key of ['section', 'scroller', 'track']) Object.defineProperty(state, key,
+            { enumerable: true, configurable: true, get: () => binding[key] });
+        return state;
+    }
+
     function formatInitializationErrorMeta(error, fallbackTotalCount = null) {
         const details = error?.details || {};
         const rawCollected = Number(
@@ -194,8 +219,6 @@ export function startLegacy() {
     let activeHoverPreparationDiagnostic = null;
     let pageMoveSequence = 0;
     let carouselMoveQueue = Promise.resolve();
-    let carouselDomRuntime = new WeakMap();
-    let nativeReadScope = null;
     const graftedGridClones = new Set();
     let hoverSequence = 0;
     let responsiveSequence = 0;
@@ -206,12 +229,6 @@ export function startLegacy() {
     let targetSessionEntryKind = 'initial';
     let targetSessionReason = 'route:initial';
     let targetListenersActive = false;
-    let targetDocumentObserver = null;
-    let targetMutationFrame = null;
-    let targetObservedBrowseHost = null;
-    let targetObservedMyListSection = null;
-    let targetObservedAncestors = [];
-    let targetDocumentDiscoveryActive = false;
     let activeCarouselStyleCleanup = null;
     let viewOriginalMyList = true;
     let viewOriginalMenuId = null;
@@ -543,42 +560,24 @@ export function startLegacy() {
         }
     }
 
-    function createNativeReadScope() {
-        return { profiles: new WeakMap(), indicators: new WeakMap(), filled: new WeakMap(),
-            slots: new WeakMap(), rects: new WeakMap(), indices: new WeakMap() };
+    function withNativeReadScope(...args) {
+        return nativeCarousel.sample(...args);
     }
 
-    function withNativeReadScope(read) {
-        if (nativeReadScope) return read();
-        // Only synchronous reads belong here. Never retain state across a frame,
-        // await, or Netflix render; the next sample must discover fresh native data.
-        nativeReadScope = createNativeReadScope();
-        try { return read(); } finally { nativeReadScope = null; }
+    function invalidateNativeReadScope(...args) {
+        return nativeCarousel.invalidateReads(...args);
     }
 
-    function invalidateNativeReadScope() {
-        if (nativeReadScope) nativeReadScope = createNativeReadScope();
+    function nativeRect(...args) {
+        return nativeCarousel.rect(...args);
     }
 
-    function nativeRect(node) {
-        if (!nativeReadScope) return node.getBoundingClientRect();
-        if (!nativeReadScope.rects.has(node)) nativeReadScope.rects.set(node, node.getBoundingClientRect());
-        return nativeReadScope.rects.get(node);
+    function nativeFilledSlots(...args) {
+        return nativeCarousel.filledSlots(...args);
     }
 
-    function nativeFilledSlots(track) {
-        if (!nativeReadScope) return netflixDom.filledSlots(track);
-        if (!nativeReadScope.filled.has(track)) nativeReadScope.filled.set(track, netflixDom.filledSlots(track));
-        return nativeReadScope.filled.get(track);
-    }
-
-    function nativeIndicatorItems(section) {
-        if (!section) return [];
-        if (!nativeReadScope) return [...section.querySelectorAll('[data-uia="carousel-page-indicator-item"]')];
-        if (!nativeReadScope.indicators.has(section)) {
-            nativeReadScope.indicators.set(section, [...section.querySelectorAll('[data-uia="carousel-page-indicator-item"]')]);
-        }
-        return nativeReadScope.indicators.get(section);
+    function nativeIndicatorItems(...args) {
+        return nativeCarousel.indicators(...args);
     }
 
     function isTargetPage() {
@@ -698,6 +697,7 @@ export function startLegacy() {
         cancelPendingGridHover('source');
         completedSection = null;
         if (sourceState?.section && !sourceState.section.isConnected) {
+            nativeCarousel.clearBinding();
             sourceState = null;
         }
         resizeObserver?.disconnect();
@@ -783,13 +783,14 @@ export function startLegacy() {
         activeResponsiveReason = '';
         myListCountConvergencePending = false;
         carouselMoveQueue = Promise.resolve();
-        carouselDomRuntime = new WeakMap();
+        nativeCarousel.resetSource();
         clearPendingMyListMutations();
         clearUndoEntries();
 
         running = false;
         runningSessionToken = null;
         completedSection = null;
+        nativeCarousel.clearBinding();
         sourceState = null;
         activeVideoId = null;
         activePage = null;
@@ -1411,181 +1412,16 @@ export function startLegacy() {
         return { ...decoded, action: wasInLegacy ? 'remove' : 'add', wasInLegacy };
     }
 
-    function parseSlotLayoutFormula(track) {
-        const slot = netflixDom.directSlots(track).find(node => node.getAttribute('style')?.includes('calc('));
-        if (!slot) return null;
-
-        const style = slot.getAttribute('style') || '';
-        const match = style.match(/calc\(\(\s*100%\s*-\s*([0-9.]+)px\s*\)\s*\/\s*([0-9]+)\s*\)/i);
-        if (!match) return null;
-
-        const subtractPx = Number(match[1]);
-        const columns = Number(match[2]);
-        if (!Number.isFinite(subtractPx) || !Number.isFinite(columns) || columns < 1) return null;
-
-        const computedTrack = getComputedStyle(track);
-        const gap = Number.parseFloat(computedTrack.columnGap || computedTrack.gap || '8') || 8;
-        const paddingLeft = Math.max(0, Number.parseFloat(computedTrack.paddingLeft || '0') || 0);
-        const paddingRight = Math.max(0, Number.parseFloat(computedTrack.paddingRight || '0') || 0);
-        const formulaSidePadding = Math.max(0, (subtractPx - gap * Math.max(0, columns - 1)) / 2);
-
-        return { columns, subtractPx, gap, paddingLeft, paddingRight, formulaSidePadding };
+    function parseSlotLayoutFormula(...args) {
+        return nativeCarousel.slotLayoutFormula(...args);
     }
 
-    function measureVisibleLayout(section, scroller, track) {
-        const sectionRect = nativeRect(section);
-        const scrollerRect = nativeRect(scroller);
-        const formula = parseSlotLayoutFormula(track);
-
-        if (formula) {
-            const { columns, gap, paddingLeft, paddingRight, formulaSidePadding } = formula;
-            // Netflix has two native slot formulas. Multi-page rows may include the
-            // side padding in calc(), while a genuine one-page row uses track padding
-            // plus a gap-only calc((100% - 40px) / 6). Prefer the actual computed
-            // track padding whenever it is present so the legacy cards share the exact
-            // native x coordinates in both cases.
-            const explicitPadding = paddingLeft > 0.5 || paddingRight > 0.5;
-            const sidePaddingLeft = explicitPadding ? paddingLeft : formulaSidePadding;
-            const sidePaddingRight = explicitPadding ? paddingRight : formulaSidePadding;
-            const sidePadding = (sidePaddingLeft + sidePaddingRight) / 2;
-            const gridWidth = Math.max(1, scrollerRect.width - sidePaddingLeft - sidePaddingRight);
-            const cardWidth = Math.max(1, (gridWidth - gap * Math.max(0, columns - 1)) / columns);
-            const gridLeft = Math.max(0, scrollerRect.left - sectionRect.left + sidePaddingLeft);
-
-            return {
-                columns,
-                cardWidth,
-                gap,
-                gridLeft,
-                gridWidth,
-                sidePadding,
-                sidePaddingLeft,
-                sidePaddingRight,
-                scrollerWidth: Math.max(1, scrollerRect.width),
-                scrollerHeight: Math.max(1, scrollerRect.height),
-                widthRatio: cardWidth / gridWidth,
-                formulaBased: true
-            };
-        }
-
-        // Fallback: prefer the current page card count instead of the number visible in the viewport.
-        const activeSlots = netflixDom.filledSlots(track).filter(slot => {
-            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-            return card?.getAttribute('tabindex') === '0';
-        });
-        const sample = activeSlots.length ? activeSlots : netflixDom.filledSlots(track);
-        const rects = sample
-            .map(slot => nativeRect(slot))
-            .filter(rect => rect.width > 1)
-            .sort((a, b) => a.left - b.left);
-
-        const columns = Math.max(1, activeSlots.length || rects.length || 5);
-        const cardWidth = Math.max(1, median(rects.map(rect => rect.width)) || scrollerRect.width / columns);
-        const gaps = [];
-        for (let i = 1; i < rects.length; i++) {
-            const g = rects[i].left - rects[i - 1].right;
-            if (g >= 0 && g < 100) gaps.push(g);
-        }
-        const gap = gaps.length ? median(gaps) : 8;
-        const sidePadding = Math.max(0, (scrollerRect.width - (cardWidth * columns + gap * Math.max(0, columns - 1))) / 2);
-        const gridWidth = Math.max(1, scrollerRect.width - sidePadding * 2);
-        const gridLeft = Math.max(0, scrollerRect.left - sectionRect.left + sidePadding);
-
-        return {
-            columns,
-            cardWidth,
-            gap,
-            gridLeft,
-            gridWidth,
-            sidePadding,
-            sidePaddingLeft: sidePadding,
-            sidePaddingRight: sidePadding,
-            scrollerWidth: Math.max(1, scrollerRect.width),
-            scrollerHeight: Math.max(1, scrollerRect.height),
-            widthRatio: cardWidth / gridWidth,
-            formulaBased: false
-        };
+    function measureVisibleLayout(...args) {
+        return nativeCarousel.layout(...args);
     }
 
-    function measureEmptyLayout(section) {
-        const sectionRect = section.getBoundingClientRect();
-        const content = section.querySelector(':scope > [data-uia="empty-carousel-section+content"]');
-        const heading = section.querySelector(':scope > [data-uia="empty-carousel-section+title"], :scope > h2');
-        const reference = content || heading;
-        const referenceRect = reference?.getBoundingClientRect?.();
-
-        let gridLeft = 0;
-        let gridWidth = 0;
-        let sidePaddingLeft = 0;
-        let sidePaddingRight = 0;
-
-        const hasNativeReference = Boolean(
-            referenceRect &&
-            Number.isFinite(referenceRect.left) &&
-            Number.isFinite(referenceRect.right) &&
-            Number.isFinite(referenceRect.width) &&
-            referenceRect.width > 1 &&
-            sectionRect.width > 1 &&
-            referenceRect.left >= sectionRect.left - 1 &&
-            referenceRect.right <= sectionRect.right + 1
-        );
-
-        const nativeEmptySection = section.matches?.('[data-uia="empty-carousel-section"]');
-        const originalHiddenByScript = nativeEmptySection && (
-            section.classList.contains(ORIGINAL_HIDDEN_CLASS) ||
-            section.getAttribute(ORIGINAL_VISIBILITY_ATTR) === 'false'
-        );
-
-        if (hasNativeReference) {
-            // Empty Netflix sections are already horizontally inset. Using the
-            // viewport fallback here would subtract the same padding twice.
-            gridLeft = Math.max(0, referenceRect.left - sectionRect.left);
-            gridWidth = Math.max(1, referenceRect.width);
-            sidePaddingLeft = gridLeft;
-            sidePaddingRight = Math.max(0, sectionRect.right - referenceRect.right);
-        } else if (originalHiddenByScript && sectionRect.width > 1) {
-            // When Original My List is hidden, our CSS sets the native empty title
-            // and content to display:none. Their rects therefore collapse to zero.
-            // The native empty section itself already carries Netflix's responsive
-            // horizontal inset, so using the viewport fallback would inset it again
-            // (48px -> 96px at the desktop breakpoint) and shrink the legacy frame.
-            gridLeft = 0;
-            gridWidth = Math.max(1, sectionRect.width);
-            sidePaddingLeft = 0;
-            sidePaddingRight = 0;
-        } else {
-            // Synthetic loading/empty sections have no native child geometry.
-            // Reproduce the responsive Netflix page padding only in that case.
-            let fallbackPadding;
-            if (window.innerWidth >= 2560) fallbackPadding = 72;
-            else if (window.innerWidth >= 1600) fallbackPadding = 60;
-            else if (window.innerWidth >= 1280) fallbackPadding = 48;
-            else if (window.innerWidth >= 600) fallbackPadding = 36;
-            else fallbackPadding = 24;
-
-            sidePaddingLeft = fallbackPadding;
-            sidePaddingRight = fallbackPadding;
-            gridLeft = sidePaddingLeft;
-            gridWidth = Math.max(1, sectionRect.width - sidePaddingLeft - sidePaddingRight);
-        }
-
-        const columns = Math.max(1, Math.round(gridWidth / 290));
-        const gap = 8;
-        const cardWidth = Math.max(1, (gridWidth - gap * Math.max(0, columns - 1)) / columns);
-        return {
-            columns,
-            cardWidth,
-            gap,
-            gridLeft,
-            gridWidth,
-            sidePadding: (sidePaddingLeft + sidePaddingRight) / 2,
-            sidePaddingLeft,
-            sidePaddingRight,
-            scrollerWidth: Math.max(1, sectionRect.width),
-            scrollerHeight: 1,
-            widthRatio: cardWidth / gridWidth,
-            formulaBased: false
-        };
+    function measureEmptyLayout(...args) {
+        return nativeCarousel.emptyLayout(...args);
     }
 
     function placeLegacyFrame(section, scroller, layout, { elapsedMs = null, finalized = false, totalCount = null } = {}) {
@@ -1716,32 +1552,8 @@ export function startLegacy() {
         return true;
     }
 
-    async function waitForNativeSource(section, timeout = NATIVE_READY_TIMEOUT_MS, sessionToken = null) {
-        assertRouteSession(sessionToken);
-        const started = performance.now();
-        while (performance.now() - started < timeout) {
-            assertRouteSession(sessionToken);
-            if (section.id === SYNTHETIC_SECTION_ID) {
-                const nativeSection = findMyListSection();
-                if (nativeSection && nativeSection !== section) {
-                    return { found: false, nativeSection, elapsedMs: Math.round(performance.now() - started) };
-                }
-            }
-
-            const scroller = section.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller);
-            const track = scroller && netflixDom.findTrack(scroller);
-            if (scroller && track) return { found: true, scroller, track, elapsedMs: Math.round(performance.now() - started) };
-            await sleep(NATIVE_READY_POLL_MS);
-        }
-        assertRouteSession(sessionToken);
-        return {
-            found: false,
-            empty: false,
-            reason: 'timeout',
-            stage: 'native-source',
-            timeoutMs: timeout,
-            elapsedMs: Math.round(performance.now() - started)
-        };
+    function waitForNativeSource(...args) {
+        return nativeCarousel.waitForSource(...args);
     }
 
     function finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, reason = 'empty') {
@@ -1753,10 +1565,7 @@ export function startLegacy() {
             track.classList.add('tm-netflix-mylist-v15-track');
             scroller.classList.add(SOURCE_PARKED_CLASS);
         }
-        sourceState = {
-            section,
-            scroller: scroller || null,
-            track: track || null,
+        sourceState = attachNativeBinding({
             layout,
             items: [],
             totalCount: 0,
@@ -1768,7 +1577,7 @@ export function startLegacy() {
             resizeViewportSignature: responsiveViewportSignature(),
             initializationStartedAt: initializationStarted,
             initializationElapsedMs: elapsedMs
-        };
+        }, section, scroller || null, track || null);
         waitingForNativeEmpty = false;
         syncLegacyEmptyState(section, { allowProvisional: true });
         completedSection = section;
@@ -3021,86 +2830,8 @@ export function startLegacy() {
         throw initializationTimeoutError('total-count-detection', timeout, details);
     }
 
-    function readNativeMyListDomState() {
-        if (!nativeReadScope) return withNativeReadScope(() => readNativeMyListDomState());
-        const section = findMyListSection();
-        if (!section) {
-            const graphqlCount = listData.readMyListTotalCount();
-            return {
-                section: null,
-                scroller: null,
-                track: null,
-                pages: 0,
-                selectedPage: 0,
-                pageSignature: '',
-                currentPageCount: 0,
-                sourceSlots: 0,
-                sourceCards: 0,
-                domExactCount: null,
-                graphqlCount,
-                exactCount: Number.isFinite(graphqlCount) ? graphqlCount : null,
-                fingerprint: `none|${Number.isFinite(graphqlCount) ? graphqlCount : 'x'}`
-            };
-        }
-
-        const scroller = section.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller);
-        const track = scroller && netflixDom.findTrack(scroller);
-        const runtime = getCarouselDomRuntime(section);
-        const profile = runtime?.profile || detectCarouselDomProfile(section);
-        const pages = pageCount(section);
-        const page = selectedPage(section);
-        const pageTopologyKnown = profile.pageMode === 'indicator'
-            ? profile.indicatorCount > 0
-            : Boolean(runtime?.pageCountFinalized);
-        const graphqlCount = listData.readMyListTotalCount();
-
-        if (!scroller || !track) {
-            return {
-                section,
-                scroller: scroller || null,
-                track: track || null,
-                pages,
-                selectedPage: page,
-                pageSignature: '',
-                currentPageCount: 0,
-                sourceSlots: 0,
-                sourceCards: 0,
-                domExactCount: pageTopologyKnown && pages === 1 ? 0 : null,
-                graphqlCount,
-                exactCount: pageTopologyKnown && pages === 1 ? 0 : (Number.isFinite(graphqlCount) ? graphqlCount : null),
-                fingerprint: `${pages}|${page}|0|0||${Number.isFinite(graphqlCount) ? graphqlCount : 'x'}`
-            };
-        }
-
-        const current = currentPageSlots(scroller, track);
-        const identities = current.map(nativeCardIdentity).filter(Boolean);
-        const uniqueIdentities = [...new Set(identities)];
-        const pageSignature = uniqueIdentities.join('|');
-        const domExactCount = pageTopologyKnown && pages === 1 ? uniqueIdentities.length : null;
-        // For one-page lists the live DOM is authoritative. Netflix's GraphQL cache can
-        // remain stale after an in-page add/remove, so only use GraphQL as a fallback.
-        const exactCount = Number.isFinite(domExactCount)
-            ? domExactCount
-            : (Number.isFinite(graphqlCount) ? graphqlCount : null);
-        const sourceSlots = netflixDom.directSlots(track).length;
-        const sourceCards = nativeFilledSlots(track).length;
-
-        return {
-            section,
-            scroller,
-            track,
-            pages,
-            selectedPage: page,
-            pageSignature,
-            pageTopologyKnown,
-            currentPageCount: uniqueIdentities.length,
-            sourceSlots,
-            sourceCards,
-            domExactCount,
-            graphqlCount,
-            exactCount,
-            fingerprint: `${pages}|${page}|${uniqueIdentities.length}|${sourceSlots}|${sourceCards}|${pageSignature}|${Number.isFinite(graphqlCount) ? graphqlCount : 'x'}`
-        };
+    function readNativeMyListDomState(...args) {
+        return nativeCarousel.observe(...args);
     }
 
     function normalizeNetflixUiText(value) {
@@ -3277,9 +3008,7 @@ export function startLegacy() {
         status.insertAdjacentElement('afterend', grid);
         const layout = measureEmptyLayout(synthetic);
         layout.rowGap = measureNativeCarouselGap(synthetic);
-        sourceState.section = synthetic;
-        sourceState.scroller = null;
-        sourceState.track = null;
+        attachNativeBinding(sourceState, synthetic);
         sourceState.layout = layout;
         sourceState.empty = true;
         sourceState.status = status;
@@ -3318,9 +3047,7 @@ export function startLegacy() {
         parkSource(live.scroller);
         live.scroller.insertAdjacentElement('afterend', status);
         status.insertAdjacentElement('afterend', grid);
-        sourceState.section = live.section;
-        sourceState.scroller = live.scroller;
-        sourceState.track = live.track;
+        attachNativeBinding(sourceState, live.section, live.scroller, live.track);
         sourceState.layout = layout;
         sourceState.status = status;
         sourceState.grid = grid;
@@ -3372,9 +3099,7 @@ export function startLegacy() {
         else live.section.prepend(status);
         status.insertAdjacentElement('afterend', grid);
 
-        sourceState.section = live.section;
-        sourceState.scroller = null;
-        sourceState.track = null;
+        attachNativeBinding(sourceState, live.section);
         sourceState.layout = layout;
         sourceState.empty = true;
         sourceState.status = status;
@@ -3443,14 +3168,7 @@ export function startLegacy() {
         }
 
         myListCountConvergencePending = true;
-        runtime.signatureToPage.clear();
-        runtime.pageToSignature.clear();
-        runtime.knownPageCount = estimatedPages;
-        runtime.pageCountFinalized = true;
-        runtime.cycleDetected = false;
-        runtime.pageMappingStale = true;
-        runtime.currentPage = currentPage;
-        if (signature) registerLogicalPageSignature(sourceState.section, signature, currentPage);
+        nativeCarousel.anchorAfterDelta(sourceState.section, { pageCount: estimatedPages, currentPage, signature });
 
         log(tLog('logicalPageModelSynchronizedAfterDelta'), {
             reason,
@@ -3728,6 +3446,7 @@ export function startLegacy() {
         responsiveRefreshPromise = null;
         responsiveRefreshing = false;
         completedSection = null;
+        nativeCarousel.clearBinding();
         sourceState = null;
         waitingForNativeEmpty = false;
         missingSectionSince = 0;
@@ -4149,219 +3868,52 @@ export function startLegacy() {
         status.style.color = style.color || 'rgb(255, 255, 255)';
     }
 
-    function detectCarouselDomProfile(section) {
-        if (section && nativeReadScope?.profiles.has(section)) return nativeReadScope.profiles.get(section);
-        const legacyLeft = section?.querySelector?.('[data-uia="carousel-left-button"]') || null;
-        const legacyRight = section?.querySelector?.('[data-uia="carousel-right-button"]') || null;
-        const hawkinsLeft = section?.querySelector?.('[data-uia="carousel-hawkins-left-button"]') || null;
-        const hawkinsRight = section?.querySelector?.('[data-uia="carousel-hawkins-right-button"]') || null;
-        const indicatorItems = nativeIndicatorItems(section);
-        const legacyControls = Boolean(legacyLeft || legacyRight);
-        const hawkinsControls = Boolean(hawkinsLeft || hawkinsRight);
-        const generation = legacyControls && hawkinsControls
-            ? 'hybrid'
-            : legacyControls
-                ? 'generation1'
-                : hawkinsControls
-                    ? 'generation2'
-                    : 'unknown';
-        const navigationMode = legacyControls ? 'legacy' : (hawkinsControls ? 'hawkins' : 'none');
-        const pageMode = legacyControls && indicatorItems.length > 0 ? 'indicator' :
-            ((legacyControls || hawkinsControls) ? 'logical' : 'unknown');
-        const profile = {
-            generation,
-            navigationMode,
-            pageMode,
-            capabilities: {
-                legacyControls,
-                hawkinsControls,
-                pageIndicators: indicatorItems.length > 0,
-                selectedIndicator: indicatorItems.some(x => x.getAttribute('data-indicator-selected') === 'true'),
-                virtualSlots: Boolean(section?.querySelector?.(NETFLIX_DOM_SELECTORS.virtualSlot)),
-                standardCards: Boolean(section?.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard))
-            },
-            indicatorCount: indicatorItems.length
-        };
-        if (section && nativeReadScope) nativeReadScope.profiles.set(section, profile);
-        return profile;
+    function detectCarouselDomProfile(...args) {
+        return nativeCarousel.profile(...args);
     }
 
-    function getCarouselDomRuntime(section) {
-        if (!section) return null;
-        let state = carouselDomRuntime.get(section);
-        if (!state) {
-            state = {
-                profile: detectCarouselDomProfile(section),
-                currentPage: 0,
-                knownPageCount: null,
-                pageCountFinalized: false,
-                cycleDetected: false,
-                pageMappingStale: false,
-                signatureToPage: new Map(),
-                pageToSignature: new Map(),
-                profileLogSignature: ''
-            };
-            carouselDomRuntime.set(section, state);
-        } else {
-            state.profile = detectCarouselDomProfile(section);
-        }
-        return state;
+    function getCarouselDomRuntime(...args) {
+        return nativeCarousel.model(...args);
     }
 
-    function resetCarouselDomRuntime(section) {
-        if (!section) return null;
-        invalidateNativeReadScope();
-        carouselDomRuntime.delete(section);
-        return getCarouselDomRuntime(section);
+    function resetCarouselDomRuntime(...args) {
+        return nativeCarousel.resetModel(...args);
     }
 
-    function carouselDomProfileSummary(section) {
-        const runtime = getCarouselDomRuntime(section);
-        if (!runtime) return null;
-        return {
-            generation: runtime.profile.generation,
-            navigationMode: runtime.profile.navigationMode,
-            pageMode: runtime.profile.pageMode,
-            indicatorCount: runtime.profile.indicatorCount,
-            knownPageCount: runtime.knownPageCount,
-            pageCountFinalized: Boolean(runtime.pageCountFinalized),
-            cycleDetected: Boolean(runtime.cycleDetected),
-            pageMappingStale: Boolean(runtime.pageMappingStale),
-            logicalPage: runtime.currentPage,
-            capabilities: { ...runtime.profile.capabilities }
-        };
+    function carouselDomProfileSummary(...args) {
+        return nativeCarousel.profileSummary(...args);
     }
 
-    function logCarouselDomProfile(section, reason = 'unknown') {
-        const runtime = getCarouselDomRuntime(section);
-        if (!runtime) return;
-        const summary = carouselDomProfileSummary(section);
-        const signature = JSON.stringify(summary);
-        if (signature === runtime.profileLogSignature) return;
-        runtime.profileLogSignature = signature;
-        log(tLog('carouselDomProfileDetected'), { reason, ...summary });
+    function logCarouselDomProfile(...args) {
+        return nativeCarousel.logProfile(...args);
     }
 
-    function logicalVisibleSignature(section) {
-        const scroller = sourceState?.scroller?.isConnected
-            ? sourceState.scroller
-            : section?.querySelector?.(NETFLIX_DOM_SELECTORS.carouselScroller);
-        const track = sourceState?.track?.isConnected ? sourceState.track : (scroller && netflixDom.findTrack(scroller));
-        if (!scroller || !track) return '';
-        return visibleSignature(currentPageSlots(scroller, track));
+    function logicalVisibleSignature(...args) {
+        return nativeCarousel.visiblePageSignature(...args);
     }
 
-    function registerLogicalPageSignature(section, signature, page = null) {
-        if (!section || !signature) return null;
-        const runtime = getCarouselDomRuntime(section);
-        if (!runtime) return null;
-
-        if (runtime.signatureToPage.has(signature)) {
-            const existing = runtime.signatureToPage.get(signature);
-            runtime.currentPage = existing;
-            return existing;
-        }
-
-        const resolvedPage = Number.isFinite(page) ? Math.max(0, page) : Math.max(0, runtime.currentPage);
-        const previousSignature = runtime.pageToSignature.get(resolvedPage);
-        if (previousSignature && previousSignature !== signature) {
-            runtime.signatureToPage.delete(previousSignature);
-        }
-        runtime.signatureToPage.set(signature, resolvedPage);
-        runtime.pageToSignature.set(resolvedPage, signature);
-        runtime.currentPage = resolvedPage;
-        return resolvedPage;
+    function registerLogicalPageSignature(...args) {
+        return nativeCarousel.registerPage(...args);
     }
 
-    function normalizeLogicalPages(section) {
-        const runtime = getCarouselDomRuntime(section);
-        if (!runtime || !runtime.signatureToPage.size) return 0;
-        const pages = [...runtime.signatureToPage.values()].filter(Number.isFinite);
-        if (!pages.length) return 0;
-        const minimum = Math.min(...pages);
-        if (minimum === 0) return 0;
-        const shifted = new Map();
-        for (const [signature, page] of runtime.signatureToPage.entries()) {
-            shifted.set(signature, page - minimum);
-        }
-        runtime.signatureToPage = shifted;
-        runtime.pageToSignature = new Map([...shifted.entries()].map(([signature, page]) => [page, signature]));
-        runtime.currentPage = Math.max(0, runtime.currentPage - minimum);
-        return -minimum;
+    function normalizeLogicalPages(...args) {
+        return nativeCarousel.normalizePages(...args);
     }
 
-    function selectedPage(section) {
-        if (!nativeReadScope) return withNativeReadScope(() => selectedPage(section));
-        const runtime = getCarouselDomRuntime(section);
-        const profile = runtime?.profile || detectCarouselDomProfile(section);
-        if (profile.pageMode === 'indicator') {
-            const items = nativeIndicatorItems(section);
-            const index = items.findIndex(x => x.getAttribute('data-indicator-selected') === 'true');
-            return index >= 0 ? index : 0;
-        }
-        if (profile.pageMode === 'logical' && runtime) {
-            const scroller = sourceState?.section === section && sourceState?.scroller?.isConnected
-                ? sourceState.scroller
-                : section?.querySelector?.(NETFLIX_DOM_SELECTORS.carouselScroller);
-            const track = sourceState?.section === section && sourceState?.track?.isConnected
-                ? sourceState.track
-                : (scroller && netflixDom.findTrack(scroller));
-            const totalCount = sourceState?.section === section ? sourceState?.totalCount : null;
-            const columns = sourceState?.section === section
-                ? Math.max(1, sourceState?.layout?.columns || 1)
-                : 0;
-            if (scroller && track && Number.isFinite(totalCount) && totalCount > 0 && columns > 0) {
-                const nativeState = nativeLogicalPageState(scroller, track, totalCount, columns);
-                if (Number.isFinite(nativeState.page)) {
-                    const signature = visibleSignature(nativeState.slots);
-                    if (signature) forceLogicalPageSignature(section, signature, nativeState.page);
-                    runtime.currentPage = nativeState.page;
-                    return runtime.currentPage;
-                }
-            }
-            const signature = logicalVisibleSignature(section);
-            if (signature && runtime.signatureToPage.has(signature)) {
-                runtime.currentPage = runtime.signatureToPage.get(signature);
-            }
-            return runtime.currentPage;
-        }
-        return 0;
+    function selectedPage(...args) {
+        return nativeCarousel.selectedPage(...args);
     }
 
-    function pageCount(section) {
-        const runtime = getCarouselDomRuntime(section);
-        const profile = runtime?.profile || detectCarouselDomProfile(section);
-        if (profile.pageMode === 'indicator') {
-            return nativeIndicatorItems(section).length || 1;
-        }
-        if (profile.pageMode === 'logical' && runtime) {
-            if (runtime.pageCountFinalized && Number.isFinite(runtime.knownPageCount)) {
-                return Math.max(1, runtime.knownPageCount);
-            }
-            const knownPages = [...runtime.signatureToPage.values()].filter(Number.isFinite);
-            if (knownPages.length) return Math.max(1, Math.max(...knownPages) + 1);
-        }
-        return 1;
+    function pageCount(...args) {
+        return nativeCarousel.pageCount(...args);
     }
 
-    function carouselMoveButton(section, scroller, direction) {
-        const profile = getCarouselDomRuntime(section)?.profile || detectCarouselDomProfile(section);
-        const side = direction < 0 ? 'left' : 'right';
-        const selectors = profile.navigationMode === 'legacy'
-            ? [`[data-uia="carousel-${side}-button"]`, `[data-uia="carousel-hawkins-${side}-button"]`]
-            : [`[data-uia="carousel-hawkins-${side}-button"]`, `[data-uia="carousel-${side}-button"]`];
-        for (const selector of selectors) {
-            const button = scroller?.querySelector?.(selector) || section?.querySelector?.(selector);
-            if (button) return { button, selector };
-        }
-        return { button: null, selector: selectors.join(' | ') };
+    function carouselMoveButton(...args) {
+        return nativeCarousel.navigationControl(...args);
     }
 
-    function carouselMoveButtonDisabled(button) {
-        if (!button) return false;
-        return button.disabled === true ||
-            button.getAttribute('aria-disabled') === 'true' ||
-            button.getAttribute('tabindex') === '-1';
+    function carouselMoveButtonDisabled(...args) {
+        return nativeCarousel.controlDisabled(...args);
     }
 
     function createLogicalMoveSignal(scroller, token, sessionToken) {
@@ -4429,6 +3981,9 @@ export function startLegacy() {
     }
 
     async function waitLogicalPageChange(section, scroller, track, beforePage, direction, beforeTransform, beforeSignature, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
+        assertRouteSession(sessionToken);
+        const bindingOwner = nativeCarousel.borrowBinding(section, scroller, track);
+        nativeCarousel.assertBinding(bindingOwner);
         const runtime = getCarouselDomRuntime(section);
         const started = performance.now();
         let lastTransform = beforeTransform;
@@ -4452,6 +4007,7 @@ export function startLegacy() {
                     }
                 }
                 assertRouteSession(sessionToken);
+                nativeCarousel.assertBinding(bindingOwner);
                 if (performanceDiagnostics.hoverLifecycle === counters) counters.logicalMoveReads++;
                 const transform = track.style.getPropertyValue('transform') || getComputedStyle(track).transform;
                 const signature = visibleSignature(currentPageSlots(scroller, track));
@@ -4466,8 +4022,7 @@ export function startLegacy() {
                     ? existingPage
                     : registerLogicalPageSignature(section, signature, proposedPage);
                 if (runtime) {
-                    runtime.currentPage = mapped;
-                    runtime.cycleDetected = Number.isFinite(existingPage) && existingPage !== beforePage;
+                    nativeCarousel.notePage(section, mapped, Number.isFinite(existingPage) && existingPage !== beforePage);
                 }
                 return {
                     page: mapped,
@@ -4480,6 +4035,7 @@ export function startLegacy() {
                 };
             }
             assertRouteSession(sessionToken);
+            nativeCarousel.assertBinding(bindingOwner);
             if (hoverPreparationCancelled(token)) {
                 return { page: beforePage, changed: false, transform: lastTransform, signature: lastSignature };
             }
@@ -4902,104 +4458,16 @@ export function startLegacy() {
         return result;
     }
 
-    function currentPageSlots(scroller, track) {
-        if (!nativeReadScope) return withNativeReadScope(() => currentPageSlots(scroller, track));
-        let byTrack = nativeReadScope.slots.get(scroller);
-        if (!byTrack) nativeReadScope.slots.set(scroller, byTrack = new WeakMap());
-        if (byTrack.has(track)) return byTrack.get(track);
-        const all = nativeFilledSlots(track);
-        if (!all.length) {
-            byTrack.set(track, []);
-            return byTrack.get(track);
-        }
-
-        const sr = nativeRect(scroller);
-        const visible = all
-            .map(slot => ({ slot, rect: nativeRect(slot) }))
-            .filter(x => {
-                const cx = x.rect.left + x.rect.width / 2;
-                return x.rect.width > 1 && cx >= sr.left && cx <= sr.right;
-            })
-            .sort((a, b) => a.rect.left - b.rect.left)
-            .map(x => x.slot);
-
-        const active = all.filter(slot => {
-            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-            return card?.getAttribute('tabindex') === '0';
-        });
-        let current = visible;
-        if (active.length) {
-            // During Hawkins virtual-window hydration Netflix can leave only
-            // the first card tabbable while the remaining visible cards exist.
-            // Prefer the complete geometric viewport window in that state.
-            if (visible.length <= active.length) current = active.sort((a, b) => nativeRect(a).left - nativeRect(b).left);
-        }
-
-        byTrack.set(track, current);
-        return current;
+    function currentPageSlots(...args) {
+        return nativeCarousel.currentSlots(...args);
     }
 
-    function visibleSignature(slots) {
-        return slots.map(slot => {
-            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-            return card?.href || card?.getAttribute('href') || '';
-        }).filter(Boolean).join('|');
+    function visibleSignature(...args) {
+        return nativeCarousel.signatureOf(...args);
     }
 
-    function nativeCarouselReadiness(section, scroller, track) {
-        if (!nativeReadScope) return withNativeReadScope(() => nativeCarouselReadiness(section, scroller, track));
-        const slots = netflixDom.directSlots(track);
-        const cards = nativeFilledSlots(track);
-        const currentSlots = currentPageSlots(scroller, track);
-        const pages = pageCount(section);
-        const formula = parseSlotLayoutFormula(track);
-        const columns = Math.max(1, formula?.columns || currentSlots.length || cards.length || 1);
-        const runtime = getCarouselDomRuntime(section);
-        const profile = runtime?.profile || detectCarouselDomProfile(section);
-        const leftControl = carouselMoveButton(section, scroller, -1).button;
-        const rightControl = carouselMoveButton(section, scroller, 1).button;
-        const controlsPresent = Boolean(leftControl || rightControl);
-        const controlsEnabled =
-            leftControl?.getAttribute('tabindex') === '0' ||
-            rightControl?.getAttribute('tabindex') === '0';
-        const inlineTransform = track.style.getPropertyValue('transform') || '';
-        const inlineDisplay = track.style.getPropertyValue('display') || '';
-        const inlineWillChange = track.style.getPropertyValue('will-change') || '';
-        const trackInitialized =
-            inlineDisplay === 'flex' ||
-            (inlineTransform && inlineTransform !== 'none') ||
-            /\btransform\b/i.test(inlineWillChange);
-        const signature = [
-            pages,
-            slots.length,
-            cards.length,
-            currentSlots.length,
-            columns,
-            controlsPresent ? 1 : 0,
-            controlsEnabled ? 1 : 0,
-            trackInitialized ? 1 : 0,
-            profile.generation,
-            profile.navigationMode,
-            profile.pageMode,
-            visibleSignature(currentSlots)
-        ].join('||');
-
-        return {
-            connected: section.isConnected && scroller.isConnected && track.isConnected,
-            pages,
-            slots: slots.length,
-            cards: cards.length,
-            currentCards: currentSlots.length,
-            columns,
-            controlsPresent,
-            controlsEnabled,
-            trackInitialized,
-            domGeneration: profile.generation,
-            navigationMode: profile.navigationMode,
-            pageMode: profile.pageMode,
-            capabilities: { ...profile.capabilities },
-            signature
-        };
+    function nativeCarouselReadiness(...args) {
+        return nativeCarousel.readiness(...args);
     }
 
     function readMountedSinglePageMembership(section, scroller, track) {
@@ -5099,140 +4567,8 @@ export function startLegacy() {
         return null;
     }
 
-    async function waitForNativeCarouselReady(section, scroller, track, sessionToken = null, options = {}) {
-        assertRouteSession(sessionToken);
-        const started = performance.now();
-        const fastSinglePageTotalCount = Number.isSafeInteger(options.fastSinglePageTotalCount)
-            ? options.fastSinglePageTotalCount
-            : null;
-        let lastSignature = '';
-        let stableSince = started;
-        let lastState = nativeCarouselReadiness(section, scroller, track);
-
-        log(tLog('waitingForNativeCarouselInitialization'), {
-            pages: lastState.pages,
-            slots: lastState.slots,
-            cards: lastState.cards,
-            currentCards: lastState.currentCards,
-            columns: lastState.columns,
-            controlsPresent: lastState.controlsPresent,
-            controlsEnabled: lastState.controlsEnabled,
-            trackInitialized: lastState.trackInitialized,
-            domGeneration: lastState.domGeneration,
-            navigationMode: lastState.navigationMode,
-            pageMode: lastState.pageMode,
-            capabilities: lastState.capabilities
-        });
-
-        while (performance.now() - started < NATIVE_READY_TIMEOUT_MS) {
-            assertRouteSession(sessionToken);
-            const state = nativeCarouselReadiness(section, scroller, track);
-            lastState = state;
-            if (!state.connected) {
-                return { ready: false, reason: 'detached', elapsedMs: Math.round(performance.now() - started), state };
-            }
-
-            const now = performance.now();
-            if (state.signature !== lastSignature) {
-                lastSignature = state.signature;
-                stableSince = now;
-            }
-
-            const stableMs = now - stableSince;
-            const multiPageReady =
-                state.pages > 1 &&
-                state.cards > 0 &&
-                state.currentCards > 0 &&
-                (state.controlsEnabled || state.trackInitialized || state.slots >= state.columns);
-
-            const logicalCarouselReady =
-                state.pageMode === 'logical' &&
-                state.cards > 0 &&
-                state.currentCards > 0 &&
-                state.controlsPresent &&
-                state.trackInitialized &&
-                stableMs >= NATIVE_LOGICAL_STABLE_MS;
-
-            // A genuine short list can legitimately have one page and fewer cards than
-            // the responsive column count. Do not accept that state immediately: the
-            // same shape also appears briefly while Netflix is still building a larger
-            // virtual carousel. Let it remain unchanged before treating it as complete.
-            const fastSinglePageReady =
-                Number.isSafeInteger(fastSinglePageTotalCount) &&
-                fastSinglePageTotalCount > 0 &&
-                fastSinglePageTotalCount <= state.columns &&
-                state.pageMode === 'logical' &&
-                state.pages === 1 &&
-                state.cards === fastSinglePageTotalCount &&
-                state.currentCards === fastSinglePageTotalCount &&
-                state.slots === fastSinglePageTotalCount;
-
-            const singlePageReady =
-                state.pages === 1 &&
-                state.cards > 0 &&
-                state.currentCards > 0 &&
-                state.slots === state.cards &&
-                (fastSinglePageReady || stableMs >= NATIVE_SINGLE_PAGE_STABLE_MS);
-
-            const emptyPageReady =
-                state.pages === 1 &&
-                state.cards === 0 &&
-                state.slots === 0 &&
-                stableMs >= NATIVE_EMPTY_STABLE_MS;
-
-            if (emptyPageReady) {
-                return {
-                    ready: true,
-                    empty: true,
-                    reason: 'stable-empty-page',
-                    elapsedMs: Math.round(performance.now() - started),
-                    state
-                };
-            }
-
-            if (logicalCarouselReady || multiPageReady || singlePageReady) {
-                await new Promise(resolve => requestAnimationFrame(resolve));
-                assertRouteSession(sessionToken);
-                await new Promise(resolve => requestAnimationFrame(resolve));
-                assertRouteSession(sessionToken);
-                const confirmed = nativeCarouselReadiness(section, scroller, track);
-                if (confirmed.connected && confirmed.signature === state.signature) {
-                    const result = {
-                        ready: true,
-                        reason: logicalCarouselReady
-                            ? 'logical-carousel'
-                            : (multiPageReady ? 'multi-page' : (fastSinglePageReady ? 'fast-single-page' : 'stable-single-page')),
-                        elapsedMs: Math.round(performance.now() - started),
-                        state: confirmed
-                    };
-                    log(tLog('nativeCarouselInitializationReady'), result);
-                    return result;
-                }
-                lastSignature = confirmed.signature;
-                stableSince = performance.now();
-                lastState = confirmed;
-            }
-
-            await sleep(NATIVE_READY_POLL_MS);
-            assertRouteSession(sessionToken);
-        }
-
-        assertRouteSession(sessionToken);
-        const finalState = nativeCarouselReadiness(section, scroller, track);
-        const result = {
-            ready: false,
-            reason: 'timeout',
-            stage: 'native-carousel-readiness',
-            timeoutMs: NATIVE_READY_TIMEOUT_MS,
-            elapsedMs: Math.round(performance.now() - started),
-            state: finalState
-        };
-        logOperationTimeout(result.stage, result.timeoutMs, {
-            elapsedMs: result.elapsedMs,
-            state: finalState
-        });
-        warn(tLog('nativeCarouselInitializationIsStillIncompleteInitializationDeferred'), result);
-        return result;
+    function waitForNativeCarouselReady(...args) {
+        return nativeCarousel.ready(...args);
     }
 
     async function waitStableCurrentPage(scroller, track, options = {}) {
@@ -6037,170 +5373,12 @@ export function startLegacy() {
     }
 
     // Reads the private React props needed to order and validate Netflix's logical carousel.
-    const netflixReactCarousel = Object.freeze({
-        fiberForNode(node) {
-            if (!node) return null;
-            for (const key of Object.getOwnPropertyNames(node)) {
-                if (!key.startsWith('__reactFiber$') && !key.startsWith('__reactInternalInstance$')) continue;
-                const fiber = node[key];
-                if (fiber && typeof fiber === 'object') return fiber;
-            }
-            return null;
-        },
-
-        typeName(fiber) {
-            const type = fiber?.elementType || fiber?.type;
-            if (typeof type === 'string') return type;
-            if (typeof type === 'function') return type.displayName || type.name || '(anonymous)';
-            if (type && typeof type === 'object') {
-                return String(type.displayName || type.name || type.$$typeof || '(object)');
-            }
-            return type == null ? '' : String(type);
-        },
-
-        readFiberProp(roots, property, isValid) {
-            for (const root of roots) {
-                let fiber = this.fiberForNode(root);
-                const visited = new Set();
-                let depth = 0;
-                while (fiber && typeof fiber === 'object' && depth < 16 && !visited.has(fiber)) {
-                    visited.add(fiber);
-                    const sources = [
-                        ['memoizedProps', fiber.memoizedProps],
-                        ['pendingProps', fiber.pendingProps],
-                        ['alternate.memoizedProps', fiber.alternate?.memoizedProps],
-                        ['alternate.pendingProps', fiber.alternate?.pendingProps]
-                    ];
-                    for (const [source, props] of sources) {
-                        const value = props?.[property];
-                        if (isValid(value)) {
-                            return {
-                                value,
-                                depth,
-                                source,
-                                fiberKey: fiber.key ?? null,
-                                typeName: this.typeName(fiber)
-                            };
-                        }
-                    }
-                    fiber = fiber.return;
-                    depth++;
-                }
-            }
-            return { value: null, depth: null, source: null, fiberKey: null, typeName: '' };
-        },
-
-        readItemIndex(slot) {
-            const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard) || null;
-            return this.readFiberProp(
-                [slot?.firstElementChild || null, card?.parentElement || null, card],
-                'itemIndex',
-                Number.isSafeInteger
-            );
-        },
-
-        readCarouselTotalCount(slot) {
-            const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard) || null;
-            const reading = this.readFiberProp(
-                [slot, slot?.firstElementChild || null, card?.parentElement || null, card],
-                'totalCount',
-                value => Number.isSafeInteger(value) && value >= 0
-            );
-            return reading.value;
-        }
-    });
-
-    function diagnosticPrimitiveProps(props) {
-        if (!props || typeof props !== 'object') return null;
-        const keys = Object.keys(props);
-        const interesting = {};
-        const pattern = /(index|offset|position|slot|page|item|cursor|count|first|last|key|raw|virtual)/i;
-        for (const key of keys) {
-            if (!pattern.test(key)) continue;
-            const value = props[key];
-            if (value == null || ['string', 'number', 'boolean'].includes(typeof value)) {
-                interesting[key] = value;
-            }
-            if (Object.keys(interesting).length >= 24) break;
-        }
-        return { keys: keys.slice(0, 40), interesting };
+    function logVirtualRawIndexDiagnostic(...args) {
+        return nativeCarousel.diagnoseIndices(...args);
     }
 
-    function diagnosticFiberChain(node, maxDepth = 16) {
-        const fiber = netflixReactCarousel.fiberForNode(node);
-        const chain = [];
-        let current = fiber;
-        const visited = new Set();
-        let depth = 0;
-        while (current && typeof current === 'object' && depth < maxDepth && !visited.has(current)) {
-            visited.add(current);
-            const stateNode = current.stateNode;
-            chain.push({
-                depth,
-                tag: current.tag ?? null,
-                key: current.key ?? null,
-                alternateKey: current.alternate?.key ?? null,
-                typeName: netflixReactCarousel.typeName(current),
-                stateNodeName: stateNode instanceof Element ? stateNode.tagName.toLowerCase() : '',
-                stateVirtualSlot: stateNode instanceof Element ? (stateNode.getAttribute('data-virtual-slot') || '') : '',
-                memoizedProps: diagnosticPrimitiveProps(current.memoizedProps),
-                pendingProps: diagnosticPrimitiveProps(current.pendingProps)
-            });
-            current = current.return;
-            depth++;
-        }
-        return chain;
-    }
-
-    function diagnosticReactNode(node, label) {
-        if (!(node instanceof Element)) return { label, available: false };
-        const ownKeys = Object.getOwnPropertyNames(node);
-        return {
-            label,
-            available: true,
-            tagName: node.tagName.toLowerCase(),
-            virtualSlot: node.getAttribute('data-virtual-slot') || '',
-            reactKeys: ownKeys.filter(key => key.startsWith('__react')).slice(0, 20),
-            fiberChain: diagnosticFiberChain(node)
-        };
-    }
-
-    function logVirtualRawIndexDiagnostic(slots, totalCount, columns, stage) {
-        const entries = slots.slice(0, Math.min(slots.length, 6)).map((slot, index) => {
-            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-            const child = slot.firstElementChild;
-            const cardParent = card?.parentElement || null;
-            return {
-                index,
-                descriptor: slotDescriptor(slot),
-                nodes: [
-                    diagnosticReactNode(slot, 'slot'),
-                    diagnosticReactNode(child, 'slot-first-child'),
-                    diagnosticReactNode(cardParent, 'card-parent'),
-                    diagnosticReactNode(card, 'card')
-                ]
-            };
-        });
-        warn('Netflix itemIndex diagnostic', {
-            stage,
-            totalCount,
-            columns,
-            slotCount: slots.length,
-            entries
-        });
-    }
-
-    function nativeReactCarouselTotalCount(scroller, track) {
-        const slots = currentPageSlots(scroller, track);
-        const readings = slots.map(slot => netflixReactCarousel.readCarouselTotalCount(slot));
-        const finiteReadings = readings.filter(value => Number.isSafeInteger(value) && value >= 0);
-        const unique = [...new Set(finiteReadings)];
-        return {
-            totalCount: unique.length === 1 ? unique[0] : null,
-            readings,
-            slots: slots.length,
-            uniqueReadings: unique
-        };
+    function nativeReactCarouselTotalCount(...args) {
+        return nativeCarousel.readCount(...args);
     }
 
     function isResizeResponsiveReason(reason) {
@@ -6238,133 +5416,46 @@ export function startLegacy() {
         };
     }
 
-    function requireNativeReactCarouselTotalCount(scroller, track, provisionalTotalCount = null) {
-        const state = nativeReactCarouselTotalCount(scroller, track);
-        if (Number.isSafeInteger(state.totalCount) && state.totalCount >= 0) return state;
-        throw initializationError(
-            'NATIVE_TOTAL_COUNT_UNAVAILABLE',
-            'native-react-total-count',
-            'Could not read a consistent Netflix My List totalCount from the mounted carousel',
-            {
-                provisionalTotalCount,
-                slots: state.slots,
-                readings: state.readings,
-                uniqueReadings: state.uniqueReadings
-            }
-        );
+    function requireNativeReactCarouselTotalCount(...args) {
+        return nativeCarousel.requireCount(...args);
     }
 
-    function netflixItemIndexFromSlot(slot) {
-        if (!nativeReadScope || !slot) return netflixReactCarousel.readItemIndex(slot).value;
-        if (!nativeReadScope.indices.has(slot)) {
-            nativeReadScope.indices.set(slot, netflixReactCarousel.readItemIndex(slot).value);
-        }
-        return nativeReadScope.indices.get(slot);
+    function netflixItemIndexFromSlot(...args) {
+        return nativeCarousel.itemIndex(...args);
     }
 
-    function normalizeNetflixLogicalIndex(itemIndex, totalCount) {
-        if (!Number.isSafeInteger(itemIndex) || !Number.isFinite(totalCount) || totalCount <= 0) return null;
-        if (itemIndex < 0 || itemIndex >= totalCount) return null;
-        return itemIndex;
+    function normalizeNetflixLogicalIndex(...args) {
+        return nativeCarousel.logicalIndex(...args);
     }
 
-    function logicalSlotPositions(slots, totalCount) {
-        return slots.map(slot => {
-            const itemIndex = netflixItemIndexFromSlot(slot);
-            return {
-                slot,
-                itemIndex,
-                logicalIndex: normalizeNetflixLogicalIndex(itemIndex, totalCount)
-            };
-        });
+    function logicalSlotPositions(...args) {
+        return nativeCarousel.positions(...args);
     }
 
-    function expectedLogicalIndicesForPage(totalCount, columns, page) {
-        const count = Math.max(0, Math.floor(totalCount));
-        const width = Math.max(1, Math.floor(columns));
-        if (count <= 0) return [];
-        const pages = Math.max(1, Math.ceil(count / width));
-        const normalizedPage = Math.max(0, Math.min(pages - 1, Math.floor(page)));
-        const visibleCount = Math.min(width, count);
-        let start = normalizedPage * width;
-        if (pages > 1 && normalizedPage === pages - 1 && count % width !== 0) {
-            start = Math.max(0, count - width);
-        }
-        return Array.from({ length: visibleCount }, (_, index) => start + index);
+    function expectedLogicalIndicesForPage(...args) {
+        return nativeCarousel.expectedPageIndices(...args);
     }
 
-    function logicalPageFromSlotPositions(positions, totalCount, columns) {
-        if (!positions.length || positions.some(position => !Number.isSafeInteger(position.logicalIndex))) return null;
-        const actual = [...new Set(positions.map(position => position.logicalIndex))].sort((a, b) => a - b);
-        if (actual.length !== positions.length) return null;
-        const width = Math.max(1, Math.floor(columns));
-        const pages = Math.max(1, Math.ceil(totalCount / width));
-        // A full window starts at a page boundary, except the overlapping last
-        // page. Still require exact membership; never accept partial hydration.
-        const candidates = [...new Set([Math.floor(actual[0] / width), pages - 1])].sort((a, b) => a - b);
-        for (const page of candidates) {
-            if (page < 0 || page >= pages) continue;
-            const expected = expectedLogicalIndicesForPage(totalCount, columns, page);
-            if (expected.length !== actual.length) continue;
-            if (expected.every((value, index) => value === actual[index])) return page;
-        }
-        return null;
+    function logicalPageFromSlotPositions(...args) {
+        return nativeCarousel.pageForPositions(...args);
     }
 
-    function nativeLogicalPageState(scroller, track, totalCount, columns) {
-        if (!nativeReadScope) return withNativeReadScope(() => nativeLogicalPageState(scroller, track, totalCount, columns));
-        const slots = currentPageSlots(scroller, track);
-        const positions = logicalSlotPositions(slots, totalCount);
-        const page = logicalPageFromSlotPositions(positions, totalCount, columns);
-        return {
-            slots,
-            positions,
-            page,
-            itemIndices: positions.map(position => position.itemIndex),
-            logicalIndices: positions.map(position => position.logicalIndex)
-        };
+    function nativeLogicalPageState(...args) {
+        return nativeCarousel.logicalWindow(...args);
     }
 
-    function forceLogicalPageSignature(section, signature, page) {
-        if (!section || !signature || !Number.isFinite(page)) return null;
-        const runtime = getCarouselDomRuntime(section);
-        if (!runtime) return null;
-        const resolvedPage = Math.max(0, Math.floor(page));
-        const oldPage = runtime.signatureToPage.get(signature);
-        if (Number.isFinite(oldPage) && oldPage !== resolvedPage) {
-            if (runtime.pageToSignature.get(oldPage) === signature) runtime.pageToSignature.delete(oldPage);
-        }
-        const oldSignature = runtime.pageToSignature.get(resolvedPage);
-        if (oldSignature && oldSignature !== signature) runtime.signatureToPage.delete(oldSignature);
-        runtime.signatureToPage.set(signature, resolvedPage);
-        runtime.pageToSignature.set(resolvedPage, signature);
-        runtime.currentPage = resolvedPage;
-        return resolvedPage;
+    function forceLogicalPageSignature(...args) {
+        return nativeCarousel.forcePage(...args);
     }
 
-    function requireNativeLogicalPageState(scroller, track, totalCount, columns, stage = 'logical-item-index-detection') {
-        const state = nativeLogicalPageState(scroller, track, totalCount, columns);
-        if (state.positions.length && state.positions.every(position => Number.isSafeInteger(position.itemIndex)) && Number.isFinite(state.page)) {
-            return state;
-        }
-        logVirtualRawIndexDiagnostic(state.slots, totalCount, columns, stage);
-        throw initializationError(
-            'NATIVE_LOGICAL_INDEX_UNAVAILABLE',
-            stage,
-            'Could not read a complete Netflix itemIndex page from the current My List carousel',
-            {
-                totalCount,
-                columns,
-                slots: state.slots.length,
-                itemIndices: state.itemIndices,
-                logicalIndices: state.logicalIndices,
-                resolvedPage: state.page
-            }
-        );
+    function requireNativeLogicalPageState(...args) {
+        return nativeCarousel.requireLogicalWindow(...args);
     }
 
     async function collectAllItemsLogical(section, scroller, track, totalCount, sessionToken = null) {
         assertRouteSession(sessionToken);
+        const bindingOwner = nativeCarousel.borrowBinding(section, scroller, track);
+        nativeCarousel.assertBinding(bindingOwner);
         const snapshotWork = performanceDiagnostics.nativeCollection;
         if (!Number.isFinite(totalCount) || totalCount < 0) {
             throw initializationError(
@@ -6376,9 +5467,7 @@ export function startLegacy() {
         }
 
         let runtime = resetCarouselDomRuntime(section);
-        runtime.profile = detectCarouselDomProfile(section);
-        runtime.pageCountFinalized = false;
-        runtime.cycleDetected = false;
+        nativeCarousel.beginCollection(section);
         const goal = totalCount;
         const itemsByLogicalIndex = new Map();
         const videoIndex = new Map();
@@ -6472,6 +5561,7 @@ export function startLegacy() {
                     sessionToken
                 });
                 assertRouteSession(sessionToken);
+                nativeCarousel.assertBinding(bindingOwner);
                 let stabilizedSignature = visibleSignature(slots);
                 let stabilizedTransform = trackTransformValue(track);
                 let pageState = nativeLogicalPageState(
@@ -6507,6 +5597,7 @@ export function startLegacy() {
                         sessionToken
                     });
                     assertRouteSession(sessionToken);
+                    nativeCarousel.assertBinding(bindingOwner);
                     stabilizedSignature = visibleSignature(recoveredSlots);
                     stabilizedTransform = trackTransformValue(track);
                     pageState = requireNativeLogicalPageState(
@@ -6534,7 +5625,7 @@ export function startLegacy() {
                     });
                 }
                 const page = pageState.page;
-                runtime.currentPage = page;
+                nativeCarousel.notePage(section, page);
                 forceLogicalPageSignature(section, stabilizedSignature, page);
                 stablePageTransforms.set(page, stabilizedTransform);
                 if (initialPage === null) {
@@ -6549,7 +5640,7 @@ export function startLegacy() {
                 }
 
                 if (visitedSignatures.has(stabilizedSignature) && collectedCount() < goal) {
-                    runtime.cycleDetected = true;
+                    nativeCarousel.markCycle(section);
                     incomplete('collect-page', 'known-signature-cycle-before-total-count', {
                         page,
                         signature: stabilizedSignature,
@@ -6677,6 +5768,7 @@ export function startLegacy() {
                 const beforeSignature = stabilizedSignature;
                 await moveOnePage(section, scroller, 1, null, sessionToken);
                 assertRouteSession(sessionToken);
+                nativeCarousel.assertBinding(bindingOwner);
                 const afterSignature = visibleSignature(currentPageSlots(scroller, track));
                 if (!afterSignature || afterSignature === beforeSignature) {
                     incomplete('advance-right', 'enabled-control-did-not-change-page', {
@@ -6719,10 +5811,7 @@ export function startLegacy() {
             }
 
             completionReason = completionReason || 'total-count-and-logical-index-range-reached';
-            runtime.knownPageCount = estimatedPages;
-            runtime.pageCountFinalized = true;
-            runtime.pageMappingStale = false;
-            runtime.cycleDetected = false;
+            nativeCarousel.completeCollection(section, estimatedPages);
             initialPage = Number.isFinite(initialPage) ? initialPage : 0;
             if (sourceState) sourceState.initialPage = initialPage;
             forceLogicalPageSignature(section, visibleSignature(currentPageSlots(scroller, track)), endingPage);
@@ -6752,6 +5841,8 @@ export function startLegacy() {
                     canonicalTargetTransform,
                     sessionToken
                 );
+                assertRouteSession(sessionToken);
+                nativeCarousel.assertBinding(bindingOwner);
                 log(tLog('nativeRestorationResult'), {
                     from: endingPage,
                     target: initialPage,
@@ -6770,6 +5861,7 @@ export function startLegacy() {
             }
 
             assertRouteSession(sessionToken);
+            nativeCarousel.assertBinding(bindingOwner);
             log(tLog('fullCollectionCompleted'), {
                 collected: items.length,
                 totalCount,
@@ -6793,11 +5885,15 @@ export function startLegacy() {
     }
 
     async function collectAllItems(section, scroller, track, totalCount, sessionToken = null) {
+        assertRouteSession(sessionToken);
+        const bindingOwner = nativeCarousel.borrowBinding(section, scroller, track);
+        nativeCarousel.assertBinding(bindingOwner);
         const profile = getCarouselDomRuntime(section)?.profile || detectCarouselDomProfile(section);
         if (profile.pageMode === 'logical') {
             return collectAllItemsLogical(section, scroller, track, totalCount, sessionToken);
         }
         assertRouteSession(sessionToken);
+        nativeCarousel.assertBinding(bindingOwner);
         const snapshotWork = performanceDiagnostics.nativeCollection;
         const items = [];
         const seen = new Set();
@@ -6853,9 +5949,11 @@ export function startLegacy() {
 
         try {
             assertRouteSession(sessionToken);
+            nativeCarousel.assertBinding(bindingOwner);
             const signatureBeforeStartMove = visibleSignature(currentPageSlots(scroller, track));
             await goToPage(section, scroller, 0, null, sessionToken);
             assertRouteSession(sessionToken);
+            nativeCarousel.assertBinding(bindingOwner);
             let previousPageSignature = initialPage === 0 ? '' : signatureBeforeStartMove;
 
             for (let page = 0; page < pages && (!Number.isFinite(goal) || items.length < goal); page++) {
@@ -6882,6 +5980,7 @@ export function startLegacy() {
                     sessionToken
                 });
                 assertRouteSession(sessionToken);
+                nativeCarousel.assertBinding(bindingOwner);
                 const stabilizedSignature = visibleSignature(slots);
                 const stabilizedTransform = trackTransformValue(track);
                 stablePageTransforms.set(actualPage, stabilizedTransform);
@@ -6946,6 +6045,8 @@ export function startLegacy() {
                 if ((Number.isFinite(goal) && items.length >= goal) || actualPage >= pages - 1) break;
                 previousPageSignature = stabilizedSignature;
                 const next = await moveOnePage(section, scroller, 1, null, sessionToken);
+                assertRouteSession(sessionToken);
+                nativeCarousel.assertBinding(bindingOwner);
                 if (next === actualPage) {
                     warn(tLog('couldNotAdvanceDuringFullCollection'), {
                         actualPage,
@@ -6979,6 +6080,8 @@ export function startLegacy() {
                     canonicalTargetTransform,
                     sessionToken
                 );
+                assertRouteSession(sessionToken);
+                nativeCarousel.assertBinding(bindingOwner);
 
                 log(tLog('nativeRestorationResult'), {
                     from: endingPage,
@@ -6993,8 +6096,10 @@ export function startLegacy() {
                 if (restorationComplete && selectedPage(section) === initialPage) {
                     await new Promise(resolve => requestAnimationFrame(resolve));
                     assertRouteSession(sessionToken);
+                    nativeCarousel.assertBinding(bindingOwner);
                     await new Promise(resolve => requestAnimationFrame(resolve));
                     assertRouteSession(sessionToken);
+                    nativeCarousel.assertBinding(bindingOwner);
                 }
             }
         } finally {
@@ -7003,6 +6108,7 @@ export function startLegacy() {
         }
 
         assertRouteSession(sessionToken);
+        nativeCarousel.assertBinding(bindingOwner);
         log(tLog('fullCollectionCompleted'), {
             collected: items.length,
             totalCount,
@@ -7376,7 +6482,7 @@ export function startLegacy() {
         const expectedIndex = Number.isSafeInteger(expectedIndexFromItems) && expectedIndexFromItems >= 0
             ? expectedIndexFromItems
             : item.logicalIndex;
-        const actualIndex = netflixReactCarousel.readItemIndex(slot).value;
+        const actualIndex = nativeCarousel.indexReading(slot).value;
         if (!Number.isSafeInteger(expectedIndex) || expectedIndex < 0 ||
             !Number.isSafeInteger(actualIndex) || actualIndex < 0) {
             return null;
@@ -9016,56 +8122,12 @@ export function startLegacy() {
         return latest;
     }
 
-    function wrappedTailLogicalPageInfo(positions, totalCount, columns) {
-        const count = Math.max(0, Math.floor(totalCount));
-        const width = Math.max(1, Math.floor(columns));
-        if (count <= 1 || count % width === 0 || !positions.length) return null;
-
-        const expectedVisibleCount = Math.min(width, count);
-        if (positions.length !== expectedVisibleCount) return null;
-
-        const itemIndices = positions.map(position => position.itemIndex);
-        if (!itemIndices.every(index => Number.isSafeInteger(index) && index >= 0 && index < count)) return null;
-        if (new Set(itemIndices).size !== itemIndices.length) return null;
-
-        let wrapIndex = -1;
-        for (let index = 1; index < itemIndices.length; index++) {
-            const previous = itemIndices[index - 1];
-            const current = itemIndices[index];
-            if (current !== (previous + 1) % count) return null;
-            if (previous === count - 1 && current === 0) {
-                if (wrapIndex !== -1) return null;
-                wrapIndex = index;
-            }
-        }
-        if (wrapIndex <= 0 || !itemIndices.includes(count - 1)) return null;
-
-        const pages = Math.max(1, Math.ceil(count / width));
-        const lastPage = pages - 1;
-        const expectedTail = new Set(expectedLogicalIndicesForPage(count, width, lastPage));
-        if (!itemIndices.slice(0, wrapIndex).every(index => expectedTail.has(index))) return null;
-
-        return { page: lastPage, wrapIndex, itemIndices };
+    function wrappedTailLogicalPageInfo(...args) {
+        return nativeCarousel.wrappedTail(...args);
     }
 
-    function wrappedTailLogicalPageForRebuild(positions, totalCount, columns, previousRuntime) {
-        const info = wrappedTailLogicalPageInfo(positions, totalCount, columns);
-        if (!info) return null;
-
-        const pages = Math.max(1, Math.ceil(Math.max(0, Math.floor(totalCount)) / Math.max(1, Math.floor(columns))));
-        const previousCurrentPage = Number.isFinite(previousRuntime?.currentPage)
-            ? Math.max(0, Math.floor(previousRuntime.currentPage))
-            : null;
-        const previousKnownPageCount = previousRuntime?.pageCountFinalized && Number.isFinite(previousRuntime?.knownPageCount)
-            ? Math.max(1, Math.floor(previousRuntime.knownPageCount))
-            : null;
-
-        const wasAtCompatibleTail = previousCurrentPage === info.page || (
-            previousKnownPageCount !== null &&
-            previousCurrentPage === previousKnownPageCount - 1 &&
-            (previousKnownPageCount === pages || previousKnownPageCount === pages + 1)
-        );
-        return wasAtCompatibleTail ? info : null;
+    function wrappedTailLogicalPageForRebuild(...args) {
+        return nativeCarousel.wrappedTailForRebuild(...args);
     }
 
     async function rebuildLogicalPageModelFromNativePosition(layout, reason = 'responsive-remap', sessionToken = sessionScope.token) {
@@ -9079,6 +8141,8 @@ export function startLegacy() {
             throw new Error('Native carousel binding is unavailable during logical page model rebuild');
         }
 
+        const bindingOwner = nativeCarousel.borrowBinding(section, scroller, track);
+        nativeCarousel.assertBinding(bindingOwner);
         const columns = Math.max(1, layout?.columns || sourceState?.layout?.columns || 1);
         const pages = Math.max(1, Math.ceil(Math.max(items.length, 1) / columns));
         const savedTransition = captureInlineStyleProperty(track, 'transition');
@@ -9091,11 +8155,12 @@ export function startLegacy() {
         };
 
         let runtime = getCarouselDomRuntime(section);
-        runtime.pageMappingStale = true;
+        nativeCarousel.markMappingStale(section);
 
         try {
             try { await carouselMoveQueue; } catch (_) {}
             assertRouteSession(sessionToken);
+            nativeCarousel.assertBinding(bindingOwner);
 
             // Keep the finalized runtime until the current Hawkins page has been
             // validated. A My List mutation can briefly expose a wrapped virtual
@@ -9113,7 +8178,7 @@ export function startLegacy() {
                 nativeCountState.totalCount === items.length;
             if (nativeCountConverged) myListCountConvergencePending = false;
             if (!nativeCountHasReadings || !nativeCountConverged) {
-                runtime.logicalRemapRetryCount = (runtime.logicalRemapRetryCount || 0) + 1;
+                nativeCarousel.deferMapping(section);
                 log('Logical My List page-model rebuild deferred until native delta converges', {
                     reason,
                     legacyTotalCount: items.length,
@@ -9152,7 +8217,7 @@ export function startLegacy() {
                     });
                 } else {
                     logVirtualRawIndexDiagnostic(pageState.slots, items.length, columns, 'logical-page-model-rebuild');
-                    runtime.logicalRemapRetryCount = (runtime.logicalRemapRetryCount || 0) + 1;
+                    nativeCarousel.deferMapping(section);
                     log('Logical My List page-model rebuild deferred for non-canonical native window', {
                         reason,
                         totalCount: items.length,
@@ -9169,7 +8234,7 @@ export function startLegacy() {
 
             const signature = visibleSignature(pageState.slots);
             if (!signature) {
-                runtime.logicalRemapRetryCount = (runtime.logicalRemapRetryCount || 0) + 1;
+                nativeCarousel.deferMapping(section);
                 log('Logical My List page-model rebuild deferred because native signature is unavailable', {
                     reason,
                     totalCount: items.length,
@@ -9179,15 +8244,8 @@ export function startLegacy() {
                 return null;
             }
 
-            runtime = resetCarouselDomRuntime(section);
-            runtime.profile = detectCarouselDomProfile(section);
-            runtime.knownPageCount = pages;
-            runtime.pageCountFinalized = true;
-            runtime.cycleDetected = false;
-            runtime.pageMappingStale = false;
-            runtime.logicalRemapRetryCount = 0;
-            runtime.currentPage = pageState.page;
-            forceLogicalPageSignature(section, signature, pageState.page);
+            nativeCarousel.commitMapping(section, { pageCount: pages, currentPage: pageState.page, signature });
+            runtime = getCarouselDomRuntime(section);
 
             let changed = 0;
             items.forEach((item, index) => {
@@ -9597,159 +8655,13 @@ export function startLegacy() {
         scheduleResponsiveRefresh(140, reason);
     }
 
-    function targetDocumentObserverAncestors(host) {
-        const ancestors = [];
-        for (let node = host?.parentElement; node; node = node.parentElement) {
-            ancestors.push(node);
-        }
-        return ancestors;
-    }
-
-    function bindTargetDocumentObserver(host, section) {
-        if (!targetDocumentObserver) return false;
-
-        const ancestors = host ? targetDocumentObserverAncestors(host) : [];
-        const sameAncestors = ancestors.length === targetObservedAncestors.length &&
-            ancestors.every((ancestor, index) => ancestor === targetObservedAncestors[index]);
-        const isAlreadyWatchingDiscovery = !host && targetDocumentDiscoveryActive && !targetObservedBrowseHost;
-        if (isAlreadyWatchingDiscovery) return false;
-
-        if (host === targetObservedBrowseHost &&
-            section === targetObservedMyListSection &&
-            sameAncestors &&
-            !targetDocumentDiscoveryActive) {
-            return false;
-        }
-
-        targetDocumentObserver.disconnect();
-        targetObservedBrowseHost = null;
-        targetObservedMyListSection = null;
-        targetObservedAncestors = [];
-        targetDocumentDiscoveryActive = false;
-
-        if (!host) {
-            if (document.documentElement) {
-                // Watch broadly only until Netflix mounts the browse sections host.
-                targetDocumentObserver.observe(document.documentElement, { childList: true, subtree: true });
-                targetDocumentDiscoveryActive = true;
-            }
-            return true;
-        }
-
-        // The host's direct children identify/reorder carousel rows. Observe the
-        // selected My List row deeply, plus only direct child changes along the
-        // host's ancestor path so replacement of the host is still detected.
-        targetDocumentObserver.observe(host, { childList: true, subtree: !section });
-        if (section?.isConnected) {
-            targetDocumentObserver.observe(section, { childList: true, subtree: true });
-        }
-        for (const ancestor of ancestors) {
-            targetDocumentObserver.observe(ancestor, { childList: true });
-        }
-
-        targetObservedBrowseHost = host;
-        targetObservedMyListSection = section?.isConnected ? section : null;
-        targetObservedAncestors = ancestors;
-        return true;
-    }
-
-    function handleRelevantTargetDocumentMutation() {
-        if (completedSection || (waitingForNativeEmpty && sourceState?.empty)) {
-            if (targetMutationFrame !== null) return;
-            const sessionToken = sessionScope.token;
-            targetMutationFrame = requestAnimationFrame(() => {
-                targetMutationFrame = null;
-                if (!isRouteSessionActive(sessionToken)) return;
-                if (sourceState?.grid?.isConnected) {
-                    ensureLiveNativeBinding('document-mutation', true);
-                } else {
-                    scheduleRun(40, sessionToken);
-                }
-            });
-            return;
-        }
-        scheduleRun(40, sessionScope.token);
-    }
-
-    function isScriptOwnedMyListNode(node) {
-        const element = node?.nodeType === 1 ? node : node?.parentElement;
-        return Boolean(element?.closest?.(`#${GRID_ID}, #${STATUS_ID}, #${LEGACY_EMPTY_STATE_ID}, #${ORDER_MISMATCH_DIALOG_ID}`));
-    }
-
-    function mutationOnlyChangesScriptUi(mutation) {
-        if (isScriptOwnedMyListNode(mutation.target)) return true;
-        const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
-        return changedNodes.length > 0 && changedNodes.every(isScriptOwnedMyListNode);
-    }
-
-    function mutationChangesObservedAncestorPath(mutation) {
-        const ancestorIndex = targetObservedAncestors.indexOf(mutation.target);
-        if (ancestorIndex < 0) return false;
-
-        const branch = ancestorIndex === 0
-            ? targetObservedBrowseHost
-            : targetObservedAncestors[ancestorIndex - 1];
-        if (!branch) return false;
-
-        return [...mutation.addedNodes, ...mutation.removedNodes].some(node =>
-            node === branch || (node.nodeType === 1 && node.contains(branch))
-        );
-    }
-
-    function handleTargetDocumentMutation(mutations = []) {
-        if (location.href !== lastObservedUrl) {
-            handleRouteChange('MutationObserver-url');
-        }
-        if (!targetSessionActive || !isTargetPage() || !targetDocumentObserver) return;
-        if (activeNativeHover?.previewRoot && !activeNativeHover.previewRoot.isConnected) {
-            releaseNativePreview(activeNativeHover, 'preview-removed');
-        }
-        if (initializationBlockedSessionToken === sessionScope.token) {
-            if (mutations.some(mutation => !mutationOnlyChangesScriptUi(mutation))) {
-                recoverNativeInitialization(sessionScope.token, 'document-mutation');
-            }
-            return;
-        }
-        // External removal of our whole grid still needs recovery, even though
-        // mutations wholly inside the connected script UI are otherwise ignored.
-        if (completedSection && sourceState?.grid && !sourceState.grid.isConnected) {
-            handleRelevantTargetDocumentMutation();
-        }
-        mutations = mutations.filter(mutation => !mutationOnlyChangesScriptUi(mutation));
-        if (!mutations.length) return;
-
-        let relevantMutation = false;
-        if (targetDocumentDiscoveryActive) {
-            // This is the only phase that watches the full document. Switch to
-            // the browse host once it appears, then narrow to My List when found.
-            const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
-            if (!host) return;
-            const section = findMyListSection();
-            relevantMutation = bindTargetDocumentObserver(host, section);
+    function handleRelevantTargetDocumentMutation(sessionToken) {
+        if (!isRouteSessionActive(sessionToken)) return;
+        if ((completedSection || (waitingForNativeEmpty && sourceState?.empty)) && sourceState?.grid?.isConnected) {
+            ensureLiveNativeBinding('document-mutation', true);
         } else {
-            const ancestorChanged = mutations.some(mutationChangesObservedAncestorPath);
-            const hostChanged = mutations.some(mutation => mutation.target === targetObservedBrowseHost);
-            const hostDiscoveryChanged = Boolean(targetObservedBrowseHost && !targetObservedMyListSection) &&
-                mutations.some(mutation => targetObservedBrowseHost.contains(mutation.target));
-            const sectionChanged = mutations.some(mutation =>
-                targetObservedMyListSection && targetObservedMyListSection.contains(mutation.target)
-            );
-
-            if (ancestorChanged || hostChanged) {
-                const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
-                const section = host ? findMyListSection() : null;
-                const bindingChanged = bindTargetDocumentObserver(host, section);
-                relevantMutation = bindingChanged || hostChanged || sectionChanged;
-            } else if (hostDiscoveryChanged) {
-                const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
-                const section = host ? findMyListSection() : null;
-                relevantMutation = bindTargetDocumentObserver(host, section) || hostDiscoveryChanged;
-            } else {
-                relevantMutation = sectionChanged;
-            }
+            scheduleRun(40, sessionToken);
         }
-
-        if (relevantMutation) handleRelevantTargetDocumentMutation();
     }
 
     function startTargetEventListeners() {
@@ -9763,24 +8675,20 @@ export function startLegacy() {
         document.addEventListener('click', handleObservedMyListToggleClick, { capture: true, passive: true });
         window.addEventListener('resize', handleTargetWindowResize, { passive: true });
         window.visualViewport?.addEventListener('resize', handleTargetVisualViewportResize, { passive: true });
-        targetDocumentObserver = new MutationObserver(handleTargetDocumentMutation);
-        const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
-        bindTargetDocumentObserver(host, host ? findMyListSection() : null);
+        nativeCarousel.startDiscovery();
     }
 
     function stopTargetEventListeners() {
         stopHoverFrameDiagnostics();
         finishNativePreviewDiagnostic(activeNativeHover, { result: 'released-before-check', reason: 'listeners-stopped' });
         if (activeNativeHover?.previewRoot) releaseNativePreview(activeNativeHover, 'listeners-stopped');
-        if (!targetListenersActive && !targetDocumentObserver) return;
+        if (!targetListenersActive && !nativeCarousel.diagnostics().discoveryActive) return;
         targetListenersActive = false;
         cancelPendingGridHover('route');
         lastTargetScrollAt = -Infinity;
         hoverNeedsPointerMove = false;
         lastPointerX = -1;
         lastPointerY = -1;
-        if (targetMutationFrame !== null) cancelAnimationFrame(targetMutationFrame);
-        targetMutationFrame = null;
         document.removeEventListener('pointermove', handleTargetPointerMove, true);
         document.removeEventListener('pointerout', handleTargetPreviewPointerOut, true);
         document.removeEventListener('visibilitychange', handleHoverDiagnosticVisibilityChange);
@@ -9789,12 +8697,7 @@ export function startLegacy() {
         document.removeEventListener('click', handleObservedMyListToggleClick, true);
         window.removeEventListener('resize', handleTargetWindowResize);
         window.visualViewport?.removeEventListener('resize', handleTargetVisualViewportResize);
-        targetDocumentObserver?.disconnect();
-        targetDocumentObserver = null;
-        targetObservedBrowseHost = null;
-        targetObservedMyListSection = null;
-        targetObservedAncestors = [];
-        targetDocumentDiscoveryActive = false;
+        nativeCarousel.stopDiscovery();
     }
 
     function recoverNativeInitialization(sessionToken, reason) {
@@ -9826,12 +8729,13 @@ export function startLegacy() {
         responsiveRefreshTimer = null;
         responsiveRefreshPromise = null;
         responsiveRefreshing = false;
+        nativeCarousel.clearBinding();
         sourceState = null;
         completedSection = null;
         initializationBlockedSessionToken = null;
         nativeInitializationFailure = null;
         clearRunningSession(sessionToken, false);
-        bindTargetDocumentObserver(document.querySelector(NETFLIX_DOM_SELECTORS.browseSections), section);
+        nativeCarousel.refreshDiscovery();
         // A replacement may have a different membership/count. Use the existing
         // fresh SPA bootstrap rather than an old initial-page cache on this retry.
         targetSessionEntryKind = 'spa';
@@ -9885,10 +8789,7 @@ export function startLegacy() {
         let provisionalLayout = scroller && track ? measureVisibleLayout(section, scroller, track) : measureEmptyLayout(section);
         provisionalLayout.rowGap = measureNativeCarouselGap(section);
         const provisionalFrame = placeLegacyFrame(section, scroller, provisionalLayout, { elapsedMs: null, finalized: false, totalCount: null });
-        sourceState = {
-            section,
-            scroller: scroller || null,
-            track: track || null,
+        sourceState = attachNativeBinding({
             layout: provisionalLayout,
             items: [],
             collectedCount: 0,
@@ -9900,7 +8801,7 @@ export function startLegacy() {
             empty: false,
             resizeViewportSignature: responsiveViewportSignature(),
             initializationStartedAt: initializationStarted
-        };
+        }, section, scroller || null, track || null);
         applyOriginalMyListVisibility();
 
         running = true;
@@ -10001,6 +8902,7 @@ export function startLegacy() {
                 document.getElementById(GRID_ID)?.remove();
                 document.getElementById(STATUS_ID)?.remove();
                 if (section.id === SYNTHETIC_SECTION_ID) section.remove();
+                nativeCarousel.clearBinding();
                 sourceState = null;
                 completedSection = null;
                 clearRunningSession(sessionToken);
@@ -10029,8 +8931,7 @@ export function startLegacy() {
             }
             scroller = sourceWait.scroller;
             track = sourceWait.track;
-            sourceState.scroller = scroller;
-            sourceState.track = track;
+            attachNativeBinding(sourceState, section, scroller, track);
         }
 
         // Netflix can expose the My List section before its virtual carousel has finished
@@ -10165,7 +9066,14 @@ export function startLegacy() {
         }
 
         if (mountedProfile.pageMode === 'logical') {
+            const fastBindingOwner = nativeCarousel.borrowBinding(section, scroller, track);
+            const retryReplacedSource = () => {
+                log('Fast My List collection discarded after native source replacement', { sessionToken });
+                clearRunningSession(sessionToken, false);
+                scheduleRun(0, sessionToken);
+            };
             try {
+                nativeCarousel.assertBinding(fastBindingOwner);
                 const graphqlLayout = measureVisibleLayout(section, scroller, track);
                 const templateSlot = currentPageSlots(scroller, track)[0] || netflixDom.filledSlots(track)[0];
                 const graphqlCollection = await collectLogicalListItems({
@@ -10176,14 +9084,17 @@ export function startLegacy() {
                     sessionToken
                 });
                 assertRouteSession(sessionToken);
+                if (!nativeCarousel.isBindingCurrent(fastBindingOwner)) {
+                    retryReplacedSource();
+                    return;
+                }
                 freshMyListBootstrap = graphqlCollection.bootstrap;
                 fastItems = graphqlCollection.items;
                 fastCollectionSource = graphqlCollection.collectionSource || 'graphql';
                 if (graphqlCollection.error) throw graphqlCollection.error;
                 if (fastItems) {
                     const runtime = getCarouselDomRuntime(section);
-                    runtime.knownPageCount = Math.max(1, Math.ceil(earlyTotalCount / Math.max(1, graphqlLayout.columns)));
-                    runtime.pageCountFinalized = true;
+                    nativeCarousel.confirmPageCount(section, Math.max(1, Math.ceil(earlyTotalCount / Math.max(1, graphqlLayout.columns))));
                     log(fastCollectionSource === 'mounted-single-page'
                         ? 'Mounted single-page My List fast collection prepared' : 'GraphQL My List fast collection prepared', {
                         collectionSource: fastCollectionSource,
@@ -10206,6 +9117,10 @@ export function startLegacy() {
             } catch (error) {
                 if (isRouteSessionCancelledError(error)) {
                     clearRunningSession(sessionToken);
+                    return;
+                }
+                if (!nativeCarousel.isBindingCurrent(fastBindingOwner)) {
+                    retryReplacedSource();
                     return;
                 }
                 warn('GraphQL My List fast collection failed; falling back to native scan', {
@@ -10258,7 +9173,7 @@ export function startLegacy() {
             // moves still need the track marker used by the animation suppression CSS.
             track.classList.add('tm-netflix-mylist-v15-track');
             waitingForNativeEmpty = false;
-            sourceState = { section, scroller, track, layout, initializationStartedAt: initializationStarted, empty: false, collectedCount: 0, totalCount };
+            sourceState = attachNativeBinding({ layout, initializationStartedAt: initializationStarted, empty: false, collectedCount: 0, totalCount }, section, scroller, track);
             let items;
             if (fastItems?.length === totalCount) {
                 items = fastItems;
@@ -10364,6 +9279,7 @@ export function startLegacy() {
             } else if (error?.code === 'GRID_BUILD_SOURCE_REPLACED') {
                 log('Grid construction discarded after native source replacement', { sessionToken });
                 cleanupTargetSessionDom();
+                nativeCarousel.clearBinding();
                 sourceState = null;
                 completedSection = null;
                 retryGridBuild = true;

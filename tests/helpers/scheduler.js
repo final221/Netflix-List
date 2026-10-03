@@ -22,6 +22,13 @@ export function createScheduler() {
                 if (timer.due <= now && timers.delete(id)) timer.callback();
             }
             await flush();
+        },
+        async frame(ms = 16) {
+            now += ms;
+            const callbacks = [...frames.values()];
+            frames.clear();
+            for (const callback of callbacks) callback(now);
+            await flush();
         }
     };
 }

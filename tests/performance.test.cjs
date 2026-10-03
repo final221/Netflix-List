@@ -14,6 +14,7 @@ const { createCardMarkup } = require('../src/netflix/card-markup.js');
 const { createListData } = require('../src/netflix/list-data.js');
 const { createViewingData } = require('../src/netflix/viewing-data.js');
 const { createSessionScope } = require('../src/app/session-scope.js');
+const { createCarousel } = require('../src/netflix/carousel/carousel.js');
 const { carouselPayload, atom, reference, viewingVideo } = require('./helpers/fixtures.js');
 
 // Exercise residual authored functions without executing Netflix startup.
@@ -79,6 +80,20 @@ class Element {
     }
 }
 
+function mountNativeControls(section, mode = 'logical') {
+    const query = section.querySelector?.bind(section) || (() => null);
+    const queryAll = section.querySelectorAll?.bind(section) || (() => []);
+    const control = new Element('native-control', section);
+    const indicator = new Element('native-indicator', section);
+    indicator.setAttribute('data-indicator-selected', 'true');
+    section.querySelector = selector => {
+        const right = mode === 'indicator' ? '[data-uia="carousel-right-button"]' : '[data-uia="carousel-hawkins-right-button"]';
+        return selector === right ? control : query(selector);
+    };
+    section.querySelectorAll = selector => selector === '[data-uia="carousel-page-indicator-item"]'
+        ? (mode === 'indicator' ? [indicator] : []) : queryAll(selector);
+}
+
 function environment(names, overrides = {}) {
     let now = 0;
     let id = 0;
@@ -121,7 +136,7 @@ function environment(names, overrides = {}) {
     vm.runInContext(source.match(/^    const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_INTERRUPTION_LOG_LIMIT = \d+;/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_CANCELLATION_REASONS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
-    for (const name of ['createNativeReadScope', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
+    for (const name of ['attachNativeBinding', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
         'hoverScrollElapsed', 'recordHoverCancellation', 'advanceHoverToken', 'hoverIntentDiagnosticSnapshot', 'hoverScrollStateSnapshot',
@@ -133,7 +148,7 @@ function environment(names, overrides = {}) {
         'hoverReplayGuardDiagnostic', 'hoverLeaveDestinationDiagnostic', 'recordGridHoverLeave',
         'startImageResourceDiagnostics', 'stopImageResourceDiagnostics', 'recordImageResourceEntries',
         'responsiveViewportSignature', 'responsiveLayoutMatches',
-        'cancelResizeHover', 'handleTargetResize', 'recoverNativeInitialization', ...names]) {
+        'cancelResizeHover', 'handleTargetResize', 'handleRelevantTargetDocumentMutation', 'recoverNativeInitialization', ...names]) {
         if (!migratedAdapterFunctions.has(name)) vm.runInContext(declaration(name), c);
     }
     const location = c.location || { origin: 'https://www.netflix.com', href: 'https://www.netflix.com/browse/my-list' };
@@ -158,6 +173,52 @@ function environment(names, overrides = {}) {
         isCurrentSession: token => c.targetSessionActive && c.isRouteSessionActive(token),
         readSessionToken: () => c.routeSessionToken, isSourceMounted: () => Boolean(c.sourceState?.grid?.isConnected),
         readSourceCard: () => c.sourceState?.track?.querySelector(c.NETFLIX_DOM_SELECTORS?.standardCard) });
+    const nativePageDom = { get selectors() { return c.NETFLIX_DOM_SELECTORS || pageDom.selectors; },
+        findMyListSection: (...args) => c.findMyListSection(...args),
+        findTrack: (...args) => c.netflixDom.findTrack ? c.netflixDom.findTrack(...args) : pageDom.findTrack(...args),
+        filledSlots: (...args) => c.netflixDom.filledSlots ? c.netflixDom.filledSlots(...args) : pageDom.filledSlots(...args),
+        directSlots: (...args) => c.netflixDom.directSlots ? c.netflixDom.directSlots(...args) : pageDom.directSlots(...args),
+        nativeCardIdentity: (...args) => c.nativeCardIdentity(...args) };
+    c.nativeDiscoveryObservers = [];
+    const NativeObserver = class {
+        constructor(callback) {
+            const observer = c.MutationObserver ? new c.MutationObserver(callback) : {
+                callback, observations: [], disconnects: 0,
+                observe(...args) { this.observations.push(args); }, disconnect() { this.disconnects++; }
+            };
+            c.nativeDiscoveryObservers.push(observer); return observer;
+        }
+    };
+    c.nativeCarousel = createCarousel({ pageDom: nativePageDom, MutationObserver: NativeObserver,
+        scope: { get token() { return c.sessionScope.token; }, isCurrent: token => c.isRouteSessionActive(token),
+            assertCurrent: token => c.assertRouteSession(token) },
+        document: new Proxy({}, { get: (_target, key) => c.document?.[key] }),
+        window: new Proxy({}, { get: (_target, key) => c.window?.[key] }), Element,
+        getComputedStyle: (...args) => c.getComputedStyle?.(...args) || {},
+        performance: { now: () => c.performance.now() }, setTimeout: (...args) => c.setTimeout(...args),
+        clearTimeout: id => c.clearTimeout(id), requestAnimationFrame: callback => c.requestAnimationFrame(callback),
+        cancelAnimationFrame: id => c.cancelAnimationFrame(id),
+        readListShape: section => c.sourceState?.section === section ? { totalCount: c.sourceState.totalCount,
+            columns: Math.max(1, c.sourceState.layout?.columns || 1) } : null,
+        readGraphqlCount: () => c.listData?.readMyListTotalCount?.() ?? null,
+        createError: (...args) => c.initializationError?.(...args) || Object.assign(new Error(args[2]), { code: args[0], stage: args[1] }),
+        log: (...args) => c.log(...args), warn: (...args) => c.warn(...args), tLog: (...args) => c.tLog(...args),
+        logTimeout: (...args) => c.logOperationTimeout?.(...args), describeSlot: (...args) => c.slotDescriptor?.(...args),
+        ownedUi: { grid: c.GRID_ID, status: c.STATUS_ID, empty: c.LEGACY_EMPTY_STATE_ID, dialog: c.ORDER_MISMATCH_DIALOG_ID },
+        checkRoute: () => { if (c.location?.href !== c.lastObservedUrl) c.handleRouteChange?.('MutationObserver-url'); },
+        onMutationDelivery: () => { if (c.activeNativeHover?.previewRoot && !c.activeNativeHover.previewRoot.isConnected)
+            c.releaseNativePreview(c.activeNativeHover, 'preview-removed'); },
+        isInitializationBlocked: () => c.initializationBlockedSessionToken === c.sessionScope.token,
+        onBlockedMutation: token => c.recoverNativeInitialization(token, 'document-mutation'),
+        isGridDetached: () => Boolean(c.completedSection && c.sourceState?.grid && !c.sourceState.grid.isConnected),
+        shouldCoalesce: () => Boolean(c.completedSection || (c.waitingForNativeEmpty && c.sourceState?.empty)),
+        onRelevantMutation: token => c.handleRelevantTargetDocumentMutation(token) });
+    c.handleTargetDocumentMutation = mutations => {
+        if (!c.nativeCarousel.diagnostics().discoveryActive) c.nativeCarousel.startDiscovery();
+        c.nativeDiscoveryObservers.at(-1).callback(mutations);
+    };
+    if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
+    Object.defineProperty(c, 'nativeReadScope', { get: () => c.nativeCarousel.diagnostics().readScopeActive ? true : null });
     c.performanceDiagnostics = c.createPerformanceDiagnostics();
     c.listData ||= fixtureListData(c);
     async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
@@ -258,8 +319,8 @@ function preparedHoverEnvironment(options = {}) {
     });
     current = e.clone;
     e.clone.__tmHoverActivationGeneration = 1;
-    e.c.sourceState.scroller = new Element('scroller');
-    e.c.sourceState.track = new Element('track', e.c.sourceState.scroller);
+    const nativeScroller = new Element('scroller');
+    e.c.attachNativeBinding(e.c.sourceState, e.c.sourceState.section, nativeScroller, new Element('track', nativeScroller));
     e.c.sourceState.layout = { columns: 6 };
     e.c.sourceState.items = [e.clone.__tmMyListItem];
     sourceSlot.parentElement = e.c.sourceState.track;
@@ -1503,7 +1564,6 @@ test('removed previews and missed pointer-out events recover through existing mu
         if (reason === 'mutation') {
             Object.assign(e.c, { location: { href: '/my-list' }, lastObservedUrl: '/my-list',
                 targetDocumentObserver: {}, initializationBlockedSessionToken: null, completedSection: null });
-            for (const name of ['mutationOnlyChangesScriptUi', 'handleTargetDocumentMutation']) vm.runInContext(declaration(name), e.c);
             e.c.handleTargetDocumentMutation([]);
         } else {
             e.c.handleTargetPointerMove(pointer(new Element('margin'), { type: 'pointermove', clientX: 40 }));
@@ -1948,8 +2008,9 @@ test('cancelled expected-page and recovery retries stop before native binding wo
 function logicalMoveEnvironment(overrides = {}) {
     let signature = 'before', reads = 0;
     const observers = [], timeouts = [];
-    const runtime = { signatureToPage: new Map() };
-    const scroller = new Element('scroller');
+    const section = new Element('section');
+    mountNativeControls(section);
+    const scroller = new Element('scroller', section);
     const track = { style: { getPropertyValue: () => 'transform' } };
     class Observer {
         constructor(callback) { this.callback = callback; this.disconnects = 0; observers.push(this); }
@@ -1958,17 +2019,19 @@ function logicalMoveEnvironment(overrides = {}) {
     }
     const e = environment(['hoverPreparationCancelled', 'sleep', 'waitLogicalPageChange'], {
         MutationObserver: Observer, PAGE_CHANGE_TIMEOUT_MS: 3000,
-        getCarouselDomRuntime: () => runtime,
         currentPageSlots: () => { reads++; return []; }, visibleSignature: () => signature,
-        registerLogicalPageSignature: (_section, _signature, page) => page,
         logOperationTimeout: (...args) => timeouts.push(args),
         initializationTimeoutError: () => Object.assign(new Error('Logical move timeout'), { code: 'INITIALIZATION_TIMEOUT' }),
         ...overrides
     });
+    e.c.nativeCarousel.bind(section, scroller, track);
+    const runtime = e.c.nativeCarousel.model(section);
+    e.c.getCarouselDomRuntime = node => e.c.nativeCarousel.model(node);
+    e.c.registerLogicalPageSignature = (node, signature, page) => e.c.nativeCarousel.registerPage(node, signature, page);
     return {
-        ...e, runtime, scroller, track, observers, timeouts, reads: () => reads,
+        ...e, runtime, section, scroller, track, observers, timeouts, reads: () => reads,
         change: value => { signature = value; },
-        start: (timeout = 3000, token = 1) => e.c.waitLogicalPageChange({}, scroller, track, 0, 1, 'transform', 'before', timeout, 1, token)
+        start: (timeout = 3000, token = 1) => e.c.waitLogicalPageChange(section, scroller, track, 0, 1, 'transform', 'before', timeout, 1, token)
     };
 }
 
@@ -2006,6 +2069,23 @@ test('logical hover waits inspect one initial frame and coalesce mutations witho
     assert.equal(counters.logicalMoveNotifications, 5);
     assert.equal(counters.logicalMoveSignalFrames, 2);
     assert.equal(counters.logicalMoveFallbackWakes, 0);
+});
+
+test('an acknowledged old binding cannot update the replacement page model while its elements stay connected', async () => {
+    const e = logicalMoveEnvironment();
+    const pending = e.start();
+    const replacement = new Element('replacement-track', e.scroller);
+    e.c.nativeCarousel.bind(e.section, e.scroller, replacement);
+    const current = e.c.nativeCarousel.model(e.section);
+    e.change('after');
+    const rejected = assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' });
+    await e.frame();
+    await rejected;
+    assert.equal(current.signatureToPage.has('after'), false);
+    assert.equal(e.runtime.signatureToPage.has('after'), false);
+    assert.equal(e.observers[0].disconnects, 1);
+    assert.equal(e.frames.size, 0);
+    assert.equal(e.timers.size, 0);
 });
 
 test('logical move signals cover synchronous click changes and unobserved visibility changes', async () => {
@@ -2156,24 +2236,17 @@ test('non-hover collection retains frame polling without adding logical move obs
 });
 
 test('an obsolete clicked logical move uses coarse polling and still records native acknowledgement', async () => {
-    let signature = 'before';
-    const runtime = { signatureToPage: new Map() };
-    const e = environment(['hoverPreparationCancelled', 'sleep', 'waitLogicalPageChange'], {
-        PAGE_CHANGE_TIMEOUT_MS: 3000, getCarouselDomRuntime: () => runtime,
-        currentPageSlots: () => [], visibleSignature: () => signature,
-        registerLogicalPageSignature: (_section, _signature, page) => page
-    });
+    const e = logicalMoveEnvironment();
     e.c.hoverToken = 2;
-    const track = { style: { getPropertyValue: () => 'transform' } };
-    const wait = e.c.waitLogicalPageChange({}, {}, track, 0, 1, 'transform', 'before', 3000, 1, 1);
+    const wait = e.start();
     assert.equal(e.frames.size, 0);
     assert.equal([...e.timers.values()][0].due, 80);
-    signature = 'after';
+    e.change('after');
     await e.advance(80);
     const result = await wait;
     assert.equal(result.page, 1);
     assert.equal(result.changed, true);
-    assert.equal(runtime.currentPage, 1);
+    assert.equal(e.runtime.currentPage, 1);
 });
 
 test('an obsolete unacknowledged move expires without reporting a fresh hover failure', async () => {
@@ -2279,20 +2352,20 @@ test('signal-acknowledged clicks remain serialized through native settling after
         registerActiveCarouselStyleCleanup: () => {}, unregisterActiveCarouselStyleCleanup: () => {},
         waitForScriptMoveSettle: () => clicks === 1 ? settlement.promise : Promise.resolve({ transform: 'transform', signature: 'second', observedChange: true })
     });
-    e.runtime.profile = { pageMode: 'logical' };
+    Object.assign(e.section, { classList: section.classList });
     const properties = new Map([['transform', 'transform'], ['transition', 'original'], ['animation', 'original']]);
     Object.assign(e.track, { isConnected: true, offsetWidth: 100, style: {
         getPropertyValue: key => properties.get(key) || '', getPropertyPriority: () => '',
         setProperty: (key, value) => properties.set(key, value)
     } });
-    e.c.sourceState = { track: e.track };
+    e.c.sourceState = e.c.attachNativeBinding({}, e.section, e.scroller, e.track);
     vm.runInContext(declaration('moveOnePage'), e.c);
-    const first = e.c.moveOnePage(section, e.scroller, 1, 1, 1);
+    const first = e.c.moveOnePage(e.section, e.scroller, 1, 1, 1);
     await e.flush();
     assert.equal(clicks, 1);
     e.c.hoverToken = 2;
-    const obsolete = e.c.moveOnePage(section, e.scroller, 1, 1, 1);
-    const latest = e.c.moveOnePage(section, e.scroller, 1, 2, 1);
+    const obsolete = e.c.moveOnePage(e.section, e.scroller, 1, 1, 1);
+    const latest = e.c.moveOnePage(e.section, e.scroller, 1, 2, 1);
     e.change('first');
     e.observers[0].callback([]);
     await e.advance(80);
@@ -2364,8 +2437,7 @@ test('Hawkins logical hover navigation avoids boundary detours while legacy cycl
 });
 
 const observerFunctions = [
-    'isScriptOwnedMyListNode', 'mutationOnlyChangesScriptUi', 'mutationChangesObservedAncestorPath',
-    'handleTargetDocumentMutation', 'handleRelevantTargetDocumentMutation', 'nativeBindingChanged', 'ensureLiveNativeBinding'
+    'handleRelevantTargetDocumentMutation', 'nativeBindingChanged', 'ensureLiveNativeBinding'
 ];
 function observerEnvironment() {
     const ancestor = new Element('ancestor');
@@ -2381,15 +2453,13 @@ function observerEnvironment() {
     const e = environment(observerFunctions, {
         GRID_ID: 'grid', STATUS_ID: 'status', LEGACY_EMPTY_STATE_ID: 'empty', ORDER_MISMATCH_DIALOG_ID: 'dialog',
         NETFLIX_DOM_SELECTORS: { browseSections: 'host', carouselScroller: 'scroller' },
-        location: { href: 'same' }, lastObservedUrl: 'same', targetDocumentObserver: {}, targetMutationFrame: null,
-        initializationBlockedSessionToken: null, targetDocumentDiscoveryActive: false,
-        targetObservedBrowseHost: host, targetObservedMyListSection: section, targetObservedAncestors: [ancestor],
+        location: { href: 'same' }, lastObservedUrl: 'same', initializationBlockedSessionToken: null,
         sourceState: { section, scroller, track, grid, empty: false, items: [1] }, completedSection: section,
         waitingForNativeEmpty: false, document: { getElementById: id => id === 'grid' ? grid : null, querySelector: () => host },
         findMyListSection: () => section, netflixDom: { findTrack: () => track },
         readNativeMyListDomState: () => { reads++; return { section, scroller, track }; },
         adoptLiveMyListSection: () => { adoptions++; return false; },
-        bindTargetDocumentObserver: () => false, scheduleRun: (...args) => runs.push(args)
+        scheduleRun: (...args) => runs.push(args)
     });
     return { ...e, ancestor, host, section, scroller, track, grid, status, runs, reads: () => reads, adoptions: () => adoptions };
 }
@@ -2421,7 +2491,7 @@ test('track replacement retains the full binding adoption path', async () => {
     e.c.netflixDom.findTrack = () => replacement;
     e.c.readNativeMyListDomState = () => ({ section: e.section, scroller: e.scroller, track: replacement });
     let adoptions = 0;
-    e.c.adoptLiveMyListSection = binding => { adoptions++; Object.assign(e.c.sourceState, binding); return true; };
+    e.c.adoptLiveMyListSection = binding => { adoptions++; e.c.attachNativeBinding(e.c.sourceState, binding.section, binding.scroller, binding.track); return true; };
     e.c.handleTargetDocumentMutation([mutation(e.scroller, [replacement], [e.track])]);
     await e.frame();
     assert.equal(adoptions, 1);
@@ -2453,10 +2523,14 @@ test('native empty transitions bypass the identity-only shortcut', async () => {
 
 test('host replacement along the ancestor path is not filtered', async () => {
     const e = observerEnvironment();
-    let bindings = 0;
-    e.c.bindTargetDocumentObserver = () => { bindings++; return true; };
-    e.c.handleTargetDocumentMutation([mutation(e.ancestor, [new Element('new-host')], [e.host])]);
-    assert.equal(bindings, 1);
+    e.c.nativeCarousel.startDiscovery();
+    const observer = e.c.nativeDiscoveryObservers.at(-1);
+    const replacement = new Element('new-host', e.ancestor);
+    e.host.isConnected = false;
+    e.c.document.querySelector = () => replacement;
+    e.c.handleTargetDocumentMutation([mutation(e.ancestor, [replacement], [e.host])]);
+    assert.equal(observer.disconnects, 2);
+    assert.ok(observer.observations.some(([node]) => node === replacement));
     assert.equal(e.frames.size, 1);
     await e.frame();
 });
@@ -2465,19 +2539,26 @@ test('route listener cleanup cancels pending hover and observer work', async () 
     const e = hoverEnvironment(['stopTargetEventListeners']);
     const removed = [];
     e.c.targetListenersActive = true;
-    e.c.targetDocumentObserver = { disconnect() {} };
     e.c.handleObservedMyListToggleClick = () => {};
     e.c.handleTargetWindowResize = () => {};
     e.c.handleTargetVisualViewportResize = () => {};
     e.c.document = { removeEventListener: type => removed.push(type) };
     e.c.window = { removeEventListener() {}, visualViewport: { removeEventListener() {} } };
-    e.c.targetMutationFrame = e.c.requestAnimationFrame(() => { throw new Error('Stale observer ran'); });
+    e.c.completedSection = e.section;
+    const host = new Element('host');
+    e.section.parentElement = host;
+    e.c.document.querySelector = () => host;
+    e.c.findMyListSection = () => e.section;
+    e.c.nativeCarousel.startDiscovery();
+    e.c.handleTargetDocumentMutation([mutation(e.section, [new Element('native-child')])]);
+    assert.equal(e.c.nativeCarousel.diagnostics().pendingMutationFrame, true);
     e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
     e.c.stopTargetEventListeners();
     await e.advance(200);
     await e.frame();
     assert.equal(e.activations.length, 0);
-    assert.equal(e.c.targetMutationFrame, null);
+    assert.equal(e.c.nativeCarousel.diagnostics().pendingMutationFrame, false);
+    assert.equal(e.c.nativeCarousel.diagnostics().discoveryActive, false);
     assert.equal(e.c.pendingGridHoverClone, null);
     assert.ok(removed.includes('wheel') && removed.includes('scroll'));
 });
@@ -2511,14 +2592,12 @@ function nativeReadEnvironment(mode = 'logical') {
     scroller.querySelector = () => null;
     scroller.getBoundingClientRect = () => { counts.rects++; return { left: 0, right: 600 }; };
     const e = environment(nativeReadFunctions, {
-        carouselDomRuntime: new WeakMap(),
         NETFLIX_DOM_SELECTORS: { carouselScroller: 'scroller', virtualSlot: 'slot', standardCard: 'card' },
         netflixDom: {
             findTrack: () => track,
             filledSlots: () => { counts.filled++; return slots; },
             directSlots: () => slots
         },
-        netflixReactCarousel: { readItemIndex: slot => { counts.indices++; return { value: slot.index }; } },
         listData: { readMyListTotalCount: () => 600 },
         findMyListSection: () => section, nativeCardIdentity: slot => String(slot.index),
         logicalVisibleSignature: () => '', parseSlotLayoutFormula: () => ({ columns: 6 }),
@@ -2528,6 +2607,9 @@ function nativeReadEnvironment(mode = 'logical') {
         slots = indices.map((index, position) => {
             const slot = new Element(String(index), track);
             slot.index = index;
+            const props = { get itemIndex() { counts.indices++; return slot.index; } };
+            slot.__reactFiber$test = { memoizedProps: props };
+            slot.firstElementChild = slot;
             slot.left = position * 100;
             slot.getBoundingClientRect = () => {
                 counts.rects++;
@@ -2556,75 +2638,15 @@ function nativeReadEnvironment(mode = 'logical') {
             track.isConnected = false;
             track = new Element('replacement-track', scroller);
             track.style = { getPropertyValue: () => '' };
-            e.c.sourceState.track = track;
+            e.c.attachNativeBinding(e.c.sourceState, section, scroller, track);
             return track;
         }
     };
 }
 
-test('one native-state sample shares profile, filled-slot, rectangle, and React-index reads', () => {
-    const e = nativeReadEnvironment();
-    e.mount([12, 13, 14, 15, 16, 17]);
-    const state = e.c.readNativeMyListDomState();
-    assert.equal(state.selectedPage, 2);
-    assert.equal(state.currentPageCount, 6);
-    assert.deepEqual(e.counts, { profile: 6, indicators: 1, filled: 1, rects: 7, indices: 6 });
-    assert.equal(e.c.nativeReadScope, null);
-    e.resetCounts();
-    e.mount([18, 19, 20, 21, 22, 23]);
-    assert.equal(e.c.readNativeMyListDomState().selectedPage, 3);
-    assert.deepEqual(e.counts, { profile: 6, indicators: 1, filled: 1, rects: 7, indices: 6 });
-});
 
-test('indicator selection and carousel generation refresh on the next sample', () => {
-    const e = nativeReadEnvironment('indicator');
-    e.setMode('indicator', 1);
-    e.mount([0, 1, 2, 3, 4, 5]);
-    assert.equal(e.c.readNativeMyListDomState().selectedPage, 1);
-    assert.equal(e.counts.indicators, 1);
-    assert.equal(e.counts.profile, 6);
-    e.setMode('indicator', 2);
-    assert.equal(e.c.selectedPage(e.section), 2);
-    e.setMode('logical');
-    e.mount([6, 7, 8, 9, 10, 11]);
-    assert.equal(e.c.selectedPage(e.section), 1);
-    assert.equal(e.c.getCarouselDomRuntime(e.section).profile.generation, 'generation2');
-});
 
-test('readiness shares discovery and measures each active slot once even during sorting', () => {
-    const e = nativeReadEnvironment();
-    const slots = e.mount([5, 4, 3, 2, 1, 0]);
-    slots.forEach((slot, index) => { slot.left = (5 - index) * 100; });
-    const state = e.c.nativeCarouselReadiness(e.section, e.scroller, e.c.sourceState.track);
-    assert.equal(state.currentCards, 6);
-    assert.equal(e.counts.filled, 1);
-    assert.equal(e.counts.rects, 7);
-    assert.equal(e.counts.indicators, 1);
-    // Six profile selectors plus the two independent button lookups.
-    assert.equal(e.counts.profile, 8);
-    assert.deepEqual(Array.from(e.c.currentPageSlots(e.scroller, e.c.sourceState.track), slot => slot.index), [0, 1, 2, 3, 4, 5]);
-});
 
-test('track replacement, membership changes, and resized columns use fresh state', () => {
-    const e = nativeReadEnvironment();
-    e.mount([12, 13, 14, 15, 16, 17]);
-    assert.equal(e.c.selectedPage(e.section), 2);
-    const replacement = e.replaceTrack();
-    e.c.sourceState.totalCount = 19;
-    e.c.sourceState.layout.columns = 4;
-    e.mount([15, 16, 17, 18]);
-    const state = e.c.readNativeMyListDomState();
-    assert.equal(state.track, replacement);
-    assert.equal(state.selectedPage, 4);
-    assert.equal(state.currentPageCount, 4);
-    assert.equal(state.pageSignature, '15|16|17|18');
-    const slots = e.slots();
-    slots.slice(1).forEach(slot => slot.querySelector().setAttribute('tabindex', '-1'));
-    assert.equal(e.c.currentPageSlots(e.scroller, replacement).length, 4, 'partial tabbable hydration retains visible cards');
-    slots[0].left = -200;
-    slots[0].querySelector().setAttribute('tabindex', '-1');
-    assert.equal(e.c.currentPageSlots(e.scroller, replacement).length, 3, 'next read observes changed geometry');
-});
 
 test('restoring a geometry proxy and resetting runtime invalidate reads inside a scope', () => {
     const e = nativeReadEnvironment();
@@ -2647,17 +2669,6 @@ test('restoring a geometry proxy and resetting runtime invalidate reads inside a
     });
 });
 
-test('native read scopes end on exceptions and before asynchronous continuation', async () => {
-    const e = nativeReadEnvironment();
-    assert.throws(() => e.c.withNativeReadScope(() => { throw new Error('read failed'); }), /read failed/);
-    assert.equal(e.c.nativeReadScope, null);
-    const continuation = e.c.withNativeReadScope(async () => {
-        await Promise.resolve();
-        assert.equal(e.c.nativeReadScope, null);
-    });
-    assert.equal(e.c.nativeReadScope, null);
-    await continuation;
-});
 
 test('ready hover and frame replay share reads while refreshing original geometry on each frame', async () => {
     const e = nativeReadEnvironment();
@@ -2713,11 +2724,11 @@ test('binding adoption clears old grafts and does not retain reads collected bef
     e.c.sourceState.status = status;
     e.c.sourceState.items = [{ videoId: '0' }];
     const replacement = e.replaceTrack();
-    e.c.sourceState.track = slots[0].parentElement;
+    e.c.attachNativeBinding(e.c.sourceState, e.c.sourceState.section, e.c.sourceState.scroller, slots[0].parentElement);
     const nextScroller = new Element('next-scroller');
     nextScroller.getBoundingClientRect = e.scroller.getBoundingClientRect;
     nextScroller.insertAdjacentElement = status.insertAdjacentElement = () => {};
-    e.c.sourceState.section = new Element('old-section');
+    e.c.attachNativeBinding(e.c.sourceState, new Element('old-section'), e.c.sourceState.scroller, e.c.sourceState.track);
     const query = e.section.querySelector;
     e.section.querySelector = selector => selector === 'scroller' ? nextScroller : query(selector);
     Object.assign(e.c, {
@@ -2741,32 +2752,6 @@ test('binding adoption clears old grafts and does not retain reads collected bef
     assert.equal(e.c.graftedGridClones.size, 0);
 });
 
-test('constant-size logical candidates preserve exact pages including overlapping tails', () => {
-    const e = environment(['expectedLogicalIndicesForPage', 'logicalPageFromSlotPositions']);
-    const expected = e.c.expectedLogicalIndicesForPage;
-    let candidates = 0;
-    e.c.expectedLogicalIndicesForPage = (...args) => { candidates++; return expected(...args); };
-    const positions = indices => indices.map(logicalIndex => ({ logicalIndex }));
-    for (let count = 1; count <= 120; count++) {
-        for (let columns = 1; columns <= 12; columns++) {
-            for (let page = 0; page < Math.ceil(count / columns); page++) {
-                const indices = Array.from(expected(count, columns, page));
-                candidates = 0;
-                assert.equal(e.c.logicalPageFromSlotPositions(positions(indices.reverse()), count, columns), page);
-                assert.ok(candidates <= 2);
-            }
-        }
-    }
-    for (const count of [30, 150, 600]) {
-        candidates = 0;
-        const tail = Array.from(expected(count, 6, Math.ceil(count / 6) - 1));
-        assert.equal(e.c.logicalPageFromSlotPositions(positions(tail), count, 6), count / 6 - 1);
-        assert.equal(candidates, 1, `last page of ${count} needs one exact candidate`);
-    }
-    for (const indices of [[], [0, 1, 2], [0, 0, 1, 2, 3, 4], [1, 2, 3, 4, 5, 6], [-1, 0, 1, 2, 3, 4], [12, 13, 14, 15, 16, 17], [null, 1, 2, 3, 4, 5]]) {
-        assert.equal(e.c.logicalPageFromSlotPositions(positions(indices), 12, 6), null);
-    }
-});
 
 function graftEnvironment(extraNames = [], overrides = {}) {
     const cleared = [];
@@ -2942,7 +2927,7 @@ function constructionEnvironment() {
         'itemFromSlot', 'visibleNativeItems', 'findNativeMyListItemByVideoId'
     ], {
         GRID_ID: 'grid', STATUS_ID: 'status', SYNTHETIC_SECTION_ID: 'synthetic', SECTION_ATTR: 'section',
-        NETFLIX_DOM_SELECTORS: { standardCard: 'card', carouselScroller: 'scroller' },
+        NETFLIX_DOM_SELECTORS: { standardCard: 'card', carouselScroller: 'scroller', virtualSlot: 'slot' },
         URL,
         location: { origin: 'https://www.netflix.com', href: 'https://www.netflix.com/browse/my-list' },
         document: {
@@ -3118,7 +3103,7 @@ test('route cancellation, state replacement, and native-source replacement canno
         if (change === 'route') e.c.isRouteSessionActive = () => false;
         if (change === 'state') e.c.sourceState = { cloneMap: new Map(), grid: new ConstructionNode('new-session') };
         if (change === 'section') e.section.setConnected(false);
-        if (change === 'track') state.track = new ConstructionNode('replacement-track');
+        if (change === 'track') e.c.attachNativeBinding(state, state.section, state.scroller, new ConstructionNode('replacement-track'));
         await e.drain();
         await rejection;
         assert.equal(e.created[0].children.length, 24);
@@ -3174,7 +3159,7 @@ test('queued add/remove deltas apply after complete publication and stay deferre
 function initializationEnvironment(count = 150) {
     const e = constructionEnvironment();
     const bootstrap = { totalCount: count, source: 'graphql', pageCount: 2, edgeCount: count, hasMore: false };
-    const runtime = { profile: { pageMode: 'logical' } };
+    mountNativeControls(e.section);
     vm.runInContext(declaration('collectLogicalListItems'), e.c);
     e.c.listData = { ...e.c.listData, firstMyListVideoId: () => '', fetchBootstrap: async () => bootstrap,
         collectRecords: async () => ({ bootstrap, records: e.records(count) }) };
@@ -3187,7 +3172,8 @@ function initializationEnvironment(count = 150) {
         measureVisibleLayout: () => e.layout, measureNativeCarouselGap: () => 10,
         placeLegacyFrame: () => ({ grid: e.oldGrid, status: e.status }), applyOriginalMyListVisibility() {},
         waitForMyListTotalCount: async () => count,
-        logCarouselDomProfile() {}, resetCarouselDomRuntime: () => runtime, getCarouselDomRuntime: () => runtime,
+        logCarouselDomProfile() {}, resetCarouselDomRuntime: section => e.c.nativeCarousel.resetModel(section),
+        getCarouselDomRuntime: section => e.c.nativeCarousel.model(section),
         waitForNativeCarouselReady: async () => ({ ready: true, empty: false }),
         requireNativeReactCarouselTotalCount: () => ({ totalCount: count }),
         currentPageSlots: () => [e.template],
@@ -3204,6 +3190,29 @@ function initializationEnvironment(count = 150) {
     vm.runInContext(declaration('runScript'), e.c);
     return { ...e, async flush() { await e.flush(); await e.flush(); } };
 }
+
+test('late fast-collection completion cannot finalize the model or republish a replaced native binding', async () => {
+    const e = initializationEnvironment(6);
+    const gate = deferred(), runs = [];
+    let started = 0;
+    e.c.collectLogicalListItems = () => { started++; return gate.promise; };
+    e.c.scheduleRun = (...args) => runs.push(args);
+    const completion = e.c.runScript(1);
+    await e.flush();
+    assert.equal(started, 1);
+    const replacement = new ConstructionNode('replacement-track');
+    replacement.setConnected(true);
+    e.c.attachNativeBinding(e.c.sourceState, e.section, e.scroller, replacement);
+    const current = e.c.nativeCarousel.model(e.section);
+    gate.resolve({ bootstrap: { totalCount: 6 }, items: e.items(6), collectionSource: 'graphql' });
+    await e.flush();
+    await completion;
+    assert.equal(e.c.nativeCarousel.currentBinding().track, replacement);
+    assert.equal(current.pageCountFinalized, false);
+    assert.equal(e.logs.filter(entry => entry.name === 'legacyGridBuilt').length, 0);
+    assert.equal(e.c.completedSection, null);
+    assert.deepEqual(runs, [[0, 1]]);
+});
 
 test('GraphQL adapter awaits snapshot chunks and initialization awaits grid publication before becoming idle', async () => {
     const e = initializationEnvironment();
@@ -3642,8 +3651,7 @@ test('native order reads allocate no card trees and native additions capture onl
 function nativeCollectionEnvironment(mode, windows, totalCount = 4) {
     const e = constructionEnvironment();
     let currentPage = 0;
-    const runtime = { profile: { pageMode: mode, generation: mode === 'logical' ? 2 : 1, navigationMode: mode },
-        signatureToPage: new Map(), pageToSignature: new Map(), currentPage: 0 };
+    mountNativeControls(e.section, mode);
     const cleanup = new Set();
     const pages = windows.map((entries, page) => entries.map(entry => {
         const slot = e.template.cloneNode(true);
@@ -3660,7 +3668,9 @@ function nativeCollectionEnvironment(mode, windows, totalCount = 4) {
     Object.assign(e.c, {
         FAST_MOVE_CLASS: 'fast', LOGICAL_COLLECTION_TIMEOUT_MS: 120000, PAGE_STABLE_TIMEOUT_MS: 2000,
         PARTIAL_PAGE_RECOVERY_TIMEOUT_MS: 2000,
-        detectCarouselDomProfile: () => runtime.profile, resetCarouselDomRuntime: () => runtime, getCarouselDomRuntime: () => runtime,
+        detectCarouselDomProfile: section => e.c.nativeCarousel.profile(section),
+        resetCarouselDomRuntime: section => e.c.nativeCarousel.resetModel(section),
+        getCarouselDomRuntime: section => e.c.nativeCarousel.model(section),
         carouselDomProfileSummary: () => ({ pageMode: mode }),
         currentPageSlots: () => pages[currentPage], pageCount: () => pages.length, selectedPage: () => currentPage,
         nativeLogicalPageState: state, requireNativeLogicalPageState: state,
@@ -3669,7 +3679,7 @@ function nativeCollectionEnvironment(mode, windows, totalCount = 4) {
         goToPage: async (_, __, page) => { currentPage = page; return page; },
         moveOnePage: async () => { currentPage++; return currentPage; },
         restoreNativePageFast: async (_, __, ___, ____, _____, page) => { currentPage = page; return true; },
-        forceLogicalPageSignature: (_, signature, page) => { runtime.signatureToPage.set(signature, page); },
+        forceLogicalPageSignature: (section, signature, page) => e.c.nativeCarousel.forcePage(section, signature, page),
         carouselMoveButton: () => ({ button: {}, selector: 'right' }), carouselMoveButtonDisabled: () => false,
         captureInlineStyleProperty: (node, key) => ({ value: node.style.getPropertyValue(key) }),
         restoreInlineStyleProperty: (node, key, saved) => {
@@ -3689,7 +3699,7 @@ function nativeCollectionEnvironment(mode, windows, totalCount = 4) {
     for (const name of ['visibleSignature', 'itemKeyFromCard', 'collectAllItemsLogical', 'collectAllItems']) {
         vm.runInContext(declaration(name), e.c);
     }
-    return { ...e, pages, runtime, cleanup, async scan() {
+    return { ...e, pages, get runtime() { return e.c.nativeCarousel.model(e.section); }, cleanup, async scan() {
         const pending = e.c.collectAllItems(e.section, e.scroller, e.track, totalCount, 1);
         let settled = false;
         pending.then(() => { settled = true; }, () => { settled = true; });
@@ -7191,7 +7201,6 @@ test('incremental groups follow hover replacement ownership without retaining or
 function configureInitializationRecovery(e) {
     const scheduled = [];
     e.c.document.querySelector = () => null;
-    e.c.bindTargetDocumentObserver = () => {};
     e.c.scheduleRun = (...args) => scheduled.push(args);
     e.c.responsiveRefreshTimer = null;
     e.c.LEGACY_EMPTY_STATE_ID = 'empty';
@@ -7254,9 +7263,6 @@ test('a replacement mounted after a readiness timeout can unblock through the na
     e.c.netflixDom.findTrack = () => replacement;
     e.c.targetDocumentObserver = {};
     e.c.lastObservedUrl = e.c.location.href;
-    for (const name of ['isScriptOwnedMyListNode', 'mutationOnlyChangesScriptUi', 'handleTargetDocumentMutation']) {
-        vm.runInContext(declaration(name), e.c);
-    }
     e.c.handleTargetDocumentMutation([mutation(e.scroller, [replacement])]);
     assert.deepEqual(scheduled, [[40, 1]]);
     assert.equal(e.c.initializationBlockedSessionToken, null);
@@ -7358,7 +7364,6 @@ function resizeEnvironment() {
     const calls = { measures: 0, styles: 0, refreshes: 0 };
     const logs = [];
     let pages = 4;
-    const runtime = { pageMappingStale: false };
     const layout = { columns: 6, cardWidth: 100, gridWidth: 640, gridLeft: 20, sidePadding: 20,
         scrollerWidth: 680, scrollerHeight: 60, gap: 8, rowGap: 10 };
     const measured = { ...layout };
@@ -7367,14 +7372,17 @@ function resizeEnvironment() {
         window: viewport, responsiveRefreshTimer: null, responsiveRefreshing: false,
         SOURCE_PARKED_CLASS: 'parked', ORIGINAL_VISIBILITY_ATTR: 'original-visible',
         log: (name, details) => logs.push({ name, details }),
-        getCarouselDomRuntime: () => runtime, pageCount: () => pages, layoutSummary: value => value,
+        pageCount: () => pages, layoutSummary: value => value,
         measureVisibleLayout: () => { calls.measures++; return { ...measured }; },
         measureNativeCarouselGap: () => 10, updateResponsiveStatus: () => calls.styles++,
         currentGridGeometry: () => ({ width: 640, left: 20, columns: 6 }),
         refreshResponsiveLayout: () => { calls.refreshes++; e.c.cancelResizeHover(); }
     });
-    Object.assign(e.c.sourceState, { layout, scroller: new Element('scroller'), track: new Element('track'),
-        resizeViewportSignature: e.c.responsiveViewportSignature() });
+    e.c.attachNativeBinding(e.c.sourceState, e.section, new Element('scroller'), new Element('track'));
+    mountNativeControls(e.section);
+    const runtime = e.c.nativeCarousel.model(e.section);
+    e.c.getCarouselDomRuntime = section => e.c.nativeCarousel.model(section);
+    Object.assign(e.c.sourceState, { layout, resizeViewportSignature: e.c.responsiveViewportSignature() });
     e.c.lastResponsiveSignature = e.c.responsiveSignature(layout);
     e.grid.__tmAppliedGeometry = { width: 640, left: 20, columns: 6 };
     e.c.lastPageShape = e.c.responsivePageShape(layout);
@@ -7449,7 +7457,7 @@ test('hidden height transitions cannot bypass source, viewport, signature, mappi
         e => { e.c.sourceState.layout.scrollerHeight = 1; e.measured.scrollerHeight = 60; },
         e => e.measured.scrollerHeight = NaN,
         e => e.c.sourceState.layout.scrollerHeight = '60',
-        e => e.setPages(5), e => { e.runtime.pageMappingStale = true; },
+        e => e.setPages(5), e => { e.c.nativeCarousel.markMappingStale(e.section); },
         e => { e.grid.__tmAppliedGeometry = null; },
         e => { e.c.currentGridGeometry = () => ({ width: 620, left: 20, columns: 6 }); }
     ];
@@ -7609,7 +7617,7 @@ test('real viewport bounds, zoom, pixel ratio and offset changes still cancel ho
 
 test('same-viewport geometry changes or stale page mapping still trigger responsive refresh', async () => {
     for (const change of [e => e.measured.columns++, e => e.measured.gap += 4,
-        e => e.measured.scrollerHeight += 20, e => { e.runtime.pageMappingStale = true; }]) {
+        e => e.measured.scrollerHeight += 20, e => { e.c.nativeCarousel.markMappingStale(e.section); }]) {
         const e = resizeEnvironment();
         change(e);
         e.c.handleTargetWindowResize();
@@ -7679,9 +7687,12 @@ test('one responsive sample shares the section rectangle between native layout a
     let sectionReads = 0, scrollerReads = 0;
     section.getBoundingClientRect = () => { sectionReads++; return { left: 0, right: 1280, width: 1280 }; };
     scroller.getBoundingClientRect = () => { scrollerReads++; return { left: 0, width: 680, height: 60 }; };
+    const slot = new Element('slot', track);
+    slot.setAttribute('style', 'width: calc((100% - 80px) / 6)');
     const e = environment(['measureVisibleLayout', 'currentGridGeometry'], {
         window: { innerWidth: 1280 },
-        parseSlotLayoutFormula: () => ({ columns: 6, gap: 8, paddingLeft: 20, paddingRight: 20, formulaSidePadding: 20 })
+        netflixDom: { directSlots: () => [slot] },
+        getComputedStyle: () => ({ columnGap: '8px', paddingLeft: '20px', paddingRight: '20px' })
     });
     e.c.withNativeReadScope(() => {
         const layout = e.c.measureVisibleLayout(section, scroller, track);
@@ -7724,7 +7735,8 @@ test('obsolete responsive refreshes cannot update replacement grids or clear a n
         }
         const refresh = e.c.refreshResponsiveLayout(1);
         if (replacement === 'state') e.c.sourceState = { ...e.c.sourceState };
-        if (replacement === 'track') e.c.sourceState.track = new Element('replacement-track');
+        if (replacement === 'track') e.c.attachNativeBinding(e.c.sourceState, e.c.sourceState.section,
+            e.c.sourceState.scroller, new Element('replacement-track'));
         if (replacement === 'route') e.c.isRouteSessionActive = () => false;
         e.c.responsiveSequence = 2;
         e.c.responsiveRefreshing = true;

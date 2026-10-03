@@ -34,10 +34,12 @@ src/main.js
      -> src/netflix/list-data.js: page bootstrap, requests, pagination and normalized records
      -> src/netflix/viewing-data.js: typed viewing requests and interpreted progress/coverage
      -> src/app/session-scope.js: route epochs and registered request/timer ownership
+     -> src/netflix/carousel/carousel.js: discovery, binding generations, reads and readiness
+        -> page-model.js: private signature/page mapping and logical-window policies
      -> existing settings, SPA hooks and route-session runtime
 ```
 
-Main invokes the legacy entry once. Importing legacy alone does not activate listeners, requests or settings. It retains the remaining runtime orchestration, mutable feature state and lifecycle, with its internal SCRIPT_VERSION injected by the build. Resources, diagnostics, page context/DOM interpretation, card markup, My List data access, viewing protocol interpretation and session/request cancellation now have separate owners and live callers. No parallel implementation or public legacy state bag is introduced.
+Main invokes the legacy entry once. Importing legacy alone does not activate listeners, requests or settings. It retains the remaining runtime orchestration, mutable feature state and lifecycle, with its internal SCRIPT_VERSION injected by the build. Resources, diagnostics, page context/DOM interpretation, card markup, My List data access, viewing protocol interpretation, session/request cancellation and native binding/page-model state now have separate owners and live callers. No parallel implementation or public legacy state bag is introduced.
 
 The temporary runtime entry is replaced by application composition in P20, then removed in P21. The exact source responsibility transfers follow MigrationPlan.md; this document is updated as those capabilities become real.
 
@@ -99,7 +101,19 @@ Scope mechanics have transferred to app/session-scope.js during P08. Scan/accoun
 
 The existing route start/suspend points call the scope. Remaining legacy validity/error/request bridges delegate to it; their caller composition moves in P20. Data adapters receive begin/finish/guard collaborators without importing application code. The viewing scan borrows each admitted controller for job-specific cancellation and requests its eight-second-or-remaining deadline through the scope. It still decides quotas, deadlines and network accounting; cancelling a viewing job leaves unrelated route requests registered. HTTP failure cleanup closes unread bodies through the same request owner.
 
-P08 is still in progress. Native binding, discovery, shared-read caches and page-model ownership remain in legacy until the remaining P08 transfer; navigation and traversal remain scheduled for P09/P10. This scope checkpoint does not complete native ownership or change those boundaries.
+The remaining P08 transfer now gives native binding, discovery, shared-read caches and page-model state their carousel owner. Native movement/queue/style restoration and traversal/source resolution remain scheduled for P09/P10.
+
+## Native discovery, binding and page model
+
+`src/netflix/carousel/carousel.js` owns the accepted native section/scroller/track, a private binding generation and unforgeable frozen borrowed handles. Binding replacement clears shared reads and creates a new model for the accepted section. An old handle cannot become current merely because its DOM stays connected, its title still matches, or a caller borrows its old references after replacement. Route invalidation also rejects it. Residual sourceState publication borrows references through read-only getters; adoption calls the carousel instead of assigning native fields.
+
+The capability owns the discovery MutationObserver, observed host/section/ancestor path and coalesced animation-frame owner. It retains broad discovery only before the browse host exists, then narrows observation to the host, My List and ancestor replacements. Script-owned UI mutations remain filtered, while external grid removal still schedules application recovery. Explicit callbacks report route changes, detached preview observations, blocked initialization and relevant mutations to the residual coordinator. Stop disconnects/cancels only its own resources; queued callbacks from a stopped observer cannot act on a restarted owner or clear its frame. Route listeners remain with legacy until P20.
+
+Profile/indicator/slot/rectangle/index caches belong to synchronous samples. Every sample ends in finally, before any awaited continuation; source replacement, model reset and geometry restoration invalidate them. Profile capabilities and page-model observations are read-only. `page-model.js` privately owns the signature maps, current/known page, finalization, cycles, staleness and retry count. Commands update those fields; policy/feature callers cannot assign them or mutate the maps. The logical-index, expected-window and wrapped-tail rules transfer unchanged. State commands reuse an existing model rather than rediscovering the DOM for a former direct field write.
+
+Native source/readiness polls reject obsolete handles before returning success. Residual asynchronous navigation acknowledgement, collection and responsive remapping revalidate borrowed owners after awaits before mapping/publication. A late fast collection cannot finalize a replacement model or bind its old source again; it discards the result and requests recovery while retaining deferred membership work. Missing positive-count sources remain timeouts, distinct from a connected empty carousel that has stabilized.
+
+Until P09/P10, exact legacy forwarding functions and mapping commands serve remaining navigation/collection/source-resolution algorithms. They expose bounded observations or controlled owner operations, never writable binding/model/cache state. P10 completes the semantic collect/resolveCard/refreshMapping facade; this transitional query surface is not its final API. Membership shape and GraphQL count arrive through narrow readers, and scope/logging/diagnostic callbacks are injected without Netflix-to-app imports. Application composition moves in P20; findings.md records the bridge callers and retirement steps.
 
 ## Verification boundary
 
@@ -120,3 +134,5 @@ One baseline season-list/count validation case now exercises typed viewing reads
 These tests prove offline control flow and build consistency. They do not establish Netflix DOM/private React compatibility, real browser frame times or a faster runtime.
 
 `tests/app.test.js` now exercises the real scope's request replacement, deadline ownership, current-route guards and private/idempotent cleanup. Residual route, body, viewing-wave and responsive cases use that same scope with their explicit fixtures. List-data tests likewise use the real registration/timer owner instead of a copied request implementation. Composed application initialization/disposal coverage transfers to this suite in P20.
+
+`tests/carousel.test.js` exercises the real owner for stale/forged bindings, immutable views, source/readiness polling, disposal/restart, native read sharing and logical windows. Six baseline scenarios transfer or are covered there: shared native-state reads, indicator/profile refresh, readiness sorting/read counts, track/count/column changes, exact overlapping windows and exception/async sample cleanup. The obsolete helper-call counter is replaced by exhaustive window results and bounded input reads; a source audit confirms the two-candidate policy is unchanged. Residual acknowledgement/fast-initialization regressions reject still-connected replacement owners before model or grid publication. Geometry/graft/hover and collection/responsive integrations retain their full assertions with real model/discovery collaborators until their workflow owners move.
