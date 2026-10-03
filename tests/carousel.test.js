@@ -483,6 +483,111 @@ function mountedEnvironment(overrides = {}) {
         capture: bootstrap => e.carousel.collect({ ...options, mode: 'mounted-single-page', bootstrap, totalCount: 3, columns: 3 }) };
 }
 
+test('mounted borrowing preserves synchronous active filtering and validated identity fallback', () => {
+    for (const mode of ['logical', 'indicator']) {
+        const e = navigationEnvironment({ mode });
+        const slot = e.pages[0][0], card = slot.querySelector('a');
+        const options = { section: e.section, scroller: e.scroller, track: e.track,
+            item: { videoId: '1', href: 'https://www.netflix.com/watch/1' }, activeOnly: true, sessionToken: e.scope.token };
+        const source = e.carousel.mountedCard(options);
+        assert.equal(source.slot, slot);
+        assert.equal(source instanceof Promise, false);
+        assert.equal(e.carousel.isSourceCurrent({ ...source }), false);
+        e.pageDom.filledSlots = () => [...e.pages[0], ...e.pages[1]];
+        const hidden = e.pages[1][0];
+        hidden.getBoundingClientRect = () => ({ left: 3000, width: 100, right: 3100 });
+        hidden.querySelector('a').setAttribute('tabindex', '-1');
+        assert.equal(e.carousel.mountedCard({ ...options, item: { videoId: '2' } }), null);
+        assert.equal(e.carousel.mountedCard({ ...options, item: { videoId: '2' }, activeOnly: false }).slot, hidden);
+        card.href = 'https://www.netflix.com/browse';
+        assert.equal(e.carousel.mountedCard({ ...options, item: { href: card.href } }).slot, slot);
+        card.href = '';
+        assert.equal(e.carousel.mountedCard({ ...options, item: {} }), null, 'an absent identity cannot match an empty href');
+        assert.equal(source.isCurrent(), false, 'recycling invalidates the borrowed identity');
+        e.carousel.clearBinding();
+        assert.throws(() => source.slot, { code: 'NATIVE_SOURCE_REPLACED' });
+        assert.equal(e.scheduler.timers.size, 0);
+        assert.deepEqual(e.directions, []);
+    }
+});
+
+test('mounted resolution owns bounded polling and copies identity before waiting for hydration', async () => {
+    const e = mountedEnvironment();
+    let reads = 0;
+    e.pageDom.filledSlots = () => { reads++; return e.track.children; };
+    const item = { videoId: '99' };
+    const pending = e.carousel.resolveCard({ ...e.options, mode: 'mounted', item, activeOnly: true, hoverToken: 1 });
+    assert.equal(reads, 1, 'admission and first lookup share one native sample');
+    assert.equal(e.scheduler.timers.size, 1);
+    assert.equal([...e.scheduler.timers.values()][0].due - e.scheduler.performance.now(), 10);
+    item.videoId = '3';
+    await e.scheduler.advance(10);
+    assert.equal(e.scheduler.timers.size, 1, 'changing caller data cannot retarget the admitted wait');
+    e.slots[2].querySelector('a').href = 'https://www.netflix.com/title/99';
+    await e.scheduler.advance(10);
+    const result = await pending;
+    assert.equal(result.status, 'found');
+    assert.equal(result.source.slot, e.slots[2]);
+    assert.equal(result.source.videoId, '99');
+    assert.equal(e.scheduler.timers.size, 0);
+    assert.equal(e.carousel.diagnostics().mountedSourceWaits, 0);
+    assert.deepEqual(e.directions, []);
+
+    reads = 0;
+    const missing = e.carousel.resolveCard({ ...e.options, mode: 'mounted', item: { videoId: '100' }, timeout: 25 });
+    for (let i = 0; i < 3; i++) await e.scheduler.advance(10);
+    assert.equal((await missing).reason, 'target-not-mounted');
+    assert.equal(reads, 4, 'sample at admission and every existing 10-ms tick, including the final deadline sample');
+    assert.equal(e.scheduler.timers.size, 0);
+});
+
+test('mounted polling rejects obsolete binding, mapping, page and route before another card scan', async () => {
+    for (const change of ['binding', 'mapping', 'page', 'route', 'disconnected', 'hover']) {
+        const e = navigationEnvironment({ mode: 'indicator' });
+        let reads = 0;
+        e.pageDom.filledSlots = () => { reads++; return e.pages[e.page()]; };
+        const options = { section: e.section, scroller: e.scroller, track: e.track,
+            mode: 'mounted', item: { videoId: '99' }, hoverToken: 1, sessionToken: e.scope.token };
+        const pending = e.carousel.resolveCard(options);
+        const outcome = pending.then(value => ({ value }), error => ({ error }));
+        const before = reads;
+        if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
+        if (change === 'mapping') e.carousel.anchorAfterDelta(e.section, { pageCount: 3, currentPage: 0, signature: 'new' });
+        if (change === 'page') e.setPage(1);
+        if (change === 'route') e.scope.begin();
+        if (change === 'disconnected') e.track.remove();
+        if (change === 'hover') e.cancelHover();
+        await e.scheduler.advance(10);
+        const result = await outcome;
+        if (change === 'hover') assert.equal(result.value.reason, 'hover-cancelled');
+        else assert.equal(result.error.code, change === 'route' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'NATIVE_SOURCE_REPLACED');
+        assert.equal(reads, before, change + ' cannot scan a replacement window');
+        assert.equal(e.scheduler.timers.size, 0);
+        assert.equal(e.carousel.diagnostics().mountedSourceWaits, 0);
+    }
+});
+
+test('retired polling callbacks cannot release or resume replacement waits', async () => {
+    const e = mountedEnvironment();
+    const options = { ...e.options, mode: 'mounted', item: { videoId: '99' } };
+    const old = e.carousel.resolveCard(options);
+    const rejected = assert.rejects(old, { code: 'NATIVE_SOURCE_REPLACED' });
+    const retiredTick = [...e.scheduler.timers.values()][0].callback;
+    e.carousel.clearBinding();
+    e.carousel.bind(e.section, e.scroller, e.track);
+    const replacement = e.carousel.resolveCard(options);
+    retiredTick();
+    await e.scheduler.flush();
+    await rejected;
+    assert.equal(e.scheduler.timers.size, 1);
+    assert.equal(e.carousel.diagnostics().mountedSourceWaits, 1);
+    e.slots[0].querySelector('a').href = 'https://www.netflix.com/title/99';
+    await e.scheduler.advance(10);
+    assert.equal((await replacement).source.slot, e.slots[0]);
+    assert.equal(e.scheduler.timers.size, 0);
+    assert.equal(e.carousel.diagnostics().mountedSourceWaits, 0);
+});
+
 test('expected-page resolution returns native handles and truthful incomplete or mismatched observations', async () => {
     for (const mode of ['logical', 'indicator']) {
         const e = navigationEnvironment({ mode });

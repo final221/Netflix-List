@@ -1983,19 +1983,64 @@ test('an order-mismatch dialog stops preparation without an extra hover retry', 
 });
 
 test('mounted-source polling stops after cancellation without a final binding or card scan', async () => {
-    let bindings = 0, probes = 0;
-    const e = environment(['hoverPreparationCancelled', 'sleep', 'waitForMountedSourceItem'], {
-        sourceState: { track: new Element() },
-        ensureLiveNativeBinding: () => bindings++,
-        findMountedSourceSlot: () => { probes++; return null; }
-    });
+    let bindings = 0;
+    const e = nativeReadEnvironment();
+    vm.runInContext(declaration('hoverPreparationCancelled'), e.c);
+    vm.runInContext(declaration('waitForMountedSourceItem'), e.c);
+    e.c.ensureLiveNativeBinding = () => bindings++;
+    e.mount([]);
+    e.resetCounts();
     const wait = e.c.waitForMountedSourceItem({}, 500, true, 1, 1);
-    assert.equal(probes, 1);
+    assert.equal(e.counts.filled, 1);
     e.c.hoverToken = 2;
     await e.advance(10);
     assert.equal(await wait, null);
     assert.equal(bindings, 1);
-    assert.equal(probes, 1);
+    assert.equal(e.counts.filled, 1);
+    assert.equal(e.timers.size, 0);
+});
+
+test('mounted-source bridges borrow real cards and reject replacement parent or native ownership', async () => {
+    const e = nativeReadEnvironment();
+    for (const name of ['hoverPreparationCancelled', 'findMountedSourceSlot', 'findActiveSourceSlot', 'waitForMountedSourceItem']) {
+        vm.runInContext(declaration(name), e.c);
+    }
+    let bindings = 0;
+    e.c.ensureLiveNativeBinding = () => bindings++;
+    e.c.videoIdFromHref = href => href?.split('/').at(-1);
+    const slots = e.mount([6, 7, 8, 9, 10, 11]);
+    const target = { href: '/watch/6', videoId: '6' };
+    e.resetCounts();
+    e.c.withNativeReadScope(() => {
+        assert.equal(e.c.findActiveSourceSlot(target), slots[0]);
+        assert.equal(e.c.findMountedSourceSlot(e.c.sourceState.track, target, true), slots[0]);
+    });
+    assert.equal(e.counts.filled, 1);
+    assert.equal(e.counts.rects, 7);
+    assert.equal(e.counts.indices, 6);
+
+    bindings = 0;
+    const hydrated = e.c.waitForMountedSourceItem({ videoId: '99' }, 700, true, 1, 1);
+    slots[0].querySelector('card').href = '/watch/99';
+    await e.advance(10);
+    assert.equal(await hydrated, slots[0]);
+    assert.equal(bindings, 1, 'only pre-call admission can bind');
+    assert.equal(e.timers.size, 0);
+
+    const parent = e.c.sourceState;
+    const oldPublication = e.c.waitForMountedSourceItem({ videoId: '99' }, 500, true, 1, 1);
+    e.c.sourceState = { ...parent };
+    assert.equal(await oldPublication, null, 'a resolved card cannot publish into a replacement parent');
+
+    const obsolete = e.c.waitForMountedSourceItem({ videoId: '100' }, 500, true, 1, 1);
+    const rejected = assert.rejects(obsolete, { code: 'NATIVE_SOURCE_REPLACED' });
+    const before = e.counts.filled;
+    e.c.nativeCarousel.clearBinding();
+    e.c.nativeCarousel.bind(e.section, e.c.sourceState.scroller, e.c.sourceState.track);
+    await e.flush();
+    await rejected;
+    assert.equal(e.counts.filled, before);
+    assert.equal(e.timers.size, 0);
 });
 
 test('cancelled expected-page and recovery retries stop before native binding work', async () => {

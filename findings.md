@@ -846,7 +846,7 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | P07 | Viewing data adapter | Complete — 1.4.11; 3c6b48a; Windows/Linux CI verified |
 | P08 | Session scopes and native binding/page model | Complete — scope 1.4.12 / 848b95f; native transfer 1.4.13 / b2b64c3; Windows/Linux CI verified |
 | P09 | Navigation queue and restoration | Complete — 1.4.15; b18ec49; Windows/Linux CI verified |
-| P10 | Native collection and carousel facade | In progress — expected-card resolution/handles 1.4.18 / 22cf06e verified on Windows/Linux; mounted polling/search/recovery and remapping remain |
+| P10 | Native collection and carousel facade | In progress — mounted lookup/polling 1.4.19 passes local gate; P10.4 commit/CI pending, then P10.5–P10.7 recovery/remapping/facade audit remain |
 | P11 | Frame/card registry and resources | Planned — authorized goal |
 | P12 | Groups, filters and controls | Planned — authorized goal |
 | P13 | Membership/order and collection strategy | Planned — authorized goal |
@@ -1195,3 +1195,23 @@ The review makes P10's prompt boundaries concrete because its remaining mounted-
 Existing verified releases satisfy P10.1 (1.4.16 / a9c5faa), P10.2 (1.4.17 / 96652f6) and P10.3 (1.4.18 / 22cf06e). P10 remains in progress. The next implementation prompt resumes **P10.4**, mounted lookup and polling; P10.5 recovery/search, P10.6 remapping and P10.7 facade/caller audit follow before P11. Keep pre-call source admission and transitional list/card publication outside native integration; obsolete native work must not adopt replacement ownership.
 
 Fresh readiness evidence: npm run check verifies the existing **1.4.18** artifact; userscript syntax and all **420 tests** pass, with no failures, cancellations or skips. The plan is reviewed again for complete parent contracts, ordered checkpoint dependencies, coverage of the target files and consistency with actual callers. Documentation and whitespace verification complete the change. Runtime/source/generated output, release version, actual architecture and protected context remain unchanged.
+
+### P10.4 — Mounted-card lookup and polling checkpoint
+
+Continued the authorized migration goal at its first unfinished prompt checkpoint. Synchronous mounted-card lookup and the bounded mounting wait now belong to carousel. mountedCard returns the same unforgeable validated source handles used by expected-page resolution, preserving active-page filtering and exact-href/title fallback. resolveCard's explicit mounted mode owns the existing 500-ms default, caller-specific deadlines and 10-ms polling interval. It copies identity at admission and captures binding, model interpretation and page ownership; it initiates no request or navigation.
+
+An admitted wait cannot silently adopt a replacement binding or page. Route/hover cancellation validates before another card scan, and meaningful mapping/model replacement rejects obsolete work. Each pending tick has a private idempotent ticket; bind/clearBinding closes old tickets, and closed callbacks cannot wake or release replacement waits. The scalar mountedSourceWaits diagnostic exposes current pending tickets without retaining interaction history.
+
+Migration.md clarifies synchronous borrowing, mounted resolution and wait ownership before the transfer. No new target file, feature or capability folder is added. README/docs/architecture.md describe actual ownership, and context.md has no durable change.
+
+| Remaining bridge/workflow | Current responsibility | Removal/next transfer |
+| --- | --- | --- |
+| findMountedSourceSlot → mountedCard | Supplies copied identity/current source and translates a validated synchronous handle borrow inside the shared sample | P10.5 native recovery uses the private owner; P17 moves residual native interaction |
+| findActiveSourceSlot | Pre-call live binding admission followed by the mounted borrow; no native lookup algorithm | P17 native interaction, then P20 composition |
+| waitForMountedSourceItem → mounted resolveCard | Admits once, supplies identity/deadline/ownership and rejects publication into a replacement parent; no polling timer or mid-wait rebind | P10.5 recovery calls the owner internally; P17 transfers residual preparation |
+| Preferred-page pulse / nearby search | Still legacy workflows, now consuming owner-backed mounted borrowing/waits | P10.5 |
+| Delta/responsive remapping and technical native surface | Still use the previously recorded single-owner bridges | P10.6 remapping and P10.7 caller/facade audit; P19 later owns scheduling |
+
+Four composed carousel scenarios fail before implementation and pass afterward: synchronous active/href/title borrowing, copied-identity late hydration/deadline sampling, binding/mapping/page/route/disconnection/hover rejection without another card scan, and retired callbacks beside replacement waits. A fifth added scenario exercises the actual legacy bridges with real carousel, including shared reads, late hydration and rejected parent/native replacement. The existing polling-cancellation regression is retargeted from stubbed lookup to the actual owner; ready-hover/frame replay retains one filled-slot read, seven rectangle reads, six React-index reads and six profile queries. All prior carousel and residual scenarios remain. Source audit finds 287 legacy declarations, only findMountedSourceSlot/waitForMountedSourceItem changed, 285 other bodies identical and no added/removed declaration; the legacy polling-interval constant is removed.
+
+Local gate passes **425 tests**, with no failures, cancellations or skips. Reproducible generation, read-only output/dependency verification, distributable syntax and whitespace checks pass. Package/lock/metadata/internal version agree on **1.4.19**, above the verified published **1.4.18**. Authored/generated diffs and live caller/resource ownership are reviewed together. Commit/push and exact-revision Windows/Linux CI remain the checkpoint's final gate; P10.5 waits for that evidence. Live Netflix private DOM/React compatibility remains user-owned. **P10 and the full migration goal remain in progress**, with P10.5–P10.7 and P11–P21 still required after this checkpoint.

@@ -197,6 +197,8 @@ Source-card handles can carry native references within the native integration. G
 
 Carousel source handles are unforgeable and read-only. They retain binding/session, native page-model ownership and the card's identity/index observation; accessing the borrowed slot revalidates those facts. Meaningful native mapping changes invalidate them, while repeating an unchanged observation does not. Expected-page resolution accepts identity/count/columns/page-size hints and returns found, inconclusive or mismatch plus native visible-card facts. Comparing those facts with authoritative list positions, deciding the mismatch threshold and presenting recovery UI remain outside carousel.
 
+Mounted-card borrowing also has a synchronous operation, mountedCard, for current-source validation during hover/frame replay. The mounted mode of resolveCard owns the existing bounded 10-ms polling wait. Both accept copied identity hints and explicit source/session ownership and return the same validated handles; they add no request or navigation. Composition admits a current binding before calling them. An admitted wait keeps that binding, mapping interpretation and page rather than silently rebinding after replacement. Binding cleanup closes only the owner's pending polling tickets, and late callbacks cannot wake or clear a newer wait. Active-page filtering and shared synchronous read costs remain part of this contract.
+
 ## Dependency rules
 
 1. `main.js` and `app/` construct instances and connect their public operations directly. Use explicit callbacks and collaborators; no event bus, service locator, or framework is required.

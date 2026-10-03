@@ -34,6 +34,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     let bindingGeneration = 0;
     const bindingTickets = new WeakMap();
     const sourceTickets = new WeakMap();
+    const mountedWaits = new Set();
     let discoveryOwner = null, targetDocumentObserver = null, targetMutationFrame = null;
     let targetObservedBrowseHost = null, targetObservedMyListSection = null, targetObservedAncestors = [];
     let targetDocumentDiscoveryActive = false;
@@ -231,8 +232,87 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         assertSource(source);
         return source;
     }
-    async function resolveCard({ section, scroller, track, item, expectedPage, totalCount, columns = 1,
-        pageItemCount = 1, hoverToken = null, sessionToken = null }) {
+    function mountedOperation({ section, scroller, track, item, activeOnly = true,
+        hoverToken = null, sessionToken = null }) {
+        assertRouteSession(sessionToken);
+        const binding = borrowBinding(section, scroller, track);
+        assertBinding(binding);
+        const model = getModel(section), page = selectedPage(section), mappingGeneration = model.mappingGeneration;
+        const target = Object.freeze({ href: String(item?.href || ''), videoId: String(item?.videoId || '') });
+        const guard = () => {
+            assertRouteSession(sessionToken); assertBinding(binding);
+            if (models.get(section) !== model || model.mappingGeneration !== mappingGeneration) {
+                throw initializationError('NATIVE_SOURCE_REPLACED', 'native-mounted-card',
+                    'Native source page or mapping changed during mounted-card resolution');
+            }
+            const currentPage = selectedPage(section);
+            if (models.get(section) !== model || model.mappingGeneration !== mappingGeneration || currentPage !== page) {
+                throw initializationError('NATIVE_SOURCE_REPLACED', 'native-mounted-card',
+                    'Native source page or mapping changed during mounted-card resolution');
+            }
+        };
+        return { binding, target, activeOnly, hoverToken, sessionToken, page, guard };
+    }
+    function lookupMountedCard(operation) {
+        operation.guard();
+        const { binding, target, activeOnly, page } = operation;
+        const candidates = activeOnly ? currentPageSlots(binding.scroller, binding.track) : nativeFilledSlots(binding.track);
+        const slot = candidates.find(slot => {
+            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
+            if (!card) return false;
+            const href = card.href || card.getAttribute('href') || '';
+            return Boolean((target.href && href === target.href) ||
+                (target.videoId && netflixDom.videoIdFromHref(href) === target.videoId));
+        });
+        operation.guard();
+        return slot ? sourceHandle(binding, slot, page) : null;
+    }
+    function mountedCard(options) {
+        assertRouteSession(options.sessionToken);
+        if (isHoverCancelled(options.hoverToken ?? null) || !options.section?.isConnected ||
+            !options.scroller?.isConnected || !options.track?.isConnected) return null;
+        return withNativeReadScope(() => lookupMountedCard(mountedOperation(options)));
+    }
+    function mountedTick() {
+        return new Promise(resolve => {
+            let closed = false, timer = null;
+            const ticket = { close() {
+                if (closed) return;
+                closed = true;
+                clearTimeout(timer);
+                mountedWaits.delete(ticket);
+                resolve();
+            } };
+            mountedWaits.add(ticket);
+            timer = setTimeout(ticket.close, 10);
+        });
+    }
+    function resetMountedWaits() { for (const ticket of mountedWaits) ticket.close(); }
+    async function resolveMountedCard(options) {
+        assertRouteSession(options.sessionToken);
+        if (isHoverCancelled(options.hoverToken ?? null)) return Object.freeze({ status: 'unknown', reason: 'hover-cancelled' });
+        if (!options.section?.isConnected || !options.scroller?.isConnected || !options.track?.isConnected) {
+            return Object.freeze({ status: 'unknown', reason: 'native-binding-unavailable' });
+        }
+        const start = performance.now(), timeout = Number.isFinite(options.timeout) ? Math.max(0, options.timeout) : 500;
+        let operation;
+        let source = withNativeReadScope(() => {
+            operation = mountedOperation(options);
+            return lookupMountedCard(operation);
+        });
+        while (!source && performance.now() - start < timeout) {
+            await mountedTick();
+            assertRouteSession(operation.sessionToken);
+            if (isHoverCancelled(operation.hoverToken)) return Object.freeze({ status: 'unknown', reason: 'hover-cancelled' });
+            source = withNativeReadScope(() => lookupMountedCard(operation));
+        }
+        return source ? Object.freeze({ status: 'found', source, page: source.page }) :
+            Object.freeze({ status: 'unknown', reason: 'target-not-mounted' });
+    }
+    async function resolveCard(options) {
+        if (options.mode === 'mounted') return resolveMountedCard(options);
+        const { section, scroller, track, item, expectedPage, totalCount, columns = 1,
+            pageItemCount = 1, hoverToken = null, sessionToken = null } = options;
         assertRouteSession(sessionToken);
         if (isHoverCancelled(hoverToken)) return Object.freeze({ status: 'unknown', reason: 'hover-cancelled' });
         if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
@@ -362,13 +442,13 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     function bind(section, scroller = null, track = null) {
         if (acceptedBinding && acceptedBinding.section === section && acceptedBinding.scroller === scroller &&
             acceptedBinding.track === track && isBindingCurrent(acceptedBinding)) return acceptedBinding;
-        collection.reset(); navigation.reset();
+        resetMountedWaits(); collection.reset(); navigation.reset();
         bindingGeneration++; invalidateNativeReadScope();
         if (section) models.delete(section);
         acceptedBinding = borrowBinding(section, scroller, track);
         return acceptedBinding;
     }
-    function clearBinding() { collection.reset(); navigation.reset(); bindingGeneration++; acceptedBinding = null; invalidateNativeReadScope(); }
+    function clearBinding() { resetMountedWaits(); collection.reset(); navigation.reset(); bindingGeneration++; acceptedBinding = null; invalidateNativeReadScope(); }
     function median(values) {
         if (!values.length) return 0;
         const sorted = [...values].sort((a, b) => a - b);
@@ -1498,7 +1578,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                     options.canonicalTransform || '', options.sessionToken ?? null);
         },
         mountedBootstrap: collection.mountedBootstrap, anchorPageZero, visibleVideoIds: currentPageVideoIds,
-        resolveCard, isSourceCurrent, assertSource, viewportSlots: viewportPageSlots,
+        resolveCard, mountedCard, isSourceCurrent, assertSource, viewportSlots: viewportPageSlots,
         collect: options => options.mode === 'mounted-single-page' ? collection.collectMounted(options) : collection.collect(options),
         resetSource() { clearBinding(); collection.resetDiagnostics(); models = new WeakMap(); nativeReadScope = null; },
         model: getCarouselDomRuntime, resetModel: resetCarouselDomRuntime,
@@ -1527,7 +1607,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         wrappedTailForRebuild: wrappedTailLogicalPageForRebuild,
         diagnoseIndices: logVirtualRawIndexDiagnostic,
         diagnostics: () => ({ bindingGeneration, readScopeActive: Boolean(nativeReadScope), navigation: navigation.diagnostics(),
-            collection: collection.diagnostics(), collectionOperations: collection.pending(),
+            collection: collection.diagnostics(), collectionOperations: collection.pending(), mountedSourceWaits: mountedWaits.size,
             discoveryActive: Boolean(targetDocumentObserver), pendingMutationFrame: targetMutationFrame !== null })
     });
 }

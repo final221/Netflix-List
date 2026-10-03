@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.18
+// @version      1.4.19
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -5889,6 +5889,7 @@
     let bindingGeneration = 0;
     const bindingTickets = /* @__PURE__ */ new WeakMap();
     const sourceTickets = /* @__PURE__ */ new WeakMap();
+    const mountedWaits = /* @__PURE__ */ new Set();
     let discoveryOwner = null, targetDocumentObserver = null, targetMutationFrame = null;
     let targetObservedBrowseHost = null, targetObservedMyListSection = null, targetObservedAncestors = [];
     let targetDocumentDiscoveryActive = false;
@@ -6128,18 +6129,110 @@
       assertSource(source);
       return source;
     }
-    async function resolveCard({
+    function mountedOperation({
       section,
       scroller,
       track,
       item,
-      expectedPage,
-      totalCount,
-      columns = 1,
-      pageItemCount = 1,
+      activeOnly = true,
       hoverToken = null,
       sessionToken = null
     }) {
+      assertRouteSession(sessionToken);
+      const binding = borrowBinding(section, scroller, track);
+      assertBinding(binding);
+      const model = getModel(section), page = selectedPage(section), mappingGeneration = model.mappingGeneration;
+      const target = Object.freeze({ href: String(item?.href || ""), videoId: String(item?.videoId || "") });
+      const guard = () => {
+        assertRouteSession(sessionToken);
+        assertBinding(binding);
+        if (models.get(section) !== model || model.mappingGeneration !== mappingGeneration) {
+          throw initializationError(
+            "NATIVE_SOURCE_REPLACED",
+            "native-mounted-card",
+            "Native source page or mapping changed during mounted-card resolution"
+          );
+        }
+        const currentPage = selectedPage(section);
+        if (models.get(section) !== model || model.mappingGeneration !== mappingGeneration || currentPage !== page) {
+          throw initializationError(
+            "NATIVE_SOURCE_REPLACED",
+            "native-mounted-card",
+            "Native source page or mapping changed during mounted-card resolution"
+          );
+        }
+      };
+      return { binding, target, activeOnly, hoverToken, sessionToken, page, guard };
+    }
+    function lookupMountedCard(operation) {
+      operation.guard();
+      const { binding, target, activeOnly, page } = operation;
+      const candidates = activeOnly ? currentPageSlots(binding.scroller, binding.track) : nativeFilledSlots(binding.track);
+      const slot = candidates.find((slot2) => {
+        const card = slot2.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+        if (!card) return false;
+        const href = card.href || card.getAttribute("href") || "";
+        return Boolean(target.href && href === target.href || target.videoId && netflixDom.videoIdFromHref(href) === target.videoId);
+      });
+      operation.guard();
+      return slot ? sourceHandle(binding, slot, page) : null;
+    }
+    function mountedCard(options) {
+      assertRouteSession(options.sessionToken);
+      if (isHoverCancelled(options.hoverToken ?? null) || !options.section?.isConnected || !options.scroller?.isConnected || !options.track?.isConnected) return null;
+      return withNativeReadScope(() => lookupMountedCard(mountedOperation(options)));
+    }
+    function mountedTick() {
+      return new Promise((resolve) => {
+        let closed = false, timer = null;
+        const ticket = { close() {
+          if (closed) return;
+          closed = true;
+          clearTimeout2(timer);
+          mountedWaits.delete(ticket);
+          resolve();
+        } };
+        mountedWaits.add(ticket);
+        timer = setTimeout2(ticket.close, 10);
+      });
+    }
+    function resetMountedWaits() {
+      for (const ticket of mountedWaits) ticket.close();
+    }
+    async function resolveMountedCard(options) {
+      assertRouteSession(options.sessionToken);
+      if (isHoverCancelled(options.hoverToken ?? null)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+      if (!options.section?.isConnected || !options.scroller?.isConnected || !options.track?.isConnected) {
+        return Object.freeze({ status: "unknown", reason: "native-binding-unavailable" });
+      }
+      const start = performance2.now(), timeout = Number.isFinite(options.timeout) ? Math.max(0, options.timeout) : 500;
+      let operation;
+      let source = withNativeReadScope(() => {
+        operation = mountedOperation(options);
+        return lookupMountedCard(operation);
+      });
+      while (!source && performance2.now() - start < timeout) {
+        await mountedTick();
+        assertRouteSession(operation.sessionToken);
+        if (isHoverCancelled(operation.hoverToken)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+        source = withNativeReadScope(() => lookupMountedCard(operation));
+      }
+      return source ? Object.freeze({ status: "found", source, page: source.page }) : Object.freeze({ status: "unknown", reason: "target-not-mounted" });
+    }
+    async function resolveCard(options) {
+      if (options.mode === "mounted") return resolveMountedCard(options);
+      const {
+        section,
+        scroller,
+        track,
+        item,
+        expectedPage,
+        totalCount,
+        columns = 1,
+        pageItemCount = 1,
+        hoverToken = null,
+        sessionToken = null
+      } = options;
       assertRouteSession(sessionToken);
       if (isHoverCancelled(hoverToken)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
       if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
@@ -6316,6 +6409,7 @@
     }
     function bind(section, scroller = null, track = null) {
       if (acceptedBinding && acceptedBinding.section === section && acceptedBinding.scroller === scroller && acceptedBinding.track === track && isBindingCurrent(acceptedBinding)) return acceptedBinding;
+      resetMountedWaits();
       collection.reset();
       navigation.reset();
       bindingGeneration++;
@@ -6325,6 +6419,7 @@
       return acceptedBinding;
     }
     function clearBinding() {
+      resetMountedWaits();
       collection.reset();
       navigation.reset();
       bindingGeneration++;
@@ -7319,6 +7414,7 @@
       anchorPageZero,
       visibleVideoIds: currentPageVideoIds,
       resolveCard,
+      mountedCard,
       isSourceCurrent,
       assertSource,
       viewportSlots: viewportPageSlots,
@@ -7387,6 +7483,7 @@
         navigation: navigation.diagnostics(),
         collection: collection.diagnostics(),
         collectionOperations: collection.pending(),
+        mountedSourceWaits: mountedWaits.size,
         discoveryActive: Boolean(targetDocumentObserver),
         pendingMutationFrame: targetMutationFrame !== null
       })
@@ -7432,7 +7529,6 @@
     const DELTA_MUTATION_TIMEOUT_MS = 1800;
     const UNDO_ENTRY_TTL_MS = 3e4;
     const HOVER_SOURCE_TIMEOUT_MS = 500;
-    const HOVER_SOURCE_INTERVAL_MS = 10;
     const HOVER_ACTIVATION_DELAY_MS = 120;
     const HOVER_SCROLL_QUIET_MS = 180;
     const HOVER_RETRY_DELAY_MS = 180;
@@ -7487,7 +7583,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.18";
+    const SCRIPT_VERSION = "1.4.19";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -11645,20 +11741,14 @@
       }
     });
     function findMountedSourceSlot(track, item, activeOnly = false) {
-      let candidates;
-      if (activeOnly && sourceState?.scroller) {
-        candidates = currentPageSlots(sourceState.scroller, track);
-      } else {
-        candidates = netflixDom.filledSlots(track);
-      }
-      return candidates.find((slot) => {
-        const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-        if (!card) return false;
-        const href = card.href || card.getAttribute("href") || "";
-        if (href === item.href) return true;
-        const id = videoIdFromHref(href);
-        return item.videoId && id === item.videoId;
-      }) || null;
+      return nativeCarousel.sample(() => nativeCarousel.mountedCard({
+        section: sourceState?.section,
+        scroller: sourceState?.scroller,
+        track,
+        item: { href: item.href, videoId: item.videoId },
+        activeOnly,
+        sessionToken: routeSessionToken
+      })?.slot || null);
     }
     function findActiveSourceSlot(item) {
       ensureLiveNativeBinding("hover-source-direct");
@@ -11669,27 +11759,21 @@
       assertRouteSession(sessionToken);
       if (hoverPreparationCancelled(token)) return null;
       ensureLiveNativeBinding("hover-source-wait");
-      let track = sourceState?.track;
-      const start = performance.now();
-      let slot = null;
-      while (performance.now() - start < timeout) {
-        assertRouteSession(sessionToken);
-        if (hoverPreparationCancelled(token)) return null;
-        if (!track?.isConnected || sourceState?.track !== track) {
-          ensureLiveNativeBinding("hover-source-wait-disconnected");
-          track = sourceState?.track;
-        }
-        if (!track) return null;
-        slot = findMountedSourceSlot(track, item, activeOnly);
-        if (slot) return slot;
-        await sleep(HOVER_SOURCE_INTERVAL_MS);
-        assertRouteSession(sessionToken);
-      }
+      const state = sourceState;
+      const result = await nativeCarousel.resolveCard({
+        mode: "mounted",
+        section: state?.section,
+        scroller: state?.scroller,
+        track: state?.track,
+        item: { href: item.href, videoId: item.videoId },
+        timeout,
+        activeOnly,
+        sessionToken,
+        hoverToken: token
+      });
       assertRouteSession(sessionToken);
-      if (hoverPreparationCancelled(token)) return null;
-      ensureLiveNativeBinding("hover-source-wait-final");
-      track = sourceState?.track;
-      return track ? findMountedSourceSlot(track, item, activeOnly) : null;
+      if (hoverPreparationCancelled(token) || sourceState !== state || result.status !== "found") return null;
+      return result.source.slot;
     }
     function viewportPageSlots(scroller, track, columns = sourceState?.layout?.columns || 1) {
       return nativeCarousel.viewportSlots(scroller, track, columns);
