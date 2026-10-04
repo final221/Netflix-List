@@ -5,7 +5,7 @@ import { createNavigation } from './navigation.js';
 import { createCollection } from './collection.js';
 import { GRID_ID as DEFAULT_GRID_ID, STATUS_ID as DEFAULT_STATUS_ID, LEGACY_EMPTY_STATE_ID as DEFAULT_EMPTY_ID,
     ORDER_MISMATCH_DIALOG_ID as DEFAULT_DIALOG_ID, SYNTHETIC_SECTION_ID, ORIGINAL_HIDDEN_CLASS, ORIGINAL_VISIBILITY_ATTR,
-    FAST_MOVE_CLASS } from '../../dom-names.js';
+    FAST_MOVE_CLASS, SOURCE_SCAN_CLASS, SOURCE_PARKED_CLASS } from '../../dom-names.js';
 
 // Native binding and mapping are owned here. Composition supplies interpreted
 // membership shape and lifecycle operations, never a mutable feature state bag.
@@ -830,6 +830,21 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                 connected: Boolean(slot.isConnected), inlineTransform: slot.style?.getPropertyValue?.('transform') || '', rect: rectangle });
         } catch (_) { return null; }
     }
+    function sourceDescription(source) {
+        try {
+            const { section, scroller = null, track = null } = source || {};
+            if (!section) return null;
+            const page = selectedPage(section), pages = pageCount(section);
+            const profile = carouselDomProfileSummary(section);
+            return Object.freeze({ selectedPage: page, pageCount: pages,
+                carouselDom: profile && Object.freeze({ ...profile, capabilities: Object.freeze({ ...profile.capabilities }) }),
+                sourceSlots: track ? netflixDom.directSlots(track).length : 0,
+                sourceCards: track ? nativeFilledSlots(track).length : 0,
+                currentPageCards: scroller && track ? currentPageSlots(scroller, track).length : 0,
+                sourceScan: Boolean(scroller?.classList?.contains(SOURCE_SCAN_CLASS)),
+                sourceParked: Boolean(scroller?.classList?.contains(SOURCE_PARKED_CLASS)) });
+        } catch (_) { return null; }
+    }
     function diagnostics(options = {}) {
         const snapshot = { bindingGeneration, readScopeActive: Boolean(nativeReadScope), navigation: navigation.diagnostics(),
             collection: collection.diagnostics(), collectionOperations: collection.pending(), mountedSourceWaits: mountedWaits.size,
@@ -837,6 +852,10 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         if (Object.hasOwn(options, 'card')) {
             try { snapshot.card = withNativeReadScope(() => slotDescriptor(options.card, options.totalCount)); }
             catch (_) { snapshot.card = null; }
+        }
+        if (Object.hasOwn(options, 'source')) {
+            try { snapshot.source = withNativeReadScope(() => sourceDescription(options.source)); }
+            catch (_) { snapshot.source = null; }
         }
         return snapshot;
     }
@@ -2059,7 +2078,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         collect: options => options.mode === 'mounted-single-page' ? collection.collectMounted(options) : collection.collect(options),
         resetSource() { clearBinding(); collection.resetDiagnostics(); models = new WeakMap(); nativeReadScope = null; },
         model: getCarouselDomRuntime, resetModel: resetCarouselDomRuntime,
-        profile: detectCarouselDomProfile, profileSummary: carouselDomProfileSummary,
+        profile: detectCarouselDomProfile,
         registerPage: registerLogicalPageSignature, forcePage: forceLogicalPageSignature, normalizePages: normalizeLogicalPages,
         notePage: (section, page, cycle = null) => modelForWrite(section)?.notePage(page, cycle),
         beginCollection: section => modelForWrite(section)?.beginCollection(),

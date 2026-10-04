@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.24
+// @version      1.4.25
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -6937,6 +6937,26 @@
         return null;
       }
     }
+    function sourceDescription(source) {
+      try {
+        const { section, scroller = null, track = null } = source || {};
+        if (!section) return null;
+        const page = selectedPage(section), pages = pageCount(section);
+        const profile = carouselDomProfileSummary(section);
+        return Object.freeze({
+          selectedPage: page,
+          pageCount: pages,
+          carouselDom: profile && Object.freeze({ ...profile, capabilities: Object.freeze({ ...profile.capabilities }) }),
+          sourceSlots: track ? netflixDom.directSlots(track).length : 0,
+          sourceCards: track ? nativeFilledSlots(track).length : 0,
+          currentPageCards: scroller && track ? currentPageSlots(scroller, track).length : 0,
+          sourceScan: Boolean(scroller?.classList?.contains(SOURCE_SCAN_CLASS)),
+          sourceParked: Boolean(scroller?.classList?.contains(SOURCE_PARKED_CLASS))
+        });
+      } catch (_) {
+        return null;
+      }
+    }
     function diagnostics(options = {}) {
       const snapshot = {
         bindingGeneration,
@@ -6953,6 +6973,13 @@
           snapshot.card = withNativeReadScope(() => slotDescriptor(options.card, options.totalCount));
         } catch (_) {
           snapshot.card = null;
+        }
+      }
+      if (Object.hasOwn(options, "source")) {
+        try {
+          snapshot.source = withNativeReadScope(() => sourceDescription(options.source));
+        } catch (_) {
+          snapshot.source = null;
         }
       }
       return snapshot;
@@ -8079,7 +8106,6 @@
       model: getCarouselDomRuntime,
       resetModel: resetCarouselDomRuntime,
       profile: detectCarouselDomProfile,
-      profileSummary: carouselDomProfileSummary,
       registerPage: registerLogicalPageSignature,
       forcePage: forceLogicalPageSignature,
       normalizePages: normalizeLogicalPages,
@@ -8227,7 +8253,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.24";
+    const SCRIPT_VERSION = "1.4.25";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -9288,6 +9314,7 @@
       const statusLabel = statusNode?.querySelector?.(`.${STATUS_LABEL_CLASS}`)?.textContent || "";
       const statusMeta = statusNode?.querySelector?.(`.${STATUS_META_CLASS}`)?.textContent || "";
       const statusText = [statusLabel, statusMeta].filter(Boolean).join("  ") || statusNode?.textContent || "";
+      const native = nativeSourceDiagnostics(section, scroller, track);
       return {
         url: location.href,
         browserLanguage: navigator.language || "",
@@ -9303,14 +9330,14 @@
         targetSessionActive,
         routeSessionToken: sessionScope.token,
         completed: Boolean(completedSection && completedSection.isConnected),
-        selectedPage: section ? selectedPage(section) : null,
-        pageCount: section ? pageCount(section) : null,
-        carouselDom: section ? carouselDomProfileSummary(section) : null,
+        selectedPage: native?.selectedPage ?? null,
+        pageCount: native?.pageCount ?? null,
+        carouselDom: native?.carouselDom ?? null,
         totalCount: sourceState?.totalCount ?? null,
         collectedItems: sourceState?.items?.length ?? 0,
-        sourceSlots: track ? netflixDom.directSlots(track).length : 0,
-        sourceCards: track ? netflixDom.filledSlots(track).length : 0,
-        currentPageCards: scroller && track ? currentPageSlots(scroller, track).length : 0,
+        sourceSlots: native?.sourceSlots ?? 0,
+        sourceCards: native?.sourceCards ?? 0,
+        currentPageCards: native?.currentPageCards ?? 0,
         gridCards: sourceState?.cloneMap?.size ?? 0,
         performanceWork: collectPerformanceDiagnostics(),
         undoRetention: {
@@ -9327,8 +9354,8 @@
           failure: sourceState.watchStatus.failure,
           network: collectViewingNetworkDiagnostics(sourceState.watchStatus.network)
         } : null,
-        sourceScan: Boolean(scroller?.classList?.contains(SOURCE_SCAN_CLASS)),
-        sourceParked: Boolean(scroller?.classList?.contains(SOURCE_PARKED_CLASS)),
+        sourceScan: native?.sourceScan ?? false,
+        sourceParked: native?.sourceParked ?? false,
         sourceGeometryProxy: Boolean(activeGeometryProxy),
         hoverPresentation: "netflix-native",
         nativeHoverOwned: Boolean(activeNativeHover),
@@ -11180,7 +11207,7 @@
       const details = {
         graphqlAvailable: lastGraphqlAvailable,
         graphqlKey: listData.diagnostics().graphqlKey,
-        domGeneration: sourceState?.section ? detectCarouselDomProfile(sourceState.section).generation : null
+        domGeneration: nativeSourceDiagnostics()?.carouselDom?.generation ?? null
       };
       logOperationTimeout("total-count-detection", timeout, details);
       throw initializationTimeoutError("total-count-detection", timeout, details);
@@ -11950,7 +11977,7 @@
       activeClone = null;
       activePage = null;
       log(tLog("manualReinitializationRequested"), {
-        selectedPage: sourceState?.section ? selectedPage(sourceState.section) : null,
+        selectedPage: nativeSourceDiagnostics()?.selectedPage ?? null,
         items: sourceState?.items?.length ?? null
       });
       try {
@@ -12056,8 +12083,8 @@
       }
       status.style.color = style.color || "rgb(255, 255, 255)";
     }
-    function detectCarouselDomProfile(...args) {
-      return nativeCarousel.profile(...args);
+    function nativeSourceDiagnostics(section = sourceState?.section, scroller = sourceState?.scroller, track = sourceState?.track) {
+      return nativeCarousel.diagnostics({ source: { section, scroller, track } }).source;
     }
     function nativeSourceObservation(state = sourceState, { count, provisionalTotalCount } = {}) {
       if (!state?.section) return null;
@@ -12075,9 +12102,6 @@
           if (sourceState !== state) throw createRouteSessionCancelledError();
         }
       });
-    }
-    function carouselDomProfileSummary(...args) {
-      return nativeCarousel.profileSummary(...args);
     }
     function logicalVisibleSignature(...args) {
       return nativeCarousel.visiblePageSignature(...args);
@@ -13332,13 +13356,16 @@
         if (hoverPreparationCancelled(token)) return null;
         actualPage = selectedPage(section);
       }
-      trace(() => [tLog("nativePagePreparationPositionResolved"), {
-        requestedPage: page,
-        actualPage,
-        selectedPage: selectedPage(section),
-        currentSlots: currentPageSlots(scroller, track).length,
-        targetSource: slotDescriptor(targetSourceSlot)
-      }]);
+      trace(() => {
+        const native = nativeSourceDiagnostics(section, scroller, track);
+        return [tLog("nativePagePreparationPositionResolved"), {
+          requestedPage: page,
+          actualPage,
+          selectedPage: native?.selectedPage ?? null,
+          currentSlots: native?.currentPageCards ?? 0,
+          targetSource: slotDescriptor(targetSourceSlot)
+        }];
+      });
       assertCurrent();
       invalidateGridReact();
       clearSourceAlignment();
@@ -14068,7 +14095,7 @@
         pages,
         changed,
         total: items.length,
-        selectedPage: selectedPage(section),
+        selectedPage: nativeSourceDiagnostics(section, state.scroller, state.track)?.selectedPage ?? null,
         pageMode: updatedRuntime?.mode || null,
         reanchoredLogicalPages: logicalMode,
         pageMappingStale: Boolean(updatedRuntime?.needsRemapping)
@@ -14093,12 +14120,13 @@
           throw createRouteSessionCancelledError();
         }
       };
+      const startingNative = nativeSourceDiagnostics(section, scroller, track);
       log(tLog("responsiveRefreshStarted"), {
         seq,
         reason,
         beforeLayout: layoutSummary(sourceState.layout),
-        selectedPage: selectedPage(sourceState.section),
-        pages: pageCount(sourceState.section)
+        selectedPage: startingNative?.selectedPage ?? null,
+        pages: startingNative?.pageCount ?? null
       });
       grid.setAttribute("data-tm-responsive-refreshing", "true");
       performanceDiagnostics.resize.refreshes++;
@@ -14129,12 +14157,13 @@
           const changed = await remapItemsByOrder(liveLayout, sessionToken);
           assertOwner();
           deferredLogicalRemap = changed === null;
+          const remappedNative = nativeSourceDiagnostics(section, scroller, track);
           if (deferredLogicalRemap) {
             log("Responsive logical page remap deferred", {
               seq,
               reason,
               columns: liveLayout.columns,
-              pages: pageCount(sourceState.section),
+              pages: remappedNative?.pageCount ?? null,
               total: sourceState.items.length,
               retryCount: nativeSourceObservation(state)?.remapAttempts || 0
             });
@@ -14143,7 +14172,7 @@
               seq,
               reason,
               columns: liveLayout.columns,
-              pages: pageCount(sourceState.section),
+              pages: remappedNative?.pageCount ?? null,
               changed,
               total: sourceState.items.length
             });
@@ -14161,7 +14190,7 @@
           reason,
           layout: layoutSummary(liveLayout),
           elapsedMs: Math.round(performance.now() - started),
-          selectedPage: selectedPage(sourceState.section),
+          selectedPage: nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null,
           finalSignature,
           finalPageShape
         });
@@ -14682,7 +14711,7 @@
         clearRunningSession(sessionToken);
         return;
       }
-      const mountedMode = nativeSourceObservation()?.mode || detectCarouselDomProfile(section).pageMode;
+      const mountedMode = nativeSourceObservation()?.mode || "unknown";
       if (targetSessionEntryKind !== "initial" && mountedMode === "indicator" && freshMyListBootstrap?.firstVideoId) {
         try {
           await ensureFreshIndicatorPageZeroAnchor(
@@ -14825,6 +14854,7 @@
           });
         }
       }
+      const initializationNative = nativeSourceDiagnostics(section, scroller, track);
       log(tLog("initializationStarted"), {
         version: SCRIPT_VERSION,
         browserLanguage: navigator.language || "",
@@ -14834,24 +14864,25 @@
         logLanguage: getLogLocale(),
         viewport: { width: window.innerWidth, height: window.innerHeight },
         devicePixelRatio: window.devicePixelRatio,
-        selectedPage: selectedPage(section),
-        pages: pageCount(section),
-        sourceSlots: netflixDom.directSlots(track).length,
-        sourceCards: netflixDom.filledSlots(track).length,
-        carouselDom: carouselDomProfileSummary(section)
+        selectedPage: initializationNative?.selectedPage ?? null,
+        pages: initializationNative?.pageCount ?? null,
+        sourceSlots: initializationNative?.sourceSlots ?? 0,
+        sourceCards: initializationNative?.sourceCards ?? 0,
+        carouselDom: initializationNative?.carouselDom ?? null
       });
       let retryGridBuild = false;
       try {
         const layout = measureVisibleLayout(section, scroller, track);
         layout.rowGap = measureNativeCarouselGap(section);
         const totalCount = earlyTotalCount;
-        const initialPages = pageCount(section);
+        const measuredNative = nativeSourceDiagnostics(section, scroller, track);
+        const initialPages = measuredNative?.pageCount ?? null;
         log(tLog("initialLayoutMeasured"), {
           layout: layoutSummary(layout),
           totalCount,
           initialPages,
-          selectedPage: selectedPage(section),
-          currentPageCards: currentPageSlots(scroller, track).length
+          selectedPage: measuredNative?.selectedPage ?? null,
+          currentPageCards: measuredNative?.currentPageCards ?? 0
         });
         const status = updateStatus(formatHeaderParts(0, totalCount, null));
         scroller.insertAdjacentElement("afterend", status);
@@ -14866,22 +14897,24 @@
         let items;
         if (fastItems?.length === totalCount) {
           items = fastItems;
+          const fastNative = nativeSourceDiagnostics(section, scroller, track);
           log(fastCollectionSource === "mounted-single-page" ? "Mounted single-page My List fast collection used" : "GraphQL My List fast collection used", {
             collectionSource: fastCollectionSource,
             collected: items.length,
             totalCount,
-            pages: pageCount(section),
-            sourceCards: netflixDom.filledSlots(track).length,
-            carouselDom: carouselDomProfileSummary(section)
+            pages: fastNative?.pageCount ?? null,
+            sourceCards: fastNative?.sourceCards ?? 0,
+            carouselDom: fastNative?.carouselDom ?? null
           });
         } else {
           beginSourceScan(section, scroller, track);
+          const scanNative = nativeSourceDiagnostics(section, scroller, track);
           log(tLog("nativeCarouselScanModeStarted"), {
-            selectedPage: selectedPage(section),
-            pages: pageCount(section),
-            sourceSlots: netflixDom.directSlots(track).length,
-            sourceCards: netflixDom.filledSlots(track).length,
-            carouselDom: carouselDomProfileSummary(section)
+            selectedPage: scanNative?.selectedPage ?? null,
+            pages: scanNative?.pageCount ?? null,
+            sourceSlots: scanNative?.sourceSlots ?? 0,
+            sourceCards: scanNative?.sourceCards ?? 0,
+            carouselDom: scanNative?.carouselDom ?? null
           });
           items = await collectAllItems(section, scroller, track, totalCount, sessionToken);
         }
@@ -14900,7 +14933,7 @@
             "COLLECTION_COUNT_MISMATCH",
             "validate-count",
             `Collected ${items.length} of ${totalCount} My List items`,
-            { collected: items.length, totalCount, endingPage: selectedPage(section) }
+            { collected: items.length, totalCount, endingPage: nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null }
           );
           warn(tLog("collectedCountDoesNotMatchTotalCount"), {
             collected: items.length,
@@ -14913,21 +14946,23 @@
         log(tLog("fullCollectionResultFinalized"), {
           collected: items.length,
           totalCount,
-          endingPage: selectedPage(section),
+          endingPage: nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null,
           items: items.map(itemSummary)
         });
         parkSource(scroller);
+        const standbyNative = nativeSourceDiagnostics(section, scroller, track);
         log(tLog("nativeCarouselStandbyMode"), {
-          selectedPage: selectedPage(section),
-          parked: scroller.classList.contains(SOURCE_PARKED_CLASS)
+          selectedPage: standbyNative?.selectedPage ?? null,
+          parked: standbyNative?.sourceParked ?? false
         });
         await buildGrid(section, scroller, items, layout, totalCount, sessionToken);
         assertRouteSession(sessionToken);
         sourceState.empty = false;
         applyOriginalMyListVisibility();
+        const deferredNative = nativeSourceDiagnostics(section, scroller, track);
         log(tLog("initialHoverPreparationDeferred"), {
-          selectedPage: selectedPage(section),
-          currentPageCards: currentPageSlots(scroller, track).length
+          selectedPage: deferredNative?.selectedPage ?? null,
+          currentPageCards: deferredNative?.currentPageCards ?? 0
         });
         if (sourceState) {
           sourceState.collectedCount = items.length;

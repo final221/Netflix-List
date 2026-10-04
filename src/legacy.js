@@ -950,6 +950,7 @@ export function startLegacy() {
         const statusLabel = statusNode?.querySelector?.(`.${STATUS_LABEL_CLASS}`)?.textContent || '';
         const statusMeta = statusNode?.querySelector?.(`.${STATUS_META_CLASS}`)?.textContent || '';
         const statusText = [statusLabel, statusMeta].filter(Boolean).join('  ') || statusNode?.textContent || '';
+        const native = nativeSourceDiagnostics(section, scroller, track);
 
         return {
             url: location.href,
@@ -966,14 +967,14 @@ export function startLegacy() {
             targetSessionActive,
             routeSessionToken: sessionScope.token,
             completed: Boolean(completedSection && completedSection.isConnected),
-            selectedPage: section ? selectedPage(section) : null,
-            pageCount: section ? pageCount(section) : null,
-            carouselDom: section ? carouselDomProfileSummary(section) : null,
+            selectedPage: native?.selectedPage ?? null,
+            pageCount: native?.pageCount ?? null,
+            carouselDom: native?.carouselDom ?? null,
             totalCount: sourceState?.totalCount ?? null,
             collectedItems: sourceState?.items?.length ?? 0,
-            sourceSlots: track ? netflixDom.directSlots(track).length : 0,
-            sourceCards: track ? netflixDom.filledSlots(track).length : 0,
-            currentPageCards: scroller && track ? currentPageSlots(scroller, track).length : 0,
+            sourceSlots: native?.sourceSlots ?? 0,
+            sourceCards: native?.sourceCards ?? 0,
+            currentPageCards: native?.currentPageCards ?? 0,
             gridCards: sourceState?.cloneMap?.size ?? 0,
             performanceWork: collectPerformanceDiagnostics(),
             undoRetention: { entries: recentRemovedMyListItems.size, expiryScheduled: Boolean(undoExpiryTimer),
@@ -987,8 +988,8 @@ export function startLegacy() {
                 failure: sourceState.watchStatus.failure,
                 network: collectViewingNetworkDiagnostics(sourceState.watchStatus.network)
             } : null,
-            sourceScan: Boolean(scroller?.classList?.contains(SOURCE_SCAN_CLASS)),
-            sourceParked: Boolean(scroller?.classList?.contains(SOURCE_PARKED_CLASS)),
+            sourceScan: native?.sourceScan ?? false,
+            sourceParked: native?.sourceParked ?? false,
             sourceGeometryProxy: Boolean(activeGeometryProxy),
             hoverPresentation: 'netflix-native',
             nativeHoverOwned: Boolean(activeNativeHover),
@@ -2791,7 +2792,7 @@ export function startLegacy() {
         const details = {
             graphqlAvailable: lastGraphqlAvailable,
             graphqlKey: listData.diagnostics().graphqlKey,
-            domGeneration: sourceState?.section ? detectCarouselDomProfile(sourceState.section).generation : null
+            domGeneration: nativeSourceDiagnostics()?.carouselDom?.generation ?? null
         };
         logOperationTimeout('total-count-detection', timeout, details);
         throw initializationTimeoutError('total-count-detection', timeout, details);
@@ -3689,7 +3690,7 @@ export function startLegacy() {
         activePage = null;
 
         log(tLog('manualReinitializationRequested'), {
-            selectedPage: sourceState?.section ? selectedPage(sourceState.section) : null,
+            selectedPage: nativeSourceDiagnostics()?.selectedPage ?? null,
             items: sourceState?.items?.length ?? null
         });
 
@@ -3814,8 +3815,8 @@ export function startLegacy() {
         status.style.color = style.color || 'rgb(255, 255, 255)';
     }
 
-    function detectCarouselDomProfile(...args) {
-        return nativeCarousel.profile(...args);
+    function nativeSourceDiagnostics(section = sourceState?.section, scroller = sourceState?.scroller, track = sourceState?.track) {
+        return nativeCarousel.diagnostics({ source: { section, scroller, track } }).source;
     }
 
     function nativeSourceObservation(state = sourceState, { count, provisionalTotalCount } = {}) {
@@ -3827,10 +3828,6 @@ export function startLegacy() {
                 assertRouteSession(sessionToken);
                 if (sourceState !== state) throw createRouteSessionCancelledError();
             } });
-    }
-
-    function carouselDomProfileSummary(...args) {
-        return nativeCarousel.profileSummary(...args);
     }
 
     function logicalVisibleSignature(...args) {
@@ -5105,13 +5102,16 @@ export function startLegacy() {
             actualPage = selectedPage(section);
         }
 
-        trace(() => [tLog('nativePagePreparationPositionResolved'), {
-            requestedPage: page,
-            actualPage,
-            selectedPage: selectedPage(section),
-            currentSlots: currentPageSlots(scroller, track).length,
-            targetSource: slotDescriptor(targetSourceSlot)
-        }]);
+        trace(() => {
+            const native = nativeSourceDiagnostics(section, scroller, track);
+            return [tLog('nativePagePreparationPositionResolved'), {
+                requestedPage: page,
+                actualPage,
+                selectedPage: native?.selectedPage ?? null,
+                currentSlots: native?.currentPageCards ?? 0,
+                targetSource: slotDescriptor(targetSourceSlot)
+            }];
+        });
 
         assertCurrent();
         invalidateGridReact();
@@ -5856,7 +5856,7 @@ export function startLegacy() {
             pages,
             changed,
             total: items.length,
-            selectedPage: selectedPage(section),
+            selectedPage: nativeSourceDiagnostics(section, state.scroller, state.track)?.selectedPage ?? null,
             pageMode: updatedRuntime?.mode || null,
             reanchoredLogicalPages: logicalMode,
             pageMappingStale: Boolean(updatedRuntime?.needsRemapping)
@@ -5884,12 +5884,13 @@ export function startLegacy() {
                 throw createRouteSessionCancelledError();
             }
         };
+        const startingNative = nativeSourceDiagnostics(section, scroller, track);
         log(tLog('responsiveRefreshStarted'), {
             seq,
             reason,
             beforeLayout: layoutSummary(sourceState.layout),
-            selectedPage: selectedPage(sourceState.section),
-            pages: pageCount(sourceState.section)
+            selectedPage: startingNative?.selectedPage ?? null,
+            pages: startingNative?.pageCount ?? null
         });
         grid.setAttribute('data-tm-responsive-refreshing', 'true');
         performanceDiagnostics.resize.refreshes++;
@@ -5923,12 +5924,13 @@ export function startLegacy() {
                 const changed = await remapItemsByOrder(liveLayout, sessionToken);
                 assertOwner();
                 deferredLogicalRemap = changed === null;
+                const remappedNative = nativeSourceDiagnostics(section, scroller, track);
                 if (deferredLogicalRemap) {
                     log('Responsive logical page remap deferred', {
                         seq,
                         reason,
                         columns: liveLayout.columns,
-                        pages: pageCount(sourceState.section),
+                        pages: remappedNative?.pageCount ?? null,
                         total: sourceState.items.length,
                         retryCount: nativeSourceObservation(state)?.remapAttempts || 0
                     });
@@ -5937,7 +5939,7 @@ export function startLegacy() {
                         seq,
                         reason,
                         columns: liveLayout.columns,
-                        pages: pageCount(sourceState.section),
+                        pages: remappedNative?.pageCount ?? null,
                         changed,
                         total: sourceState.items.length
                     });
@@ -5957,7 +5959,7 @@ export function startLegacy() {
                 reason,
                 layout: layoutSummary(liveLayout),
                 elapsedMs: Math.round(performance.now() - started),
-                selectedPage: selectedPage(sourceState.section),
+                selectedPage: nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null,
                 finalSignature,
                 finalPageShape
             });
@@ -6540,7 +6542,7 @@ export function startLegacy() {
             clearRunningSession(sessionToken);
             return;
         }
-        const mountedMode = nativeSourceObservation()?.mode || detectCarouselDomProfile(section).pageMode;
+        const mountedMode = nativeSourceObservation()?.mode || 'unknown';
 
         // A manual/order-mismatch reinitialization can start while Netflix still has
         // page 0 selected with a one-card-shifted mounted window after a My List delta.
@@ -6693,6 +6695,7 @@ export function startLegacy() {
             }
         }
 
+        const initializationNative = nativeSourceDiagnostics(section, scroller, track);
         log(tLog('initializationStarted'), {
             version: SCRIPT_VERSION,
             browserLanguage: navigator.language || '',
@@ -6702,11 +6705,11 @@ export function startLegacy() {
             logLanguage: getLogLocale(),
             viewport: { width: window.innerWidth, height: window.innerHeight },
             devicePixelRatio: window.devicePixelRatio,
-            selectedPage: selectedPage(section),
-            pages: pageCount(section),
-            sourceSlots: netflixDom.directSlots(track).length,
-            sourceCards: netflixDom.filledSlots(track).length,
-            carouselDom: carouselDomProfileSummary(section)
+            selectedPage: initializationNative?.selectedPage ?? null,
+            pages: initializationNative?.pageCount ?? null,
+            sourceSlots: initializationNative?.sourceSlots ?? 0,
+            sourceCards: initializationNative?.sourceCards ?? 0,
+            carouselDom: initializationNative?.carouselDom ?? null
         });
 
         let retryGridBuild = false;
@@ -6714,13 +6717,14 @@ export function startLegacy() {
             const layout = measureVisibleLayout(section, scroller, track);
             layout.rowGap = measureNativeCarouselGap(section);
             const totalCount = earlyTotalCount;
-            const initialPages = pageCount(section);
+            const measuredNative = nativeSourceDiagnostics(section, scroller, track);
+            const initialPages = measuredNative?.pageCount ?? null;
             log(tLog('initialLayoutMeasured'), {
                 layout: layoutSummary(layout),
                 totalCount,
                 initialPages,
-                selectedPage: selectedPage(section),
-                currentPageCards: currentPageSlots(scroller, track).length
+                selectedPage: measuredNative?.selectedPage ?? null,
+                currentPageCards: measuredNative?.currentPageCards ?? 0
             });
 
             const status = updateStatus(formatHeaderParts(0, totalCount, null));
@@ -6739,25 +6743,27 @@ export function startLegacy() {
             let items;
             if (fastItems?.length === totalCount) {
                 items = fastItems;
+                const fastNative = nativeSourceDiagnostics(section, scroller, track);
                 log(fastCollectionSource === 'mounted-single-page'
                     ? 'Mounted single-page My List fast collection used' : 'GraphQL My List fast collection used', {
                     collectionSource: fastCollectionSource,
                     collected: items.length,
                     totalCount,
-                    pages: pageCount(section),
-                    sourceCards: netflixDom.filledSlots(track).length,
-                    carouselDom: carouselDomProfileSummary(section)
+                    pages: fastNative?.pageCount ?? null,
+                    sourceCards: fastNative?.sourceCards ?? 0,
+                    carouselDom: fastNative?.carouselDom ?? null
                 });
             } else {
                 // Keep the native carousel in place while scanning so Netflix layout and
                 // tabindex/current-slot detection continue to reflect native state.
                 beginSourceScan(section, scroller, track);
+                const scanNative = nativeSourceDiagnostics(section, scroller, track);
                 log(tLog('nativeCarouselScanModeStarted'), {
-                    selectedPage: selectedPage(section),
-                    pages: pageCount(section),
-                    sourceSlots: netflixDom.directSlots(track).length,
-                    sourceCards: netflixDom.filledSlots(track).length,
-                    carouselDom: carouselDomProfileSummary(section)
+                    selectedPage: scanNative?.selectedPage ?? null,
+                    pages: scanNative?.pageCount ?? null,
+                    sourceSlots: scanNative?.sourceSlots ?? 0,
+                    sourceCards: scanNative?.sourceCards ?? 0,
+                    carouselDom: scanNative?.carouselDom ?? null
                 });
                 items = await collectAllItems(section, scroller, track, totalCount, sessionToken);
             }
@@ -6777,7 +6783,7 @@ export function startLegacy() {
                     'COLLECTION_COUNT_MISMATCH',
                     'validate-count',
                     `Collected ${items.length} of ${totalCount} My List items`,
-                    { collected: items.length, totalCount, endingPage: selectedPage(section) }
+                    { collected: items.length, totalCount, endingPage: nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null }
                 );
                 warn(tLog('collectedCountDoesNotMatchTotalCount'), {
                     collected: items.length,
@@ -6791,15 +6797,16 @@ export function startLegacy() {
             log(tLog('fullCollectionResultFinalized'), {
                 collected: items.length,
                 totalCount,
-                endingPage: selectedPage(section),
+                endingPage: nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null,
                 items: items.map(itemSummary)
             });
 
             // Keep the native carousel at its normal position and size for React resynchronization.
             parkSource(scroller);
+            const standbyNative = nativeSourceDiagnostics(section, scroller, track);
             log(tLog('nativeCarouselStandbyMode'), {
-                selectedPage: selectedPage(section),
-                parked: scroller.classList.contains(SOURCE_PARKED_CLASS)
+                selectedPage: standbyNative?.selectedPage ?? null,
+                parked: standbyNative?.sourceParked ?? false
             });
             await buildGrid(section, scroller, items, layout, totalCount, sessionToken);
             assertRouteSession(sessionToken);
@@ -6808,9 +6815,10 @@ export function startLegacy() {
 
             // Defer React-backed hover preparation until the first actual hover.
             // The live native card is resolved on demand, keeping initialization off the hover path.
+            const deferredNative = nativeSourceDiagnostics(section, scroller, track);
             log(tLog('initialHoverPreparationDeferred'), {
-                selectedPage: selectedPage(section),
-                currentPageCards: currentPageSlots(scroller, track).length
+                selectedPage: deferredNative?.selectedPage ?? null,
+                currentPageCards: deferredNative?.currentPageCards ?? 0
             });
             if (sourceState) { sourceState.collectedCount = items.length; sourceState.totalCount = totalCount; }
             completedSection = section;

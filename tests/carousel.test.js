@@ -4,7 +4,7 @@ import { createCarousel } from '../src/netflix/carousel/carousel.js';
 import { createNetflixPageDom } from '../src/netflix/page-dom.js';
 import { createCardMarkup } from '../src/netflix/card-markup.js';
 import { createSessionScope } from '../src/app/session-scope.js';
-import { FAST_MOVE_CLASS } from '../src/dom-names.js';
+import { FAST_MOVE_CLASS, SOURCE_SCAN_CLASS, SOURCE_PARKED_CLASS } from '../src/dom-names.js';
 import { Element, createDocument } from './helpers/dom.js';
 import { createScheduler } from './helpers/scheduler.js';
 
@@ -735,6 +735,75 @@ test('carousel owns passive card descriptions and isolates diagnostic failures f
     assert.deepEqual(e.directions, []);
     assert.equal(e.scheduler.timers.size, 0);
     assert.equal(e.scheduler.frames.size, 0);
+});
+
+test('carousel owns a copied passive source description with page, profile, card and marker facts', () => {
+    const e = mountedEnvironment();
+    e.scroller.classList.add(SOURCE_SCAN_CLASS);
+    const description = e.carousel.diagnostics({ source: e.options }).source;
+    assert.equal(description.selectedPage, 0);
+    assert.equal(description.pageCount, 1);
+    assert.equal(description.sourceSlots, 3);
+    assert.equal(description.sourceCards, 3);
+    assert.equal(description.currentPageCards, 3);
+    assert.equal(description.sourceScan, true);
+    assert.equal(description.sourceParked, false);
+    assert.equal(description.carouselDom.pageMode, 'logical');
+    assert.equal(description.carouselDom.navigationMode, 'hawkins');
+    assert.ok(Object.isFrozen(description) && Object.isFrozen(description.carouselDom) &&
+        Object.isFrozen(description.carouselDom.capabilities));
+    assert.equal(description.section, undefined);
+    assert.equal(description.scroller, undefined);
+    assert.equal(description.track, undefined);
+    assert.equal(e.carousel.isObservationCurrent(description), false, 'passive reporting is not native admission');
+    e.scroller.classList.remove(SOURCE_SCAN_CLASS);
+    e.scroller.classList.add(SOURCE_PARKED_CLASS);
+    e.carousel.refreshMapping({ ...e.options, mode: 'delta', totalCount: 9, columns: 3 });
+    const updated = e.carousel.diagnostics({ source: e.options }).source;
+    assert.equal(description.sourceScan, true, 'prior report retains copied facts');
+    assert.equal(description.pageCount, 1);
+    assert.equal(updated.sourceParked, true);
+    assert.equal(updated.pageCount, 3);
+    assert.equal(updated.carouselDom.pageMappingStale, true);
+    assert.deepEqual(e.directions, []);
+    assert.equal(e.scheduler.timers.size, 0);
+    assert.equal(e.scheduler.frames.size, 0);
+});
+
+test('source diagnostics describe incomplete discovery and isolate failure without adding default reads', () => {
+    const e = environment();
+    let reads = 0;
+    e.pageDom.directSlots = () => { reads++; throw new Error('source description unavailable'); };
+    const counters = e.carousel.diagnostics();
+    assert.equal(Object.hasOwn(counters, 'source'), false);
+    assert.equal(reads, 0);
+    assert.equal(e.carousel.diagnostics({ source: { section: null } }).source, null);
+    const incomplete = e.carousel.diagnostics({ source: { section: e.section, scroller: null, track: null } }).source;
+    assert.equal(incomplete.sourceSlots, 0);
+    assert.equal(incomplete.sourceCards, 0);
+    assert.equal(incomplete.currentPageCards, 0);
+    assert.ok(Object.isFrozen(incomplete));
+    const handle = e.carousel.bind(e.section, e.scroller, e.track);
+    assert.equal(e.carousel.diagnostics({ source: { section: e.section, scroller: e.scroller, track: e.track } }).source, null);
+    assert.equal(e.carousel.isBindingCurrent(handle), true);
+    assert.equal(e.carousel.diagnostics().readScopeActive, false);
+    assert.equal(e.scheduler.timers.size, 0);
+});
+
+test('source descriptions preserve indicator page interpretation without granting observation authority', () => {
+    const e = navigationEnvironment({ mode: 'indicator' });
+    e.setPage(2);
+    const source = { section: e.section, scroller: e.scroller, track: e.track };
+    const description = e.carousel.diagnostics({ source }).source;
+    assert.equal(description.selectedPage, 2);
+    assert.equal(description.pageCount, 3);
+    assert.equal(description.carouselDom.pageMode, 'indicator');
+    assert.equal(description.carouselDom.indicatorCount, 3);
+    assert.equal(e.carousel.isObservationCurrent(description), false);
+    e.setPage(0);
+    assert.equal(description.selectedPage, 2);
+    assert.equal(e.carousel.diagnostics({ source }).source.selectedPage, 0);
+    assert.equal(e.scheduler.timers.size, 0);
 });
 
 test('native recovery can publish a valid source when its card description fails', async () => {

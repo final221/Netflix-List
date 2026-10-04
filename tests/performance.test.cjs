@@ -25,7 +25,7 @@ const { carouselPayload, atom, reference, viewingVideo } = require('./helpers/fi
 const { source, declaration } = require('./helpers/legacy-source.cjs');
 const privateNavigationFunctions = new Set(['createLogicalMoveSignal', 'waitLogicalPageChange', 'waitPageByPolling', 'waitPage', 'waitForScriptMoveSettle']);
 const fixtureModelReads = new Set(['getCarouselDomRuntime', 'logicalSlotPositions', 'wrappedTailLogicalPageInfo',
-    'netflixItemIndexFromSlot', 'normalizeNetflixLogicalIndex']);
+    'netflixItemIndexFromSlot', 'normalizeNetflixLogicalIndex', 'detectCarouselDomProfile', 'carouselDomProfileSummary']);
 const migratedAdapterFunctions = new Set(['getHtmlLanguage', 'getNetflixLanguage', 'netflixModelData',
     'graphqlData', 'viewingRequestContext', 'nativeCardIdentity', 'videoIdFromHref', 'decodeTrackingContext',
     'videoIdFromToggleContext', 'findMyListSection', 'itemFromSlot']);
@@ -234,6 +234,7 @@ function environment(names, overrides = {}) {
     c.netflixItemIndexFromSlot ||= slot => c.nativeCarousel.itemIndex(slot);
     c.normalizeNetflixLogicalIndex ||= normalizeNetflixLogicalIndex;
     vm.runInContext(declaration('nativeSourceObservation'), c);
+    vm.runInContext(declaration('nativeSourceDiagnostics'), c);
     if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
     Object.defineProperty(c, 'nativeReadScope', { get: () => c.nativeCarousel.diagnostics().readScopeActive ? true : null });
     // Supplementary characterization of private acknowledgement resources. Full
@@ -3555,7 +3556,7 @@ function initializationEnvironment(count = 150) {
         getCarouselDomRuntime: section => e.c.nativeCarousel.model(section),
         currentPageSlots: () => [e.template],
         netflixDom: { findTrack: () => e.track, filledSlots: () => [e.template], directSlots: () => [e.template] },
-        selectedPage: () => 0, pageCount: () => Math.ceil(count / 6), carouselDomProfileSummary: () => ({}),
+        selectedPage: () => 0, pageCount: () => Math.ceil(count / 6),
         navigator: { language: 'en' }, window: { innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1 },
         getHtmlLanguage: () => 'en', getNetflixLanguage: () => 'en', getUiLocale: () => 'en', getLogLocale: () => 'en',
         SCRIPT_VERSION: 'test', currentGridGeometry: () => ({ left: 10, width: 600 }), parkSource() {},
@@ -3710,6 +3711,78 @@ test('initialization never substitutes a provisional count for absent or contrad
         assert.ok(e.warnings.some(row => row.name === 'initializationFailed' && row.details.code === 'NATIVE_TOTAL_COUNT_UNAVAILABLE'), scenario);
         assert.equal(e.logs.filter(row => row.name === 'legacyGridBuilt').length, 0);
     }
+});
+
+test('actual initialization survives failure of passive native source descriptions after admission', async () => {
+    const e = initializationEnvironment(6);
+    const log = e.c.log;
+    e.c.log = (name, details) => {
+        log(name, details);
+        if (name === 'initializationStarted') {
+            e.c.netflixDom.directSlots = e.c.netflixDom.filledSlots = () => { throw new Error('native diagnostic unavailable'); };
+        }
+    };
+    const completion = e.c.runScript(1);
+    await e.flush(); await e.drain(); await completion;
+    assert.equal(e.c.completedSection, e.section);
+    assert.equal(e.c.sourceState.items.length, 6);
+    assert.equal(e.logs.filter(row => row.name === 'legacyGridBuilt').length, 1);
+    assert.equal(e.warnings.filter(row => row.name === 'initializationFailed').length, 0);
+    assert.equal(e.c.nativeCarousel.diagnostics().readScopeActive, false);
+});
+
+test('actual CopyLogs runtime snapshot consumes passive native facts and preserves other report fields on failure', async () => {
+    const e = initializationEnvironment(6);
+    const completion = e.c.runScript(1);
+    await e.flush(); await e.drain(); await completion;
+    Object.assign(e.c, { STATUS_LABEL_CLASS: 'status-label', STATUS_META_CLASS: 'status-meta',
+        viewOriginalMyList: true, lastResponsiveSignature: 'geometry', lastPageShape: 'pages',
+        lastResponsiveReason: 'initial', responsiveRefreshing: false });
+    vm.runInContext(declaration('layoutSummary'), e.c);
+    vm.runInContext(declaration('slotDescriptor'), e.c);
+    vm.runInContext(declaration('collectRuntimeSnapshot'), e.c);
+    const snapshot = e.c.collectRuntimeSnapshot();
+    assert.equal(snapshot.selectedPage, 0);
+    assert.equal(snapshot.pageCount, 1);
+    assert.equal(snapshot.carouselDom.pageMode, 'logical');
+    assert.equal(snapshot.sourceSlots, 1);
+    assert.equal(snapshot.sourceCards, 1);
+    assert.equal(snapshot.currentPageCards, 1);
+    assert.equal(snapshot.collectedItems, 6);
+    assert.equal(snapshot.gridCards, 6);
+    assert.equal(snapshot.totalCount, 6);
+    e.c.netflixDom.directSlots = () => { throw new Error('native report unavailable'); };
+    const unavailable = e.c.collectRuntimeSnapshot();
+    assert.equal(unavailable.selectedPage, null);
+    assert.equal(unavailable.pageCount, null);
+    assert.equal(unavailable.carouselDom, null);
+    assert.equal(unavailable.sourceCards, 0);
+    assert.equal(unavailable.collectedItems, 6);
+    assert.equal(unavailable.gridCards, 6);
+    assert.equal(unavailable.totalCount, 6);
+    assert.equal(unavailable.viewOriginalMyList, true);
+});
+
+test('count-detection timeout keeps its primary error when native profile diagnostics fail', async () => {
+    const e = initializationEnvironment(6);
+    for (const name of ['initializationTimeoutError', 'waitForMyListTotalCount']) vm.runInContext(declaration(name), e.c);
+    e.c.NATIVE_READY_POLL_MS = 5;
+    e.c.logOperationTimeout = () => {};
+    e.c.listData = { ...e.c.listData, isAvailable: () => false, detectMyListTotalCount: () => null,
+        diagnostics: () => ({ graphqlKey: 'unavailable' }) };
+    e.section.querySelector = () => { throw new Error('native profile diagnostic unavailable'); };
+    const pending = e.c.waitForMyListTotalCount(20, 1);
+    const rejected = assert.rejects(pending, error => {
+        assert.equal(error.code, 'INITIALIZATION_TIMEOUT');
+        assert.equal(error.stage, 'total-count-detection');
+        assert.equal(error.details.graphqlAvailable, false);
+        assert.equal(error.details.graphqlKey, 'unavailable');
+        assert.equal(error.details.domGeneration, null);
+        return true;
+    });
+    await e.advance(20);
+    await rejected;
+    assert.equal(e.timers.size, 0);
 });
 
 test('GraphQL adapter awaits snapshot chunks and initialization awaits grid publication before becoming idle', async () => {
