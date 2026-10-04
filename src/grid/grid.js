@@ -5,10 +5,12 @@ import { createFrame } from './frame.js';
 export function createGrid({ document, location, runChunks,
     createError = (code, message) => Object.assign(new Error(message), { code }),
     prepareCard = () => {}, onRetire = () => {}, onReplace = () => {}, installHover = () => {},
-    tLog = key => key, copyLogs = async () => {}, isActive = () => true,
+    tLog = key => key, tUi = key => key, copyLogs = async () => {}, isActive = () => true,
+    readEmptyContent = () => null, readEmptyShell = () => null,
     setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout }) {
-    const markup = createCardMarkup({ location });
-    const frame = createFrame({ document, tLog, copyLogs, isActive, setTimeout, clearTimeout, createError });
+    const markup = createCardMarkup({ location, document });
+    const frame = createFrame({ document, tLog, tUi, copyLogs, isActive, setTimeout, clearTimeout, createError,
+        readEmptyContent, readEmptyShell, cloneEmptyContent: markup.cloneEmptyContent });
     let buildGeneration = 0;
     const cards = createCards({ markup, createError, prepareCard, onRetire, onReplace,
         readRoot: () => frame.root, keyFor: item => item.videoId ? `v:${item.videoId}` : `h:${item.href}` });
@@ -28,10 +30,14 @@ export function createGrid({ document, location, runChunks,
             await runChunks(items.length, index => cards.stage(items, root, index, staged), guard);
             guard();
             cards.retireForPublication(guard);
-            frame.publish(root, { ...mount, assertCurrent: guard });
+            const previous = frame.publish(root, { ...mount, assertCurrent: guard });
             cards.publish(staged);
-            frame.setEmpty(staged.size === 0);
             items.forEach(cards.releaseStartup);
+            frame.setEmpty(staged.size === 0);
+            const acceptedRevision = cards.revision;
+            frame.releaseReplacedRoot(previous);
+            assertCurrent();
+            if (owner !== buildGeneration || acceptedRevision !== cards.revision) throw createError('GRID_BUILD_REPLACED', 'Accepted grid was superseded');
             return root;
         } catch (error) {
             if (frame.root !== root) root.remove();
@@ -57,6 +63,9 @@ export function createGrid({ document, location, runChunks,
         placeStatus: frame.placeStatus,
         showMismatch: frame.showMismatch, hideMismatch: frame.hideMismatch,
         installResources: frame.installResources, cleanupArtifacts: frame.cleanupArtifacts,
+        geometry: frame.geometry, clearEmpty: frame.clearEmpty, resetEmpty: frame.resetEmpty, presentEmpty: frame.presentEmpty,
+        layoutEmpty: frame.layoutEmpty, emptyPresentation: frame.emptyPresentation,
+        ensureSynthetic: frame.ensureSynthetic, removeSynthetic: frame.removeSynthetic, setRefreshing: frame.setRefreshing,
         getCard: cards.getCard, assertCard: cards.assertCard, isCardCurrent: cards.isCurrent,
         replaceCard: cards.replaceCard,
         removeCard: (...args) => { const result = cards.removeCard(...args); frame.setEmpty(cards.view.size === 0); return result; },
@@ -67,5 +76,5 @@ export function createGrid({ document, location, runChunks,
         captureCard: markup.capture, captureTemplate: markup.captureTemplate, normalizeCard: markup.normalize,
         moveCard: (handle, parent, before) => { cards.assertCard(handle); frame.assertParent(parent); frame.moveCard(handle.node, parent, before); },
         orderChildren: (parent, desired) => { frame.assertParent(parent); frame.orderChildren(parent, desired); },
-        applyGeometry: frame.applyGeometry, diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics() }) });
+        applyGeometry: frame.updateGeometry, diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics() }) });
 }

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.33
+// @version      1.4.34
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -185,7 +185,8 @@
     Element: Element2,
     location: location2,
     readGraphqlIdentity = () => null,
-    getComputedStyle: getComputedStyle2 = () => ({})
+    getComputedStyle: getComputedStyle2 = () => ({}),
+    HTMLElement: HTMLElement2 = Element2
   }) {
     const videoIdFromHref = (href) => readVideoIdFromHref(href, location2.href);
     function nativeCardIdentity(slot) {
@@ -342,38 +343,6 @@
       },
       filledSlots(track) {
         return this.directSlots(track).filter((slot) => slot.querySelector(this.selectors.standardCard));
-      },
-      positionSyntheticSection(section, host) {
-        if (!section || !host) return;
-        const continueWatching = this.findContinueWatchingSection(host);
-        if (continueWatching) {
-          if (continueWatching.nextElementSibling !== section) {
-            continueWatching.insertAdjacentElement("afterend", section);
-          }
-          return;
-        }
-        const firstNativeSection = [...host.querySelectorAll(":scope > section")].find((node) => node !== section);
-        if (firstNativeSection) {
-          if (firstNativeSection.nextElementSibling !== section) {
-            firstNativeSection.insertAdjacentElement("afterend", section);
-          }
-          return;
-        }
-        if (section.parentElement !== host) host.appendChild(section);
-      },
-      ensureSyntheticMyListSection() {
-        const host = document2.querySelector(this.selectors.browseSections);
-        if (!host) return null;
-        let section = document2.getElementById(SYNTHETIC_SECTION_ID);
-        const nativeSections = [...host.querySelectorAll(":scope > section")].filter((node) => node !== section);
-        if (!nativeSections.length) return null;
-        if (!section) {
-          section = document2.createElement("section");
-          section.id = SYNTHETIC_SECTION_ID;
-          section.setAttribute("data-tm-synthetic-mylist", "true");
-        }
-        this.positionSyntheticSection(section, host);
-        return section;
       }
     });
     function readMyListAnchor() {
@@ -398,6 +367,49 @@
       facts.color = style.color || "rgb(255, 255, 255)";
       return Object.freeze(facts);
     }
+    function readSyntheticPlacement() {
+      const host = document2.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
+      const native = host && [...host.querySelectorAll(":scope > section")].filter((node) => node.id !== SYNTHETIC_SECTION_ID);
+      if (!native?.length) return null;
+      const after = netflixDom.findContinueWatchingSection(host) || native[0];
+      return Object.freeze({ host, after });
+    }
+    function readEmptyContent(section) {
+      const node = section?.querySelector?.(':scope > [data-uia="empty-carousel-section+content"]');
+      if (!node) return null;
+      const message = String(node.querySelector('[data-uia="empty-carousel-section+message"]')?.textContent || "").replace(/[\u200b-\u200f\u2060\ufeff]/g, "").replace(/\s+/g, "").trim();
+      return Object.freeze({ node, message });
+    }
+    function readEmptyShell() {
+      return [...document2.querySelectorAll('[data-uia="empty-carousel-section+content"]')].find((node) => !node.closest(`[${SECTION_ATTR}="true"]`)) || null;
+    }
+    function readRowGap(section, viewportWidth) {
+      const fallback = Math.max(20, Math.min(56, viewportWidth * 0.02));
+      if (!section) return fallback;
+      const values = [], sectionRect = section.getBoundingClientRect();
+      const children = [...section.parentElement?.children || []];
+      const siblings = children.filter((node) => node instanceof HTMLElement2 && node !== section && node.matches("section") && node.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller));
+      const index = children.indexOf(section);
+      const previous = children.slice(0, index).reverse().find((node) => siblings.includes(node));
+      const next = children.slice(index + 1).find((node) => siblings.includes(node));
+      if (previous) {
+        const gap = sectionRect.top - previous.getBoundingClientRect().bottom;
+        if (gap >= 8 && gap <= 180) values.push(gap);
+        const margin = Number.parseFloat(getComputedStyle2(previous).marginBottom || "0");
+        if (margin >= 8 && margin <= 180) values.push(margin);
+      }
+      if (next) {
+        const gap = next.getBoundingClientRect().top - sectionRect.bottom;
+        if (gap >= 8 && gap <= 180) values.push(gap);
+        const margin = Number.parseFloat(getComputedStyle2(next).marginTop || "0");
+        if (margin >= 8 && margin <= 180) values.push(margin);
+      }
+      const ownMargin = Number.parseFloat(getComputedStyle2(section).marginBottom || "0");
+      if (ownMargin >= 8 && ownMargin <= 180) values.push(ownMargin);
+      if (!values.length) return fallback;
+      const nums = values.filter(Number.isFinite).sort((a, b) => a - b), mid = Math.floor(nums.length / 2);
+      return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
+    }
     return Object.freeze({
       ...netflixDom,
       findMyListSection,
@@ -406,12 +418,16 @@
       videoIdFromHref,
       decodeTrackingContext,
       describeMembershipClick,
-      readHeadingTypography
+      readHeadingTypography,
+      readSyntheticPlacement,
+      readEmptyContent,
+      readEmptyShell,
+      readRowGap
     });
   }
 
   // src/netflix/card-markup.js
-  function createCardMarkup({ location: location2 }) {
+  function createCardMarkup({ location: location2, document: document2 }) {
     const videoIdFromHref = (href) => readVideoIdFromHref(href, location2.href);
     function capture(slot, page, captureSnapshot = true) {
       const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
@@ -473,7 +489,20 @@
       const template = slot.cloneNode(true);
       return template.querySelector(NETFLIX_DOM_SELECTORS.standardCard) ? template : null;
     }
-    return Object.freeze({ capture, createClone, normalize, captureTemplate });
+    function cloneEmptyContent(source, provisionalMessage = null) {
+      const clone = source.cloneNode(true);
+      if (provisionalMessage !== null) {
+        clone.querySelector('[data-uia="empty-carousel-section+pictogram"]')?.remove();
+        let message = clone.querySelector('[data-uia="empty-carousel-section+message"]');
+        if (!message) {
+          message = document2.createElement("p");
+          clone.appendChild(message);
+        }
+        message.textContent = provisionalMessage;
+      }
+      return clone;
+    }
+    return Object.freeze({ capture, createClone, normalize, captureTemplate, cloneEmptyContent });
   }
 
   // src/grid/cards.js
@@ -1150,10 +1179,23 @@
   }
 
   // src/grid/frame.js
-  function createFrame({ document: document2, tLog, copyLogs, setTimeout: setTimeout2, clearTimeout: clearTimeout2, isActive, createError }) {
+  function createFrame({
+    document: document2,
+    tLog,
+    tUi,
+    copyLogs,
+    setTimeout: setTimeout2,
+    clearTimeout: clearTimeout2,
+    isActive,
+    createError,
+    readEmptyContent,
+    readEmptyShell,
+    cloneEmptyContent
+  }) {
     let root = null;
     let status = null, style = null, dialog = null, logLink = null, logListener = null;
-    let feedbackTimer = null, generation = 0, copySequence = 0, dialogRevision = 0, releaseFailures = 0;
+    let feedbackTimer = null, generation = 0, frameRevision = 0, copySequence = 0, dialogRevision = 0, releaseFailures = 0;
+    let empty = null, emptyTemplate = null, emptyMessage = "", synthetic = null, emptyRevision = 0, syntheticRevision = 0;
     const retiredStatuses = /* @__PURE__ */ new WeakSet();
     function attemptRelease(action) {
       try {
@@ -1235,17 +1277,17 @@
       }
       return node;
     }
-    function layoutStatus(node, geometry, rowGap, assertCurrent = () => {
+    function layoutStatus(node, geometry2, rowGap, assertCurrent = () => {
     }) {
       const guard = () => {
         assertCurrent();
         assertStatus(node);
       };
       guard();
-      if (geometry) {
-        node.style.marginLeft = `${geometry.left}px`;
+      if (geometry2) {
+        node.style.marginLeft = `${geometry2.left}px`;
         guard();
-        node.style.width = `${geometry.width}px`;
+        node.style.width = `${geometry2.width}px`;
         guard();
       }
       if (rowGap !== void 0) node.style.setProperty("--tm-row-gap", `${rowGap}px`);
@@ -1380,56 +1422,255 @@
         guard();
       }
     }
+    function geometry({ bounds, viewportWidth }, layout, assertCurrent = () => {
+    }) {
+      assertCurrent();
+      const left = Math.max(0, layout.gridLeft), viewportRight = Math.min(viewportWidth, bounds.right);
+      const available = Math.max(layout.cardWidth, viewportRight - bounds.left - left);
+      const width = Math.max(layout.cardWidth, Math.min(layout.gridWidth, available));
+      const result = { width, left, columns: Math.max(1, layout.columns) };
+      assertCurrent();
+      return result;
+    }
+    function sanitizeEmpty(clone, source) {
+      clone.id = LEGACY_EMPTY_STATE_ID;
+      clone.classList.remove(ORIGINAL_HEADER_CLASS);
+      clone.removeAttribute("data-uia");
+      clone.setAttribute("data-tm-legacy-empty-state", "true");
+      clone.setAttribute("data-tm-empty-source", source);
+      for (const node of clone.querySelectorAll("[id], [data-uia]")) {
+        node.removeAttribute("id");
+        node.removeAttribute("data-uia");
+        node.classList?.remove?.(ORIGINAL_HEADER_CLASS);
+      }
+      return clone;
+    }
+    function clearEmpty({ restoreGrid = true, assertCurrent = () => {
+    } } = {}) {
+      assertCurrent();
+      const owner = generation, target = root, heading = status, previous = empty;
+      empty = null;
+      const revision = ++emptyRevision;
+      const guard = () => {
+        assertCurrent();
+        if (generation !== owner || emptyRevision !== revision || root !== target || status !== heading) {
+          throw createError("GRID_FRAME_RETIRED", "Empty cleanup was replaced");
+        }
+      };
+      guard();
+      if (previous) attemptRelease(() => previous.remove());
+      guard();
+      if (restoreGrid && status?.isConnected && root?.isConnected && status.nextElementSibling !== root) {
+        status.insertAdjacentElement("afterend", root);
+        guard();
+      }
+    }
+    function resetEmpty() {
+      clearEmpty({ restoreGrid: false });
+      emptyTemplate = null;
+      emptyMessage = "";
+    }
+    function layoutEmpty(value, assertCurrent = () => {
+    }) {
+      const node = empty;
+      if (!node?.isConnected) return;
+      const guard = () => {
+        assertCurrent();
+        if (empty !== node) throw createError("GRID_FRAME_RETIRED", "Empty frame changed");
+      };
+      guard();
+      node.style.marginLeft = `${value.left}px`;
+      guard();
+      node.style.width = `${value.width}px`;
+      guard();
+      node.style.maxWidth = `${value.width}px`;
+      guard();
+    }
+    function presentEmpty({ section, allowProvisional = false, geometry: value, assertCurrent = () => {
+    } }) {
+      const owner = generation, target = root, heading = status;
+      clearEmpty({ restoreGrid: false, assertCurrent });
+      const revision = emptyRevision;
+      const guard = () => {
+        assertCurrent();
+        if (generation !== owner || emptyRevision !== revision || root !== target || status !== heading) {
+          throw createError("GRID_FRAME_RETIRED", "Empty publication was replaced");
+        }
+      };
+      guard();
+      if (!heading?.isConnected || !target?.isConnected) return false;
+      const native = readEmptyContent(section);
+      guard();
+      let clone, template = null, message = null;
+      if (native) {
+        const current = () => {
+          guard();
+          const next = readEmptyContent(section);
+          if (!native.node.isConnected || next?.node !== native.node || next.message !== native.message) {
+            throw createError("NATIVE_SOURCE_REPLACED", "Native empty content changed");
+          }
+          guard();
+        };
+        current();
+        template = cloneEmptyContent(native.node);
+        current();
+        clone = sanitizeEmpty(cloneEmptyContent(native.node), "native");
+        current();
+        message = native.message;
+      } else if (allowProvisional) {
+        if (emptyTemplate) clone = sanitizeEmpty(cloneEmptyContent(emptyTemplate), "provisional-cached");
+        else {
+          const shell = readEmptyShell();
+          guard();
+          if (shell) {
+            clone = sanitizeEmpty(cloneEmptyContent(shell, emptyMessage || tUi("emptyMessage")), "provisional-shell");
+            guard();
+            if (!shell.isConnected || readEmptyShell() !== shell) throw createError("NATIVE_SOURCE_REPLACED", "Provisional empty shell changed");
+          } else {
+            clone = document2.createElement("div");
+            const text = document2.createElement("p");
+            text.textContent = emptyMessage || tUi("emptyMessage");
+            clone.appendChild(text);
+            sanitizeEmpty(clone, "provisional-fallback");
+          }
+        }
+      }
+      guard();
+      if (!clone) {
+        if (heading.nextElementSibling !== target) heading.insertAdjacentElement("afterend", target);
+        guard();
+        return false;
+      }
+      try {
+        heading.insertAdjacentElement("afterend", clone);
+        guard();
+        clone.insertAdjacentElement("afterend", target);
+        guard();
+        empty = clone;
+        if (value) layoutEmpty(value, guard);
+        guard();
+        if (template) {
+          emptyTemplate = template;
+          if (message) emptyMessage = message;
+        }
+        return true;
+      } catch (error) {
+        if (empty === clone) empty = null;
+        attemptRelease(() => clone.remove());
+        throw error;
+      }
+    }
+    function ensureSynthetic(placement, assertCurrent = () => {
+    }) {
+      assertCurrent();
+      if (!placement) return null;
+      const { host, after } = placement, owner = generation, revision = ++syntheticRevision;
+      const guard = () => {
+        assertCurrent();
+        if (generation !== owner || syntheticRevision !== revision || !host.isConnected || !after?.isConnected || after.parentElement !== host) {
+          throw createError("NATIVE_SOURCE_REPLACED", "Synthetic placement changed");
+        }
+      };
+      guard();
+      const node = synthetic || document2.getElementById(SYNTHETIC_SECTION_ID) || document2.createElement("section");
+      node.id = SYNTHETIC_SECTION_ID;
+      node.setAttribute("data-tm-synthetic-mylist", "true");
+      node.setAttribute(SECTION_ATTR, "true");
+      guard();
+      if (after.nextElementSibling !== node) after.insertAdjacentElement("afterend", node);
+      try {
+        guard();
+      } catch (error) {
+        if (node !== synthetic) attemptRelease(() => node.remove());
+        throw error;
+      }
+      synthetic = node;
+      return node;
+    }
+    function removeSynthetic(except = null, assertCurrent = () => {
+    }) {
+      assertCurrent();
+      if (!synthetic || synthetic === except) return;
+      syntheticRevision++;
+      const previous = synthetic;
+      synthetic = null;
+      attemptRelease(() => previous.remove());
+    }
     function createRoot() {
       const node = document2.createElement("div");
       node.id = GRID_ID;
       node.setAttribute("data-tm-purpose", "exact-items-and-live-react-hover");
       return node;
     }
-    function applyGeometry(node, geometry, layout) {
+    function applyGeometry(node, geometry2, layout, assertCurrent = () => {
+    }) {
+      assertCurrent();
       const properties = {
-        "--tm-cols": String(geometry.columns),
-        "--tm-grid-width": `${geometry.width}px`,
-        "--tm-grid-left": `${geometry.left}px`,
+        "--tm-cols": String(geometry2.columns),
+        "--tm-grid-width": `${geometry2.width}px`,
+        "--tm-grid-left": `${geometry2.left}px`,
         "--tm-gap": `${layout.gap}px`
       };
       for (const [property, value] of Object.entries(properties)) {
+        assertCurrent();
         if (node.style.getPropertyValue(property) !== value) node.style.setProperty(property, value);
       }
-      node.__tmAppliedGeometry = geometry;
-      return geometry;
+      assertCurrent();
+      if (node.style.marginTop !== "0px") node.style.marginTop = "0px";
+      assertCurrent();
+      node.__tmAppliedGeometry = geometry2;
+      return geometry2;
     }
-    function publish(node, { section, anchor, status: status2, geometry, layout, visible = true, assertCurrent }) {
+    function updateGeometry(node, value, layout, assertCurrent = () => {
+    }) {
+      const guard = () => {
+        assertCurrent();
+        if (node !== root || !node?.isConnected) throw createError("GRID_FRAME_RETIRED", "Grid geometry target was retired");
+      };
+      return applyGeometry(node, value, layout, guard);
+    }
+    function publish(node, { section, anchor, status: status2, geometry: geometry2, layout, visible = true, assertCurrent }) {
       assertCurrent();
+      const owner = generation, revision = ++frameRevision;
       adoptStatus(status2);
-      applyGeometry(node, geometry, layout);
-      placeStatus(status2, { section, anchor, assertCurrent });
-      layoutStatus(status2, geometry, visible ? layout.rowGap || 0 : 0, assertCurrent);
-      assertCurrent();
+      const guard = () => {
+        assertCurrent();
+        if (generation !== owner || frameRevision !== revision) throw createError("GRID_FRAME_RETIRED", "Frame publication was replaced");
+        assertStatus(status2);
+      };
+      applyGeometry(node, geometry2, layout, guard);
+      placeStatus(status2, { section, anchor, assertCurrent: guard });
+      layoutStatus(status2, geometry2, visible ? layout.rowGap || 0 : 0, guard);
+      guard();
       const previous = root || document2.getElementById(GRID_ID);
       status2.insertAdjacentElement("afterend", node);
-      node.style.marginTop = "0px";
       try {
-        assertCurrent();
+        guard();
       } catch (error) {
-        node.remove();
+        if (node !== root) attemptRelease(() => node.remove());
         throw error;
       }
       root = node;
-      if (previous !== node) previous?.remove();
+      return previous;
+    }
+    function releaseReplacedRoot(previous) {
+      if (previous && previous !== root) attemptRelease(() => previous.remove());
     }
     function mount(options) {
       const node = root || document2.getElementById(GRID_ID) || createRoot();
       if (!node.children.length) node.setAttribute("data-tm-empty", "true");
-      publish(node, options);
+      const previous = publish(node, options);
+      releaseReplacedRoot(previous);
+      options.assertCurrent();
+      if (root !== node) throw createError("GRID_FRAME_RETIRED", "Mounted frame was retired");
       return node;
     }
     function clearCards() {
       root?.replaceChildren();
       root?.setAttribute("data-tm-empty", "true");
     }
-    function setEmpty(empty) {
-      if (empty) root?.setAttribute("data-tm-empty", "true");
+    function setEmpty(empty2) {
+      if (empty2) root?.setAttribute("data-tm-empty", "true");
       else root?.removeAttribute("data-tm-empty");
     }
     function moveCard(node, parent, before = null) {
@@ -1443,10 +1684,15 @@
       }
     }
     function retire() {
-      const previous = { root, status, style, dialog, logLink, logListener };
+      const previous = { root, status, style, dialog, logLink, logListener, empty, synthetic };
       if (status) retiredStatuses.add(status);
       root = status = style = dialog = logLink = logListener = null;
+      empty = emptyTemplate = synthetic = null;
+      emptyMessage = "";
+      emptyRevision++;
+      syntheticRevision++;
       generation++;
+      frameRevision++;
       copySequence++;
       dialogRevision++;
       clearFeedback();
@@ -1455,8 +1701,8 @@
     function release(previous) {
       if (previous.logLink) attemptRelease(() => previous.logLink.removeEventListener("click", previous.logListener));
       releaseDialog(previous.dialog);
-      for (const node of [previous.root, previous.status, previous.style]) {
-        if (node && node !== root && node !== status && node !== style) attemptRelease(() => node.remove());
+      for (const node of [previous.root, previous.status, previous.style, previous.empty, previous.synthetic]) {
+        if (node && node !== root && node !== status && node !== style && node !== empty && node !== synthetic) attemptRelease(() => node.remove());
       }
     }
     function assertParent(parent) {
@@ -1470,9 +1716,10 @@
         return status;
       },
       createRoot,
-      applyGeometry,
+      updateGeometry,
       publish,
       mount,
+      releaseReplacedRoot,
       clearCards,
       setEmpty,
       moveCard,
@@ -1488,6 +1735,20 @@
       hideMismatch,
       installResources,
       cleanupArtifacts,
+      geometry,
+      clearEmpty,
+      resetEmpty,
+      presentEmpty,
+      layoutEmpty,
+      ensureSynthetic,
+      removeSynthetic,
+      emptyPresentation: () => ({ connected: Boolean(empty?.isConnected), source: empty?.getAttribute("data-tm-empty-source") || null }),
+      setRefreshing(node, refreshing) {
+        if (!node || node !== root) return false;
+        if (refreshing) node.setAttribute("data-tm-responsive-refreshing", "true");
+        else node.removeAttribute("data-tm-responsive-refreshing");
+        return true;
+      },
       diagnostics: () => ({ frameReleaseFailures: releaseFailures })
     };
   }
@@ -1507,14 +1768,29 @@
     installHover = () => {
     },
     tLog = (key) => key,
+    tUi = (key) => key,
     copyLogs = async () => {
     },
     isActive = () => true,
+    readEmptyContent = () => null,
+    readEmptyShell = () => null,
     setTimeout: setTimeout2 = globalThis.setTimeout,
     clearTimeout: clearTimeout2 = globalThis.clearTimeout
   }) {
-    const markup = createCardMarkup({ location: location2 });
-    const frame = createFrame({ document: document2, tLog, copyLogs, isActive, setTimeout: setTimeout2, clearTimeout: clearTimeout2, createError });
+    const markup = createCardMarkup({ location: location2, document: document2 });
+    const frame = createFrame({
+      document: document2,
+      tLog,
+      tUi,
+      copyLogs,
+      isActive,
+      setTimeout: setTimeout2,
+      clearTimeout: clearTimeout2,
+      createError,
+      readEmptyContent,
+      readEmptyShell,
+      cloneEmptyContent: markup.cloneEmptyContent
+    });
     let buildGeneration = 0;
     const cards = createCards({
       markup,
@@ -1540,10 +1816,14 @@
         await runChunks(items.length, (index) => cards.stage(items, root, index, staged), guard);
         guard();
         cards.retireForPublication(guard);
-        frame.publish(root, { ...mount, assertCurrent: guard });
+        const previous = frame.publish(root, { ...mount, assertCurrent: guard });
         cards.publish(staged);
-        frame.setEmpty(staged.size === 0);
         items.forEach(cards.releaseStartup);
+        frame.setEmpty(staged.size === 0);
+        const acceptedRevision = cards.revision;
+        frame.releaseReplacedRoot(previous);
+        assertCurrent();
+        if (owner !== buildGeneration || acceptedRevision !== cards.revision) throw createError("GRID_BUILD_REPLACED", "Accepted grid was superseded");
         return root;
       } catch (error) {
         if (frame.root !== root) root.remove();
@@ -1592,6 +1872,15 @@
       hideMismatch: frame.hideMismatch,
       installResources: frame.installResources,
       cleanupArtifacts: frame.cleanupArtifacts,
+      geometry: frame.geometry,
+      clearEmpty: frame.clearEmpty,
+      resetEmpty: frame.resetEmpty,
+      presentEmpty: frame.presentEmpty,
+      layoutEmpty: frame.layoutEmpty,
+      emptyPresentation: frame.emptyPresentation,
+      ensureSynthetic: frame.ensureSynthetic,
+      removeSynthetic: frame.removeSynthetic,
+      setRefreshing: frame.setRefreshing,
       getCard: cards.getCard,
       assertCard: cards.assertCard,
       isCardCurrent: cards.isCurrent,
@@ -1624,7 +1913,7 @@
         frame.assertParent(parent);
         frame.orderChildren(parent, desired);
       },
-      applyGeometry: frame.applyGeometry,
+      applyGeometry: frame.updateGeometry,
       diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics() })
     });
   }
@@ -9273,6 +9562,7 @@
     const netflixDom = createNetflixPageDom({
       document,
       Element,
+      HTMLElement,
       location,
       getComputedStyle,
       readGraphqlIdentity: () => listData.myListDomIdentity()
@@ -9318,9 +9608,12 @@
       onRetire: retireGridCard,
       onReplace: onGridCardReplaced,
       tLog,
+      tUi,
       copyLogs: copyDiagnosticLogs,
       setTimeout,
       clearTimeout,
+      readEmptyContent: (section) => netflixDom.readEmptyContent(section),
+      readEmptyShell: () => netflixDom.readEmptyShell(),
       isActive: () => targetSessionActive && isTargetPage()
     });
     const BUILD_CHUNK_MAX_ITEMS = 24;
@@ -9364,7 +9657,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.33";
+    const SCRIPT_VERSION = "1.4.34";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -9557,8 +9850,6 @@
     let undoExpiryTimer = null;
     let myListMutationSequence = 0;
     let waitingForNativeEmpty = false;
-    let cachedNativeEmptyContent = null;
-    let cachedNativeEmptyMessage = "";
     let initializationBlockedSessionToken = null;
     let nativeInitializationFailure = null;
     let performanceDiagnostics = createPerformanceDiagnostics();
@@ -10198,25 +10489,20 @@
       activeGeometryProxy = null;
       missingSectionSince = 0;
       gridView.cancelBuild();
-      document.getElementById(LEGACY_EMPTY_STATE_ID)?.remove();
+      gridView.resetEmpty();
       clearPendingMyListMutations();
       clearUndoEntries();
       listData.reset();
       waitingForNativeEmpty = false;
-      cachedNativeEmptyContent = null;
-      cachedNativeEmptyMessage = "";
     }
     function cleanupTargetSessionDom() {
       restoreActiveCarouselStyles();
       clearSourceAlignment();
       invalidateGridReact();
       gridView.dispose();
-      document.getElementById(LEGACY_EMPTY_STATE_ID)?.remove();
       orderMismatchDialogOpen = false;
       nativePresentationLease?.release();
       nativePresentationLease = null;
-      const synthetic = document.getElementById(SYNTHETIC_SECTION_ID);
-      if (synthetic) synthetic.remove();
     }
     function suspendTargetSession(reason = "route-leave") {
       const hadSession = targetSessionActive || running || sourceState || completedSection || scheduled;
@@ -10259,8 +10545,6 @@
       missingSectionSince = 0;
       listData.reset();
       waitingForNativeEmpty = false;
-      cachedNativeEmptyContent = null;
-      cachedNativeEmptyMessage = "";
       initializationBlockedSessionToken = null;
       nativeInitializationFailure = null;
       orderMismatchDismissed = false;
@@ -10796,36 +11080,11 @@
       } });
     }
     function measureNativeCarouselGap(section) {
-      if (!section) return Math.max(20, Math.min(56, window.innerWidth * 0.02));
-      const values = [];
-      const sectionRect = section.getBoundingClientRect();
-      const siblings = [...section.parentElement?.children || []].filter(
-        (node) => node instanceof HTMLElement && node !== section && node.matches("section") && node.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller)
-      );
-      const index = [...section.parentElement?.children || []].indexOf(section);
-      const previous = [...section.parentElement?.children || []].slice(0, index).reverse().find((node) => siblings.includes(node));
-      const next = [...section.parentElement?.children || []].slice(index + 1).find((node) => siblings.includes(node));
-      if (previous) {
-        const gap = sectionRect.top - previous.getBoundingClientRect().bottom;
-        if (gap >= 8 && gap <= 180) values.push(gap);
-        const margin = Number.parseFloat(getComputedStyle(previous).marginBottom || "0");
-        if (margin >= 8 && margin <= 180) values.push(margin);
-      }
-      if (next) {
-        const gap = next.getBoundingClientRect().top - sectionRect.bottom;
-        if (gap >= 8 && gap <= 180) values.push(gap);
-        const margin = Number.parseFloat(getComputedStyle(next).marginTop || "0");
-        if (margin >= 8 && margin <= 180) values.push(margin);
-      }
-      const ownMargin = Number.parseFloat(getComputedStyle(section).marginBottom || "0");
-      if (ownMargin >= 8 && ownMargin <= 180) values.push(ownMargin);
-      return values.length ? median(values) : Math.max(20, Math.min(56, window.innerWidth * 0.02));
-    }
-    function median(values) {
-      const nums = values.filter(Number.isFinite).sort((a, b) => a - b);
-      if (!nums.length) return 0;
-      const mid = Math.floor(nums.length / 2);
-      return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
+      const state = sourceState, sessionToken = sessionScope.token;
+      const gap = netflixDom.readRowGap(section, window.innerWidth);
+      assertRouteSession(sessionToken);
+      if (sourceState !== state) throw createRouteSessionCancelledError();
+      return gap;
     }
     function describeMyListToggleClick(event) {
       const decoded = netflixDom.describeMembershipClick(event, { activeVideoId });
@@ -10866,90 +11125,27 @@
       syncStatusTypography(section, status);
       return { status, grid, geometry };
     }
-    function clearLegacyEmptyState({ restoreGrid = true } = {}) {
-      document.getElementById(LEGACY_EMPTY_STATE_ID)?.remove();
-      if (!restoreGrid) return;
-      const status = sourceState?.status || document.getElementById(STATUS_ID);
-      const grid = sourceState?.grid || document.getElementById(GRID_ID);
-      if (status?.isConnected && grid?.isConnected && status.nextElementSibling !== grid) {
-        status.insertAdjacentElement("afterend", grid);
-      }
-    }
-    function sanitizeLegacyEmptyClone(clone, source) {
-      if (!clone) return null;
-      clone.id = LEGACY_EMPTY_STATE_ID;
-      clone.classList.remove(ORIGINAL_HEADER_CLASS);
-      clone.removeAttribute("data-uia");
-      clone.setAttribute("data-tm-legacy-empty-state", "true");
-      clone.setAttribute("data-tm-empty-source", source);
-      for (const node of clone.querySelectorAll("[id], [data-uia]")) {
-        node.removeAttribute("id");
-        node.removeAttribute("data-uia");
-        node.classList?.remove?.(ORIGINAL_HEADER_CLASS);
-      }
-      return clone;
-    }
-    function cloneNativeEmptyContent(section) {
-      const original = section?.querySelector?.(':scope > [data-uia="empty-carousel-section+content"]');
-      if (!original) return null;
-      const message = normalizeNetflixUiText(
-        original.querySelector('[data-uia="empty-carousel-section+message"]')?.textContent || ""
-      );
-      if (message) cachedNativeEmptyMessage = message;
-      cachedNativeEmptyContent = original.cloneNode(true);
-      return sanitizeLegacyEmptyClone(original.cloneNode(true), "native");
-    }
-    function provisionalMyListEmptyMessage() {
-      if (cachedNativeEmptyMessage) return cachedNativeEmptyMessage;
-      return tUi("emptyMessage");
-    }
-    function cloneProvisionalEmptyContent() {
-      if (cachedNativeEmptyContent) {
-        return sanitizeLegacyEmptyClone(cachedNativeEmptyContent.cloneNode(true), "provisional-cached");
-      }
-      const shell = [...document.querySelectorAll('[data-uia="empty-carousel-section+content"]')].find((node) => !node.closest(`[${SECTION_ATTR}="true"]`));
-      if (shell) {
-        const clone = shell.cloneNode(true);
-        clone.querySelector('[data-uia="empty-carousel-section+pictogram"]')?.remove();
-        const messageNode = clone.querySelector('[data-uia="empty-carousel-section+message"]');
-        if (messageNode) {
-          messageNode.textContent = provisionalMyListEmptyMessage();
-        } else {
-          const p = document.createElement("p");
-          p.textContent = provisionalMyListEmptyMessage();
-          clone.appendChild(p);
-        }
-        return sanitizeLegacyEmptyClone(clone, "provisional-shell");
-      }
-      const fallback = document.createElement("div");
-      const message = document.createElement("p");
-      message.textContent = provisionalMyListEmptyMessage();
-      fallback.appendChild(message);
-      return sanitizeLegacyEmptyClone(fallback, "provisional-fallback");
+    function clearLegacyEmptyState(options) {
+      return gridView.clearEmpty(options);
     }
     function applyLegacyEmptyStateGeometry(section, layout) {
-      const emptyState = document.getElementById(LEGACY_EMPTY_STATE_ID);
-      if (!emptyState?.isConnected || !section || !layout) return;
+      if (!gridView.emptyPresentation().connected || !section || !layout) return;
+      const state = sourceState, sessionToken = sessionScope.token;
       const geometry = currentGridGeometry(section, layout);
-      emptyState.style.marginLeft = `${geometry.left}px`;
-      emptyState.style.width = `${geometry.width}px`;
-      emptyState.style.maxWidth = `${geometry.width}px`;
+      gridView.layoutEmpty(geometry, () => {
+        assertRouteSession(sessionToken);
+        if (sourceState !== state) throw createRouteSessionCancelledError();
+      });
     }
     function syncLegacyEmptyState(section, { allowProvisional = false } = {}) {
-      clearLegacyEmptyState({ restoreGrid: false });
-      const status = sourceState?.status || document.getElementById(STATUS_ID);
-      const grid = sourceState?.grid || document.getElementById(GRID_ID);
-      if (!status?.isConnected || !grid?.isConnected) return false;
-      const clone = cloneNativeEmptyContent(section) || (allowProvisional ? cloneProvisionalEmptyContent() : null);
-      if (!clone) {
-        if (status.nextElementSibling !== grid) status.insertAdjacentElement("afterend", grid);
-        return false;
-      }
-      status.insertAdjacentElement("afterend", clone);
-      clone.insertAdjacentElement("afterend", grid);
-      const layout = sourceState?.layout;
-      if (layout) applyLegacyEmptyStateGeometry(section, layout);
-      return true;
+      const state = sourceState, sessionToken = sessionScope.token;
+      const binding = state?.section === section ? nativeCarousel.borrowBinding(section, state.scroller, state.track) : null;
+      const geometry = state?.layout ? currentGridGeometry(section, state.layout) : null;
+      return gridView.presentEmpty({ section, allowProvisional, geometry, assertCurrent() {
+        assertRouteSession(sessionToken);
+        if (sourceState !== state) throw createRouteSessionCancelledError();
+        if (binding) nativeCarousel.assertBinding(binding);
+      } });
     }
     function waitForNativeSource(...args) {
       return nativeCarousel.waitForSource(...args);
@@ -12427,6 +12623,18 @@
       });
       resizeObserver.observe(section);
     }
+    function ensureSyntheticMyListSection(admission) {
+      const state = sourceState, sessionToken = sessionScope.token;
+      const guard = () => {
+        assertRouteSession(sessionToken);
+        if (sourceState !== state) throw createRouteSessionCancelledError();
+        if (admission) nativeCarousel.assertObservation(admission);
+      };
+      guard();
+      const placement = netflixDom.readSyntheticPlacement();
+      guard();
+      return gridView.ensureSynthetic(placement, guard);
+    }
     function moveLegacyFrameToSyntheticEmpty() {
       if (!sourceState) return false;
       const state = sourceState;
@@ -12434,7 +12642,7 @@
       if (live.section && !live.scroller && !live.track) {
         return adoptLiveEmptyMyListSection(live);
       }
-      const synthetic = netflixDom.ensureSyntheticMyListSection();
+      const synthetic = ensureSyntheticMyListSection(live);
       if (!synthetic) return false;
       nativeCarousel.assertObservation(live);
       const status = state.status || document.getElementById(STATUS_ID);
@@ -12444,11 +12652,17 @@
       const layout = { ...observed.layout };
       layout.rowGap = measureNativeCarouselGap(synthetic);
       nativeCarousel.assertObservation(observed);
-      synthetic.setAttribute(SECTION_ATTR, "true");
       clearLegacyEmptyState({ restoreGrid: false });
       nativeCarousel.assertObservation(observed);
-      gridView.placeStatus(status, { section: synthetic, assertCurrent: () => nativeCarousel.assertObservation(observed) });
-      status.insertAdjacentElement("afterend", grid);
+      const geometry = currentGridGeometry(synthetic, layout);
+      gridView.mount({
+        section: synthetic,
+        status,
+        geometry,
+        layout,
+        visible: false,
+        assertCurrent: () => nativeCarousel.assertObservation(observed)
+      });
       if (sourceState !== state) throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Synthetic layout parent was replaced");
       attachNativeBinding(state, synthetic);
       sourceState.layout = layout;
@@ -12456,8 +12670,6 @@
       sourceState.status = status;
       sourceState.grid = grid;
       gridView.setEmpty(true);
-      const geometry = applyGridGeometry(synthetic, grid, layout);
-      layoutFrameStatus(status, geometry, 0);
       syncLegacyEmptyState(synthetic, { allowProvisional: true });
       completedSection = synthetic;
       applyOriginalMyListVisibility();
@@ -12483,18 +12695,21 @@
       nativeCarousel.assertObservation(observed);
       invalidateGridReact();
       nativeCarousel.assertObservation(observed);
-      const oldSynthetic = document.getElementById(SYNTHETIC_SECTION_ID);
       clearLegacyEmptyState({ restoreGrid: false });
       markOriginalHeader(live.section);
       nativeCarousel.assertObservation(observed);
       nativeCarousel.assertObservation(live);
       parkSource(live.section, live.scroller, live.track);
-      gridView.placeStatus(status, {
+      const geometry = currentGridGeometry(live.section, layout);
+      gridView.mount({
         section: live.section,
         anchor: live.scroller,
+        status,
+        geometry,
+        layout,
+        visible: viewOriginalMyList,
         assertCurrent: () => nativeCarousel.assertObservation(observed)
       });
-      status.insertAdjacentElement("afterend", grid);
       if (sourceState !== state) throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Incoming layout parent was replaced");
       attachNativeBinding(state, live.section, live.scroller, live.track);
       sourceState.layout = layout;
@@ -12502,11 +12717,9 @@
       sourceState.grid = grid;
       sourceState.empty = (sourceState.items?.length ?? 0) === 0;
       if (!sourceState.empty) waitingForNativeEmpty = false;
-      const geometry = applyGridGeometry(live.section, grid, layout);
-      layoutFrameStatus(status, geometry, viewOriginalMyList ? layout.rowGap || 0 : 0);
       syncStatusTypography(live.section, status);
       completedSection = live.section;
-      if (oldSynthetic && oldSynthetic !== live.section) oldSynthetic.remove();
+      gridView.removeSynthetic(live.section);
       applyOriginalMyListVisibility();
       resizeObserver?.disconnect();
       resizeObserver = new ResizeObserver(() => {
@@ -12538,35 +12751,35 @@
       nativeCarousel.assertObservation(observed);
       invalidateGridReact();
       nativeCarousel.assertObservation(observed);
-      const oldSynthetic = document.getElementById(SYNTHETIC_SECTION_ID);
       markOriginalHeader(live.section);
       nativeCarousel.assertObservation(observed);
       nativeCarousel.assertObservation(live);
       const originalAnchor = markOriginalHeader(live.section);
       nativeCarousel.assertObservation(observed);
       nativeCarousel.assertObservation(live);
-      gridView.placeStatus(status, {
+      const geometry = currentGridGeometry(live.section, layout);
+      gridView.mount({
         section: live.section,
         anchor: originalAnchor,
+        status,
+        geometry,
+        layout,
+        visible: viewOriginalMyList,
         assertCurrent: () => nativeCarousel.assertObservation(observed)
       });
-      status.insertAdjacentElement("afterend", grid);
       if (sourceState !== state) throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Incoming empty layout parent was replaced");
       attachNativeBinding(state, live.section);
       sourceState.layout = layout;
       sourceState.empty = true;
       sourceState.status = status;
       sourceState.grid = grid;
-      grid.setAttribute("data-tm-empty", "true");
+      gridView.setEmpty(true);
       waitingForNativeEmpty = false;
       syncLegacyEmptyState(live.section, { allowProvisional: true });
-      const geometry = applyGridGeometry(live.section, grid, layout);
-      layoutFrameStatus(status, geometry);
       applyLegacyEmptyStateGeometry(live.section, layout);
-      layoutFrameStatus(status, null, viewOriginalMyList ? layout.rowGap || 0 : 0);
       syncStatusTypography(live.section, status);
       completedSection = live.section;
-      if (oldSynthetic && oldSynthetic !== live.section) oldSynthetic.remove();
+      gridView.removeSynthetic(live.section);
       applyOriginalMyListVisibility();
       installEmptyFrameResizeObserver(live.section);
       log(tLog("nativeEmptyMyListSectionAdopted"), {
@@ -12888,8 +13101,8 @@
         let live = nativeDiscoveryObservation();
         if (waitingForNativeEmpty && (sourceState.items?.length ?? 0) === 0) {
           if (live.section && !live.scroller && !live.track) {
-            const emptyState2 = document.getElementById(LEGACY_EMPTY_STATE_ID);
-            const alreadyNative = sourceState.section === live.section && !sourceState.scroller && !sourceState.track && emptyState2?.getAttribute("data-tm-empty-source") === "native";
+            const emptyState2 = gridView.emptyPresentation();
+            const alreadyNative = sourceState.section === live.section && !sourceState.scroller && !sourceState.track && emptyState2.source === "native";
             if (!alreadyNative) adoptLiveEmptyMyListSection(live);
             assertParent();
             live = nativeDiscoveryObservation();
@@ -12898,8 +13111,8 @@
           if (!live.section) {
             return live;
           }
-          const emptyState = document.getElementById(LEGACY_EMPTY_STATE_ID);
-          if (!emptyState?.isConnected) {
+          const emptyState = gridView.emptyPresentation();
+          if (!emptyState.connected) {
             syncLegacyEmptyState(sourceState.section, { allowProvisional: true });
           }
           nativeCarousel.assertObservation(live);
@@ -12928,8 +13141,8 @@
           assertParent();
           live = nativeDiscoveryObservation();
         } else if (live.section && !live.scroller && !live.track && (sourceState.items?.length ?? 0) === 0) {
-          const emptyState = document.getElementById(LEGACY_EMPTY_STATE_ID);
-          const alreadyNative = sourceState.section === live.section && !sourceState.scroller && !sourceState.track && emptyState?.getAttribute("data-tm-empty-source") === "native";
+          const emptyState = gridView.emptyPresentation();
+          const alreadyNative = sourceState.section === live.section && !sourceState.scroller && !sourceState.track && emptyState.source === "native";
           if (!alreadyNative) {
             adoptLiveEmptyMyListSection(live);
             assertParent();
@@ -13373,14 +13586,11 @@
     function currentGridGeometry(section, layout) {
       return withNativeReadScope(() => {
         const observed = nativeLayoutObservation(section, null, null, "bounds");
-        const sectionRect = observed.bounds;
-        const left = Math.max(0, layout.gridLeft);
-        const viewportRight = Math.min(observed.viewportWidth, sectionRect.right);
-        const available = Math.max(layout.cardWidth, viewportRight - sectionRect.left - left);
-        const width = Math.max(layout.cardWidth, Math.min(layout.gridWidth, available));
-        const geometry = { width, left, columns: Math.max(1, layout.columns) };
-        nativeCarousel.assertObservation(observed);
-        return geometry;
+        return gridView.geometry(
+          { bounds: observed.bounds, viewportWidth: observed.viewportWidth },
+          layout,
+          () => nativeCarousel.assertObservation(observed)
+        );
       });
     }
     function applyGridGeometry(section, grid, layout) {
@@ -15040,7 +15250,6 @@
         sourceState.initializationElapsedMs,
         true
       ));
-      sourceState.grid.style.marginTop = "0px";
       if (note) {
         log(tLog("responsiveStatusNote"), { note });
       }
@@ -15207,7 +15416,7 @@
         selectedPage: startingNative?.selectedPage ?? null,
         pages: startingNative?.pageCount ?? null
       });
-      grid.setAttribute("data-tm-responsive-refreshing", "true");
+      gridView.setRefreshing(grid, true);
       performanceDiagnostics.resize.refreshes++;
       cancelResizeHover();
       try {
@@ -15284,7 +15493,7 @@
         });
         updateResponsiveStatus(sourceState.layout, tUi("relayoutFailed"));
       } finally {
-        grid.removeAttribute("data-tm-responsive-refreshing");
+        gridView.setRefreshing(grid, false);
         if (isRouteSessionActive(sessionToken) && responsiveSequence === seq) {
           responsiveRefreshing = false;
           activeResponsiveReason = "";
@@ -15611,15 +15820,14 @@
           scheduleRun(Math.max(40, NATIVE_EMPTY_STABLE_MS - elapsed), sessionToken);
           return;
         }
-        section = netflixDom.ensureSyntheticMyListSection();
+        section = ensureSyntheticMyListSection(discovered);
         if (!section) {
           scheduleRun(120, sessionToken);
           return;
         }
       } else {
         missingSectionSince = 0;
-        const synthetic = document.getElementById(SYNTHETIC_SECTION_ID);
-        if (synthetic && synthetic !== section) synthetic.remove();
+        gridView.removeSynthetic(section);
       }
       if (completedSection === section && document.getElementById(GRID_ID) && !sourceState?.empty) return;
       try {
@@ -15776,7 +15984,6 @@
         if (sourceWait.nativeSection) {
           invalidateGridReact();
           gridView.dispose();
-          if (section.id === SYNTHETIC_SECTION_ID) section.remove();
           nativeCarousel.clearBinding();
           sourceState = null;
           completedSection = null;

@@ -43,6 +43,31 @@ test('grid publishes complete cards, releases startup material and exposes only 
     }
 });
 
+test('failed obsolete-root cleanup keeps the accepted frame and registry consistent', async () => {
+    const e = await fixture(), oldItem = e.item('1');
+    const oldRoot = await e.publish([oldItem]), old = e.grid.getCard(oldItem);
+    oldRoot.remove = () => { throw new Error('host cleanup failed'); };
+    const item = e.item('2'), root = await e.publish([item]);
+    assert.equal(e.grid.root, root);
+    assert.equal(e.grid.cards.size, 1);
+    e.grid.assertCard(e.grid.getCard(item));
+    assert.equal(e.grid.isCardCurrent(old), false);
+    assert.equal(item.snapshot, null);
+    assert.equal(e.grid.diagnostics().frameReleaseFailures, 1);
+});
+
+test('reentrant disposal during obsolete-root cleanup cannot republish the disposed registry', async () => {
+    const e = await fixture(), oldRoot = await e.publish([e.item('1')]);
+    const remove = oldRoot.remove.bind(oldRoot);
+    oldRoot.remove = () => { remove(); e.grid.dispose(); };
+    const item = e.item('2');
+    await assert.rejects(e.publish([item]), { code: 'GRID_BUILD_REPLACED' });
+    assert.equal(e.grid.root, null);
+    assert.equal(e.grid.cards.size, 0);
+    assert.equal(e.grid.getCard(item), null);
+    assert.equal(item.snapshot, null, 'accepted material is released before cleanup can retire it');
+});
+
 test('grid rejects retired, copied and replaced handles while same-attempt replacement returns an admitted handoff', async () => {
     const e = await fixture();
     const item = e.item();

@@ -1,7 +1,7 @@
 import { readVideoIdFromHref, NETFLIX_DOM_SELECTORS } from './page-dom.js';
 
 // Capture/build markup only; registry selection and retained material lifetime belong to grid.
-export function createCardMarkup({ location }) {
+export function createCardMarkup({ location, document }) {
     const videoIdFromHref = href => readVideoIdFromHref(href, location.href);
 
     function capture(slot, page, captureSnapshot = true) {
@@ -68,5 +68,15 @@ export function createCardMarkup({ location }) {
         const template = slot.cloneNode(true);
         return template.querySelector(NETFLIX_DOM_SELECTORS.standardCard) ? template : null;
     }
-    return Object.freeze({ capture, createClone, normalize, captureTemplate });
+    function cloneEmptyContent(source, provisionalMessage = null) {
+        const clone = source.cloneNode(true);
+        if (provisionalMessage !== null) {
+            clone.querySelector('[data-uia="empty-carousel-section+pictogram"]')?.remove();
+            let message = clone.querySelector('[data-uia="empty-carousel-section+message"]');
+            if (!message) { message = document.createElement('p'); clone.appendChild(message); }
+            message.textContent = provisionalMessage;
+        }
+        return clone;
+    }
+    return Object.freeze({ capture, createClone, normalize, captureTemplate, cloneEmptyContent });
 }

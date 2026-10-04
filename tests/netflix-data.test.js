@@ -4,6 +4,7 @@ import { Element, createDocument } from './helpers/dom.js';
 import { createNetflixContext } from '../src/netflix/context.js';
 import { createNetflixPageDom } from '../src/netflix/page-dom.js';
 import { createCardMarkup } from '../src/netflix/card-markup.js';
+import { createGrid } from '../src/grid/grid.js';
 import { createListData } from '../src/netflix/list-data.js';
 import { createViewingData } from '../src/netflix/viewing-data.js';
 import { createPopupInspection } from '../src/netflix/popup-inspection.js';
@@ -22,7 +23,8 @@ function environment() {
     let identity = null;
     const dom = createNetflixPageDom({ document, Element, location, readGraphqlIdentity: () => identity });
     const markup = createCardMarkup({ location });
-    return { document, location, models, window, context, dom, markup, setIdentity: value => { identity = value; } };
+    const grid = createGrid({ document, location, runChunks: async () => {} });
+    return { document, location, models, window, context, dom, markup, grid, setIdentity: value => { identity = value; } };
 }
 function section(host, uia = '') {
     const node = host.appendChild(new Element('section'));
@@ -84,9 +86,9 @@ test('page discovery uses structural anchors and skips synthetic sections indepe
     const host = e.document.body.appendChild(new Element('main'));
     host.setAttribute('data-uia', 'browse-page-sections');
     assert.equal(e.dom.findMyListSection(), null);
-    assert.equal(e.dom.ensureSyntheticMyListSection(), null);
+    assert.equal(e.grid.ensureSynthetic(e.dom.readSyntheticPlacement()), null);
     const first = section(host, 'empty-carousel-section');
-    const placeholder = e.dom.ensureSyntheticMyListSection();
+    const placeholder = e.grid.ensureSynthetic(e.dom.readSyntheticPlacement());
     const native = section(host, 'empty-carousel-section');
     first.textContent = 'Unknown localized heading';
     assert.equal(e.dom.findMyListSection(), native);
@@ -95,7 +97,7 @@ test('page discovery uses structural anchors and skips synthetic sections indepe
     assert.equal(e.dom.findMyListSection(), native);
     native.remove();
     assert.equal(e.dom.findMyListSection(), null);
-    assert.equal(e.dom.ensureSyntheticMyListSection(), placeholder);
+    assert.equal(e.grid.ensureSynthetic(e.dom.readSyntheticPlacement()), placeholder);
 });
 
 test('heading interpretation returns copied typography facts without retaining or decorating native DOM', () => {
@@ -112,6 +114,32 @@ test('heading interpretation returns copied typography facts without retaining o
     assert.equal(heading.attributes.size, 0);
     heading.remove();
     assert.deepEqual(dom.readHeadingTypography(native), {});
+});
+
+test('native frame interpretation preserves Continue Watching placement and bounded row-gap median/fallback', () => {
+    const e = environment(), host = e.document.body.appendChild(new Element('main'));
+    host.setAttribute('data-uia', 'browse-page-sections');
+    const first = section(host, 'unrelated-row');
+    const previous = section(host, 'carousel-row-section-0');
+    const current = section(host, 'carousel-row-section-1');
+    const next = section(host, 'unrelated-next-row');
+    for (const parent of [previous, next]) parent.appendChild(new Element()).setAttribute('data-uia', 'carousel-scroller');
+    previous.getBoundingClientRect = () => ({ top: 0, bottom: 100 });
+    current.getBoundingClientRect = () => ({ top: 120, bottom: 200 });
+    next.getBoundingClientRect = () => ({ top: 230, bottom: 300 });
+    const dom = createNetflixPageDom({ document: e.document, Element, location: e.location, getComputedStyle: node =>
+        node === previous ? { marginBottom: '40px' } : node === next ? { marginTop: '50px' } : { marginBottom: '40px' } });
+    const placement = dom.readSyntheticPlacement();
+    assert.equal(placement.host, host);
+    assert.equal(placement.after, previous);
+    assert.equal(Object.isFrozen(placement), true);
+    assert.equal(first.nextElementSibling, previous, 'reading must not position a script node');
+    assert.equal(dom.readRowGap(current, 1280), 40);
+    assert.equal(dom.readRowGap(null, 1280), 25.6);
+    assert.equal(dom.readRowGap(null, 300), 20);
+    assert.equal(dom.readRowGap(null, 10000), 56);
+    assert.equal(dom.positionSyntheticSection, undefined);
+    assert.equal(dom.ensureSyntheticMyListSection, undefined);
 });
 
 test('GraphQL identity fallback matches current section IDs and card overlap without a structural anchor', () => {

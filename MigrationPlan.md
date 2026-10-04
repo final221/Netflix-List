@@ -97,7 +97,7 @@ The target test files are created or deepened with the owner they exercise. This
 | tests/netflix-data.test.js | P05–P07 | Page/context/markup interpretation and actual list/viewing protocol operations |
 | tests/app.test.js | P08; deepen in P20 | Session/request invalidation first, then composed initialization, recovery and disposal |
 | tests/carousel.test.js | P08–P10 | Binding replacement, shared reads, readiness, page mapping, serialized movement and native collection |
-| tests/grid.test.js | P03 resource checks; deepen in P11–P12 | Frame/card lifetime, complete replacement, groups, controls, filters and focus |
+| tests/grid.test.js; tests/grid-cards.test.js; tests/grid-frame.test.js; tests/grid-empty.test.js | P03 resource checks; P11 ownership suites; deepen in P12 | Frame/card lifetime, complete replacement, native/provisional/synthetic empty transitions, exact disposal, groups, controls, filters and focus |
 | tests/list.test.js | P13–P14 | Collection strategy, validated membership/order, pending changes, deferral and Undo |
 | tests/viewing.test.js | P15–P16 | Completion/cache use, bounded scan, partial results, repairs and incremental publication |
 | tests/viewing-choices.test.js | P15 | Profile-scoped manual placement, persistence, precedence and coverage expiry |

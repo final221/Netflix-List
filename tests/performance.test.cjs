@@ -218,6 +218,16 @@ function environment(names, overrides = {}) {
         normalizeCard: node => c.cardMarkup.normalize(node),
         diagnostics: () => ({ activeCards: c.sourceState?.cloneMap?.size || 0, retainedCards: 0, retirementFailures: 0 }),
         setEmpty() {},
+        geometry: createGrid({ document, location, runChunks: async () => {} }).geometry,
+        clearEmpty() {}, resetEmpty() {}, removeSynthetic() {}, presentEmpty: () => false,
+        emptyPresentation() {
+            const node = c.document?.getElementById?.(c.LEGACY_EMPTY_STATE_ID);
+            return { connected: Boolean(node?.isConnected), source: node?.getAttribute?.('data-tm-empty-source') || null };
+        },
+        setRefreshing(node, refreshing) {
+            if (refreshing) node.setAttribute('data-tm-responsive-refreshing', 'true');
+            else node.removeAttribute('data-tm-responsive-refreshing');
+        },
         layoutStatus(status, geometry, rowGap) {
             if (geometry) { status.style.marginLeft = `${geometry.left}px`; status.style.width = `${geometry.width}px`; }
             if (rowGap !== undefined) status.style.setProperty('--tm-row-gap', `${rowGap}px`);
@@ -3255,12 +3265,19 @@ test('binding adoption clears old grafts and does not retain reads collected bef
         ResizeObserver: class { observe() {} }, layoutSummary: layout => layout
     });
     e.c.gridView = {
-        placeStatus: (node, { anchor }) => anchor.insertAdjacentElement('afterend', node),
+        mount({ status, anchor, geometry, layout }) {
+            anchor.insertAdjacentElement('afterend', status);
+            status.insertAdjacentElement('afterend', grid);
+            status.style.marginLeft = `${geometry.left}px`; status.style.width = `${geometry.width}px`;
+            status.style.setProperty('--tm-row-gap', `${layout.rowGap || 0}px`); return grid;
+        },
+        removeSynthetic() {},
         layoutStatus(node, geometry, rowGap) {
             if (geometry) { node.style.marginLeft = `${geometry.left}px`; node.style.width = `${geometry.width}px`; }
             if (rowGap !== undefined) node.style.setProperty('--tm-row-gap', `${rowGap}px`);
         }
     };
+    e.c.currentGridGeometry = () => ({ left: 0, width: 600, columns: 6 });
     e.c.withNativeReadScope(() => {
         assert.equal(e.c.nativeDiscoveryObservation().pageSignature, '0|1|2|3|4|5');
         assert.equal(e.c.adoptLiveMyListSection(e.c.nativeDiscoveryObservation({ bindingOnly: true })), true);
@@ -4218,6 +4235,80 @@ test('actual status and dialog callers retain diagnostic copy and mismatch decis
     assert.ok(logs.some(entry => entry.name === 'orderMismatchPromptCancelled'));
     e.c.gridView.dispose();
     assert.equal(e.timers.size, 0);
+});
+
+function emptyFrameCallerEnvironment() {
+    const e = sourcePresentationBridgeEnvironment();
+    const { Element: UiElement } = require('./helpers/dom.js');
+    const document = e.c.document;
+    const location = { href: 'https://www.netflix.com/browse/my-list' };
+    const pageDom = createNetflixPageDom({ document, Element: UiElement, location, getComputedStyle: node => node.style });
+    Object.assign(e.c, { window: { innerWidth: 1280, innerHeight: 800 },
+        createRouteSessionCancelledError: () => e.c.sessionScope.cancelledError(), waitingForNativeEmpty: true,
+        tUi: () => 'Empty My List', netflixDom: { ...e.c.netflixDom, readEmptyContent: pageDom.readEmptyContent,
+            readEmptyShell: pageDom.readEmptyShell, readSyntheticPlacement: pageDom.readSyntheticPlacement, readRowGap: pageDom.readRowGap,
+            readHeadingTypography: pageDom.readHeadingTypography },
+        layoutSummary: value => value, installEmptyFrameResizeObserver() {}, applyLegacyEmptyStateGeometry() {} });
+    const host = document.body.appendChild(new UiElement('main')); host.setAttribute('data-uia', 'browse-page-sections');
+    host.appendChild(e.section);
+    e.c.gridView.dispose();
+    e.c.gridView = createGrid({ document, location, runChunks: async () => {}, tUi: e.c.tUi,
+        readEmptyContent: pageDom.readEmptyContent, readEmptyShell: pageDom.readEmptyShell });
+    const status = e.c.gridView.updateStatus('My List');
+    const layout = { columns: 6, gap: 8, rowGap: 12, gridLeft: 20, cardWidth: 100, gridWidth: 640 };
+    const grid = e.c.gridView.mount({ section: e.section, anchor: e.scroller, status, layout,
+        geometry: { left: 20, width: 640, columns: 6 }, assertCurrent() {} });
+    Object.assign(e.state, { status, grid, layout, empty: true });
+    for (const name of ['syncLegacyEmptyState', 'currentGridGeometry', 'ensureSyntheticMyListSection',
+        'clearLegacyEmptyState', 'adoptLiveEmptyMyListSection', 'measureNativeCarouselGap', 'syncStatusTypography']) vm.runInContext(declaration(name), e.c);
+    const nativeEmpty = (parent, text) => {
+        const title = parent.appendChild(new UiElement('h2')); title.setAttribute('data-uia', 'empty-carousel-section+title');
+        const content = parent.appendChild(new UiElement()); content.setAttribute('data-uia', 'empty-carousel-section+content');
+        const message = content.appendChild(new UiElement('p')); message.setAttribute('data-uia', 'empty-carousel-section+message');
+        message.textContent = text; return content;
+    };
+    return { ...e, host, status, grid, nativeEmpty, UiElement };
+}
+
+test('actual empty caller uses admitted native material and synthetic publication stops on parent replacement', () => {
+    const e = emptyFrameCallerEnvironment();
+    const content = e.nativeEmpty(e.section, 'Native empty');
+    assert.equal(e.c.syncLegacyEmptyState(e.section, { allowProvisional: true }), true);
+    assert.equal(e.c.gridView.emptyPresentation().source, 'native');
+    content.remove();
+    assert.equal(e.c.syncLegacyEmptyState(e.section, { allowProvisional: true }), true);
+    assert.equal(e.c.gridView.emptyPresentation().source, 'provisional-cached');
+    const admission = e.c.nativeDiscoveryObservation({ bindingOnly: true });
+    const read = e.c.netflixDom.readSyntheticPlacement;
+    e.c.netflixDom.readSyntheticPlacement = () => { const placement = read(); e.c.sourceState = { ...e.state }; return placement; };
+    assert.throws(() => e.c.ensureSyntheticMyListSection(admission), { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+    assert.equal(e.host.children.length, 1);
+    e.c.gridView.dispose();
+    assert.equal(e.c.gridView.emptyPresentation().connected, false);
+});
+
+test('actual empty native adoption remounts owned resources and permits its first admitted addition', () => {
+    const e = emptyFrameCallerEnvironment();
+    const incoming = e.host.appendChild(new e.UiElement('section'));
+    e.nativeEmpty(incoming, 'Empty incoming');
+    e.c.findMyListSection = () => incoming;
+    const live = e.c.nativeDiscoveryObservation({ bindingOnly: true });
+    assert.equal(e.c.adoptLiveEmptyMyListSection(live), true);
+    assert.equal(e.grid.parentElement, incoming);
+    assert.equal(e.status.parentElement, incoming);
+    assert.equal(e.c.sourceState.section, incoming);
+    assert.equal(e.c.waitingForNativeEmpty, false);
+    assert.equal(e.c.gridView.emptyPresentation().source, 'native');
+    const snapshot = new e.UiElement(), card = snapshot.appendChild(new e.UiElement('a'));
+    card.setAttribute('data-uia', 'standard-card'); card.setAttribute('href', 'https://www.netflix.com/browse?jbv=1');
+    const item = { videoId: '1', href: card.getAttribute('href'), page: 0, snapshot };
+    const binding = e.c.nativeCarousel.borrowBinding(incoming, null, null);
+    e.c.gridView.insertCard(item, { assertCurrent: () => e.c.nativeCarousel.assertBinding(binding) });
+    e.c.clearLegacyEmptyState();
+    assert.equal(e.c.gridView.getCard(item).node.parentElement, e.grid);
+    assert.equal(e.grid.getAttribute('data-tm-empty'), null);
+    assert.equal(e.status.nextElementSibling, e.grid);
+    assert.equal(item.snapshot, null);
 });
 
 test('actual initialization rejects marker replacement before collection and preserves queued intent', async () => {

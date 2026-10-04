@@ -27,7 +27,7 @@ export function readVideoIdFromHref(href, baseHref) {
 }
 
 export function createNetflixPageDom({ document, Element, location, readGraphqlIdentity = () => null,
-    getComputedStyle = () => ({}) }) {
+    getComputedStyle = () => ({}), HTMLElement = Element }) {
     const videoIdFromHref = href => readVideoIdFromHref(href, location.href);
 
     function nativeCardIdentity(slot) {
@@ -224,51 +224,6 @@ export function createNetflixPageDom({ document, Element, location, readGraphqlI
 
         filledSlots(track) {
             return this.directSlots(track).filter(slot => slot.querySelector(this.selectors.standardCard));
-        },
-
-        positionSyntheticSection(section, host) {
-            if (!section || !host) return;
-
-            // On the My List browse page Netflix places the My List rail immediately
-            // after Continue Watching. A synthetic empty/loading rail must occupy that
-            // same slot; prepending it to the sections host makes it jump above all
-            // native rows while Netflix is still building the page.
-            const continueWatching = this.findContinueWatchingSection(host);
-            if (continueWatching) {
-                if (continueWatching.nextElementSibling !== section) {
-                    continueWatching.insertAdjacentElement('afterend', section);
-                }
-                return;
-            }
-
-            const firstNativeSection = [...host.querySelectorAll(':scope > section')].find(node => node !== section);
-            if (firstNativeSection) {
-                if (firstNativeSection.nextElementSibling !== section) {
-                    firstNativeSection.insertAdjacentElement('afterend', section);
-                }
-                return;
-            }
-
-            if (section.parentElement !== host) host.appendChild(section);
-        },
-
-        ensureSyntheticMyListSection() {
-            const host = document.querySelector(this.selectors.browseSections);
-            if (!host) return null;
-
-            let section = document.getElementById(SYNTHETIC_SECTION_ID);
-            const nativeSections = [...host.querySelectorAll(':scope > section')].filter(node => node !== section);
-            // Do not guess a position before Netflix has rendered at least one native row.
-            // The MutationObserver/poll will call us again as soon as the row stack exists.
-            if (!nativeSections.length) return null;
-
-            if (!section) {
-                section = document.createElement('section');
-                section.id = SYNTHETIC_SECTION_ID;
-                section.setAttribute('data-tm-synthetic-mylist', 'true');
-            }
-            this.positionSyntheticSection(section, host);
-            return section;
         }
     });
 
@@ -291,6 +246,52 @@ export function createNetflixPageDom({ document, Element, location, readGraphqlI
         facts.color = style.color || 'rgb(255, 255, 255)';
         return Object.freeze(facts);
     }
+    function readSyntheticPlacement() {
+        const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
+        const native = host && [...host.querySelectorAll(':scope > section')].filter(node => node.id !== SYNTHETIC_SECTION_ID);
+        if (!native?.length) return null;
+        const after = netflixDom.findContinueWatchingSection(host) || native[0];
+        return Object.freeze({ host, after });
+    }
+    function readEmptyContent(section) {
+        const node = section?.querySelector?.(':scope > [data-uia="empty-carousel-section+content"]');
+        if (!node) return null;
+        const message = String(node.querySelector('[data-uia="empty-carousel-section+message"]')?.textContent || '')
+            .replace(/[\u200b-\u200f\u2060\ufeff]/g, '').replace(/\s+/g, '').trim();
+        return Object.freeze({ node, message });
+    }
+    function readEmptyShell() {
+        return [...document.querySelectorAll('[data-uia="empty-carousel-section+content"]')]
+            .find(node => !node.closest(`[${SECTION_ATTR}="true"]`)) || null;
+    }
+    function readRowGap(section, viewportWidth) {
+        const fallback = Math.max(20, Math.min(56, viewportWidth * 0.02));
+        if (!section) return fallback;
+        const values = [], sectionRect = section.getBoundingClientRect();
+        const children = [...section.parentElement?.children || []];
+        const siblings = children.filter(node => node instanceof HTMLElement && node !== section &&
+            node.matches('section') && node.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller));
+        const index = children.indexOf(section);
+        const previous = children.slice(0, index).reverse().find(node => siblings.includes(node));
+        const next = children.slice(index + 1).find(node => siblings.includes(node));
+        if (previous) {
+            const gap = sectionRect.top - previous.getBoundingClientRect().bottom;
+            if (gap >= 8 && gap <= 180) values.push(gap);
+            const margin = Number.parseFloat(getComputedStyle(previous).marginBottom || '0');
+            if (margin >= 8 && margin <= 180) values.push(margin);
+        }
+        if (next) {
+            const gap = next.getBoundingClientRect().top - sectionRect.bottom;
+            if (gap >= 8 && gap <= 180) values.push(gap);
+            const margin = Number.parseFloat(getComputedStyle(next).marginTop || '0');
+            if (margin >= 8 && margin <= 180) values.push(margin);
+        }
+        const ownMargin = Number.parseFloat(getComputedStyle(section).marginBottom || '0');
+        if (ownMargin >= 8 && ownMargin <= 180) values.push(ownMargin);
+        if (!values.length) return fallback;
+        const nums = values.filter(Number.isFinite).sort((a, b) => a - b), mid = Math.floor(nums.length / 2);
+        return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
+    }
     return Object.freeze({ ...netflixDom, findMyListSection, readMyListAnchor, nativeCardIdentity, videoIdFromHref,
-        decodeTrackingContext, describeMembershipClick, readHeadingTypography });
+        decodeTrackingContext, describeMembershipClick, readHeadingTypography, readSyntheticPlacement, readEmptyContent, readEmptyShell, readRowGap });
 }
