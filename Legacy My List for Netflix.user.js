@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.22
+// @version      1.4.23
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -5891,6 +5891,7 @@
     const sourceTickets = /* @__PURE__ */ new WeakMap();
     const mappingTickets = /* @__PURE__ */ new WeakMap();
     const preparationTickets = /* @__PURE__ */ new WeakMap();
+    const observationTickets = /* @__PURE__ */ new WeakMap();
     let preparationOwner = null;
     let mappingSequence = 0;
     const mountedWaits = /* @__PURE__ */ new Set();
@@ -6809,6 +6810,120 @@
       owner.accepted = true;
       owner.guard();
       return mappingResult({ binding: owner.binding, model: owner.model, totalCount, columns, guard: owner.guard }, "accepted");
+    }
+    function observationOperation({
+      section,
+      scroller = null,
+      track = null,
+      binding = null,
+      source = null,
+      sessionToken = null,
+      assertCurrent = () => {
+      }
+    }) {
+      assertRouteSession(sessionToken);
+      assertCurrent();
+      binding ||= borrowBinding(section, scroller, track);
+      assertBinding(binding);
+      if (binding.section !== section || scroller && binding.scroller !== scroller || track && binding.track !== track) {
+        throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Observation binding does not match its source");
+      }
+      const model = getModel(section), generation = model.mappingGeneration;
+      const guard = () => {
+        assertRouteSession(sessionToken);
+        assertCurrent();
+        assertBinding(binding);
+        if (models.get(section) !== model || model.mappingGeneration !== generation) {
+          throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Observed native interpretation changed");
+        }
+        if (source) {
+          assertSource(source);
+          const ticket = sourceTickets.get(source);
+          if (ticket.binding.section !== section || ticket.binding.scroller !== scroller || ticket.binding.track !== track) {
+            throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Resolved source does not belong to the observed binding");
+          }
+        }
+      };
+      guard();
+      return { binding, model, guard };
+    }
+    function observationResult(operation, facts, validate = () => {
+    }) {
+      operation.guard();
+      validate();
+      operation.guard();
+      const result = Object.freeze(facts);
+      observationTickets.set(result, { operation, validate });
+      return result;
+    }
+    function assertObservation(result) {
+      const ticket = observationTickets.get(result);
+      if (ticket) {
+        return withNativeReadScope(() => {
+          ticket.operation.guard();
+          getModel(ticket.operation.binding.section);
+          ticket.operation.guard();
+          ticket.validate();
+          ticket.operation.guard();
+          return result;
+        });
+      }
+      throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native observation is no longer current");
+    }
+    function isObservationCurrent(result) {
+      try {
+        assertObservation(result);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    function observeSource(options) {
+      return withNativeReadScope(() => {
+        const operation = observationOperation(options), runtime = operation.model.view;
+        const attempts = runtime.logicalRemapRetryCount;
+        return observationResult(operation, {
+          mode: runtime.profile.pageMode,
+          needsRemapping: Boolean(runtime.pageMappingStale),
+          remapAttempts: attempts
+        }, () => {
+          if (runtime.logicalRemapRetryCount !== attempts) throw initializationError(
+            "NATIVE_SOURCE_REPLACED",
+            "native-observation",
+            "Native remapping observation changed"
+          );
+        });
+      });
+    }
+    function pageCards(options) {
+      return withNativeReadScope(() => {
+        const operation = observationOperation(options);
+        const { section, scroller, track } = operation.binding;
+        const page = selectedPage(section);
+        operation.guard();
+        if (Number.isFinite(options.page) && options.page !== page) throw initializationError(
+          "NATIVE_SOURCE_REPLACED",
+          "native-observation",
+          "Mounted native page changed before preparation"
+        );
+        const columns = Math.max(1, options.columns || 1);
+        const slots = options.window === "viewport" ? viewportPageSlots(scroller, track, columns) : currentPageSlots(scroller, track);
+        const mode = operation.model.view.profile.pageMode;
+        const tail = mode === "logical" ? wrappedTailLogicalPageInfo(logicalSlotPositions(slots, options.totalCount || 0), options.totalCount || 0, columns) : null;
+        const revision = operation.model.revision;
+        const cards = Object.freeze(slots.map((slot, index) => Object.freeze({
+          source: sourceHandle(operation.binding, slot, page),
+          inPage: !(tail && tail.page === page && index >= tail.wrapIndex)
+        })));
+        return observationResult(operation, { page, mode, cards }, () => {
+          if (operation.model.revision !== revision || selectedPage(section) !== page) throw initializationError(
+            "NATIVE_SOURCE_REPLACED",
+            "native-observation",
+            "Observed native page mapping changed"
+          );
+          for (const entry of cards) assertSource(entry.source);
+        });
+      });
     }
     function getModel(section) {
       if (!section) return null;
@@ -7887,7 +8002,6 @@
       mountedCard,
       isSourceCurrent,
       assertSource,
-      viewportSlots: viewportPageSlots,
       refreshMapping,
       isMappingCurrent,
       assertMapping,
@@ -7913,6 +8027,10 @@
       acceptCollection,
       isPreparationCurrent,
       assertPreparation,
+      observeSource,
+      pageCards,
+      assertObservation,
+      isObservationCurrent,
       anchorAfterDelta: (section, facts) => modelForWrite(section)?.anchor(facts),
       markMappingStale: (section) => modelForWrite(section)?.markStale(),
       deferMapping: (section) => modelForWrite(section)?.deferMapping(),
@@ -8058,7 +8176,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.22";
+    const SCRIPT_VERSION = "1.4.23";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -11335,21 +11453,29 @@
     }
     function reindexLegacyItemsAfterDelta(reason = "delta-reindex") {
       if (!sourceState) return;
-      const items = sourceState.items || [];
-      const columns = Math.max(1, sourceState.layout?.columns || 1);
-      const runtime = sourceState.section ? getCarouselDomRuntime(sourceState.section) : null;
-      const logicalMode = runtime?.profile?.pageMode === "logical";
+      const state = sourceState;
+      const items = state.items || [];
+      const columns = Math.max(1, state.layout?.columns || 1);
+      const runtime = nativeSourceObservation(state);
+      const logicalMode = runtime?.mode === "logical";
       const resetLogicalPages = reason === "mutation-reindex";
-      sourceState.itemMap = /* @__PURE__ */ new Map();
-      items.forEach((item, index) => {
+      const itemMap = state.itemMap = /* @__PURE__ */ new Map();
+      const assertCurrent = () => {
+        nativeCarousel.assertObservation(runtime);
+        if (state.itemMap !== itemMap || state.items && state.items !== items) throw createRouteSessionCancelledError();
+      };
+      nativeCarousel.sample(() => items.forEach((item, index) => {
+        assertCurrent();
         if (!logicalMode || resetLogicalPages || !Number.isFinite(item.page)) {
           item.page = Math.floor(index / columns);
         }
         const key = itemKey(item);
-        sourceState.itemMap.set(key, item);
-        const clone = sourceState.cloneMap?.get(key);
+        itemMap.set(key, item);
+        const clone = state.cloneMap?.get(key);
         if (clone?.isConnected) copyItemAttributes(clone, item, index);
-      });
+        assertCurrent();
+      }));
+      assertCurrent();
       sourceState.totalCount = items.length;
       sourceState.empty = items.length === 0;
       if (logicalMode) {
@@ -11899,8 +12025,20 @@
     function detectCarouselDomProfile(...args) {
       return nativeCarousel.profile(...args);
     }
-    function getCarouselDomRuntime(...args) {
-      return nativeCarousel.model(...args);
+    function nativeSourceObservation(state = sourceState) {
+      if (!state?.section) return null;
+      const { section, scroller, track } = state;
+      const sessionToken = sessionScope.token;
+      return nativeCarousel.observeSource({
+        section,
+        scroller,
+        track,
+        sessionToken,
+        assertCurrent() {
+          assertRouteSession(sessionToken);
+          if (sourceState !== state) throw createRouteSessionCancelledError();
+        }
+      });
     }
     function carouselDomProfileSummary(...args) {
       return nativeCarousel.profileSummary(...args);
@@ -12067,9 +12205,6 @@
     }
     function normalizeNetflixLogicalIndex2(...args) {
       return nativeCarousel.logicalIndex(...args);
-    }
-    function logicalSlotPositions(...args) {
-      return nativeCarousel.positions(...args);
     }
     function expectedLogicalIndicesForPage2(...args) {
       return nativeCarousel.expectedPageIndices(...args);
@@ -12254,9 +12389,6 @@
       assertRouteSession(sessionToken);
       if (hoverPreparationCancelled(token) || sourceState !== state || result.status !== "found") return null;
       return result.source.slot;
-    }
-    function viewportPageSlots(scroller, track, columns = sourceState?.layout?.columns || 1) {
-      return nativeCarousel.viewportSlots(scroller, track, columns);
     }
     async function resolveExpectedPageSourceItem(item, expectedPage = item.page, token = null, sessionToken = null) {
       assertRouteSession(sessionToken);
@@ -12952,10 +13084,15 @@
         }
       }));
     }
-    function makeLiveClone(sourceSlot, item, oldClone, actualPage) {
+    function makeLiveClone(sourceSlot, item, oldClone, actualPage, assertCurrent = () => {
+    }) {
+      assertCurrent();
       const fresh = sourceSlot.cloneNode(true);
+      assertCurrent();
       const stats = netflixReactHover.graftTreeToClone(sourceSlot, fresh);
+      assertCurrent();
       normalizeClone(fresh);
+      assertCurrent();
       const order = oldClone?.getAttribute("data-tm-item-order");
       copyItemAttributes(fresh, item, order === null || order === void 0 ? null : Number(order));
       fresh.setAttribute("data-tm-hover-ready", String(Boolean(stats?.fiberAssignments || stats?.propsAssignments)));
@@ -12968,8 +13105,11 @@
         fresh.setAttribute("data-tm-hover-token", String(hoverToken));
         fresh.__tmHoverReplacementToken = hoverToken;
       }
+      assertCurrent();
       ensureGridHoverBehavior(sourceState.grid);
+      assertCurrent();
       associateGridHoverItem(item, fresh);
+      assertCurrent();
       return { fresh, stats };
     }
     async function prepareMountedPage(page, targetItem = null, triggerEvent = null, token = null, sessionToken = null) {
@@ -12978,7 +13118,8 @@
       performanceDiagnostics.hoverPreparation.calls++;
       const hoverTiming = performanceDiagnostics.hoverTiming;
       ensureLiveNativeBinding("hover-prepare-start");
-      const { section, scroller, track } = sourceState || {};
+      const state = sourceState;
+      const { section, scroller, track } = state || {};
       if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
         warn(tLog("nativePagePreparationFailed"), {
           reason: "native-binding-unavailable",
@@ -12987,6 +13128,13 @@
         });
         return null;
       }
+      const nativeOwner = nativeCarousel.borrowBinding(section, scroller, track);
+      const records = state.items, itemMap = state.itemMap, cloneMap = state.cloneMap, grid = state.grid;
+      const assertCurrent = () => {
+        assertRouteSession(sessionToken);
+        nativeCarousel.assertBinding(nativeOwner);
+        if (sourceState !== state || state.items !== records || state.itemMap !== itemMap || state.cloneMap !== cloneMap || state.grid !== grid) throw createRouteSessionCancelledError();
+      };
       const beforeSignature = targetItem ? "" : visibleSignature(currentPageSlots(scroller, track));
       const started = performance.now();
       log(tLog("nativePagePreparationStarted"), {
@@ -12997,7 +13145,7 @@
         hoverToken
       });
       let targetSourceSlot = null;
-      let resolvedPageSlots = null;
+      let resolvedSource = null;
       let actualPage = page;
       let staleSourceRecovery = false;
       if (targetItem) {
@@ -13055,15 +13203,16 @@
             return null;
           }
         }
+        assertCurrent();
         if (located?.status === "found" && located.slot) {
           if (rejectLargeNativePositionDeviation(targetItem, located.slot, page)) return null;
           mutationSourceRecoveryPending = false;
           targetSourceSlot = located.slot;
-          resolvedPageSlots = located.slots || null;
+          resolvedSource = located.source || null;
           actualPage = located.page;
         } else {
-          const runtime2 = getCarouselDomRuntime(section);
-          const staleLogicalMapping = runtime2?.profile?.pageMode === "logical" && runtime2.pageMappingStale;
+          const runtime = nativeSourceObservation();
+          const staleLogicalMapping = runtime?.mode === "logical" && runtime.needsRemapping;
           const mutationRecoveryPending = mutationSourceRecoveryPending;
           const expectedPageMismatch = located?.status === "mismatch";
           if (staleLogicalMapping || mutationRecoveryPending || expectedPageMismatch) {
@@ -13095,19 +13244,14 @@
               log(tLog("nativePagePreparationCancelled"), { reason: "token-changed-after-stale-page-search", token, hoverToken });
               return null;
             }
+            assertCurrent();
             if (repaired?.slot) {
               if (rejectLargeNativePositionDeviation(targetItem, repaired.slot, page, located?.visibleIds || [])) return null;
               mutationSourceRecoveryPending = false;
               staleSourceRecovery = true;
               targetSourceSlot = repaired.slot;
               actualPage = repaired.page;
-              const liveScroller = sourceState?.scroller || scroller;
-              const liveTrack = sourceState?.track || track;
-              resolvedPageSlots = viewportPageSlots(
-                liveScroller,
-                liveTrack,
-                Math.max(1, sourceState?.layout?.columns || 1)
-              );
+              resolvedSource = repaired.source || null;
               trace(() => ["Hover source recovered from stale logical page mapping", {
                 targetItem: itemSummary(targetItem),
                 requestedPage: page,
@@ -13162,74 +13306,97 @@
         requestedPage: page,
         actualPage,
         selectedPage: selectedPage(section),
-        currentSlots: (resolvedPageSlots || currentPageSlots(scroller, track)).length,
+        currentSlots: currentPageSlots(scroller, track).length,
         targetSource: slotDescriptor(targetSourceSlot)
       }]);
+      assertCurrent();
       invalidateGridReact();
       clearSourceAlignment();
       activeVideoId = null;
       activeClone = null;
       activePage = actualPage;
-      const slots = resolvedPageSlots || currentPageSlots(scroller, track);
-      const runtime = getCarouselDomRuntime(section);
-      const logicalMode = runtime?.profile?.pageMode === "logical";
-      const logicalPositions = logicalMode ? logicalSlotPositions(slots, sourceState?.items?.length || 0) : [];
-      const wrappedTail = logicalMode ? wrappedTailLogicalPageInfo2(logicalPositions, sourceState?.items?.length || 0, Math.max(1, sourceState?.layout?.columns || 1)) : null;
-      const wrappedTailBufferStart = wrappedTail && actualPage === wrappedTail.page ? wrappedTail.wrapIndex : -1;
+      const pageView = nativeCarousel.pageCards({
+        section,
+        scroller,
+        track,
+        binding: nativeOwner,
+        source: resolvedSource,
+        page: actualPage,
+        totalCount: records?.length || 0,
+        columns: state.layout?.columns || 1,
+        window: targetItem ? "viewport" : "current",
+        sessionToken,
+        assertCurrent
+      });
       let freshTarget = null;
       let refreshedCount = 0;
       let fiberAssignments = 0;
       let propsAssignments = 0;
       let neighborsSkipped = 0;
-      for (let slotIndex = 0; slotIndex < slots.length; slotIndex++) {
-        const sourceSlot = slots[slotIndex];
-        performanceDiagnostics.hoverPreparation.slotsConsidered++;
-        if (wrappedTailBufferStart >= 0 && slotIndex >= wrappedTailBufferStart) continue;
-        const pageItem = findItemForSourceSlot(sourceSlot);
-        if (!pageItem) continue;
-        if (!staleSourceRecovery && pageItem.page !== actualPage) {
-          pageItem.page = actualPage;
-          const mappedClone = findGridClone(pageItem);
-          if (mappedClone?.isConnected) mappedClone.setAttribute("data-tm-item-page", String(actualPage));
-        }
-        if (targetItem && itemKey(pageItem) !== itemKey(targetItem)) {
-          neighborsSkipped++;
-          performanceDiagnostics.hoverPreparation.neighborsSkipped++;
-          continue;
-        }
-        const oldClone = findGridClone(pageItem);
-        if (!oldClone?.isConnected) continue;
-        const graftStarted = performance.now();
-        let fresh, stats;
-        try {
-          ({ fresh, stats } = makeLiveClone(sourceSlot, pageItem, oldClone, actualPage));
-        } finally {
-          recordHoverTiming(hoverTiming, "graft", graftStarted);
-        }
-        refreshedCount++;
-        performanceDiagnostics.hoverPreparation.clonesRebuilt++;
-        fiberAssignments += stats?.fiberAssignments || 0;
-        propsAssignments += stats?.propsAssignments || 0;
-        fresh.setAttribute("data-tm-item-page", String(pageItem.page));
-        fresh.setAttribute("data-tm-backed-page", String(actualPage));
-        oldClone.replaceWith(fresh);
-        setGridClone(pageItem, fresh);
-        if (targetItem && itemKey(pageItem) === itemKey(targetItem)) {
-          try {
-            fresh.__tmHoverReplacementHovered = fresh.matches(":hover");
-            if (!fresh.__tmHoverReplacementHovered) performanceDiagnostics.hoverInteraction.replacementNotHovered++;
-          } catch (_) {
-            performanceDiagnostics.hoverInteraction.diagnosticFailures++;
+      nativeCarousel.sample(() => {
+        for (const entry of pageView.cards) {
+          if (hoverPreparationCancelled(token)) return;
+          nativeCarousel.assertObservation(pageView);
+          performanceDiagnostics.hoverPreparation.slotsConsidered++;
+          if (!entry.inPage) continue;
+          const sourceSlot = entry.source.slot;
+          const pageItem = findItemForSourceSlot(sourceSlot);
+          if (!pageItem) continue;
+          if (!staleSourceRecovery && pageItem.page !== actualPage) {
+            pageItem.page = actualPage;
+            const mappedClone = findGridClone(pageItem);
+            if (mappedClone?.isConnected) mappedClone.setAttribute("data-tm-item-page", String(actualPage));
+            nativeCarousel.assertObservation(pageView);
           }
-          freshTarget = fresh;
-          targetSourceSlot = sourceSlot;
+          if (targetItem && itemKey(pageItem) !== itemKey(targetItem)) {
+            neighborsSkipped++;
+            performanceDiagnostics.hoverPreparation.neighborsSkipped++;
+            continue;
+          }
+          const oldClone = findGridClone(pageItem);
+          if (!oldClone?.isConnected) continue;
+          const graftStarted = performance.now();
+          let fresh, stats;
+          try {
+            ({ fresh, stats } = makeLiveClone(
+              sourceSlot,
+              pageItem,
+              oldClone,
+              actualPage,
+              () => nativeCarousel.assertObservation(pageView)
+            ));
+          } finally {
+            recordHoverTiming(hoverTiming, "graft", graftStarted);
+          }
+          nativeCarousel.assertObservation(pageView);
+          refreshedCount++;
+          performanceDiagnostics.hoverPreparation.clonesRebuilt++;
+          fiberAssignments += stats?.fiberAssignments || 0;
+          propsAssignments += stats?.propsAssignments || 0;
+          fresh.setAttribute("data-tm-item-page", String(pageItem.page));
+          fresh.setAttribute("data-tm-backed-page", String(actualPage));
+          oldClone.replaceWith(fresh);
+          setGridClone(pageItem, fresh);
+          nativeCarousel.assertObservation(pageView);
+          if (targetItem && itemKey(pageItem) === itemKey(targetItem)) {
+            try {
+              fresh.__tmHoverReplacementHovered = fresh.matches(":hover");
+              if (!fresh.__tmHoverReplacementHovered) performanceDiagnostics.hoverInteraction.replacementNotHovered++;
+            } catch (_) {
+              performanceDiagnostics.hoverInteraction.diagnosticFailures++;
+            }
+            freshTarget = fresh;
+            targetSourceSlot = sourceSlot;
+          }
         }
-      }
+      });
+      if (hoverPreparationCancelled(token)) return null;
+      nativeCarousel.assertObservation(pageView);
       log(tLog("nativePageClonesUpdated"), {
         actualPage,
         refreshedCount,
         preparationScope: targetItem ? "target-card" : "mounted-page",
-        slotsConsidered: slots.length,
+        slotsConsidered: pageView.cards.length,
         neighborsSkipped,
         fiberAssignments,
         propsAssignments,
@@ -13237,12 +13404,13 @@
         targetFound: Boolean(freshTarget && targetSourceSlot),
         targetHoveredAtInsertion: freshTarget?.__tmHoverReplacementHovered ?? null
       });
+      nativeCarousel.assertObservation(pageView);
       if (targetItem && !freshTarget) {
         warn(tLog("nativePagePreparationFailed"), {
           reason: "target-not-in-current-page-slots",
           targetItem: itemSummary(targetItem),
           actualPage,
-          slots: slots.map(slotDescriptor)
+          slots: pageView.cards.map((entry) => slotDescriptor(entry.source.slot))
         });
         return null;
       }
@@ -13262,6 +13430,7 @@
         );
         if (!replayed) return null;
       }
+      nativeCarousel.assertObservation(pageView);
       log(tLog("nativePagePreparationCompleted"), {
         requestedPage: page,
         actualPage,
@@ -13269,6 +13438,7 @@
         targetReady: Boolean(freshTarget),
         elapsedMs: Math.round(performance.now() - started)
       });
+      nativeCarousel.assertObservation(pageView);
       return freshTarget;
     }
     async function activateClone(item, clone, triggerEvent = null, generation = clone?.__tmHoverActivationGeneration, intentDiagnostic = null) {
@@ -13769,9 +13939,6 @@
       assertRouteSession(sessionToken);
       return latest;
     }
-    function wrappedTailLogicalPageInfo2(...args) {
-      return nativeCarousel.wrappedTail(...args);
-    }
     async function rebuildLogicalPageModelFromNativePosition(layout, reason = "responsive-remap", sessionToken = sessionScope.token) {
       assertRouteSession(sessionToken);
       const live = ensureLiveNativeBinding("logical-page-model-rebuild-start") || sourceState;
@@ -13845,34 +14012,38 @@
       });
     }
     async function remapItemsByOrder(layout, sessionToken = sessionScope.token) {
-      const { section, items, cloneMap } = sourceState;
+      const state = sourceState;
+      const { section, items, cloneMap } = state;
       const columns = Math.max(1, layout.columns);
-      const runtime = getCarouselDomRuntime(section);
-      const logicalMode = runtime?.profile?.pageMode === "logical";
+      const runtime = nativeSourceObservation(state);
+      const logicalMode = runtime?.mode === "logical";
       const pages = logicalMode ? Math.max(1, Math.ceil(items.length / columns)) : Math.max(1, pageCount(section));
       let changed = 0;
       if (logicalMode) {
         changed = await rebuildLogicalPageModelFromNativePosition(layout, "responsive-remap", sessionToken);
       } else {
-        items.forEach((item, index) => {
+        nativeCarousel.sample(() => items.forEach((item, index) => {
+          nativeCarousel.assertObservation(runtime);
           const page = Math.min(pages - 1, Math.floor(index / columns));
           if (item.page !== page) changed++;
           item.page = page;
           const clone = cloneMap?.get(itemKey(item));
           if (clone) clone.setAttribute("data-tm-item-page", String(page));
-        });
+          nativeCarousel.assertObservation(runtime);
+        }));
       }
-      const updatedRuntime = getCarouselDomRuntime(section);
+      const updatedRuntime = nativeSourceObservation(state);
       log(tLog("responsiveItemPageMappingRecalculatedWithoutNativeCarouselScan"), {
         columns,
         pages,
         changed,
         total: items.length,
         selectedPage: selectedPage(section),
-        pageMode: updatedRuntime?.profile?.pageMode || null,
+        pageMode: updatedRuntime?.mode || null,
         reanchoredLogicalPages: logicalMode,
-        pageMappingStale: Boolean(updatedRuntime?.pageMappingStale)
+        pageMappingStale: Boolean(updatedRuntime?.needsRemapping)
       });
+      nativeCarousel.assertObservation(updatedRuntime);
       return changed;
     }
     async function refreshResponsiveLayout(sessionToken = sessionScope.token) {
@@ -13910,7 +14081,8 @@
         sourceState.layout = liveLayout;
         updateResponsiveStatus(liveLayout, tUi("relayoutInProgress"));
         const pageShapeChanged = pageShape !== lastPageShape;
-        const logicalMappingStale = Boolean(getCarouselDomRuntime(sourceState.section)?.pageMappingStale);
+        const sourceObservation = nativeSourceObservation(state);
+        const logicalMappingStale = Boolean(sourceObservation?.needsRemapping);
         log(tLog("responsiveMeasurementResolved"), {
           seq,
           reason,
@@ -13921,6 +14093,8 @@
           pageShapeChanged,
           logicalMappingStale
         });
+        assertOwner();
+        nativeCarousel.assertObservation(sourceObservation);
         if (pageShapeChanged || logicalMappingStale) {
           const changed = await remapItemsByOrder(liveLayout, sessionToken);
           assertOwner();
@@ -13932,7 +14106,7 @@
               columns: liveLayout.columns,
               pages: pageCount(sourceState.section),
               total: sourceState.items.length,
-              retryCount: getCarouselDomRuntime(sourceState.section)?.logicalRemapRetryCount || 0
+              retryCount: nativeSourceObservation(state)?.remapAttempts || 0
             });
           } else {
             log(tLog("responsivePageMappingUpdatedWithoutNativeCarouselMovement"), {
@@ -13977,8 +14151,8 @@
           responsiveRefreshing = false;
           activeResponsiveReason = "";
           retryPendingMyListMutations("after-responsive-refresh");
-          const runtime = sourceState?.section ? getCarouselDomRuntime(sourceState.section) : null;
-          if (deferredLogicalRemap && runtime?.pageMappingStale && (runtime.logicalRemapRetryCount || 0) === 1) {
+          const runtime = sourceState === state ? nativeSourceObservation(state) : null;
+          if (deferredLogicalRemap && runtime?.needsRemapping && (runtime.remapAttempts || 0) === 1) {
             scheduleResponsiveRefresh(
               400,
               isResizeResponsiveReason(reason) ? "responsive-resize-retry" : "logical-page-model-retry"
@@ -14019,11 +14193,14 @@
         });
         const measured = sample.measured;
         const sig = sample.signature;
-        const logicalMappingStale = Boolean(getCarouselDomRuntime(sourceState.section)?.pageMappingStale);
+        if (sourceState !== state) return;
+        const sourceObservation = nativeSourceObservation(state);
+        const logicalMappingStale = Boolean(sourceObservation?.needsRemapping);
         const applied = state.grid.__tmAppliedGeometry;
         const layoutUnchanged = responsiveLayoutMatches(state.layout, measured);
         const parkedHeightOnlyChange = !layoutUnchanged && lastResponsiveReason === "ResizeObserver" && sig === lastResponsiveSignature && !logicalMappingStale && state.section.getAttribute(ORIGINAL_VISIBILITY_ATTR) === "false" && state.scroller.classList.contains(SOURCE_PARKED_CLASS) && state.resizeViewportSignature === responsiveViewportSignature() && Number.isFinite(state.layout?.scrollerHeight) && state.layout.scrollerHeight > 1.5 && Number.isFinite(measured.scrollerHeight) && measured.scrollerHeight >= 1 && measured.scrollerHeight <= 1.5 && responsiveLayoutMatches(state.layout, measured, true);
         const geometryUnchanged = (layoutUnchanged || parkedHeightOnlyChange) && applied && ["width", "left", "columns"].every((key) => Math.abs(applied[key] - sample.geometry[key]) <= 0.5);
+        if (!nativeCarousel.isObservationCurrent(sourceObservation)) return;
         if (sig === lastResponsiveSignature && geometryUnchanged && !logicalMappingStale) {
           const previousScrollerHeight = state.layout.scrollerHeight;
           sourceState.layout = measured;
@@ -14475,8 +14652,8 @@
         clearRunningSession(sessionToken);
         return;
       }
-      const mountedProfile = getCarouselDomRuntime(section)?.profile || detectCarouselDomProfile(section);
-      if (targetSessionEntryKind !== "initial" && mountedProfile.pageMode === "indicator" && freshMyListBootstrap?.firstVideoId) {
+      const mountedMode = nativeSourceObservation()?.mode || detectCarouselDomProfile(section).pageMode;
+      if (targetSessionEntryKind !== "initial" && mountedMode === "indicator" && freshMyListBootstrap?.firstVideoId) {
         try {
           await ensureFreshIndicatorPageZeroAnchor(
             section,
@@ -14502,7 +14679,7 @@
           return;
         }
       }
-      if (mountedProfile.pageMode === "logical") {
+      if (mountedMode === "logical") {
         try {
           const mountedCountState = requireNativeReactCarouselTotalCount(scroller, track, earlyTotalCount);
           const mountedTotalCount = mountedCountState.totalCount;
@@ -14540,7 +14717,7 @@
           return;
         }
       }
-      if (mountedProfile.pageMode === "logical") {
+      if (mountedMode === "logical") {
         const retryReplacedSource = () => {
           log("Fast My List collection discarded after native source replacement", { sessionToken });
           clearRunningSession(sessionToken, false);

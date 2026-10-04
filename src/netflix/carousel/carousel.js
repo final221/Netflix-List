@@ -36,6 +36,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     const sourceTickets = new WeakMap();
     const mappingTickets = new WeakMap();
     const preparationTickets = new WeakMap();
+    const observationTickets = new WeakMap();
     let preparationOwner = null;
     let mappingSequence = 0;
     const mountedWaits = new Set();
@@ -739,6 +740,86 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         owner.accepted = true;
         owner.guard();
         return mappingResult({ binding: owner.binding, model: owner.model, totalCount, columns, guard: owner.guard }, 'accepted');
+    }
+
+    function observationOperation({ section, scroller = null, track = null, binding = null, source = null,
+        sessionToken = null, assertCurrent = () => {} }) {
+        assertRouteSession(sessionToken); assertCurrent();
+        binding ||= borrowBinding(section, scroller, track);
+        assertBinding(binding);
+        if (binding.section !== section || (scroller && binding.scroller !== scroller) || (track && binding.track !== track)) {
+            throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Observation binding does not match its source');
+        }
+        const model = getModel(section), generation = model.mappingGeneration;
+        const guard = () => {
+            assertRouteSession(sessionToken); assertCurrent(); assertBinding(binding);
+            if (models.get(section) !== model || model.mappingGeneration !== generation) {
+                throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Observed native interpretation changed');
+            }
+            if (source) {
+                assertSource(source);
+                const ticket = sourceTickets.get(source);
+                if (ticket.binding.section !== section || ticket.binding.scroller !== scroller || ticket.binding.track !== track) {
+                    throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Resolved source does not belong to the observed binding');
+                }
+            }
+        };
+        guard();
+        return { binding, model, guard };
+    }
+    function observationResult(operation, facts, validate = () => {}) {
+        operation.guard(); validate(); operation.guard();
+        const result = Object.freeze(facts);
+        observationTickets.set(result, { operation, validate });
+        return result;
+    }
+    function assertObservation(result) {
+        const ticket = observationTickets.get(result);
+        if (ticket) {
+            return withNativeReadScope(() => {
+                ticket.operation.guard(); getModel(ticket.operation.binding.section); ticket.operation.guard();
+                ticket.validate(); ticket.operation.guard();
+                return result;
+            });
+        }
+        throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Native observation is no longer current');
+    }
+    function isObservationCurrent(result) {
+        try { assertObservation(result); return true; } catch (_) { return false; }
+    }
+    function observeSource(options) {
+        return withNativeReadScope(() => {
+            const operation = observationOperation(options), runtime = operation.model.view;
+            const attempts = runtime.logicalRemapRetryCount;
+            return observationResult(operation, { mode: runtime.profile.pageMode,
+                needsRemapping: Boolean(runtime.pageMappingStale), remapAttempts: attempts }, () => {
+                if (runtime.logicalRemapRetryCount !== attempts) throw initializationError('NATIVE_SOURCE_REPLACED',
+                    'native-observation', 'Native remapping observation changed');
+            });
+        });
+    }
+    function pageCards(options) {
+        return withNativeReadScope(() => {
+            const operation = observationOperation(options);
+            const { section, scroller, track } = operation.binding;
+            const page = selectedPage(section);
+            operation.guard();
+            if (Number.isFinite(options.page) && options.page !== page) throw initializationError('NATIVE_SOURCE_REPLACED',
+                'native-observation', 'Mounted native page changed before preparation');
+            const columns = Math.max(1, options.columns || 1);
+            const slots = options.window === 'viewport' ? viewportPageSlots(scroller, track, columns) : currentPageSlots(scroller, track);
+            const mode = operation.model.view.profile.pageMode;
+            const tail = mode === 'logical'
+                ? wrappedTailLogicalPageInfo(logicalSlotPositions(slots, options.totalCount || 0), options.totalCount || 0, columns) : null;
+            const revision = operation.model.revision;
+            const cards = Object.freeze(slots.map((slot, index) => Object.freeze({ source: sourceHandle(operation.binding, slot, page),
+                inPage: !(tail && tail.page === page && index >= tail.wrapIndex) })));
+            return observationResult(operation, { page, mode, cards }, () => {
+                if (operation.model.revision !== revision || selectedPage(section) !== page) throw initializationError('NATIVE_SOURCE_REPLACED',
+                    'native-observation', 'Observed native page mapping changed');
+                for (const entry of cards) assertSource(entry.source);
+            });
+        });
     }
 
     function getModel(section) {
@@ -1930,7 +2011,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                     options.canonicalTransform || '', options.sessionToken ?? null);
         },
         mountedBootstrap: collection.mountedBootstrap, anchorPageZero, visibleVideoIds: currentPageVideoIds,
-        resolveCard, mountedCard, isSourceCurrent, assertSource, viewportSlots: viewportPageSlots,
+        resolveCard, mountedCard, isSourceCurrent, assertSource,
         refreshMapping, isMappingCurrent, assertMapping,
         collect: options => options.mode === 'mounted-single-page' ? collection.collectMounted(options) : collection.collect(options),
         resetSource() { clearBinding(); collection.resetDiagnostics(); models = new WeakMap(); nativeReadScope = null; },
@@ -1942,6 +2023,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         markCycle: section => modelForWrite(section)?.markCycle(),
         completeCollection: (section, pages) => modelForWrite(section)?.finishCollection(pages),
         prepareSource, acceptCollection, isPreparationCurrent, assertPreparation,
+        observeSource, pageCards, assertObservation, isObservationCurrent,
         anchorAfterDelta: (section, facts) => modelForWrite(section)?.anchor(facts),
         markMappingStale: section => modelForWrite(section)?.markStale(),
         deferMapping: section => modelForWrite(section)?.deferMapping(),

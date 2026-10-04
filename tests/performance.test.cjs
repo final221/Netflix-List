@@ -23,6 +23,7 @@ const { carouselPayload, atom, reference, viewingVideo } = require('./helpers/fi
 // Generated-bundle startup and lifecycle are covered separately in bundle.test.js.
 const { source, declaration } = require('./helpers/legacy-source.cjs');
 const privateNavigationFunctions = new Set(['createLogicalMoveSignal', 'waitLogicalPageChange', 'waitPageByPolling', 'waitPage', 'waitForScriptMoveSettle']);
+const fixtureModelReads = new Set(['getCarouselDomRuntime', 'logicalSlotPositions', 'wrappedTailLogicalPageInfo']);
 const migratedAdapterFunctions = new Set(['getHtmlLanguage', 'getNetflixLanguage', 'netflixModelData',
     'graphqlData', 'viewingRequestContext', 'nativeCardIdentity', 'videoIdFromHref', 'decodeTrackingContext',
     'videoIdFromToggleContext', 'findMyListSection', 'itemFromSlot']);
@@ -91,6 +92,8 @@ function mountNativeControls(section, mode = 'logical') {
     indicator.setAttribute('data-indicator-selected', 'true');
     section.querySelector = selector => {
         const right = mode === 'indicator' ? '[data-uia="carousel-right-button"]' : '[data-uia="carousel-hawkins-right-button"]';
+        if (/^\[data-uia="carousel-(?:hawkins-)?(?:left|right)-button"\]$/.test(selector) &&
+            selector.includes('hawkins') !== (mode === 'logical')) return null;
         return selector === right ? control : query(selector);
     };
     section.querySelectorAll = selector => selector === '[data-uia="carousel-page-indicator-item"]'
@@ -152,7 +155,7 @@ function environment(names, overrides = {}) {
         'startImageResourceDiagnostics', 'stopImageResourceDiagnostics', 'recordImageResourceEntries',
         'responsiveViewportSignature', 'responsiveLayoutMatches',
         'cancelResizeHover', 'handleTargetResize', 'handleRelevantTargetDocumentMutation', 'recoverNativeInitialization', ...names]) {
-        if (!migratedAdapterFunctions.has(name) && !privateNavigationFunctions.has(name)) vm.runInContext(declaration(name), c);
+        if (!migratedAdapterFunctions.has(name) && !privateNavigationFunctions.has(name) && !fixtureModelReads.has(name)) vm.runInContext(declaration(name), c);
     }
     const location = c.location || { origin: 'https://www.netflix.com', href: 'https://www.netflix.com/browse/my-list' };
     const document = c.document || {};
@@ -223,6 +226,10 @@ function environment(names, overrides = {}) {
         if (!c.nativeCarousel.diagnostics().discoveryActive) c.nativeCarousel.startDiscovery();
         c.nativeDiscoveryObservers.at(-1).callback(mutations);
     };
+    c.getCarouselDomRuntime ||= section => c.nativeCarousel.model(section);
+    c.logicalSlotPositions ||= (...args) => c.nativeCarousel.positions(...args);
+    c.wrappedTailLogicalPageInfo ||= (...args) => c.nativeCarousel.wrappedTail(...args);
+    vm.runInContext(declaration('nativeSourceObservation'), c);
     if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
     Object.defineProperty(c, 'nativeReadScope', { get: () => c.nativeCarousel.diagnostics().readScopeActive ? true : null });
     // Supplementary characterization of private acknowledgement resources. Full
@@ -304,6 +311,7 @@ function preparedHoverEnvironment(options = {}) {
     const sourceSlot = new Element('source');
     const card = new Element('native-card', sourceSlot);
     card.href = '/watch/123';
+    card.setAttribute('tabindex', '0');
     card.dispatchEvent = event => { events.push(event); return true; };
     sourceSlot.querySelector = () => card;
     sourceSlot.cloneNode = () => new Element('fresh');
@@ -354,6 +362,9 @@ function preparedHoverEnvironment(options = {}) {
     e.c.sourceState.layout = { columns: 6 };
     e.c.sourceState.items = [e.clone.__tmMyListItem];
     sourceSlot.parentElement = e.c.sourceState.track;
+    mountNativeControls(e.c.sourceState.section, 'indicator');
+    e.c.netflixDom = { ...e.c.netflixDom, filledSlots: () => [sourceSlot], directSlots: () => [sourceSlot],
+        findTrack: () => e.c.sourceState.track };
     return {
         ...e, calls, logs, warnings, events, sourceSlot, card, current: () => current,
         start: () => e.c.activateClone(e.clone.__tmMyListItem, e.clone, pointer(e.clone), 1)
@@ -1964,6 +1975,71 @@ test('a graft without React assignments is not marked ready for later clone reus
     // invent a fallback or incorrectly mark the clone ready for reuse.
     assert.equal(e.calls.preparations, 1);
     assert.equal(e.events.length, 4);
+});
+
+test('native page preparation rejects replacement during graft before attaching or publishing the fresh card', async () => {
+    for (const replacement of ['binding', 'parent', 'card']) {
+        const e = preparedHoverEnvironment();
+        vm.runInContext(declaration('createRouteSessionCancelledError'), e.c);
+        const state = e.c.sourceState;
+        let attachments = 0, associations = 0, publications = 0;
+        e.c.ensureGridHoverBehavior = () => attachments++;
+        e.c.associateGridHoverItem = () => associations++;
+        e.c.setGridClone = () => publications++;
+        e.c.resolveExpectedPageSourceItem = async () => {
+            const source = e.c.nativeCarousel.mountedCard({ section: state.section, scroller: state.scroller,
+                track: state.track, item: e.clone.__tmMyListItem, sessionToken: 1 });
+            return { status: 'found', source, slot: source.slot, page: source.page };
+        };
+        e.c.netflixReactHover.graftTreeToClone = () => {
+            if (replacement === 'binding') {
+                e.c.nativeCarousel.clearBinding();
+                e.c.nativeCarousel.borrowBinding(state.section, state.scroller, state.track);
+            } else if (replacement === 'parent') e.c.sourceState = { ...state, itemMap: new Map() };
+            else e.card.href = '/watch/999';
+            return { fiberAssignments: 1, propsAssignments: 1 };
+        };
+        await assert.rejects(e.c.prepareMountedPage(0, e.clone.__tmMyListItem, pointer(e.clone), 1, 1),
+            { code: replacement === 'parent' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'NATIVE_SOURCE_REPLACED' });
+        assert.equal(attachments, 0, replacement);
+        assert.equal(associations, 0, replacement);
+        assert.equal(publications, 0, replacement);
+        assert.equal(e.clone.isConnected, true, replacement);
+        assert.equal(e.current(), e.clone, replacement);
+        assert.equal(e.events.length, 0, replacement);
+        assert.equal(e.frames.size, 0, replacement);
+        assert.equal(e.timers.size, 0, replacement);
+    }
+});
+
+test('differential reindexing rejects an obsolete source observation before copying the next item', () => {
+    for (const replacement of ['binding', 'parent']) {
+        const e = preparedHoverEnvironment();
+        vm.runInContext(declaration('createRouteSessionCancelledError'), e.c);
+        vm.runInContext(declaration('reindexLegacyItemsAfterDelta'), e.c);
+        e.c.clearLegacyEmptyState = () => {};
+        e.c.formatHeaderParts = () => ({});
+        e.c.updateStatus = () => null;
+        const state = e.c.sourceState;
+        const items = [e.clone.__tmMyListItem, { videoId: '456', page: 9 }];
+        state.items = items;
+        state.cloneMap = new Map(items.map(item => [item.videoId, new Element('clone-' + item.videoId)]));
+        let copies = 0;
+        e.c.copyItemAttributes = () => {
+            copies++;
+            if (replacement === 'parent') e.c.sourceState = { ...state, itemMap: new Map() };
+            else {
+                e.c.nativeCarousel.clearBinding();
+                e.c.nativeCarousel.borrowBinding(state.section, state.scroller, state.track);
+            }
+        };
+        assert.throws(() => e.c.reindexLegacyItemsAfterDelta(),
+            { code: replacement === 'parent' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'NATIVE_SOURCE_REPLACED' });
+        assert.equal(copies, 1, replacement);
+        assert.equal(items[1].page, 9, replacement);
+        assert.equal(state.itemMap.has('456'), false, replacement);
+        assert.equal(e.c.sourceState.itemMap.has('456'), false, replacement);
+    }
 });
 
 test('an order-mismatch dialog stops preparation without an extra hover retry', async () => {
@@ -4190,7 +4266,7 @@ test('SPA indicator and not-yet-mounted modes bootstrap one page without optiona
     for (const mounted of [true, false]) {
         const e = fetchEnvironment(150);
         e.c.targetSessionEntryKind = 'spa';
-        e.c.getCarouselDomRuntime = () => ({ profile: { pageMode: 'indicator' } });
+        mountNativeControls(e.c.sourceState.section, 'indicator');
         if (!mounted) {
             e.scroller.id = 'delayed-scroller';
             e.c.waitForNativeSource = async () => ({ found: true, scroller: e.scroller, track: e.track });
@@ -5098,7 +5174,7 @@ test('group synchronization is idempotent and rebuild preserves expansion, membe
 test('remove and Undo work inside watched groups and new titles stay visible until classified', async () => {
     const e = await viewingEnvironment();
     await e.start();
-    e.c.getCarouselDomRuntime = () => ({ profile: { pageMode: 'indicator' } });
+    mountNativeControls(e.c.sourceState.section, 'indicator');
     vm.runInContext(declaration('reindexLegacyItemsAfterDelta'), e.c);
     assert.equal(e.c.applyLegacyRemoval('1'), true);
     assert.deepEqual(completedViewingIds(e), ['4']);
@@ -5118,7 +5194,7 @@ test('remove and Undo work inside watched groups and new titles stay visible unt
 test('native order alignment preserves separate group order without changing Netflix membership', async () => {
     const e = await viewingEnvironment();
     await e.start();
-    e.c.getCarouselDomRuntime = () => ({ profile: { pageMode: 'indicator' } });
+    mountNativeControls(e.c.sourceState.section, 'indicator');
     e.c.visibleNativeItems = () => [{ videoId: '4' }, { videoId: '3' }, { videoId: '1' }];
     vm.runInContext(declaration('reindexLegacyItemsAfterDelta'), e.c);
     vm.runInContext(declaration('alignLegacyVisiblePageOrder'), e.c);
@@ -5707,7 +5783,7 @@ test('type filtering is available while series episode requests are still loadin
 test('filtered counts and card order stay correct through removal, Undo and unknown-type additions', async () => {
     const e = await viewingEnvironment();
     await e.start();
-    e.c.getCarouselDomRuntime = () => ({ profile: { pageMode: 'indicator' } });
+    mountNativeControls(e.c.sourceState.section, 'indicator');
     vm.runInContext(declaration('reindexLegacyItemsAfterDelta'), e.c);
     assert.equal(e.c.applyLegacyRemoval('2'), true);
     assert.deepEqual(filteredViewingIds(e), ['3']);
@@ -7662,6 +7738,7 @@ test('six mounted cards rebuild only the hover target, and another card prepares
         const slot = new Element('source-' + i, e.c.sourceState.track);
         const card = new Element('card-' + i, slot);
         card.href = '/watch/' + item.videoId;
+        card.setAttribute('tabindex', '0');
         card.dispatchEvent = () => true;
         slot.querySelector = () => card;
         slot.cloneNode = () => new Element('fresh-' + i);
@@ -7672,6 +7749,7 @@ test('six mounted cards rebuild only the hover target, and another card prepares
     for (const item of items) clones.get(item.videoId).__tmMyListItem = item;
     e.c.sourceState.items = items;
     e.c.currentPageSlots = () => slots;
+    e.c.netflixDom = { ...e.c.netflixDom, filledSlots: () => slots, directSlots: () => slots };
     e.c.resolveExpectedPageSourceItem = async item => ({ status: 'found', slot: slots[items.indexOf(item)], slots, page: 0 });
     e.c.findItemForSourceSlot = slot => items[slots.indexOf(slot)];
     e.c.findActiveSourceSlot = item => slots[items.indexOf(item)];
@@ -7997,9 +8075,21 @@ test('target-only hover preparation still rejects a target in the wrapped tail b
     const otherItems = Array.from({ length: 5 }, (_, i) => ({ videoId: String(200 + i), page: 6 }));
     const slots = otherItems.map((_, i) => new Element('tail-' + i, e.c.sourceState.track));
     slots.push(e.sourceSlot);
-    e.c.getCarouselDomRuntime = () => ({ profile: { pageMode: 'logical' } });
-    e.c.logicalSlotPositions = () => [32, 33, 34, 35, 36, 0];
-    e.c.wrappedTailLogicalPageInfo = () => ({ page: 6, wrapIndex: 5 });
+    mountNativeControls(e.c.sourceState.section, 'logical');
+    const indices = [32, 33, 34, 35, 36, 0];
+    slots.forEach((slot, index) => {
+        slot.__reactFiber$tail = { memoizedProps: { itemIndex: indices[index], totalCount: 37 }, return: null };
+        if (slot !== e.sourceSlot) {
+            const card = new Element('card', slot);
+            card.href = '/watch/' + otherItems[index].videoId;
+            slot.querySelector = () => card;
+        }
+    });
+    e.c.netflixDom.filledSlots = e.c.netflixDom.directSlots = () => slots;
+    e.c.sourceState.items = [e.clone.__tmMyListItem, ...Array.from({ length: 36 }, (_, i) => ({ videoId: String(i + 200) }))];
+    e.c.nativeCarousel.refreshMapping({ mode: 'delta', section: e.c.sourceState.section,
+        scroller: e.c.sourceState.scroller, track: e.c.sourceState.track, totalCount: 37, columns: 6,
+        sessionToken: 1, pageHintForVideoId: () => 6 });
     e.c.resolveExpectedPageSourceItem = async () => ({ status: 'found', slot: e.sourceSlot, slots, page: 6 });
     e.c.findItemForSourceSlot = slot => slot === e.sourceSlot ? e.clone.__tmMyListItem : otherItems[slots.indexOf(slot)];
     assert.equal(await e.c.prepareMountedPage(6, e.clone.__tmMyListItem, pointer(e.clone), 1, 1), null);

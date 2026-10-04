@@ -615,6 +615,89 @@ test('source preparation and acceptance check the captured caller before publish
     }
 });
 
+test('source observations expose only validated mode and remapping facts without writable model state', () => {
+    const e = mountedEnvironment();
+    const current = e.carousel.observeSource(e.options);
+    assert.deepEqual(current, { mode: 'logical', needsRemapping: false, remapAttempts: 0 });
+    assert.ok(Object.isFrozen(current));
+    assert.equal(e.carousel.isObservationCurrent(current), true);
+    assert.equal(e.carousel.isObservationCurrent({ ...current }), false);
+    e.carousel.refreshMapping({ ...e.options, mode: 'delta', totalCount: 6, columns: 3 });
+    assert.equal(e.carousel.isObservationCurrent(current), false);
+    const stale = e.carousel.observeSource(e.options);
+    assert.equal(stale.needsRemapping, true);
+    assert.equal(stale.profile, undefined);
+    assert.equal(stale.signatureToPage, undefined);
+    const indicator = navigationEnvironment({ mode: 'indicator' });
+    assert.equal(indicator.carousel.observeSource({ section: indicator.section, scroller: indicator.scroller,
+        track: indicator.track, sessionToken: indicator.scope.token }).mode, 'indicator');
+});
+
+test('page observations own wrapped-tail inclusion and borrow current cards through source handles', () => {
+    const e = mountedEnvironment();
+    const indices = [6, 7, 0];
+    e.slots.forEach((slot, index) => { slot.__reactFiber$mounted.memoizedProps.itemIndex = indices[index]; });
+    const mapping = e.carousel.refreshMapping({ ...e.options, mode: 'delta', totalCount: 8, columns: 3,
+        pageHintForVideoId: () => 2 });
+    assert.equal(mapping.currentPage, 2);
+    const result = e.carousel.pageCards({ ...e.options, page: 2, totalCount: 8, columns: 3, window: 'viewport' });
+    assert.equal(result.page, 2);
+    assert.equal(result.mode, 'logical');
+    assert.deepEqual(result.cards.map(card => card.inPage), [true, true, false]);
+    assert.deepEqual(result.cards.map(card => card.source.itemIndex), indices);
+    assert.deepEqual(result.cards.map(card => card.source.slot), e.slots);
+    assert.ok(Object.isFrozen(result) && Object.isFrozen(result.cards) && result.cards.every(Object.isFrozen));
+    assert.equal(e.carousel.isObservationCurrent(result), true);
+    assert.equal(e.carousel.isObservationCurrent({ ...result }), false);
+    assert.deepEqual(e.directions, []);
+    e.slots[2].querySelector('a').href = 'https://www.netflix.com/title/99';
+    assert.equal(e.carousel.isObservationCurrent(result), false, 'buffer recycling also invalidates the observed inclusion rule');
+    assert.throws(() => e.carousel.assertObservation(result), { code: 'NATIVE_SOURCE_REPLACED' });
+});
+
+test('page observations reject an obsolete resolved handle or admission rather than borrowing a new source', () => {
+    for (const change of ['binding', 'mapping', 'caller', 'route']) {
+        const e = mountedEnvironment();
+        const source = e.carousel.mountedCard({ ...e.options, item: { videoId: '1' } });
+        const binding = e.carousel.borrowBinding(e.section, e.scroller, e.track);
+        let current = true;
+        const options = { ...e.options, source, binding, totalCount: 3, columns: 3, assertCurrent() {
+            if (!current) throw Object.assign(new Error('caller replaced'), { code: 'CALLER_REPLACED' });
+        } };
+        const observation = e.carousel.pageCards(options);
+        if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
+        if (change === 'mapping') e.carousel.refreshMapping({ ...e.options, mode: 'delta', totalCount: 6, columns: 3 });
+        if (change === 'caller') current = false;
+        if (change === 'route') e.scope.begin();
+        assert.equal(e.carousel.isObservationCurrent(observation), false);
+        assert.throws(() => e.carousel.pageCards(options), { code: change === 'caller' ? 'CALLER_REPLACED' :
+            change === 'route' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'NATIVE_SOURCE_REPLACED' });
+        assert.equal(e.scheduler.timers.size, 0);
+    }
+});
+
+test('page observation validates its selected page and preserves current versus viewport selection', () => {
+    const e = mountedEnvironment();
+    e.slots[1].querySelector('a').setAttribute('tabindex', '-1');
+    e.slots[1].getBoundingClientRect = () => ({ left: 1000, right: 1100, width: 100, height: 100 });
+    const current = e.carousel.pageCards({ ...e.options, totalCount: 3, columns: 3, window: 'current' });
+    const viewport = e.carousel.pageCards({ ...e.options, totalCount: 3, columns: 1, window: 'viewport' });
+    assert.deepEqual(current.cards.map(entry => entry.source.videoId), ['1', '3']);
+    assert.deepEqual(viewport.cards.map(entry => entry.source.videoId), ['1']);
+    assert.throws(() => e.carousel.pageCards({ ...e.options, page: 1, totalCount: 3, columns: 3 }), { code: 'NATIVE_SOURCE_REPLACED' });
+    const indicator = navigationEnvironment({ mode: 'indicator' });
+    const observed = indicator.carousel.pageCards({ section: indicator.section, scroller: indicator.scroller,
+        track: indicator.track, sessionToken: indicator.scope.token, totalCount: 3, columns: 1 });
+    indicator.setPage(1);
+    assert.equal(indicator.carousel.isObservationCurrent(observed), false);
+    indicator.pageDom.filledSlots = () => [];
+    const empty = indicator.carousel.pageCards({ section: indicator.section, scroller: indicator.scroller,
+        track: indicator.track, sessionToken: indicator.scope.token, totalCount: 3, columns: 1 });
+    assert.deepEqual(empty.cards, []);
+    indicator.setPage(2);
+    assert.equal(indicator.carousel.isObservationCurrent(empty), false, 'an empty window still belongs to its selected page');
+});
+
 test('delta mapping anchors native positions or visible title hints synchronously without rewriting membership', () => {
     const e = mountedEnvironment();
     const hints = new Map([['1', 1], ['2', 1], ['3', 0]]);
