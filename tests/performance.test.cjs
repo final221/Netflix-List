@@ -247,6 +247,7 @@ function environment(names, overrides = {}) {
     vm.runInContext(declaration('nativeSourceDiagnostics'), c);
     vm.runInContext(declaration('nativePageObservation'), c);
     vm.runInContext(declaration('nativeLayoutObservation'), c);
+    vm.runInContext(declaration('nativeDiscoveryObservation'), c);
     if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
     Object.defineProperty(c, 'nativeReadScope', { get: () => c.nativeCarousel.diagnostics().readScopeActive ? true : null });
     // Supplementary characterization of private acknowledgement resources. Full
@@ -2788,7 +2789,7 @@ test('Hawkins logical hover navigation avoids boundary detours while legacy cycl
 });
 
 const observerFunctions = [
-    'handleRelevantTargetDocumentMutation', 'nativeBindingChanged', 'ensureLiveNativeBinding'
+    'handleRelevantTargetDocumentMutation', 'ensureLiveNativeBinding'
 ];
 function observerEnvironment() {
     const ancestor = new Element('ancestor');
@@ -2799,6 +2800,7 @@ function observerEnvironment() {
     const grid = new Element('grid', section);
     const status = new Element('status', section);
     section.querySelector = () => scroller;
+    section.querySelectorAll = () => [];
     let reads = 0, adoptions = 0;
     const runs = [];
     const e = environment(observerFunctions, {
@@ -2807,8 +2809,8 @@ function observerEnvironment() {
         location: { href: 'same' }, lastObservedUrl: 'same', initializationBlockedSessionToken: null,
         sourceState: { section, scroller, track, grid, empty: false, items: [1] }, completedSection: section,
         waitingForNativeEmpty: false, document: { getElementById: id => id === 'grid' ? grid : null, querySelector: () => host },
-        findMyListSection: () => section, netflixDom: { findTrack: () => track },
-        readNativeMyListDomState: () => { reads++; return { section, scroller, track }; },
+        findMyListSection: () => section, netflixDom: { findTrack: () => track,
+            directSlots: () => [], filledSlots: () => { reads++; return []; } },
         adoptLiveMyListSection: () => { adoptions++; return false; },
         scheduleRun: (...args) => runs.push(args)
     });
@@ -2840,13 +2842,25 @@ test('track replacement retains the full binding adoption path', async () => {
     const replacement = new Element('new-track', e.scroller);
     e.track.isConnected = false;
     e.c.netflixDom.findTrack = () => replacement;
-    e.c.readNativeMyListDomState = () => ({ section: e.section, scroller: e.scroller, track: replacement });
     let adoptions = 0;
     e.c.adoptLiveMyListSection = binding => { adoptions++; e.c.attachNativeBinding(e.c.sourceState, binding.section, binding.scroller, binding.track); return true; };
     e.c.handleTargetDocumentMutation([mutation(e.scroller, [replacement], [e.track])]);
     await e.frame();
     assert.equal(adoptions, 1);
     assert.equal(e.c.sourceState.track, replacement);
+});
+
+test('discovery during observer delivery rejects a replaced parent before adoption or return', () => {
+    const e = observerEnvironment();
+    let replacement;
+    e.c.netflixDom.findTrack = () => {
+        replacement = e.c.sourceState = { ...e.c.sourceState };
+        return e.track;
+    };
+    assert.equal(e.c.ensureLiveNativeBinding('replacement', true), null);
+    assert.equal(e.adoptions(), 0);
+    assert.equal(e.c.sourceState, replacement);
+    assert.equal(e.frames.size, 0);
 });
 
 test('removal of the script grid still schedules recovery', async () => {
@@ -2864,7 +2878,7 @@ test('native empty transitions bypass the identity-only shortcut', async () => {
     e.c.waitingForNativeEmpty = true;
     e.c.sourceState.empty = true;
     e.c.sourceState.items = [];
-    e.c.readNativeMyListDomState = () => ({ section: e.section, scroller: null, track: null });
+    e.section.querySelector = () => null;
     let adoptedEmpty = 0;
     e.c.adoptLiveEmptyMyListSection = () => adoptedEmpty++;
     e.c.handleTargetDocumentMutation([mutation(e.section, [new Element('native-empty')], [e.scroller])]);
@@ -2919,7 +2933,7 @@ const nativeReadFunctions = [
     'getCarouselDomRuntime', 'pageCount', 'selectedPage',
     'currentPageSlots', 'visibleSignature', 'netflixItemIndexFromSlot', 'normalizeNetflixLogicalIndex',
     'logicalSlotPositions', 'expectedLogicalIndicesForPage', 'logicalPageFromSlotPositions',
-    'nativeLogicalPageState', 'forceLogicalPageSignature', 'readNativeMyListDomState',
+    'nativeLogicalPageState', 'forceLogicalPageSignature',
     'nativeCarouselReadiness', 'carouselMoveButton'
 ];
 function nativeReadEnvironment(mode = 'logical') {
@@ -3067,7 +3081,7 @@ test('ready hover and frame replay share reads while refreshing original geometr
     clone.setAttribute('data-tm-backed-page', '1');
     clone.getBoundingClientRect = () => ({ left: 900, width: 100 });
     e.c.sourceState.grid = grid;
-    e.c.ensureLiveNativeBinding = () => e.c.readNativeMyListDomState();
+    e.c.ensureLiveNativeBinding = () => e.c.nativeDiscoveryObservation();
     e.c.findItemForSourceSlot = () => item;
     e.c.videoIdFromHref = href => href?.split('/').at(-1);
     e.c.prepareMountedPage = () => { throw new Error('Ready source should not prepare'); };
@@ -3127,7 +3141,7 @@ test('binding adoption clears old grafts and does not retain reads collected bef
     });
     e.c.withNativeReadScope(() => {
         assert.equal(e.c.nativeFilledSlots(replacement)[0].index, 0);
-        assert.equal(e.c.adoptLiveMyListSection({ section: e.section, scroller: nextScroller, track: replacement }), true);
+        assert.equal(e.c.adoptLiveMyListSection(e.c.nativeDiscoveryObservation({ bindingOnly: true })), true);
         assert.equal(e.c.nativeFilledSlots(replacement)[0].index, 6);
         assert.equal(e.c.selectedPage(e.section), 1);
     });
@@ -3306,6 +3320,7 @@ function constructionEnvironment() {
         'itemKey', 'clearRunningSession', 'retryPendingMyListMutations', 'tryApplyMyListMutation',
         'applyLegacyRemoval', 'applyLegacyAddition', 'disposeMyListMutation',
         'cardSourceForItem', 'createItemClone', 'releaseItemCardSnapshot',
+        'alignLegacyVisiblePageOrder',
         'rememberUndoEntry', 'pruneUndoEntries', 'normalizeNetflixUiText', 'videoIdFromHref',
         'itemFromSlot', 'visibleNativeItems', 'findNativeMyListItemByVideoId'
     ], {
@@ -3318,6 +3333,7 @@ function constructionEnvironment() {
             createElement: () => { const node = new ConstructionNode(); created.push(node); return node; }
         },
         sourceState: { section, scroller, track, grid: oldGrid, status, layout, items: [], cloneMap: new Map(), itemMap: new Map() },
+        findMyListSection: () => null,
         pendingMyListMutations: new Map(), recentRemovedMyListItems: new Map(),
         UNDO_ENTRY_TTL_MS: 30000,
         running: true, runningSessionToken: 1, responsiveRefreshing: false,
@@ -3327,7 +3343,7 @@ function constructionEnvironment() {
         responsiveSignature: () => 'geometry', responsivePageShape: () => 'pages',
         resizeObserver: null, ResizeObserver: class { observe() {} disconnect() {} }, viewOriginalMyList: true,
         layoutSummary: value => value, scheduleResponsiveRefresh() {},
-        refreshNativeSectionAfterDelta: () => ({}), readNativeMyListDomState: () => ({}),
+        refreshNativeSectionAfterDelta: () => e.c.nativeDiscoveryObservation({ bindingOnly: true }),
         netflixDom: { directSlots: track => track.children },
         currentPageSlots: (_, track) => track.children, findAnyStandardCardItemByVideoId: () => null,
         reindexLegacyItemsAfterDelta() {},
@@ -4429,7 +4445,17 @@ test('native order reads allocate no card trees and native additions capture onl
     const items = e.items(6);
     for (const item of items) e.track.appendChild(item.snapshot);
     const before = e.template.cloneCounter.count;
-    const live = { scroller: e.scroller, track: e.track, selectedPage: 2 };
+    e.c.findMyListSection = () => e.section;
+    e.c.netflixDom.findTrack = () => e.track;
+    mountNativeControls(e.section, 'indicator');
+    const queryAll = e.section.querySelectorAll.bind(e.section);
+    const indicators = Array.from({ length: 3 }, (_, index) => {
+        const indicator = new Element('indicator', e.section);
+        if (index === 2) indicator.setAttribute('data-indicator-selected', 'true');
+        return indicator;
+    });
+    e.section.querySelectorAll = selector => selector === '[data-uia="carousel-page-indicator-item"]' ? indicators : queryAll(selector);
+    const live = e.c.nativeDiscoveryObservation();
     assert.deepEqual(Array.from(e.c.visibleNativeItems(live), item => item.videoId), ['1', '2', '3', '4', '5', '6']);
     assert.equal(e.template.cloneCounter.count, before);
     assert.equal(e.c.findNativeMyListItemByVideoId('missing', live), null);
@@ -4439,6 +4465,69 @@ test('native order reads allocate no card trees and native additions capture onl
     assert.equal(found.page, 2);
     assert.equal(found.snapshot.markup, 'native-markup-6');
     assert.equal(e.template.cloneCounter.count, before + 1);
+});
+
+test('a native mutation capture replaced during cloning preserves its intent and never publishes into the new parent', () => {
+    const e = constructionEnvironment();
+    const item = e.items(1)[0];
+    e.track.appendChild(item.snapshot);
+    e.c.findMyListSection = () => e.section;
+    e.c.netflixDom.findTrack = () => e.track;
+    const mutation = { videoId: '1', action: 'add' };
+    e.c.pendingMyListMutations.set('1', mutation);
+    e.c.running = false;
+    const clone = item.snapshot.cloneNode.bind(item.snapshot);
+    let replacement, publications = 0;
+    item.snapshot.cloneNode = (...args) => { replacement = e.c.sourceState = { ...e.c.sourceState }; return clone(...args); };
+    e.c.applyLegacyAddition = () => { publications++; return true; };
+    assert.equal(e.c.tryApplyMyListMutation(mutation), false);
+    assert.equal(e.c.sourceState, replacement);
+    assert.equal(publications, 0);
+    assert.equal(e.c.pendingMyListMutations.get('1'), mutation);
+    assert.equal(e.c.sourceState.items.length, 0);
+});
+
+test('mutation candidate callbacks reject changed parent, route or intent before publication', () => {
+    for (const change of ['parent', 'route', 'intent']) {
+        const e = constructionEnvironment();
+        const candidate = e.items(1)[0];
+        const mutation = { videoId: '1', action: 'add', fallbackItem: candidate };
+        const replacementIntent = { ...mutation };
+        e.c.pendingMyListMutations.set('1', mutation);
+        e.c.running = false;
+        let publications = 0;
+        e.c.cardSourceForItem = () => {
+            if (change === 'parent') e.c.sourceState = { ...e.c.sourceState };
+            if (change === 'route') e.c.sessionScope.begin();
+            if (change === 'intent') e.c.pendingMyListMutations.set('1', replacementIntent);
+            return candidate.snapshot;
+        };
+        e.c.applyLegacyAddition = () => { publications++; return true; };
+        assert.equal(e.c.tryApplyMyListMutation(mutation), false, change);
+        assert.equal(publications, 0, change);
+        assert.equal(e.c.pendingMyListMutations.get('1'), change === 'intent' ? replacementIntent : mutation);
+        assert.equal(e.c.sourceState.items.length, 0);
+    }
+});
+
+test('post-mutation discovery replacement preserves queued intent and never aligns the new parent', () => {
+    for (const action of ['add', 'remove']) {
+        const e = constructionEnvironment();
+        const mutation = { videoId: '1', action, fallbackItem: e.items(1)[0] };
+        e.c.pendingMyListMutations.set('1', mutation);
+        e.c.running = false;
+        e.c.applyLegacyAddition = e.c.applyLegacyRemoval = () => true;
+        let reads = 0, alignments = 0, replacement;
+        e.c.refreshNativeSectionAfterDelta = () => {
+            if (++reads === 2) replacement = e.c.sourceState = { ...e.c.sourceState };
+            return e.c.nativeDiscoveryObservation({ bindingOnly: true });
+        };
+        e.c.alignLegacyVisiblePageOrder = () => { alignments++; };
+        assert.equal(e.c.tryApplyMyListMutation(mutation), false, action);
+        assert.equal(e.c.sourceState, replacement);
+        assert.equal(alignments, 0);
+        assert.equal(e.c.pendingMyListMutations.get('1'), mutation);
+    }
 });
 
 function nativeCollectionEnvironment(mode, windows, totalCount = 4) {
@@ -8124,6 +8213,48 @@ test('native initialization replacement recovery stops after one attempt and ign
     assert.equal(e.c.performanceDiagnostics.nativeRecovery.exhausted, 1);
 });
 
+test('obsolete discovery recovery preserves the replacement parent or failure and its retry budget', async () => {
+    for (const change of ['parent', 'failure', 'route']) {
+        const e = initializationEnvironment(6);
+        const scheduled = configureInitializationRecovery(e);
+        e.c.waitForNativeCarouselReady = async () => ({ ready: false, reason: 'timeout', elapsedMs: 8000 });
+        await e.c.runScript(1);
+        const replacementTrack = e.scroller.appendChild(new ConstructionNode('replacement'));
+        e.c.netflixDom.findTrack = () => replacementTrack;
+        let replacement;
+        e.c.cancelPendingGridHover = () => {
+            if (change === 'parent') replacement = e.c.sourceState = { ...e.c.sourceState };
+            if (change === 'failure') replacement = e.c.nativeInitializationFailure = { ...e.c.nativeInitializationFailure };
+            if (change === 'route') e.c.sessionScope.begin();
+        };
+        assert.equal(e.c.recoverNativeInitialization(1, 'replacement'), false, change);
+        if (change === 'parent') assert.equal(e.c.sourceState, replacement);
+        if (change === 'failure') assert.equal(e.c.nativeInitializationFailure, replacement);
+        assert.equal(e.c.performanceDiagnostics.nativeRecovery.attempts, 0);
+        assert.equal(scheduled.length, 0);
+    }
+});
+
+test('initial discovery replacement retries before cleanup or provisional publication', async () => {
+    for (const changeAt of [2, 3, 5]) {
+        const e = initializationEnvironment(6);
+        let reads = 0, cleanups = 0, frames = 0, retries = 0, replacement;
+        e.c.netflixDom.findTrack = () => {
+            if (++reads === changeAt) replacement = e.c.sourceState = { ...e.c.sourceState };
+            return e.track;
+        };
+        e.c.cleanupOldArtifacts = () => cleanups++;
+        e.c.placeLegacyFrame = () => frames++;
+        e.c.scheduleRun = () => retries++;
+        await e.c.runScript(1);
+        assert.equal(e.c.sourceState, replacement, changeAt);
+        assert.equal(frames, 0, changeAt);
+        assert.equal(cleanups, changeAt === 5 ? 1 : 0, changeAt);
+        assert.equal(retries, 1, changeAt);
+        assert.equal(e.c.initializationBlockedSessionToken, null);
+    }
+});
+
 test('detached reset restores original geometry descriptors before dropping source and clone references', () => {
     const e = constructionEnvironment();
     const slot = e.track.appendChild(new ConstructionNode('source'));
@@ -8671,7 +8802,11 @@ test('incoming layout replacement rejects adoption before releasing the current 
         layoutSummary: value => value, SECTION_ATTR: 'source', STATUS_ID: 'status', GRID_ID: 'grid', SYNTHETIC_SECTION_ID: 'synthetic'
     });
     scroller.insertAdjacentElement = status.insertAdjacentElement = () => {};
-    assert.throws(() => e.c.adoptLiveMyListSection({ section: incoming, scroller, track }), { code: 'NATIVE_SOURCE_REPLACED' });
+    e.c.findMyListSection = () => incoming;
+    incoming.querySelector = () => scroller;
+    e.c.netflixDom.findTrack = () => track;
+    const incomingObservation = e.c.nativeDiscoveryObservation({ bindingOnly: true });
+    assert.throws(() => e.c.adoptLiveMyListSection(incomingObservation), { code: 'NATIVE_SOURCE_REPLACED' });
     assert.equal(released, 0);
     assert.equal(e.c.sourceState.section, state.section);
 });

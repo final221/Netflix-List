@@ -245,14 +245,14 @@ function nativeReadEnvironment(mode = 'logical') {
 test('one native-state sample shares profile, filled-slot, rectangle, and React-index reads', () => {
     const e = nativeReadEnvironment();
     e.mount([12, 13, 14, 15, 16, 17]);
-    const state = e.carousel.observe();
+    const state = e.carousel.discoverSource();
     assert.equal(state.selectedPage, 2);
     assert.equal(state.currentPageCount, 6);
     assert.deepEqual(e.counts, { profile: 6, indicators: 1, filled: 1, rects: 7, indices: 6 });
     assert.equal(e.carousel.diagnostics().readScopeActive, false);
     e.resetCounts();
     e.mount([18, 19, 20, 21, 22, 23]);
-    assert.equal(e.carousel.observe().selectedPage, 3);
+    assert.equal(e.carousel.discoverSource().selectedPage, 3);
     assert.deepEqual(e.counts, { profile: 6, indicators: 1, filled: 1, rects: 7, indices: 6 });
 });
 
@@ -267,6 +267,114 @@ test('indicator selection and carousel generation refresh on the next sample', (
     e.mount([6, 7, 8, 9, 10, 11]);
     assert.equal(e.carousel.selectedPage(e.section), 1);
     assert.equal(e.carousel.model(e.section).profile.generation, 'generation2');
+});
+
+test('identity-only discovery admits connected references without native model, card, count or geometry work', () => {
+    const e = environment({ readGraphqlCount() { throw new Error('identity discovery must not read counts'); } });
+    e.scroller.classList.add('scroller');
+    const accepted = e.carousel.bind(e.section, e.scroller, e.track);
+    e.section.querySelector = selector => {
+        assert.equal(selector, '.scroller');
+        return e.scroller;
+    };
+    e.section.querySelectorAll = e.pageDom.directSlots = e.pageDom.filledSlots =
+        e.section.getBoundingClientRect = () => { throw new Error('identity discovery added detailed work'); };
+    const observed = e.carousel.discoverSource({ bindingOnly: true, sessionToken: e.scope.token });
+    assert.ok(Object.isFrozen(observed));
+    assert.equal(observed.matchesBinding, true);
+    assert.equal(observed.pages, undefined);
+    assert.equal(e.carousel.isObservationCurrent(observed), true);
+    assert.equal(e.carousel.currentBinding(), accepted);
+    assert.equal(e.scheduler.timers.size, 0);
+});
+
+test('discovery observations reject copies and changed route, binding, discovery, counts or caller ownership', () => {
+    for (const change of ['route', 'binding', 'discovery', 'count', 'parent']) {
+        const e = nativeReadEnvironment();
+        e.mount([0, 1, 2, 3, 4, 5]);
+        let current = true;
+        const observed = e.carousel.discoverSource({ sessionToken: e.scope.token, assertCurrent() {
+            if (!current) throw Object.assign(new Error('parent replaced'), { code: 'CALLER_REPLACED' });
+        } });
+        assert.equal(e.carousel.isObservationCurrent(observed), true);
+        assert.equal(e.carousel.isObservationCurrent({ ...observed }), false);
+        if (change === 'route') e.scope.begin();
+        if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
+        if (change === 'discovery') e.pageDom.findTrack = () => e.scroller.appendChild(new Element('div'));
+        if (change === 'count') e.shape.totalCount++;
+        if (change === 'parent') current = false;
+        assert.equal(e.carousel.isObservationCurrent(observed), false, change);
+        assert.equal(observed.graphqlCount, 600);
+    }
+});
+
+test('discovery preserves single-page DOM count precedence and missing versus incomplete source facts', () => {
+    const e = nativeReadEnvironment('indicator');
+    e.mount([0, 1, 2, 3, 4, 5]);
+    e.section.querySelectorAll('[data-uia="carousel-page-indicator-item"]').slice(1).forEach(node => node.remove());
+    const onePage = e.carousel.discoverSource();
+    assert.equal(onePage.domExactCount, 6);
+    assert.equal(onePage.graphqlCount, 600);
+    assert.equal(onePage.exactCount, 6);
+    e.pageDom.findTrack = () => null;
+    const incomplete = e.carousel.discoverSource();
+    assert.equal(incomplete.section, e.section);
+    assert.equal(incomplete.track, null);
+    assert.equal(incomplete.domExactCount, 0);
+    assert.equal(e.carousel.isObservationCurrent(onePage), false);
+    e.pageDom.findMyListSection = () => null;
+    const missing = e.carousel.discoverSource();
+    assert.equal(missing.section, null);
+    assert.equal(missing.domExactCount, null);
+    assert.equal(missing.exactCount, 600);
+    assert.equal(e.carousel.currentBinding().section, e.section, 'discovery never adopts');
+});
+
+test('admitted mounted capture clones only the matching card and rejects replacement during capture', () => {
+    const e = nativeReadEnvironment();
+    const slots = e.mount([0, 1, 2, 3, 4, 5]);
+    let clones = 0;
+    for (const slot of slots) {
+        slot.querySelector('a').setAttribute('data-uia', 'standard-card');
+        slot.querySelector('a').setAttribute('href', '/title/' + slot.index);
+        const clone = slot.cloneNode.bind(slot);
+        slot.cloneNode = (...args) => { clones++; return clone(...args); };
+    }
+    const discovery = e.carousel.discoverSource();
+    assert.equal(e.carousel.captureMountedItem({ discovery, videoId: 'missing' }), null);
+    assert.equal(clones, 0);
+    const item = e.carousel.captureMountedItem({ discovery, videoId: '2' });
+    assert.equal(item.videoId, '2');
+    assert.equal(item.page, 0);
+    assert.notEqual(item.snapshot, slots[2]);
+    assert.equal(clones, 1);
+    assert.throws(() => e.carousel.captureMountedItem({ discovery: { ...discovery }, videoId: '2' }), { code: 'NATIVE_SOURCE_REPLACED' });
+    slots[2].cloneNode = () => { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); return new Element('captured'); };
+    assert.throws(() => e.carousel.captureMountedItem({ discovery, videoId: '2' }), { code: 'NATIVE_SOURCE_REPLACED' });
+    assert.equal(e.carousel.isBindingCurrent(e.carousel.currentBinding()), true);
+});
+
+test('mounted capture rejects detached slots, replaced cards and changed markup even with unchanged source facts', () => {
+    for (const change of ['slot', 'card', 'href', 'label']) {
+        const e = nativeReadEnvironment();
+        const [slot] = e.mount([2]);
+        const card = slot.querySelector('a');
+        card.setAttribute('data-uia', 'standard-card');
+        card.setAttribute('href', '/title/2');
+        const discovery = e.carousel.discoverSource();
+        const clone = slot.cloneNode.bind(slot);
+        slot.cloneNode = () => {
+            const snapshot = clone(true);
+            if (change === 'slot') slot.remove();
+            if (change === 'card') { card.remove(); slot.appendChild(card.cloneNode(true)); }
+            if (change === 'href') card.setAttribute('href', '/title/3');
+            if (change === 'label') card.setAttribute('aria-label', 'changed');
+            return snapshot;
+        };
+        assert.throws(() => e.carousel.captureMountedItem({ discovery, videoId: '2' }), { code: 'NATIVE_SOURCE_REPLACED' }, change);
+        assert.equal(e.carousel.currentBinding().track, e.track);
+        assert.equal(e.scheduler.timers.size, 0);
+    }
 });
 
 test('readiness shares discovery and measures each active slot once even during sorting', () => {
@@ -289,7 +397,7 @@ test('track replacement, membership changes, and resized columns use fresh state
     const replacement = e.replaceTrack();
     e.shape.totalCount = 19; e.shape.columns = 4;
     e.mount([15, 16, 17, 18]);
-    const state = e.carousel.observe();
+    const state = e.carousel.discoverSource();
     assert.equal(state.track, replacement);
     assert.equal(state.selectedPage, 4);
     assert.equal(state.currentPageCount, 4);

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.28
+// @version      1.4.29
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -6877,6 +6877,67 @@
         return false;
       }
     }
+    function discoverSource({ bindingOnly = false, sessionToken = null, assertCurrent = () => {
+    } } = {}) {
+      return withNativeReadScope(() => {
+        const generation = bindingGeneration, route = scope.token;
+        const guard = () => {
+          assertRouteSession(sessionToken);
+          assertCurrent();
+          if (generation !== bindingGeneration || route !== scope.token) {
+            throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Discovery admission changed");
+          }
+        };
+        const references = () => {
+          const section = findMyListSection();
+          const scroller = section?.querySelector(NETFLIX_DOM_SELECTORS2.carouselScroller) || null;
+          const track = scroller && netflixDom.findTrack(scroller);
+          return { section: section || null, scroller, track: track || null };
+        };
+        guard();
+        const facts = bindingOnly ? references() : readNativeMyListDomState();
+        const matchesBinding = Boolean(acceptedBinding && isBindingCurrent(acceptedBinding) && ["section", "scroller", "track"].every((key) => acceptedBinding[key] === facts[key]));
+        return observationResult({ binding: { section: facts.section }, guard }, { ...facts, matchesBinding }, () => {
+          const currentReferences = references();
+          const current = bindingOnly ? currentReferences : readNativeMyListDomState();
+          const changedFields = Object.keys(facts).filter((key) => !Object.is(facts[key], current[key]));
+          if (changedFields.length || ["section", "scroller", "track"].some((key) => facts[key] !== currentReferences[key]) || facts.section?.isConnected === false || facts.scroller?.isConnected === false || facts.track?.isConnected === false) {
+            throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Observed My List source changed", { changedFields });
+          }
+        });
+      });
+    }
+    function captureMountedItem({ discovery, videoId }) {
+      return withNativeReadScope(() => {
+        assertObservation(discovery);
+        if (!discovery.track) return null;
+        let item = null;
+        try {
+          for (const slot of netflixDom.directSlots(discovery.track)) {
+            item = cardMarkup.capture(slot, discovery.selectedPage || 0, false);
+            assertObservation(discovery);
+            if (item?.videoId !== String(videoId)) continue;
+            const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+            const assertCapturedSlot = () => {
+              const current = cardMarkup.capture(slot, discovery.selectedPage || 0, false);
+              if (slot.isConnected === false || slot.parentElement !== discovery.track || slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard) !== card || !current || ["href", "videoId", "ariaLabel"].some((key) => current[key] !== item[key])) {
+                throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Captured native card changed");
+              }
+              assertObservation(discovery);
+            };
+            assertCapturedSlot();
+            item.snapshot = slot.cloneNode(true);
+            assertCapturedSlot();
+            return item;
+          }
+          assertObservation(discovery);
+          return null;
+        } catch (error) {
+          if (item) item.snapshot = null;
+          throw error;
+        }
+      });
+    }
     function measureLayout({
       section,
       scroller = null,
@@ -7261,7 +7322,8 @@
         slots: /* @__PURE__ */ new WeakMap(),
         rects: /* @__PURE__ */ new WeakMap(),
         indices: /* @__PURE__ */ new WeakMap(),
-        layouts: /* @__PURE__ */ new WeakMap()
+        layouts: /* @__PURE__ */ new WeakMap(),
+        domState: null
       };
     }
     function withNativeReadScope(read) {
@@ -7780,10 +7842,11 @@
     }
     function readNativeMyListDomState() {
       if (!nativeReadScope) return withNativeReadScope(() => readNativeMyListDomState());
+      if (nativeReadScope.domState) return nativeReadScope.domState;
       const section = findMyListSection();
       if (!section) {
         const graphqlCount2 = listData.readMyListTotalCount();
-        return {
+        return nativeReadScope.domState = {
           section: null,
           scroller: null,
           track: null,
@@ -7803,12 +7866,12 @@
       const track = scroller && netflixDom.findTrack(scroller);
       const runtime = getCarouselDomRuntime(section);
       const profile = runtime?.profile || detectCarouselDomProfile(section);
-      const pages = pageCount(section);
       const page = selectedPage(section);
+      const pages = pageCount(section);
       const pageTopologyKnown = profile.pageMode === "indicator" ? profile.indicatorCount > 0 : Boolean(runtime?.pageCountFinalized);
       const graphqlCount = listData.readMyListTotalCount();
       if (!scroller || !track) {
-        return {
+        return nativeReadScope.domState = {
           section,
           scroller: scroller || null,
           track: track || null,
@@ -7832,7 +7895,7 @@
       const exactCount = Number.isFinite(domExactCount) ? domExactCount : Number.isFinite(graphqlCount) ? graphqlCount : null;
       const sourceSlots = netflixDom.directSlots(track).length;
       const sourceCards = nativeFilledSlots(track).length;
-      return {
+      return nativeReadScope.domState = {
         section,
         scroller,
         track,
@@ -8211,6 +8274,8 @@
       observeSource,
       pageCards,
       measureLayout,
+      discoverSource,
+      captureMountedItem,
       assertObservation,
       isObservationCurrent,
       anchorAfterDelta: (section, facts) => modelForWrite(section)?.anchor(facts),
@@ -8236,7 +8301,6 @@
       ready: waitForNativeCarouselReady,
       waitForSource: waitForNativeSource,
       slotLayoutFormula: parseSlotLayoutFormula,
-      observe: readNativeMyListDomState,
       itemIndex: netflixItemIndexFromSlot,
       positions: logicalSlotPositions,
       logicalWindow: nativeLogicalPageState,
@@ -8343,7 +8407,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.28";
+    const SCRIPT_VERSION = "1.4.29";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -11320,8 +11384,16 @@
       logOperationTimeout("total-count-detection", timeout, details);
       throw initializationTimeoutError("total-count-detection", timeout, details);
     }
-    function readNativeMyListDomState(...args) {
-      return nativeCarousel.observe(...args);
+    function nativeDiscoveryObservation({ bindingOnly = false } = {}) {
+      const state = sourceState, sessionToken = sessionScope.token;
+      const section = state?.section, scroller = state?.scroller, track = state?.track;
+      const grid = state?.grid, layout = state?.layout;
+      return nativeCarousel.discoverSource({ bindingOnly, sessionToken, assertCurrent() {
+        assertRouteSession(sessionToken);
+        if (sourceState !== state || state?.section !== section || state?.scroller !== scroller || state?.track !== track || state?.grid !== grid || state?.layout !== layout) {
+          throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Discovery caller was replaced");
+        }
+      } });
     }
     function normalizeNetflixUiText(value) {
       return String(value || "").replace(/[\u200b-\u200f\u2060\ufeff]/g, "").replace(/\s+/g, "").trim();
@@ -11416,17 +11488,8 @@
       };
     }
     function findNativeMyListItemByVideoId(videoId, liveState = null) {
-      const live = liveState || readNativeMyListDomState();
-      const track = live.track;
-      if (!track) return null;
-      for (const slot of netflixDom.directSlots(track)) {
-        const item = itemFromSlot(slot, live.selectedPage || 0, false);
-        if (item?.videoId === String(videoId)) {
-          item.snapshot = slot.cloneNode(true);
-          return item;
-        }
-      }
-      return null;
+      const discovery = liveState || nativeDiscoveryObservation();
+      return nativeCarousel.captureMountedItem({ discovery, videoId });
     }
     function findAnyStandardCardItemByVideoId(videoId) {
       const wanted = String(videoId);
@@ -11469,16 +11532,17 @@
     }
     function moveLegacyFrameToSyntheticEmpty() {
       if (!sourceState) return false;
-      const live = readNativeMyListDomState();
+      const state = sourceState;
+      const live = nativeDiscoveryObservation();
       if (live.section && !live.scroller && !live.track) {
         return adoptLiveEmptyMyListSection(live);
       }
       const synthetic = netflixDom.ensureSyntheticMyListSection();
       if (!synthetic) return false;
-      const status = sourceState.status || document.getElementById(STATUS_ID);
-      const grid = sourceState.grid || document.getElementById(GRID_ID);
+      nativeCarousel.assertObservation(live);
+      const status = state.status || document.getElementById(STATUS_ID);
+      const grid = state.grid || document.getElementById(GRID_ID);
       if (!status || !grid) return false;
-      const state = sourceState;
       const observed = nativeLayoutObservation(synthetic, null, null, "empty", state);
       const layout = { ...observed.layout };
       layout.rowGap = measureNativeCarouselGap(synthetic);
@@ -11511,6 +11575,7 @@
     function adoptLiveMyListSection(live) {
       if (!sourceState || !live?.section || !live?.scroller || !live?.track) return false;
       if (sourceState.section === live.section && sourceState.scroller === live.scroller && sourceState.track === live.track) return false;
+      nativeCarousel.assertObservation(live);
       const state = sourceState;
       const status = state.status || document.getElementById(STATUS_ID);
       const grid = state.grid || document.getElementById(GRID_ID);
@@ -11528,6 +11593,7 @@
       live.section.setAttribute(SECTION_ATTR, "true");
       markOriginalHeader(live.section);
       nativeCarousel.assertObservation(observed);
+      nativeCarousel.assertObservation(live);
       parkSource(live.scroller);
       live.scroller.insertAdjacentElement("afterend", status);
       status.insertAdjacentElement("afterend", grid);
@@ -11563,6 +11629,7 @@
     }
     function adoptLiveEmptyMyListSection(live) {
       if (!sourceState || !live?.section || live.scroller || live.track) return false;
+      nativeCarousel.assertObservation(live);
       const status = sourceState.status || document.getElementById(STATUS_ID);
       const grid = sourceState.grid || document.getElementById(GRID_ID);
       if (!status || !grid) return false;
@@ -11579,8 +11646,11 @@
       live.section.setAttribute(SECTION_ATTR, "true");
       markOriginalHeader(live.section);
       nativeCarousel.assertObservation(observed);
+      nativeCarousel.assertObservation(live);
       const emptyContent = live.section.querySelector(':scope > [data-uia="empty-carousel-section+content"]');
       const originalAnchor = emptyContent || markOriginalHeader(live.section);
+      nativeCarousel.assertObservation(observed);
+      nativeCarousel.assertObservation(live);
       if (originalAnchor) originalAnchor.insertAdjacentElement("afterend", status);
       else live.section.prepend(status);
       status.insertAdjacentElement("afterend", grid);
@@ -11775,6 +11845,7 @@
         throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Visible cards no longer belong to the current parent");
       }
       return withNativeReadScope(() => {
+        nativeCarousel.assertObservation(live);
         const observed = nativePageObservation(state);
         const items = observed.cards.map((entry) => {
           const item = itemFromSlot(entry.source.slot, live.selectedPage || 0, false);
@@ -11782,6 +11853,7 @@
           return item;
         }).filter((item) => item?.videoId);
         nativeCarousel.assertObservation(observed);
+        nativeCarousel.assertObservation(live);
         return items;
       });
     }
@@ -11872,10 +11944,6 @@
       }
       pendingMyListMutations = /* @__PURE__ */ new Map();
     }
-    function nativeBindingChanged(live) {
-      if (!sourceState || !live?.section || !live?.scroller || !live?.track) return false;
-      return sourceState.section !== live.section || sourceState.scroller !== live.scroller || sourceState.track !== live.track || !sourceState.section?.isConnected || !sourceState.scroller?.isConnected || !sourceState.track?.isConnected;
-    }
     function restartInitializationForPopulatedNativeMyList(live, reason = "late-populated-source") {
       if (!sourceState?.empty || !live?.section || !live?.scroller || !live?.track) return false;
       const visibleItems = visibleNativeItems(live);
@@ -11886,6 +11954,7 @@
         selectedPage: live.selectedPage,
         visibleItems: visibleItems.length
       });
+      nativeCarousel.assertObservation(live);
       const sessionToken = sessionScope.token;
       cleanupTargetSessionDom();
       resizeObserver?.disconnect();
@@ -11906,66 +11975,81 @@
     }
     function ensureLiveNativeBinding(reason = "live-check", bindingOnly = false) {
       if (!sourceState || !isTargetPage()) return null;
-      if (bindingOnly && !waitingForNativeEmpty && !sourceState.empty) {
-        const section = findMyListSection();
-        const scroller = section?.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller) || null;
-        const track = scroller && netflixDom.findTrack(scroller);
-        const binding = { section, scroller, track };
-        if (section && scroller && track && !nativeBindingChanged(binding)) return binding;
-      }
-      let live = readNativeMyListDomState();
-      if (waitingForNativeEmpty && (sourceState.items?.length ?? 0) === 0) {
-        if (live.section && !live.scroller && !live.track) {
-          const emptyState2 = document.getElementById(LEGACY_EMPTY_STATE_ID);
-          const alreadyNative = sourceState.section === live.section && !sourceState.scroller && !sourceState.track && emptyState2?.getAttribute("data-tm-empty-source") === "native";
-          if (!alreadyNative) adoptLiveEmptyMyListSection(live);
-          live = readNativeMyListDomState();
+      const owner = sourceState;
+      const sessionToken = sessionScope.token;
+      const assertParent = () => {
+        assertRouteSession(sessionToken);
+        if (sourceState !== owner) throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Adoption parent was replaced");
+      };
+      try {
+        if (bindingOnly && !waitingForNativeEmpty && !sourceState.empty) {
+          const binding = nativeDiscoveryObservation({ bindingOnly: true });
+          nativeCarousel.assertObservation(binding);
+          if (binding.section && binding.scroller && binding.track && binding.matchesBinding) return binding;
+        }
+        let live = nativeDiscoveryObservation();
+        if (waitingForNativeEmpty && (sourceState.items?.length ?? 0) === 0) {
+          if (live.section && !live.scroller && !live.track) {
+            const emptyState2 = document.getElementById(LEGACY_EMPTY_STATE_ID);
+            const alreadyNative = sourceState.section === live.section && !sourceState.scroller && !sourceState.track && emptyState2?.getAttribute("data-tm-empty-source") === "native";
+            if (!alreadyNative) adoptLiveEmptyMyListSection(live);
+            assertParent();
+            live = nativeDiscoveryObservation();
+            return live;
+          }
+          if (!live.section) {
+            return live;
+          }
+          const emptyState = document.getElementById(LEGACY_EMPTY_STATE_ID);
+          if (!emptyState?.isConnected) {
+            syncLegacyEmptyState(sourceState.section, { allowProvisional: true });
+          }
+          nativeCarousel.assertObservation(live);
           return live;
         }
-        if (!live.section) {
-          return live;
+        if (live.section && live.scroller && live.track && sourceState.empty && (sourceState.items?.length ?? 0) === 0) {
+          if (restartInitializationForPopulatedNativeMyList(live, reason)) return null;
         }
-        const emptyState = document.getElementById(LEGACY_EMPTY_STATE_ID);
-        if (!emptyState?.isConnected) {
-          syncLegacyEmptyState(sourceState.section, { allowProvisional: true });
+        if (live.section && live.scroller && live.track && !live.matchesBinding) {
+          const previous = {
+            sectionConnected: Boolean(sourceState.section?.isConnected),
+            scrollerConnected: Boolean(sourceState.scroller?.isConnected),
+            trackConnected: Boolean(sourceState.track?.isConnected),
+            sameSection: sourceState.section === live.section,
+            sameScroller: sourceState.scroller === live.scroller,
+            sameTrack: sourceState.track === live.track
+          };
+          if (adoptLiveMyListSection(live)) {
+            log(tLog("nativeMyListBindingRefreshed"), {
+              reason,
+              pages: live.pages,
+              selectedPage: live.selectedPage,
+              previous
+            });
+          }
+          assertParent();
+          live = nativeDiscoveryObservation();
+        } else if (live.section && !live.scroller && !live.track && (sourceState.items?.length ?? 0) === 0) {
+          const emptyState = document.getElementById(LEGACY_EMPTY_STATE_ID);
+          const alreadyNative = sourceState.section === live.section && !sourceState.scroller && !sourceState.track && emptyState?.getAttribute("data-tm-empty-source") === "native";
+          if (!alreadyNative) {
+            adoptLiveEmptyMyListSection(live);
+            assertParent();
+            live = nativeDiscoveryObservation();
+          }
+        } else if (!live.section && (sourceState.items?.length ?? 0) === 0 && sourceState.section?.id !== SYNTHETIC_SECTION_ID) {
+          if (!waitingForNativeEmpty) {
+            moveLegacyFrameToSyntheticEmpty();
+            assertParent();
+            live = nativeDiscoveryObservation();
+          }
         }
+        nativeCarousel.assertObservation(live);
         return live;
+      } catch (error) {
+        if (error?.code !== "NATIVE_SOURCE_REPLACED" && !isRouteSessionCancelledError(error)) throw error;
+        return null;
       }
-      if (live.section && live.scroller && live.track && sourceState.empty && (sourceState.items?.length ?? 0) === 0) {
-        if (restartInitializationForPopulatedNativeMyList(live, reason)) return live;
-      }
-      if (live.section && live.scroller && live.track && nativeBindingChanged(live)) {
-        const previous = {
-          sectionConnected: Boolean(sourceState.section?.isConnected),
-          scrollerConnected: Boolean(sourceState.scroller?.isConnected),
-          trackConnected: Boolean(sourceState.track?.isConnected),
-          sameSection: sourceState.section === live.section,
-          sameScroller: sourceState.scroller === live.scroller,
-          sameTrack: sourceState.track === live.track
-        };
-        if (adoptLiveMyListSection(live)) {
-          log(tLog("nativeMyListBindingRefreshed"), {
-            reason,
-            pages: live.pages,
-            selectedPage: live.selectedPage,
-            previous
-          });
-        }
-        live = readNativeMyListDomState();
-      } else if (live.section && !live.scroller && !live.track && (sourceState.items?.length ?? 0) === 0) {
-        const emptyState = document.getElementById(LEGACY_EMPTY_STATE_ID);
-        const alreadyNative = sourceState.section === live.section && !sourceState.scroller && !sourceState.track && emptyState?.getAttribute("data-tm-empty-source") === "native";
-        if (!alreadyNative) {
-          adoptLiveEmptyMyListSection(live);
-          live = readNativeMyListDomState();
-        }
-      } else if (!live.section && (sourceState.items?.length ?? 0) === 0 && sourceState.section?.id !== SYNTHETIC_SECTION_ID) {
-        if (!waitingForNativeEmpty) {
-          moveLegacyFrameToSyntheticEmpty();
-          live = readNativeMyListDomState();
-        }
-      }
-      return live;
     }
     function refreshNativeSectionAfterDelta() {
       return ensureLiveNativeBinding("delta-refresh");
@@ -11978,38 +12062,61 @@
         return false;
       }
       mutation.deferredWhileBusy = false;
-      const videoId = mutation.videoId;
-      let live = refreshNativeSectionAfterDelta() || readNativeMyListDomState();
-      if (mutation.action === "remove") {
-        const changed2 = applyLegacyRemoval(videoId, reason);
-        if (!changed2 && !sourceState.itemMap?.has(`v:${videoId}`)) {
+      const owner = sourceState;
+      const sessionToken = sessionScope.token;
+      const assertMutationCurrent = () => {
+        assertRouteSession(sessionToken);
+        if (sourceState !== owner || pendingMyListMutations.get(mutation.videoId) !== mutation || !isTargetPage()) {
+          throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Mutation admission was replaced");
+        }
+      };
+      try {
+        const videoId = mutation.videoId;
+        let live = refreshNativeSectionAfterDelta() || nativeDiscoveryObservation();
+        assertMutationCurrent();
+        if (mutation.action === "remove") {
+          const changed2 = applyLegacyRemoval(videoId, reason);
+          assertMutationCurrent();
+          if (!changed2 && !sourceState.itemMap?.has(`v:${videoId}`)) {
+            disposeMyListMutation(videoId, mutation);
+            return true;
+          }
+          if (changed2) {
+            live = refreshNativeSectionAfterDelta() || live;
+            assertMutationCurrent();
+            if (live?.track) alignLegacyVisiblePageOrder(live);
+            assertMutationCurrent();
+            disposeMyListMutation(videoId, mutation);
+            return true;
+          }
+          return false;
+        }
+        if (sourceState.itemMap?.has(`v:${videoId}`)) {
           disposeMyListMutation(videoId, mutation);
           return true;
         }
-        if (changed2) {
+        const nativeItem = findNativeMyListItemByVideoId(videoId, live);
+        assertMutationCurrent();
+        const candidate = nativeItem || mutation.fallbackItem || findAnyStandardCardItemByVideoId(videoId);
+        if (!cardSourceForItem(candidate)) return false;
+        const preferredIndex = nativeItem ? preferredIndexForNativeItem(videoId, live) : Number.isFinite(mutation.preferredIndex) ? mutation.preferredIndex : 0;
+        assertMutationCurrent();
+        nativeCarousel.assertObservation(live);
+        const changed = applyLegacyAddition(candidate, preferredIndex, nativeItem ? `${reason}-native` : `${reason}-captured`);
+        assertMutationCurrent();
+        if (changed || sourceState.itemMap?.has(`v:${videoId}`)) {
           live = refreshNativeSectionAfterDelta() || live;
+          assertMutationCurrent();
           if (live?.track) alignLegacyVisiblePageOrder(live);
+          assertMutationCurrent();
           disposeMyListMutation(videoId, mutation);
           return true;
         }
         return false;
+      } catch (error) {
+        if (error?.code !== "NATIVE_SOURCE_REPLACED" && !isRouteSessionCancelledError(error)) throw error;
+        return false;
       }
-      if (sourceState.itemMap?.has(`v:${videoId}`)) {
-        disposeMyListMutation(videoId, mutation);
-        return true;
-      }
-      const nativeItem = findNativeMyListItemByVideoId(videoId, live);
-      const candidate = nativeItem || mutation.fallbackItem || findAnyStandardCardItemByVideoId(videoId);
-      if (!cardSourceForItem(candidate)) return false;
-      const preferredIndex = nativeItem ? preferredIndexForNativeItem(videoId, live) : Number.isFinite(mutation.preferredIndex) ? mutation.preferredIndex : 0;
-      const changed = applyLegacyAddition(candidate, preferredIndex, nativeItem ? `${reason}-native` : `${reason}-captured`);
-      if (changed || sourceState.itemMap?.has(`v:${videoId}`)) {
-        live = refreshNativeSectionAfterDelta() || live;
-        if (live?.track) alignLegacyVisiblePageOrder(live);
-        disposeMyListMutation(videoId, mutation);
-        return true;
-      }
-      return false;
     }
     function queueMyListMutation(descriptor) {
       if (!descriptor?.videoId || !sourceState) return;
@@ -14675,14 +14782,20 @@
         }
         return false;
       }
-      const section = findMyListSection();
-      const scroller = section?.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller);
-      const track = scroller && netflixDom.findTrack(scroller);
-      if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected || !section.contains(scroller) || !scroller.contains(track) || section === failure.section && scroller === failure.scroller && track === failure.track) return false;
+      try {
+        const discovered = nativeDiscoveryObservation({ bindingOnly: true });
+        const { section, scroller, track } = discovered;
+        if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected || !section.contains(scroller) || !scroller.contains(track) || section === failure.section && scroller === failure.scroller && track === failure.track) return false;
+        advanceHoverToken("source");
+        cancelPendingGridHover("source");
+        nativeCarousel.assertObservation(discovered);
+        if (nativeInitializationFailure !== failure) return false;
+      } catch (error) {
+        if (error?.code !== "NATIVE_SOURCE_REPLACED" && !isRouteSessionCancelledError(error)) throw error;
+        return false;
+      }
       performanceDiagnostics.nativeRecovery.attempts++;
       for (const mutation of pendingMyListMutations.values()) mutation.deferredWhileBusy = true;
-      advanceHoverToken("source");
-      cancelPendingGridHover("source");
       cleanupTargetSessionDom();
       resizeObserver?.disconnect();
       resizeObserver = null;
@@ -14714,7 +14827,15 @@
         return;
       }
       if (running && runningSessionToken === sessionToken) return;
-      let section = findMyListSection();
+      let discovered;
+      try {
+        discovered = nativeDiscoveryObservation({ bindingOnly: true });
+      } catch (error) {
+        if (error?.code !== "NATIVE_SOURCE_REPLACED" && !isRouteSessionCancelledError(error)) throw error;
+        if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
+        return;
+      }
+      let section = discovered.section;
       if (!section) {
         if (waitingForNativeEmpty && sourceState?.empty) {
           return;
@@ -14737,15 +14858,27 @@
         if (synthetic && synthetic !== section) synthetic.remove();
       }
       if (completedSection === section && document.getElementById(GRID_ID) && !sourceState?.empty) return;
+      try {
+        nativeCarousel.assertObservation(discovered);
+      } catch (error) {
+        if (error?.code !== "NATIVE_SOURCE_REPLACED" && !isRouteSessionCancelledError(error)) throw error;
+        if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
+        return;
+      }
       cleanupOldArtifacts();
       installStyles(document);
       section.setAttribute(SECTION_ATTR, "true");
       markOriginalHeader(section);
       const initializationStarted = performance.now();
-      let scroller = section.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller);
-      let track = scroller && netflixDom.findTrack(scroller);
+      let mountedSource, scroller, track;
       let provisionalLayout, provisionalFrame;
       try {
+        mountedSource = nativeDiscoveryObservation({ bindingOnly: true });
+        if (mountedSource.section && mountedSource.section !== section) {
+          throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Initialization source was replaced");
+        }
+        scroller = mountedSource.section === section ? mountedSource.scroller : null;
+        track = mountedSource.section === section ? mountedSource.track : null;
         withNativeReadScope(() => {
           const observed = nativeLayoutObservation(section, scroller, track);
           provisionalLayout = { ...observed.layout };
@@ -14753,6 +14886,7 @@
           nativeCarousel.assertObservation(observed);
           provisionalFrame = placeLegacyFrame(section, scroller, provisionalLayout, { elapsedMs: null, finalized: false, totalCount: null });
           nativeCarousel.assertObservation(observed);
+          nativeCarousel.assertObservation(mountedSource);
         });
       } catch (error) {
         if (error?.code !== "NATIVE_SOURCE_REPLACED" && !isRouteSessionCancelledError(error)) throw error;

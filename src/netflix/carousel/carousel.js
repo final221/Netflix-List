@@ -789,6 +789,69 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     function isObservationCurrent(result) {
         try { assertObservation(result); return true; } catch (_) { return false; }
     }
+    function discoverSource({ bindingOnly = false, sessionToken = null, assertCurrent = () => {} } = {}) {
+        return withNativeReadScope(() => {
+            const generation = bindingGeneration, route = scope.token;
+            const guard = () => {
+                assertRouteSession(sessionToken); assertCurrent();
+                if (generation !== bindingGeneration || route !== scope.token) {
+                    throw initializationError('NATIVE_SOURCE_REPLACED', 'native-discovery', 'Discovery admission changed');
+                }
+            };
+            const references = () => {
+                const section = findMyListSection();
+                const scroller = section?.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller) || null;
+                const track = scroller && netflixDom.findTrack(scroller);
+                return { section: section || null, scroller, track: track || null };
+            };
+            guard();
+            const facts = bindingOnly ? references() : readNativeMyListDomState();
+            const matchesBinding = Boolean(acceptedBinding && isBindingCurrent(acceptedBinding) &&
+                ['section', 'scroller', 'track'].every(key => acceptedBinding[key] === facts[key]));
+            return observationResult({ binding: { section: facts.section }, guard }, { ...facts, matchesBinding }, () => {
+                const currentReferences = references();
+                const current = bindingOnly ? currentReferences : readNativeMyListDomState();
+                const changedFields = Object.keys(facts).filter(key => !Object.is(facts[key], current[key]));
+                if (changedFields.length || ['section', 'scroller', 'track'].some(key => facts[key] !== currentReferences[key]) ||
+                    facts.section?.isConnected === false || facts.scroller?.isConnected === false || facts.track?.isConnected === false) {
+                    throw initializationError('NATIVE_SOURCE_REPLACED', 'native-discovery', 'Observed My List source changed', { changedFields });
+                }
+            });
+        });
+    }
+    function captureMountedItem({ discovery, videoId }) {
+        return withNativeReadScope(() => {
+            assertObservation(discovery);
+            if (!discovery.track) return null;
+            let item = null;
+            try {
+                for (const slot of netflixDom.directSlots(discovery.track)) {
+                    item = cardMarkup.capture(slot, discovery.selectedPage || 0, false);
+                    assertObservation(discovery);
+                    if (item?.videoId !== String(videoId)) continue;
+                    const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
+                    const assertCapturedSlot = () => {
+                        const current = cardMarkup.capture(slot, discovery.selectedPage || 0, false);
+                        if (slot.isConnected === false || slot.parentElement !== discovery.track ||
+                            slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard) !== card ||
+                            !current || ['href', 'videoId', 'ariaLabel'].some(key => current[key] !== item[key])) {
+                            throw initializationError('NATIVE_SOURCE_REPLACED', 'native-discovery', 'Captured native card changed');
+                        }
+                        assertObservation(discovery);
+                    };
+                    assertCapturedSlot();
+                    item.snapshot = slot.cloneNode(true);
+                    assertCapturedSlot();
+                    return item;
+                }
+                assertObservation(discovery);
+                return null;
+            } catch (error) {
+                if (item) item.snapshot = null;
+                throw error;
+            }
+        });
+    }
     function measureLayout({ section, scroller = null, track = null, mode = 'auto', binding = null,
         sessionToken = null, assertCurrent = () => {} }) {
         return withNativeReadScope(() => {
@@ -1095,7 +1158,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
 
     function createNativeReadScope() {
         return { profiles: new WeakMap(), indicators: new WeakMap(), filled: new WeakMap(),
-            slots: new WeakMap(), rects: new WeakMap(), indices: new WeakMap(), layouts: new WeakMap() };
+            slots: new WeakMap(), rects: new WeakMap(), indices: new WeakMap(), layouts: new WeakMap(), domState: null };
     }
 
     function withNativeReadScope(read) {
@@ -1727,10 +1790,11 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
 
     function readNativeMyListDomState() {
         if (!nativeReadScope) return withNativeReadScope(() => readNativeMyListDomState());
+        if (nativeReadScope.domState) return nativeReadScope.domState;
         const section = findMyListSection();
         if (!section) {
             const graphqlCount = listData.readMyListTotalCount();
-            return {
+            return nativeReadScope.domState = {
                 section: null,
                 scroller: null,
                 track: null,
@@ -1751,15 +1815,15 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         const track = scroller && netflixDom.findTrack(scroller);
         const runtime = getCarouselDomRuntime(section);
         const profile = runtime?.profile || detectCarouselDomProfile(section);
-        const pages = pageCount(section);
         const page = selectedPage(section);
+        const pages = pageCount(section);
         const pageTopologyKnown = profile.pageMode === 'indicator'
             ? profile.indicatorCount > 0
             : Boolean(runtime?.pageCountFinalized);
         const graphqlCount = listData.readMyListTotalCount();
 
         if (!scroller || !track) {
-            return {
+            return nativeReadScope.domState = {
                 section,
                 scroller: scroller || null,
                 track: track || null,
@@ -1789,7 +1853,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         const sourceSlots = netflixDom.directSlots(track).length;
         const sourceCards = nativeFilledSlots(track).length;
 
-        return {
+        return nativeReadScope.domState = {
             section,
             scroller,
             track,
@@ -2165,7 +2229,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         markCycle: section => modelForWrite(section)?.markCycle(),
         completeCollection: (section, pages) => modelForWrite(section)?.finishCollection(pages),
         prepareSource, acceptCollection, isPreparationCurrent, assertPreparation,
-        observeSource, pageCards, measureLayout, assertObservation, isObservationCurrent,
+        observeSource, pageCards, measureLayout, discoverSource, captureMountedItem, assertObservation, isObservationCurrent,
         anchorAfterDelta: (section, facts) => modelForWrite(section)?.anchor(facts),
         markMappingStale: section => modelForWrite(section)?.markStale(),
         deferMapping: section => modelForWrite(section)?.deferMapping(),
@@ -2176,7 +2240,6 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         selectedPage, pageCount, navigationControl: carouselMoveButton, controlDisabled: carouselMoveButtonDisabled,
         readiness: nativeCarouselReadiness, ready: waitForNativeCarouselReady, waitForSource: waitForNativeSource,
         slotLayoutFormula: parseSlotLayoutFormula,
-        observe: readNativeMyListDomState,
         itemIndex: netflixItemIndexFromSlot,
         positions: logicalSlotPositions, logicalWindow: nativeLogicalPageState, requireLogicalWindow: requireNativeLogicalPageState,
         expectedPageIndices: expectedLogicalIndicesForPage,
