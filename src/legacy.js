@@ -5,14 +5,12 @@ import { createLogger } from './diagnostics/logger.js';
 import { createReport } from './diagnostics/report.js';
 import { createPopupInspection } from './netflix/popup-inspection.js';
 import {
-    GRID_ID, STATUS_ID, ORDER_MISMATCH_DIALOG_ID, SECTION_ATTR,
-    LOG_LINK_ID, STATUS_TEXT_CLASS,
+    GRID_ID, STATUS_ID, SECTION_ATTR,
     STATUS_LABEL_CLASS, STATUS_META_CLASS,
     ORIGINAL_HEADER_CLASS, SYNTHETIC_SECTION_ID,
-    LEGACY_EMPTY_STATE_ID, OLD_IDS, OLD_STYLE_IDS
+    LEGACY_EMPTY_STATE_ID
 } from './dom-names.js';
 import { createI18n } from './i18n/i18n.js';
-import { installStyles, removeStyles } from './grid/styles.js';
 import { createListData } from './netflix/list-data.js';
 import { createViewingData } from './netflix/viewing-data.js';
 import { createSessionScope } from './app/session-scope.js';
@@ -26,7 +24,7 @@ export function startLegacy() {
     const { getHtmlLanguage, getNetflixLanguage } = netflixContext;
     const viewingData = createViewingData({ context: netflixContext,
         fetch: (...args) => fetch(...args), createCancelledError: createRouteSessionCancelledError });
-    const netflixDom = createNetflixPageDom({ document, Element, location,
+    const netflixDom = createNetflixPageDom({ document, Element, location, getComputedStyle,
         readGraphqlIdentity: () => listData.myListDomIdentity() });
     const { nativeCardIdentity, videoIdFromHref, decodeTrackingContext } = netflixDom;
     const itemFromSlot = (...args) => gridView.captureCard(...args);
@@ -50,7 +48,9 @@ export function startLegacy() {
     const gridView = createGrid({ document, location, runChunks: runConstructionChunks,
         createError: (code, message) => initializationError(code, 'grid-cards', message),
         prepareCard: clone => ensureManualViewingControls(clone), installHover: ensureGridHoverBehavior,
-        onRetire: retireGridCard, onReplace: onGridCardReplaced });
+        onRetire: retireGridCard, onReplace: onGridCardReplaced,
+        tLog, copyLogs: copyDiagnosticLogs, setTimeout, clearTimeout,
+        isActive: () => targetSessionActive && isTargetPage() });
 
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
@@ -222,7 +222,6 @@ export function startLegacy() {
     let targetListenersActive = false;
     let viewOriginalMyList = true;
     let viewOriginalMenuId = null;
-    let logFeedbackTimer = null;
     let missingSectionSince = 0;
     let pendingMyListMutations = new Map();
     let recentRemovedMyListItems = new Map();
@@ -708,12 +707,8 @@ export function startLegacy() {
         invalidateGridReact();
 
         gridView.dispose();
-        document.getElementById(GRID_ID)?.remove();
-        document.getElementById(STATUS_ID)?.remove();
         document.getElementById(LEGACY_EMPTY_STATE_ID)?.remove();
-        document.getElementById(ORDER_MISMATCH_DIALOG_ID)?.remove();
         orderMismatchDialogOpen = false;
-        removeStyles(document);
 
         nativePresentationLease?.release();
         nativePresentationLease = null;
@@ -1182,32 +1177,15 @@ export function startLegacy() {
         return report;
     }
 
-    function copyLogsTooltip() {
-        return tLog('copyLogsTooltip');
-    }
-
-    function showLogCopiedFeedback(link) {
-        clearTimeout(logFeedbackTimer);
-        link.textContent = tLog('copied');
-        link.title = tLog('copied');
-        logFeedbackTimer = setTimeout(() => {
-            if (!link?.isConnected) return;
-            link.textContent = 'CopyLogs';
-            link.title = copyLogsTooltip();
-        }, 2500);
-    }
-
-    async function handleLogClick(event) {
-        event.preventDefault();
-        const link = event.currentTarget;
+    async function copyDiagnosticLogs() {
         log(tLog('copyLogsRequested'), collectRuntimeSnapshot());
         try {
             const method = await diagnosticReport.copy();
-            showLogCopiedFeedback(link);
             log(tLog('copyLogsCompleted'), { method, entries: logger.size() });
+            return method;
         } catch (error) {
             warn(tLog('copyLogsFailed'), error);
-            link.title = tLog('copyFailed', { message: error?.message || error });
+            throw error;
         }
     }
 
@@ -1277,7 +1255,7 @@ export function startLegacy() {
         if (!sourceState?.section && !isTargetPage()) return;
         if (!nativeSourcePresentation(undefined, undefined, undefined, { visible: viewOriginalMyList })) return;
         if (sourceState?.status) {
-            sourceState.status.style.setProperty('--tm-row-gap', `${viewOriginalMyList ? (sourceState.layout?.rowGap || 0) : 0}px`);
+            layoutFrameStatus(sourceState.status, null, viewOriginalMyList ? (sourceState.layout?.rowGap || 0) : 0);
         }
     }
 
@@ -1286,9 +1264,11 @@ export function startLegacy() {
     }
 
     function cleanupOldArtifacts() {
-        for (const id of OLD_IDS) document.getElementById(id)?.remove();
-        for (const id of OLD_STYLE_IDS) document.getElementById(id)?.remove();
         const state = sourceState, sessionToken = sessionScope.token;
+        gridView.cleanupArtifacts(() => {
+            assertRouteSession(sessionToken);
+            if (sourceState !== state) throw createRouteSessionCancelledError();
+        });
         nativeCarousel.cleanupArtifacts({ sessionToken, assertCurrent() {
             assertRouteSession(sessionToken);
             if (sourceState !== state) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-presentation', 'Artifact cleanup caller changed');
@@ -1518,8 +1498,7 @@ export function startLegacy() {
                     emptyState.layout = nextLayout;
                     const geometry = applyGridGeometry(section, frame.grid, nextLayout);
                     if (sourceState !== emptyState || !nativeCarousel.isBindingCurrent(emptyBinding)) return;
-                    frame.status.style.marginLeft = `${geometry.left}px`;
-                    frame.status.style.width = `${geometry.width}px`;
+                    layoutFrameStatus(frame.status, geometry);
                     applyLegacyEmptyStateGeometry(section, nextLayout);
                 });
             } catch (error) {
@@ -2919,9 +2898,7 @@ export function startLegacy() {
                     state.layout = nextLayout;
                     const geometry = applyGridGeometry(section, state.grid, nextLayout);
                     if (sourceState !== state || !nativeCarousel.isBindingCurrent(binding)) return;
-                    state.status.style.marginLeft = `${geometry.left}px`;
-                    state.status.style.width = `${geometry.width}px`;
-                    state.status.style.setProperty('--tm-row-gap', `${viewOriginalMyList ? (nextLayout.rowGap || 0) : 0}px`);
+                    layoutFrameStatus(state.status, geometry, viewOriginalMyList ? (nextLayout.rowGap || 0) : 0);
                     applyLegacyEmptyStateGeometry(section, nextLayout);
                 });
             } catch (error) {
@@ -2951,7 +2928,7 @@ export function startLegacy() {
         synthetic.setAttribute(SECTION_ATTR, 'true');
         clearLegacyEmptyState({ restoreGrid: false });
         nativeCarousel.assertObservation(observed);
-        synthetic.appendChild(status);
+        gridView.placeStatus(status, { section: synthetic, assertCurrent: () => nativeCarousel.assertObservation(observed) });
         status.insertAdjacentElement('afterend', grid);
         if (sourceState !== state) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-layout', 'Synthetic layout parent was replaced');
         attachNativeBinding(state, synthetic);
@@ -2961,9 +2938,7 @@ export function startLegacy() {
         sourceState.grid = grid;
         gridView.setEmpty(true);
         const geometry = applyGridGeometry(synthetic, grid, layout);
-        status.style.marginLeft = `${geometry.left}px`;
-        status.style.width = `${geometry.width}px`;
-        status.style.setProperty('--tm-row-gap', '0px');
+        layoutFrameStatus(status, geometry, 0);
         syncLegacyEmptyState(synthetic, { allowProvisional: true });
         completedSection = synthetic;
         applyOriginalMyListVisibility();
@@ -2996,7 +2971,8 @@ export function startLegacy() {
         nativeCarousel.assertObservation(observed);
         nativeCarousel.assertObservation(live);
         parkSource(live.section, live.scroller, live.track);
-        live.scroller.insertAdjacentElement('afterend', status);
+        gridView.placeStatus(status, { section: live.section, anchor: live.scroller,
+            assertCurrent: () => nativeCarousel.assertObservation(observed) });
         status.insertAdjacentElement('afterend', grid);
         if (sourceState !== state) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-layout', 'Incoming layout parent was replaced');
         attachNativeBinding(state, live.section, live.scroller, live.track);
@@ -3006,9 +2982,7 @@ export function startLegacy() {
         sourceState.empty = (sourceState.items?.length ?? 0) === 0;
         if (!sourceState.empty) waitingForNativeEmpty = false;
         const geometry = applyGridGeometry(live.section, grid, layout);
-        status.style.marginLeft = `${geometry.left}px`;
-        status.style.width = `${geometry.width}px`;
-        status.style.setProperty('--tm-row-gap', `${viewOriginalMyList ? (layout.rowGap || 0) : 0}px`);
+        layoutFrameStatus(status, geometry, viewOriginalMyList ? (layout.rowGap || 0) : 0);
         syncStatusTypography(live.section, status);
         completedSection = live.section;
         if (oldSynthetic && oldSynthetic !== live.section) oldSynthetic.remove();
@@ -3054,8 +3028,8 @@ export function startLegacy() {
         const originalAnchor = markOriginalHeader(live.section);
         nativeCarousel.assertObservation(observed);
         nativeCarousel.assertObservation(live);
-        if (originalAnchor) originalAnchor.insertAdjacentElement('afterend', status);
-        else live.section.prepend(status);
+        gridView.placeStatus(status, { section: live.section, anchor: originalAnchor,
+            assertCurrent: () => nativeCarousel.assertObservation(observed) });
         status.insertAdjacentElement('afterend', grid);
 
         if (sourceState !== state) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-layout', 'Incoming empty layout parent was replaced');
@@ -3069,10 +3043,9 @@ export function startLegacy() {
         syncLegacyEmptyState(live.section, { allowProvisional: true });
 
         const geometry = applyGridGeometry(live.section, grid, layout);
-        status.style.marginLeft = `${geometry.left}px`;
-        status.style.width = `${geometry.width}px`;
+        layoutFrameStatus(status, geometry);
         applyLegacyEmptyStateGeometry(live.section, layout);
-        status.style.setProperty('--tm-row-gap', `${viewOriginalMyList ? (layout.rowGap || 0) : 0}px`);
+        layoutFrameStatus(status, null, viewOriginalMyList ? (layout.rowGap || 0) : 0);
         syncStatusTypography(live.section, status);
 
         completedSection = live.section;
@@ -3165,7 +3138,7 @@ export function startLegacy() {
         const elapsed = sourceState.initializationElapsedMs;
         sourceState.status = updateStatus(formatHeaderParts(items.length, items.length, elapsed, true));
         if (sourceState.status && sourceState.layout) {
-            sourceState.status.style.setProperty('--tm-row-gap', `${viewOriginalMyList && !sourceState.empty ? (sourceState.layout.rowGap || 0) : 0}px`);
+            layoutFrameStatus(sourceState.status, null, viewOriginalMyList && !sourceState.empty ? (sourceState.layout.rowGap || 0) : 0);
         }
     }
 
@@ -3648,54 +3621,11 @@ export function startLegacy() {
     }
 
     function updateStatus(content) {
-        let node = document.getElementById(STATUS_ID);
-        if (!node) {
-            node = document.createElement('div');
-            node.id = STATUS_ID;
-        }
-
-        let textNode = node.querySelector(`.${STATUS_TEXT_CLASS}`);
-        if (!textNode) {
-            textNode = document.createElement('span');
-            textNode.className = STATUS_TEXT_CLASS;
-            node.appendChild(textNode);
-        }
-
-        let labelNode = textNode.querySelector(`.${STATUS_LABEL_CLASS}`);
-        if (!labelNode) {
-            labelNode = document.createElement('span');
-            labelNode.className = STATUS_LABEL_CLASS;
-            textNode.appendChild(labelNode);
-        }
-
-        let metaNode = textNode.querySelector(`.${STATUS_META_CLASS}`);
-        if (!metaNode) {
-            metaNode = document.createElement('span');
-            metaNode.className = STATUS_META_CLASS;
-            textNode.appendChild(metaNode);
-        }
-
-        const label = content && typeof content === 'object' ? content.label || '' : String(content ?? '');
-        const meta = content && typeof content === 'object' ? content.meta || '' : '';
-        if (labelNode.textContent !== label) labelNode.textContent = label;
-        if (metaNode.textContent !== meta) metaNode.textContent = meta;
-
-        let link = node.querySelector(`#${LOG_LINK_ID}`);
-        if (!link) {
-            link = document.createElement('a');
-            link.id = LOG_LINK_ID;
-            link.href = '#';
-            link.textContent = 'CopyLogs';
-            link.title = copyLogsTooltip();
-            link.addEventListener('click', handleLogClick);
-            node.appendChild(link);
-        }
-
-        return node;
+        return gridView.updateStatus(content);
     }
 
     function hideOrderMismatchDialog() {
-        document.getElementById(ORDER_MISMATCH_DIALOG_ID)?.remove();
+        gridView.hideMismatch();
         orderMismatchDialogOpen = false;
     }
 
@@ -3789,71 +3719,47 @@ export function startLegacy() {
 
     function showOrderMismatchDialog(item, expectedPage, visibleIds = []) {
         if (orderMismatchDismissed || orderMismatchDialogOpen || orderMismatchReinitializing) return;
-
+        const state = sourceState, sessionToken = sessionScope.token;
+        const detail = { item: itemSummary(item), expectedPage, visibleIds: [...visibleIds] };
+        gridView.showMismatch({ message: tUi('orderChangedPrompt'), acceptLabel: tUi('orderChangedOk'),
+            cancelLabel: tUi('orderChangedCancel'), assertCurrent() {
+                assertRouteSession(sessionToken);
+                if (sourceState !== state) throw createRouteSessionCancelledError();
+            }, onAccept() {
+                log(tLog('orderMismatchPromptAccepted'), detail);
+                void reinitializeAfterOrderMismatch();
+            }, onCancel() {
+                orderMismatchDismissed = true;
+                hideOrderMismatchDialog();
+                log(tLog('orderMismatchPromptCancelled'), detail);
+            } });
         orderMismatchDialogOpen = true;
-        const dialog = document.createElement('div');
-        dialog.id = ORDER_MISMATCH_DIALOG_ID;
-        dialog.setAttribute('role', 'alertdialog');
-        dialog.setAttribute('aria-modal', 'false');
-        dialog.setAttribute('aria-label', tUi('orderChangedPrompt'));
+        log(tLog('orderMismatchPromptShown'), detail);
+    }
 
-        const message = document.createElement('div');
-        message.setAttribute('data-tm-order-message', 'true');
-        message.textContent = tUi('orderChangedPrompt');
-
-        const actions = document.createElement('div');
-        actions.setAttribute('data-tm-order-actions', 'true');
-
-        const okButton = document.createElement('button');
-        okButton.type = 'button';
-        okButton.setAttribute('data-tm-order-ok', 'true');
-        okButton.textContent = tUi('orderChangedOk');
-
-        const cancelButton = document.createElement('button');
-        cancelButton.type = 'button';
-        cancelButton.setAttribute('data-tm-order-cancel', 'true');
-        cancelButton.textContent = tUi('orderChangedCancel');
-
-        okButton.addEventListener('click', () => {
-            log(tLog('orderMismatchPromptAccepted'), {
-                item: itemSummary(item),
-                expectedPage,
-                visibleIds
-            });
-            void reinitializeAfterOrderMismatch();
-        }, { once: true });
-
-        cancelButton.addEventListener('click', () => {
-            orderMismatchDismissed = true;
-            hideOrderMismatchDialog();
-            log(tLog('orderMismatchPromptCancelled'), {
-                item: itemSummary(item),
-                expectedPage,
-                visibleIds
-            });
-        }, { once: true });
-
-        actions.append(okButton, cancelButton);
-        dialog.append(message, actions);
-        (document.body || document.documentElement).appendChild(dialog);
-
-        log(tLog('orderMismatchPromptShown'), {
-            item: itemSummary(item),
-            expectedPage,
-            visibleIds
+    function layoutFrameStatus(status, geometry = null, rowGap) {
+        const state = sourceState, sessionToken = sessionScope.token;
+        const section = state?.section, scroller = state?.scroller, track = state?.track;
+        const grid = state?.grid, layout = state?.layout, previousStatus = state?.status;
+        gridView.layoutStatus(status, geometry, rowGap, () => {
+            assertRouteSession(sessionToken);
+            if (sourceState !== state || state?.section !== section || state?.scroller !== scroller ||
+                state?.track !== track || state?.grid !== grid || state?.layout !== layout || state?.status !== previousStatus) {
+                throw createRouteSessionCancelledError();
+            }
         });
     }
 
     function syncStatusTypography(section, status) {
-        const heading = section?.querySelector('h2') || document.querySelector(`${NETFLIX_DOM_SELECTORS.browseSections} section h2`);
-        if (!heading || !status) return;
-
-        const style = getComputedStyle(heading);
-        for (const property of ['font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing']) {
-            const value = style.getPropertyValue(property);
-            if (value) status.style.setProperty(property, value);
-        }
-        status.style.color = style.color || 'rgb(255, 255, 255)';
+        if (!status) return;
+        const state = sourceState, sessionToken = sessionScope.token;
+        const typography = netflixDom.readHeadingTypography(section);
+        assertRouteSession(sessionToken);
+        if (sourceState !== state) throw createRouteSessionCancelledError();
+        gridView.applyStatusTypography(status, typography, () => {
+            assertRouteSession(sessionToken);
+            if (sourceState !== state) throw createRouteSessionCancelledError();
+        });
     }
 
     function nativeSourceDiagnostics(section = sourceState?.section, scroller = sourceState?.scroller, track = sourceState?.track, discover = false) {
@@ -5663,9 +5569,7 @@ export function startLegacy() {
     function updateResponsiveStatus(layout, note = '') {
         if (!sourceState?.status || !sourceState?.items) return;
         const geometry = applyGridGeometry(sourceState.section, sourceState.grid, layout);
-        sourceState.status.style.marginLeft = `${geometry.left}px`;
-        sourceState.status.style.width = `${geometry.width}px`;
-        sourceState.status.style.setProperty('--tm-row-gap', `${viewOriginalMyList ? (layout.rowGap || sourceState.layout?.rowGap || 0) : 0}px`);
+        layoutFrameStatus(sourceState.status, geometry, viewOriginalMyList ? (layout.rowGap || sourceState.layout?.rowGap || 0) : 0);
         updateStatus(formatHeaderParts(
             sourceState.items.length,
             sourceState.totalCount,
@@ -5957,8 +5861,7 @@ export function startLegacy() {
                     }
                     state.layout = layout;
                     const geometry = applyGridGeometry(state.section, state.grid, layout);
-                    state.status.style.marginLeft = `${geometry.left}px`;
-                    state.status.style.width = `${geometry.width}px`;
+                    layoutFrameStatus(state.status, geometry);
                     return;
                 }
                 ensureLiveNativeBinding('responsive-check');
@@ -6302,7 +6205,7 @@ export function startLegacy() {
             nativeCarousel.assertObservation(discovered);
             cleanupOldArtifacts();
             nativeCarousel.assertObservation(discovered);
-            installStyles(document);
+            gridView.installResources(() => { assertRouteSession(sessionToken); nativeCarousel.assertObservation(discovered); });
             markOriginalHeader(section);
             nativeCarousel.assertObservation(discovered);
         } catch (error) {
@@ -6460,8 +6363,7 @@ export function startLegacy() {
             assertRouteSession(sessionToken);
             if (sourceWait.nativeSection) {
                 invalidateGridReact();
-                document.getElementById(GRID_ID)?.remove();
-                document.getElementById(STATUS_ID)?.remove();
+                gridView.dispose();
                 if (section.id === SYNTHETIC_SECTION_ID) section.remove();
                 nativeCarousel.clearBinding();
                 sourceState = null;
@@ -6753,12 +6655,11 @@ export function startLegacy() {
             nativeCarousel.assertObservation(layoutObservation);
 
             const status = updateStatus(formatHeaderParts(0, totalCount, null));
-            scroller.insertAdjacentElement('afterend', status);
+            gridView.placeStatus(status, { section, anchor: scroller,
+                assertCurrent: () => nativeCarousel.assertObservation(layoutObservation) });
             syncStatusTypography(section, status);
             const initialStatusGeometry = currentGridGeometry(section, layout);
-            status.style.marginLeft = `${initialStatusGeometry.left}px`;
-            status.style.width = `${initialStatusGeometry.width}px`;
-            status.style.setProperty('--tm-row-gap', `${layout.rowGap}px`);
+            layoutFrameStatus(status, initialStatusGeometry, layout.rowGap);
             nativeCarousel.assertObservation(layoutObservation);
 
             // Fast collection skips beginSourceScan(), but hover-driven native

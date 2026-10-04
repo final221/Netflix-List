@@ -98,6 +98,22 @@ test('page discovery uses structural anchors and skips synthetic sections indepe
     assert.equal(e.dom.ensureSyntheticMyListSection(), placeholder);
 });
 
+test('heading interpretation returns copied typography facts without retaining or decorating native DOM', () => {
+    const e = environment(), native = e.document.body.appendChild(new Element('section'));
+    const heading = native.appendChild(new Element('h2'));
+    const values = { 'font-family': 'Netflix Sans', 'font-size': '24px', 'font-weight': '700', color: 'white' };
+    const dom = createNetflixPageDom({ document: e.document, Element, location: e.location,
+        getComputedStyle: node => { assert.equal(node, heading); return { ...values, getPropertyValue: key => values[key] || '' }; } });
+    const facts = dom.readHeadingTypography(native);
+    assert.deepEqual(facts, { 'font-family': 'Netflix Sans', 'font-size': '24px', 'font-weight': '700', color: 'white' });
+    assert.equal(Object.isFrozen(facts), true);
+    values['font-size'] = '30px';
+    assert.equal(facts['font-size'], '24px');
+    assert.equal(heading.attributes.size, 0);
+    heading.remove();
+    assert.deepEqual(dom.readHeadingTypography(native), {});
+});
+
 test('GraphQL identity fallback matches current section IDs and card overlap without a structural anchor', () => {
     const e = environment();
     const host = e.document.body.appendChild(new Element('main'));

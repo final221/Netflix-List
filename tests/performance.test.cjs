@@ -4,7 +4,6 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { createI18n } = require('../src/i18n/i18n.js');
-const { removeStyles } = require('../src/grid/styles.js');
 const { createLogger } = require('../src/diagnostics/logger.js');
 const { createReport } = require('../src/diagnostics/report.js');
 const { createPopupInspection } = require('../src/netflix/popup-inspection.js');
@@ -219,6 +218,14 @@ function environment(names, overrides = {}) {
         normalizeCard: node => c.cardMarkup.normalize(node),
         diagnostics: () => ({ activeCards: c.sourceState?.cloneMap?.size || 0, retainedCards: 0, retirementFailures: 0 }),
         setEmpty() {},
+        layoutStatus(status, geometry, rowGap) {
+            if (geometry) { status.style.marginLeft = `${geometry.left}px`; status.style.width = `${geometry.width}px`; }
+            if (rowGap !== undefined) status.style.setProperty('--tm-row-gap', `${rowGap}px`);
+        },
+        placeStatus(status, { section, anchor }) {
+            if (anchor) anchor.insertAdjacentElement('afterend', status); else section.prepend(status);
+        },
+        applyStatusTypography() {}, installResources() {}, cleanupArtifacts() {}, hideMismatch() {},
         clearCards() { c.sourceState?.grid?.replaceChildren?.(); },
         mount({ section, anchor, status }) {
             const root = c.sourceState?.grid || c.document.getElementById(c.GRID_ID);
@@ -333,6 +340,7 @@ function environment(names, overrides = {}) {
     vm.runInContext(declaration('nativeSourceDiagnostics'), c);
     vm.runInContext(declaration('nativePageObservation'), c);
     vm.runInContext(declaration('nativeLayoutObservation'), c);
+    vm.runInContext(declaration('layoutFrameStatus'), c);
     vm.runInContext(declaration('nativeDiscoveryObservation'), c);
     if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
     Object.defineProperty(c, 'nativeReadScope', { get: () => c.nativeCarousel.diagnostics().readScopeActive ? true : null });
@@ -3246,6 +3254,13 @@ test('binding adoption clears old grafts and does not retain reads collected bef
         resizeObserver: null, viewOriginalMyList: true,
         ResizeObserver: class { observe() {} }, layoutSummary: layout => layout
     });
+    e.c.gridView = {
+        placeStatus: (node, { anchor }) => anchor.insertAdjacentElement('afterend', node),
+        layoutStatus(node, geometry, rowGap) {
+            if (geometry) { node.style.marginLeft = `${geometry.left}px`; node.style.width = `${geometry.width}px`; }
+            if (rowGap !== undefined) node.style.setProperty('--tm-row-gap', `${rowGap}px`);
+        }
+    };
     e.c.withNativeReadScope(() => {
         assert.equal(e.c.nativeDiscoveryObservation().pageSignature, '0|1|2|3|4|5');
         assert.equal(e.c.adoptLiveMyListSection(e.c.nativeDiscoveryObservation({ bindingOnly: true })), true);
@@ -3316,7 +3331,7 @@ test('removal and route cleanup release tracked metadata even if the grid is det
         clearSourceAlignment: () => {}, restoreActiveCarouselStyles: () => {},
         GRID_ID: 'grid', STATUS_ID: 'status', LEGACY_EMPTY_STATE_ID: 'empty',
         ORDER_MISMATCH_DIALOG_ID: 'dialog', STYLE_ID: 'style', SYNTHETIC_SECTION_ID: 'synthetic',
-        document: { getElementById: () => null }, removeStyles
+        document: { getElementById: () => null }
     });
     const removed = e.add('123');
     removed.remove = () => { removed.isConnected = false; };
@@ -3413,6 +3428,7 @@ function constructionEnvironment() {
     const track = scroller.appendChild(new ConstructionNode('track'));
     const status = section.appendChild(new ConstructionNode('status'));
     const oldGrid = section.appendChild(new ConstructionNode('grid'));
+    const head = new ConstructionNode('head'); head.setConnected(true);
     const created = [], logs = [], warnings = [];
     const template = new ConstructionNode('slot');
     template.cloneCounter = { count: 0 };
@@ -3439,8 +3455,10 @@ function constructionEnvironment() {
         URL,
         location: { origin: 'https://www.netflix.com', href: 'https://www.netflix.com/browse/my-list' },
         document: {
-            getElementById: id => [section, ...section.querySelectorAll('*')].find(node => node.id === id) || null,
-            createElement: () => { const node = new ConstructionNode(); created.push(node); return node; }
+            head,
+            getElementById: id => [section, ...section.querySelectorAll('*'), ...head.querySelectorAll('*')].find(node => node.id === id) || null,
+            createElement: tag => { const node = new ConstructionNode(); node.tagName = tag.toUpperCase();
+                if (tag !== 'style') created.push(node); return node; }
         },
         sourceState: { section, scroller, track, grid: oldGrid, status, layout, items: [], cloneMap: new Map(), itemMap: new Map() },
         findMyListSection: () => null,
@@ -3468,6 +3486,7 @@ function constructionEnvironment() {
         installHover: root => e.c.ensureGridHoverBehavior(root),
         onRetire: (handle, detail) => e.c.retireGridCard(handle, detail),
         onReplace: (old, next) => e.c.onGridCardReplaced(old, next) });
+    e.c.gridView.mount({ section, anchor: scroller, status, layout, geometry: { left: 10, width: 600, columns: 6 }, assertCurrent() {} });
     e.c.attachGridRegistry(e.c.sourceState);
     gridOwnersForTests.set(e.c.sourceState, e.c.gridView);
     function records(count) {
@@ -3701,7 +3720,7 @@ function initializationEnvironment(count = 150) {
         targetSessionEntryKind: 'initial', waitingForNativeEmpty: false, missingSectionSince: 0,
         TOTAL_COUNT_TIMEOUT_MS: 5000, NATIVE_READY_TIMEOUT_MS: 8000,
         SOURCE_PARKED_CLASS: NATIVE_PARKED_CLASS,
-        findMyListSection: () => e.section, cleanupOldArtifacts() {}, installStyles() {}, markOriginalHeader() {},
+        findMyListSection: () => e.section, cleanupOldArtifacts() {}, markOriginalHeader() {},
         measureNativeCarouselGap: () => 10,
         placeLegacyFrame: () => ({ grid: e.oldGrid, status: e.status }), applyOriginalMyListVisibility() {},
         waitForMyListTotalCount: async () => count,
@@ -4082,8 +4101,14 @@ function sourcePresentationBridgeEnvironment() {
         NETFLIX_DOM_SELECTORS: { carouselScroller: '.scroller', standardCard: 'a', virtualSlot: '.slot' },
         findMyListSection: () => section, netflixDom: { findTrack: () => track },
         isTargetPage: () => true, viewOriginalMyList: false,
-        clearSourceAlignment() {}, invalidateGridReact() {}, removeStyles
+        clearSourceAlignment() {}, invalidateGridReact() {}
     });
+    grid.id = OWNED_GRID_ID;
+    e.c.GRID_ID = OWNED_GRID_ID;
+    e.c.gridView = createGrid({ document, location: { href: 'https://www.netflix.com/browse/my-list' },
+        runChunks: async () => {} });
+    e.c.gridView.mount({ section, anchor: scroller, status, layout: state.layout,
+        geometry: { left: 10, width: 600, columns: 6 }, assertCurrent() {} });
     e.c.attachNativeBinding(state, section, scroller, track);
     return { ...e, section, header, scroller, track, grid, status, state };
 }
@@ -4137,6 +4162,62 @@ test('visibility preference can decorate a discovered source before initializati
     assert.equal(e.c.nativeCarousel.currentBinding(), null);
     e.c.cleanupTargetSessionDom();
     assert.equal(e.section.getAttribute(NATIVE_VISIBILITY_ATTR), null);
+});
+
+test('actual status geometry stops after a host write replaces its captured native caller', () => {
+    const e = sourcePresentationBridgeEnvironment();
+    vm.runInContext(declaration('createRouteSessionCancelledError'), e.c);
+    const width = e.status.style.width;
+    Object.defineProperty(e.status.style, 'marginLeft', { set() { e.c.sourceState = { ...e.state }; } });
+    assert.throws(() => e.c.layoutFrameStatus(e.status, { left: 30, width: 300 }, 4), { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
+    assert.equal(e.status.style.width, width);
+    assert.equal(e.status.style.getPropertyValue('--tm-row-gap'), '12px');
+});
+
+test('actual status and dialog callers retain diagnostic copy and mismatch decisions through the grid owner', async () => {
+    const { Element: UiElement, createDocument } = require('./helpers/dom.js');
+    const { LOG_LINK_ID, ORDER_MISMATCH_DIALOG_ID } = require('../src/dom-names.js');
+    const document = createDocument(), logs = [], warnings = [];
+    let copies = 0, reloads = 0, failCopy = false;
+    const e = environment(['updateStatus', 'copyDiagnosticLogs', 'showOrderMismatchDialog', 'hideOrderMismatchDialog',
+        'createRouteSessionCancelledError'], { document, sourceState: {}, orderMismatchDismissed: false,
+        tUi: key => key, log: (name, detail) => logs.push({ name, detail }), warn: (...args) => warnings.push(args),
+        diagnosticReport: { async copy() { copies++; if (failCopy) throw new Error('denied'); return 'clipboard'; } },
+        collectRuntimeSnapshot: () => ({ route: 'test' }), reinitializeAfterOrderMismatch: () => reloads++ });
+    e.c.gridView = createGrid({ document, location: { href: 'https://www.netflix.com/browse/my-list' }, runChunks: async () => {},
+        tLog: e.c.tLog, copyLogs: () => e.c.copyDiagnosticLogs(),
+        setTimeout: (...args) => e.c.setTimeout(...args), clearTimeout: timer => e.c.clearTimeout(timer) });
+    const section = document.body.appendChild(new UiElement('section'));
+    const status = e.c.updateStatus({ label: 'My List', meta: '6 titles' });
+    e.c.gridView.mount({ section, status, layout: { rowGap: 12, gap: 8 },
+        geometry: { left: 20, width: 600, columns: 6 }, assertCurrent() {} });
+    assert.equal(e.c.updateStatus('Loading'), status);
+    const click = node => node.dispatchEvent({ type: 'click', currentTarget: node, preventDefault() {} });
+    const link = status.querySelector('#' + LOG_LINK_ID);
+    click(link); await e.flush();
+    assert.equal(copies, 1);
+    assert.equal(link.textContent, 'copied');
+    assert.equal(logs.find(entry => entry.name === 'copyLogsCompleted').detail.method, 'clipboard');
+    failCopy = true; click(link); await e.flush();
+    assert.equal(warnings.length, 1);
+    assert.equal(link.title, 'copyFailed');
+    assert.equal(link.textContent, 'CopyLogs');
+    assert.equal(e.timers.size, 0);
+    e.c.showOrderMismatchDialog({ videoId: '1' }, 2, ['2']);
+    const dialog = document.getElementById(ORDER_MISMATCH_DIALOG_ID);
+    assert.equal(e.c.orderMismatchDialogOpen, true);
+    e.c.sourceState = {};
+    click(dialog.querySelector('[data-tm-order-ok]'));
+    assert.equal(reloads, 0);
+    e.c.hideOrderMismatchDialog();
+    e.c.showOrderMismatchDialog({ videoId: '1' }, 2, ['2']);
+    click(document.getElementById(ORDER_MISMATCH_DIALOG_ID).querySelector('[data-tm-order-cancel]'));
+    assert.equal(e.c.orderMismatchDismissed, true);
+    assert.equal(e.c.orderMismatchDialogOpen, false);
+    assert.equal(document.getElementById(ORDER_MISMATCH_DIALOG_ID), null);
+    assert.ok(logs.some(entry => entry.name === 'orderMismatchPromptCancelled'));
+    e.c.gridView.dispose();
+    assert.equal(e.timers.size, 0);
 });
 
 test('actual initialization rejects marker replacement before collection and preserves queued intent', async () => {

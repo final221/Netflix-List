@@ -442,7 +442,3 @@ export function installStyles(document) {
     document.head.appendChild(style);
     return style;
 }
-
-export function removeStyles(document) {
-    document.getElementById(STYLE_ID)?.remove();
-}

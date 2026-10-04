@@ -4,9 +4,11 @@ import { createFrame } from './frame.js';
 
 export function createGrid({ document, location, runChunks,
     createError = (code, message) => Object.assign(new Error(message), { code }),
-    prepareCard = () => {}, onRetire = () => {}, onReplace = () => {}, installHover = () => {} }) {
+    prepareCard = () => {}, onRetire = () => {}, onReplace = () => {}, installHover = () => {},
+    tLog = key => key, copyLogs = async () => {}, isActive = () => true,
+    setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout }) {
     const markup = createCardMarkup({ location });
-    const frame = createFrame({ document });
+    const frame = createFrame({ document, tLog, copyLogs, isActive, setTimeout, clearTimeout, createError });
     let buildGeneration = 0;
     const cards = createCards({ markup, createError, prepareCard, onRetire, onReplace,
         readRoot: () => frame.root, keyFor: item => item.videoId ? `v:${item.videoId}` : `h:${item.href}` });
@@ -40,7 +42,7 @@ export function createGrid({ document, location, runChunks,
         ++buildGeneration;
         const previous = frame.retire();
         try { cards.dispose(); }
-        finally { previous?.remove(); }
+        finally { frame.release(previous); }
     }
     function clearCards(assertCurrent = () => {}) {
         ++buildGeneration;
@@ -50,7 +52,11 @@ export function createGrid({ document, location, runChunks,
         cards.publish(new Map());
     }
     return Object.freeze({ publish, dispose, clearCards, mount: frame.mount, cancelBuild: () => { ++buildGeneration; },
-        get cards() { return cards.view; }, get root() { return frame.root; },
+        get cards() { return cards.view; }, get root() { return frame.root; }, get status() { return frame.status; },
+        updateStatus: frame.updateStatus, layoutStatus: frame.layoutStatus, applyStatusTypography: frame.applyStatusTypography,
+        placeStatus: frame.placeStatus,
+        showMismatch: frame.showMismatch, hideMismatch: frame.hideMismatch,
+        installResources: frame.installResources, cleanupArtifacts: frame.cleanupArtifacts,
         getCard: cards.getCard, assertCard: cards.assertCard, isCardCurrent: cards.isCurrent,
         replaceCard: cards.replaceCard,
         removeCard: (...args) => { const result = cards.removeCard(...args); frame.setEmpty(cards.view.size === 0); return result; },
@@ -61,5 +67,5 @@ export function createGrid({ document, location, runChunks,
         captureCard: markup.capture, captureTemplate: markup.captureTemplate, normalizeCard: markup.normalize,
         moveCard: (handle, parent, before) => { cards.assertCard(handle); frame.assertParent(parent); frame.moveCard(handle.node, parent, before); },
         orderChildren: (parent, desired) => { frame.assertParent(parent); frame.orderChildren(parent, desired); },
-        applyGeometry: frame.applyGeometry, diagnostics: cards.diagnostics });
+        applyGeometry: frame.applyGeometry, diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics() }) });
 }

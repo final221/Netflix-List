@@ -3,21 +3,22 @@ import assert from 'node:assert/strict';
 import { createDocument } from './helpers/dom.js';
 
 test('styles install once, keep native/owned selectors and can be removed and reinstalled', async () => {
-    const { installStyles, removeStyles } = await import('../src/grid/styles.js');
+    const { createGrid } = await import('../src/grid/grid.js');
     const names = await import('../src/dom-names.js');
     const document = createDocument();
-    const first = installStyles(document);
+    const grid = createGrid({ document, location: { href: 'https://www.netflix.com/browse/my-list' }, runChunks: async () => {} });
+    const first = grid.installResources();
     assert.equal(first.id, names.STYLE_ID);
-    assert.equal(installStyles(document), first);
+    assert.equal(grid.installResources(), first);
     assert.equal(document.head.querySelectorAll('style').length, 1);
     for (const name of [names.GRID_ID, names.STATUS_ID, names.ORIGINAL_HIDDEN_CLASS, names.SOURCE_PARKED_CLASS,
         names.ORIGINAL_VISIBILITY_ATTR, names.LEGACY_EMPTY_STATE_ID]) assert.ok(first.textContent.includes(name), name);
     assert.ok(first.textContent.includes('[data-tm-watch-controls]'));
     assert.ok(first.textContent.includes('pointer-events: auto !important'));
-    removeStyles(document);
-    removeStyles(document);
+    grid.dispose();
+    grid.dispose();
     assert.equal(document.head.querySelectorAll('style').length, 0);
-    const replacement = installStyles(document);
+    const replacement = grid.installResources();
     assert.notEqual(replacement, first);
     assert.equal(replacement.textContent, first.textContent);
 });

@@ -10,7 +10,6 @@ const legacyImports = new Map([
     ['src/main.js -> src/legacy.js', 'P20: replace the transitional startup entry'],
     ['src/legacy.js -> src/dom-names.js', 'P20: move remaining runtime consumers to application composition'],
     ['src/legacy.js -> src/i18n/i18n.js', 'P20: inject localization into the remaining consumers'],
-    ['src/legacy.js -> src/grid/styles.js', 'P11: grid frame assumes stylesheet lifetime'],
     ['src/legacy.js -> src/diagnostics/logger.js', 'P20: application owns logger composition'],
     ['src/legacy.js -> src/diagnostics/report.js', 'P20: application wires explicit summary providers'],
     ['src/legacy.js -> src/netflix/popup-inspection.js', 'P20: application wires inspection lifetime and native consumers'],

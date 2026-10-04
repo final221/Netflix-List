@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.32
+// @version      1.4.33
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -180,7 +180,13 @@
       return "";
     }
   }
-  function createNetflixPageDom({ document: document2, Element: Element2, location: location2, readGraphqlIdentity = () => null }) {
+  function createNetflixPageDom({
+    document: document2,
+    Element: Element2,
+    location: location2,
+    readGraphqlIdentity = () => null,
+    getComputedStyle: getComputedStyle2 = () => ({})
+  }) {
     const videoIdFromHref = (href) => readVideoIdFromHref(href, location2.href);
     function nativeCardIdentity(slot) {
       const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard);
@@ -381,6 +387,17 @@
         }
       };
     }
+    function readHeadingTypography(section) {
+      const heading = section?.querySelector("h2") || document2.querySelector(`${NETFLIX_DOM_SELECTORS.browseSections} section h2`);
+      if (!heading) return Object.freeze({});
+      const style = getComputedStyle2(heading), facts = {};
+      for (const property of ["font-family", "font-size", "font-weight", "line-height", "letter-spacing"]) {
+        const value = style.getPropertyValue(property);
+        if (value) facts[property] = value;
+      }
+      facts.color = style.color || "rgb(255, 255, 255)";
+      return Object.freeze(facts);
+    }
     return Object.freeze({
       ...netflixDom,
       findMyListSection,
@@ -388,7 +405,8 @@
       nativeCardIdentity,
       videoIdFromHref,
       decodeTrackingContext,
-      describeMembershipClick
+      describeMembershipClick,
+      readHeadingTypography
     });
   }
 
@@ -694,9 +712,674 @@
     };
   }
 
+  // src/grid/styles.js
+  var stylesheet = `
+            [${SECTION_ATTR}="true"] {
+                position: relative !important;
+                overflow: visible !important;
+            }
+
+            /* Keep the native carousel visible and fully interactive. */
+            [${SECTION_ATTR}="true"] > .${SOURCE_SCAN_CLASS},
+            [${SECTION_ATTR}="true"] > .${SOURCE_PARKED_CLASS} {
+                opacity: 1 !important;
+                pointer-events: auto !important;
+                overflow: visible !important;
+            }
+
+            [${SECTION_ATTR}="true"].${ORIGINAL_HIDDEN_CLASS} > .${ORIGINAL_HEADER_CLASS},
+            [${SECTION_ATTR}="true"][${ORIGINAL_VISIBILITY_ATTR}="false"] > .${ORIGINAL_HEADER_CLASS} {
+                display: none !important;
+            }
+
+            [${SECTION_ATTR}="true"].${ORIGINAL_HIDDEN_CLASS} > .${SOURCE_PARKED_CLASS},
+            [${SECTION_ATTR}="true"][${ORIGINAL_VISIBILITY_ATTR}="false"] > .${SOURCE_PARKED_CLASS} {
+                position: absolute !important;
+                left: 0 !important;
+                top: 0 !important;
+                width: 100% !important;
+                height: 1px !important;
+                min-height: 0 !important;
+                margin: 0 !important;
+                opacity: 0 !important;
+                pointer-events: none !important;
+                overflow: visible !important;
+                z-index: -1 !important;
+            }
+
+            [${SECTION_ATTR}="true"].${ORIGINAL_HIDDEN_CLASS} #${STATUS_ID},
+            [${SECTION_ATTR}="true"][${ORIGINAL_VISIBILITY_ATTR}="false"] #${STATUS_ID} {
+                --tm-row-gap: 0px !important;
+            }
+
+            /* Suppress native slide animation only for script-driven moves. */
+            [${SECTION_ATTR}="true"].${FAST_MOVE_CLASS} .tm-netflix-mylist-v15-track {
+                transition: none !important;
+                animation: none !important;
+            }
+
+            #${STATUS_ID} {
+                box-sizing: border-box;
+                position: relative;
+                z-index: 5;
+                margin: var(--tm-row-gap, 24px) 0 10px;
+                padding: 0;
+                min-height: 17px;
+                color: rgba(255,255,255,.72);
+                font-size: inherit;
+                line-height: normal;
+                pointer-events: auto;
+                display: flex;
+                align-items: baseline;
+                flex-wrap: nowrap;
+                white-space: nowrap;
+                gap: 8px;
+                overflow: visible;
+            }
+
+            #${STATUS_ID} .${STATUS_TEXT_CLASS} {
+                display: flex;
+                align-items: baseline;
+                gap: 8px;
+                white-space: nowrap;
+                flex: 0 0 auto;
+            }
+
+            #${STATUS_ID} .${STATUS_LABEL_CLASS} {
+                font: inherit;
+                color: inherit;
+                white-space: nowrap;
+            }
+
+            #${STATUS_ID} .${STATUS_META_CLASS},
+            #${LOG_LINK_ID} {
+                font-size: .80em;
+                font-weight: 400;
+                line-height: 1.2;
+            }
+
+            #${LOG_LINK_ID} {
+                margin-left: 0;
+                flex: 0 0 auto;
+                align-self: baseline;
+                color: rgba(255,255,255,.88);
+                text-decoration: underline;
+                text-underline-offset: 2px;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+
+            #${ORDER_MISMATCH_DIALOG_ID} {
+                box-sizing: border-box;
+                position: fixed !important;
+                left: 50% !important;
+                bottom: 14vh !important;
+                transform: translateX(-50%) !important;
+                z-index: 2147483647 !important;
+                width: max-content;
+                max-width: min(760px, calc(100vw - 48px));
+                padding: 18px 22px;
+                border-radius: 4px;
+                background: rgba(38,38,38,.98);
+                color: #fff;
+                box-shadow: 0 4px 18px rgba(0,0,0,.55);
+                font-family: "Netflix Sans", "Helvetica Neue", "Segoe UI", sans-serif;
+                font-size: 16px;
+                line-height: 1.45;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 14px;
+                text-align: center;
+                pointer-events: auto !important;
+            }
+
+            #${ORDER_MISMATCH_DIALOG_ID} [data-tm-order-message] {
+                min-width: 0;
+                max-width: 520px;
+            }
+
+            #${ORDER_MISMATCH_DIALOG_ID} [data-tm-order-actions] {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+                flex: 0 0 auto;
+            }
+
+            #${ORDER_MISMATCH_DIALOG_ID} button {
+                box-sizing: border-box;
+                min-width: 88px;
+                min-height: 36px;
+                padding: 7px 14px;
+                border-radius: 3px;
+                border: 1px solid rgba(255,255,255,.72);
+                background: transparent;
+                color: #fff;
+                font: inherit;
+                font-size: 14px;
+                font-weight: 600;
+                line-height: 1.2;
+                cursor: pointer;
+            }
+
+            #${ORDER_MISMATCH_DIALOG_ID} button[data-tm-order-ok] {
+                border-color: #fff;
+                background: #fff;
+                color: #181818;
+            }
+
+            #${ORDER_MISMATCH_DIALOG_ID} button:hover {
+                opacity: .86;
+            }
+
+            @media (max-width: 700px) {
+                #${ORDER_MISMATCH_DIALOG_ID} {
+                    width: calc(100vw - 32px);
+                    max-width: none;
+                    padding: 16px 18px;
+                    gap: 14px;
+                    align-items: stretch;
+                }
+
+                #${ORDER_MISMATCH_DIALOG_ID} [data-tm-order-actions] {
+                    justify-content: flex-end;
+                }
+            }
+
+            #${GRID_ID}[data-tm-responsive-refreshing="true"] {
+                pointer-events: none !important;
+            }
+
+            #${GRID_ID}[data-tm-empty="true"] {
+                display: none !important;
+            }
+
+            #${LEGACY_EMPTY_STATE_ID} {
+                position: relative;
+                z-index: 0;
+                box-sizing: border-box;
+            }
+
+            #${LEGACY_EMPTY_STATE_ID}[data-tm-empty-source="provisional-fallback"] {
+                min-height: 116px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 24px;
+                color: rgba(255,255,255,.72);
+                text-align: center;
+            }
+
+            #${LEGACY_EMPTY_STATE_ID}[data-tm-empty-source="provisional-fallback"] > p {
+                margin: 0;
+                font: inherit;
+            }
+
+            #${GRID_ID} {
+                --tm-cols: 5;
+                --tm-gap: 8px;
+                --tm-grid-width: 1000px;
+                --tm-grid-left: 0px;
+                display: grid;
+                grid-template-columns: repeat(var(--tm-cols), minmax(0, 1fr));
+                gap: var(--tm-gap);
+                box-sizing: border-box;
+                width: var(--tm-grid-width);
+                max-width: var(--tm-grid-width);
+                margin: 0 0 0 var(--tm-grid-left);
+                padding: 0;
+                overflow: visible;
+                position: relative;
+                z-index: 0;
+            }
+
+            #${GRID_ID} > [data-virtual-slot],
+            #${GRID_ID} [data-tm-watch-grid] > [data-virtual-slot] {
+                min-width: 0 !important;
+                width: auto !important;
+                max-width: none !important;
+                flex: none !important;
+                transform: none !important;
+                translate: none !important;
+                overflow: visible !important;
+                position: relative !important;
+            }
+
+            #${GRID_ID} [data-uia="standard-card"] {
+                display: block;
+                width: 100%;
+                pointer-events: auto !important;
+            }
+
+            #${GRID_ID} img {
+                display: block;
+                width: 100%;
+                max-width: 100%;
+                height: auto;
+            }
+
+            #${GRID_ID} [data-tm-viewing-actions] {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 4px;
+                padding-top: 6px;
+                position: relative;
+                z-index: 1;
+            }
+
+            #${GRID_ID} [data-tm-viewing-actions] > button {
+                border: 1px solid rgba(255,255,255,.18);
+                border-radius: 5px;
+                padding: 5px 8px;
+                background: #242424;
+                color: rgba(255,255,255,.85);
+                font: inherit;
+                font-size: 12px;
+                line-height: 1.3;
+                cursor: pointer;
+            }
+
+            #${GRID_ID} [data-tm-viewing-actions] > button:hover,
+            #${GRID_ID} [data-tm-viewing-actions] > button:focus-visible {
+                border-color: #fff;
+                color: #fff;
+                outline: 2px solid #fff;
+                outline-offset: 2px;
+            }
+
+            #${GRID_ID} [data-tm-viewing-actions] > button:disabled { opacity: .45; cursor: default; }
+            #${GRID_ID} [data-tm-viewing-actions] > button[hidden] { display: none; }
+            #${GRID_ID} [data-tm-manual-choice] {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                padding-inline: 4px;
+                color: rgba(255,255,255,.65);
+                font: inherit;
+                font-size: 11px;
+                line-height: 1.3;
+            }
+            #${GRID_ID} [data-tm-manual-choice]::before {
+                content: '';
+                width: 5px;
+                height: 5px;
+                flex: 0 0 5px;
+                border-radius: 50%;
+                background: currentColor;
+            }
+            #${GRID_ID} [data-tm-manual-choice][hidden] { display: none; }
+
+            #${GRID_ID} > [data-tm-watch-section],
+            #${GRID_ID} > [data-tm-type-filter],
+            #${GRID_ID} > [data-tm-watch-controls],
+            #${GRID_ID} > [data-tm-watch-empty] {
+                grid-column: 1 / -1;
+                min-width: 0;
+                margin: 12px 0;
+                color: rgba(255,255,255,.8);
+                font: inherit;
+            }
+
+            #${GRID_ID} [data-tm-watch-grid] {
+                display: grid;
+                grid-template-columns: repeat(var(--tm-cols), minmax(0, 1fr));
+                gap: var(--tm-gap);
+                margin-top: 16px;
+            }
+
+            #${GRID_ID} [data-tm-watch-section]:not([open]) > :not(summary),
+            #${GRID_ID} [data-tm-type-hidden="true"] {
+                display: none !important;
+            }
+
+            #${GRID_ID} [data-tm-type-filter] {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 6px;
+                padding: 5px;
+                border: 1px solid rgba(255,255,255,.12);
+                border-radius: 12px;
+                background: rgba(255,255,255,.035);
+                width: fit-content;
+                max-width: 100%;
+                box-sizing: border-box;
+                margin: 4px 0 18px;
+            }
+
+            #${GRID_ID} [data-tm-type-filter] > button {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+                min-height: 40px;
+                padding: 8px 16px;
+                border: 1px solid transparent;
+                border-radius: 8px;
+                background: transparent;
+                color: rgba(255,255,255,.7);
+                font: inherit;
+                font-size: .9em;
+                cursor: pointer;
+            }
+
+            #${GRID_ID} [data-tm-type-filter] > button:hover {
+                background: rgba(255,255,255,.08);
+                color: #fff;
+            }
+
+            #${GRID_ID} [data-tm-type-filter] > button[aria-pressed="true"] {
+                background: #e50914;
+                color: #fff;
+                font-weight: 600;
+            }
+
+            #${GRID_ID} [data-tm-type-filter] > button:focus-visible {
+                outline: 2px solid #fff;
+                outline-offset: 3px;
+            }
+
+            #${GRID_ID} [data-tm-type-count] {
+                min-width: 1.5em;
+                padding: 2px 6px;
+                border-radius: 5px;
+                background: rgba(255,255,255,.1);
+                font-size: .8em;
+                font-variant-numeric: tabular-nums;
+                text-align: center;
+            }
+
+            #${GRID_ID} [data-tm-watch-section] {
+                border: 1px solid rgba(255,255,255,.14);
+                border-radius: 12px;
+                padding: 12px 18px;
+                background: rgba(255,255,255,.025);
+            }
+
+            #${GRID_ID} [data-tm-watch-section] > summary {
+                cursor: pointer;
+                padding: 8px 0;
+                font-size: 1.15em;
+                font-weight: 600;
+            }
+
+            #${GRID_ID} [data-tm-watch-section] > [data-tm-type-filter] {
+                margin-top: 14px;
+            }
+
+            #${GRID_ID} [data-tm-watch-controls] {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                font-size: .9em;
+            }
+
+            #${GRID_ID} [data-tm-watch-controls] > button {
+                border: 1px solid rgba(255,255,255,.4);
+                border-radius: 4px;
+                background: transparent;
+                color: inherit;
+                font: inherit;
+                padding: 6px 10px;
+                cursor: pointer;
+            }
+
+            #${GRID_ID} [data-tm-watch-controls] > button:disabled {
+                opacity: .6;
+                cursor: default;
+            }
+
+            #${GRID_ID} [data-tm-watch-empty][hidden] {
+                display: none !important;
+            }
+
+        `;
+  function installStyles(document2) {
+    const current = document2.getElementById(STYLE_ID);
+    if (current) return current;
+    const style = document2.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = stylesheet;
+    document2.head.appendChild(style);
+    return style;
+  }
+
   // src/grid/frame.js
-  function createFrame({ document: document2 }) {
+  function createFrame({ document: document2, tLog, copyLogs, setTimeout: setTimeout2, clearTimeout: clearTimeout2, isActive, createError }) {
     let root = null;
+    let status = null, style = null, dialog = null, logLink = null, logListener = null;
+    let feedbackTimer = null, generation = 0, copySequence = 0, dialogRevision = 0, releaseFailures = 0;
+    const retiredStatuses = /* @__PURE__ */ new WeakSet();
+    function attemptRelease(action) {
+      try {
+        action();
+      } catch (_) {
+        releaseFailures++;
+      }
+    }
+    function clearFeedback() {
+      const timer = feedbackTimer;
+      feedbackTimer = null;
+      if (timer !== null) attemptRelease(() => clearTimeout2(timer));
+    }
+    function assertStatus(node) {
+      if (!node || node !== status) throw createError("GRID_FRAME_RETIRED", "Status frame is no longer current");
+    }
+    function adoptStatus(node) {
+      if (retiredStatuses.has(node) || status && status !== node) {
+        throw createError("GRID_FRAME_RETIRED", "Status frame is no longer current");
+      }
+      status = node;
+    }
+    function updateStatus(content) {
+      const node = status || document2.createElement("div");
+      node.id = STATUS_ID;
+      status = node;
+      let text = node.querySelector(`.${STATUS_TEXT_CLASS}`);
+      if (!text) {
+        text = document2.createElement("span");
+        text.className = STATUS_TEXT_CLASS;
+        node.appendChild(text);
+      }
+      const writePart = (className, value) => {
+        let part = text.querySelector(`.${className}`);
+        if (!part) {
+          part = document2.createElement("span");
+          part.className = className;
+          text.appendChild(part);
+        }
+        if (part.textContent !== value) part.textContent = value;
+      };
+      writePart(STATUS_LABEL_CLASS, content && typeof content === "object" ? content.label || "" : String(content ?? ""));
+      writePart(STATUS_META_CLASS, content && typeof content === "object" ? content.meta || "" : "");
+      if (!logLink) {
+        const link = document2.createElement("a");
+        link.id = LOG_LINK_ID;
+        link.href = "#";
+        link.textContent = "CopyLogs";
+        link.title = tLog("copyLogsTooltip");
+        const owner = generation;
+        const current = (sequence) => owner === generation && status === node && logLink === link && link.isConnected && isActive() && sequence === copySequence;
+        const listener = async (event) => {
+          event.preventDefault();
+          if (owner !== generation || logLink !== link || !link.isConnected || !isActive()) return;
+          const sequence = ++copySequence;
+          clearFeedback();
+          link.textContent = "CopyLogs";
+          try {
+            await copyLogs();
+            if (!current(sequence)) return;
+            link.textContent = tLog("copied");
+            link.title = tLog("copied");
+            const timer = setTimeout2(() => {
+              if (feedbackTimer !== timer) return;
+              feedbackTimer = null;
+              if (!current(sequence)) return;
+              link.textContent = "CopyLogs";
+              link.title = tLog("copyLogsTooltip");
+            }, 2500);
+            feedbackTimer = timer;
+          } catch (error) {
+            if (current(sequence)) link.title = tLog("copyFailed", { message: error?.message || error });
+          }
+        };
+        logLink = link;
+        logListener = listener;
+        link.addEventListener("click", listener);
+        node.appendChild(link);
+      }
+      return node;
+    }
+    function layoutStatus(node, geometry, rowGap, assertCurrent = () => {
+    }) {
+      const guard = () => {
+        assertCurrent();
+        assertStatus(node);
+      };
+      guard();
+      if (geometry) {
+        node.style.marginLeft = `${geometry.left}px`;
+        guard();
+        node.style.width = `${geometry.width}px`;
+        guard();
+      }
+      if (rowGap !== void 0) node.style.setProperty("--tm-row-gap", `${rowGap}px`);
+      guard();
+    }
+    function applyStatusTypography(node, typography, assertCurrent = () => {
+    }) {
+      const guard = () => {
+        assertCurrent();
+        assertStatus(node);
+      };
+      guard();
+      for (const [property, value] of Object.entries(typography)) {
+        guard();
+        if (value) node.style.setProperty(property, value);
+      }
+      guard();
+    }
+    function placeStatus(node, { section, anchor, assertCurrent = () => {
+    } }) {
+      const guard = () => {
+        assertCurrent();
+        assertStatus(node);
+      };
+      guard();
+      if (anchor?.isConnected) anchor.insertAdjacentElement("afterend", node);
+      else section.prepend(node);
+      guard();
+    }
+    function releaseDialog(resource) {
+      if (!resource) return;
+      for (const [node, listener] of resource.listeners) attemptRelease(() => node.removeEventListener("click", listener));
+      attemptRelease(() => resource.node.remove());
+    }
+    function hideMismatch() {
+      const previous = dialog;
+      dialog = null;
+      dialogRevision++;
+      releaseDialog(previous);
+    }
+    function showMismatch({ message, acceptLabel, cancelLabel, onAccept, onCancel, assertCurrent }) {
+      const owner = generation, revision = ++dialogRevision;
+      const guard = () => {
+        assertCurrent();
+        if (generation !== owner || revision !== dialogRevision || !isActive()) {
+          throw createError("GRID_FRAME_RETIRED", "Dialog frame is no longer current");
+        }
+      };
+      guard();
+      const previous = dialog;
+      dialog = null;
+      releaseDialog(previous);
+      guard();
+      const node = document2.createElement("div");
+      node.id = ORDER_MISMATCH_DIALOG_ID;
+      node.setAttribute("role", "alertdialog");
+      node.setAttribute("aria-modal", "false");
+      node.setAttribute("aria-label", message);
+      const text = document2.createElement("div");
+      text.setAttribute("data-tm-order-message", "true");
+      text.textContent = message;
+      const actions = document2.createElement("div");
+      actions.setAttribute("data-tm-order-actions", "true");
+      const resource = { node, listeners: [], used: false };
+      const button = (label, marker, action) => {
+        const control = document2.createElement("button");
+        control.type = "button";
+        control.textContent = label;
+        control.setAttribute(marker, "true");
+        const listener = () => {
+          if (dialog !== resource || resource.used || !node.isConnected) return;
+          try {
+            guard();
+          } catch (_) {
+            return;
+          }
+          if (dialog !== resource) return;
+          resource.used = true;
+          for (const [element, callback] of resource.listeners) attemptRelease(() => element.removeEventListener("click", callback));
+          try {
+            guard();
+          } catch (_) {
+            return;
+          }
+          if (dialog !== resource) return;
+          action();
+        };
+        resource.listeners.push([control, listener]);
+        control.addEventListener("click", listener);
+        actions.appendChild(control);
+      };
+      button(acceptLabel, "data-tm-order-ok", onAccept);
+      button(cancelLabel, "data-tm-order-cancel", onCancel);
+      node.append(text, actions);
+      guard();
+      dialog = resource;
+      (document2.body || document2.documentElement).appendChild(node);
+      try {
+        guard();
+      } catch (error) {
+        if (dialog === resource) hideMismatch();
+        throw error;
+      }
+      return node;
+    }
+    function installResources(assertCurrent = () => {
+    }) {
+      const owner = generation;
+      assertCurrent();
+      const acquired = style || installStyles(document2);
+      try {
+        assertCurrent();
+        if (generation !== owner) throw createError("GRID_FRAME_RETIRED", "Resource frame is no longer current");
+      } catch (error) {
+        if (style !== acquired) attemptRelease(() => acquired.remove());
+        throw error;
+      }
+      style = acquired;
+      return style;
+    }
+    function cleanupArtifacts(assertCurrent = () => {
+    }) {
+      const owner = generation;
+      const guard = () => {
+        assertCurrent();
+        if (generation !== owner) throw createError("GRID_FRAME_RETIRED", "Artifact cleanup frame is no longer current");
+      };
+      guard();
+      for (const id of [...OLD_IDS, ...OLD_STYLE_IDS]) {
+        guard();
+        document2.getElementById(id)?.remove();
+        guard();
+      }
+    }
     function createRoot() {
       const node = document2.createElement("div");
       node.id = GRID_ID;
@@ -716,17 +1399,15 @@
       node.__tmAppliedGeometry = geometry;
       return geometry;
     }
-    function publish(node, { section, anchor, status, geometry, layout, visible = true, assertCurrent }) {
+    function publish(node, { section, anchor, status: status2, geometry, layout, visible = true, assertCurrent }) {
       assertCurrent();
+      adoptStatus(status2);
       applyGeometry(node, geometry, layout);
-      if (anchor?.isConnected) anchor.insertAdjacentElement("afterend", status);
-      else section.prepend(status);
-      status.style.marginLeft = `${geometry.left}px`;
-      status.style.width = `${geometry.width}px`;
-      status.style.setProperty("--tm-row-gap", `${visible ? layout.rowGap || 0 : 0}px`);
+      placeStatus(status2, { section, anchor, assertCurrent });
+      layoutStatus(status2, geometry, visible ? layout.rowGap || 0 : 0, assertCurrent);
       assertCurrent();
       const previous = root || document2.getElementById(GRID_ID);
-      status.insertAdjacentElement("afterend", node);
+      status2.insertAdjacentElement("afterend", node);
       node.style.marginTop = "0px";
       try {
         assertCurrent();
@@ -762,16 +1443,53 @@
       }
     }
     function retire() {
-      const previous = root;
-      root = null;
+      const previous = { root, status, style, dialog, logLink, logListener };
+      if (status) retiredStatuses.add(status);
+      root = status = style = dialog = logLink = logListener = null;
+      generation++;
+      copySequence++;
+      dialogRevision++;
+      clearFeedback();
       return previous;
+    }
+    function release(previous) {
+      if (previous.logLink) attemptRelease(() => previous.logLink.removeEventListener("click", previous.logListener));
+      releaseDialog(previous.dialog);
+      for (const node of [previous.root, previous.status, previous.style]) {
+        if (node && node !== root && node !== status && node !== style) attemptRelease(() => node.remove());
+      }
     }
     function assertParent(parent) {
       if (!root?.isConnected || !root.contains(parent)) throw Object.assign(new Error("Grid frame is no longer current"), { code: "GRID_FRAME_RETIRED" });
     }
-    return { get root() {
-      return root;
-    }, createRoot, applyGeometry, publish, mount, clearCards, setEmpty, moveCard, orderChildren, retire, assertParent };
+    return {
+      get root() {
+        return root;
+      },
+      get status() {
+        return status;
+      },
+      createRoot,
+      applyGeometry,
+      publish,
+      mount,
+      clearCards,
+      setEmpty,
+      moveCard,
+      orderChildren,
+      retire,
+      release,
+      assertParent,
+      updateStatus,
+      layoutStatus,
+      applyStatusTypography,
+      placeStatus,
+      showMismatch,
+      hideMismatch,
+      installResources,
+      cleanupArtifacts,
+      diagnostics: () => ({ frameReleaseFailures: releaseFailures })
+    };
   }
 
   // src/grid/grid.js
@@ -787,10 +1505,16 @@
     onReplace = () => {
     },
     installHover = () => {
-    }
+    },
+    tLog = (key) => key,
+    copyLogs = async () => {
+    },
+    isActive = () => true,
+    setTimeout: setTimeout2 = globalThis.setTimeout,
+    clearTimeout: clearTimeout2 = globalThis.clearTimeout
   }) {
     const markup = createCardMarkup({ location: location2 });
-    const frame = createFrame({ document: document2 });
+    const frame = createFrame({ document: document2, tLog, copyLogs, isActive, setTimeout: setTimeout2, clearTimeout: clearTimeout2, createError });
     let buildGeneration = 0;
     const cards = createCards({
       markup,
@@ -832,7 +1556,7 @@
       try {
         cards.dispose();
       } finally {
-        previous?.remove();
+        frame.release(previous);
       }
     }
     function clearCards(assertCurrent = () => {
@@ -857,6 +1581,17 @@
       get root() {
         return frame.root;
       },
+      get status() {
+        return frame.status;
+      },
+      updateStatus: frame.updateStatus,
+      layoutStatus: frame.layoutStatus,
+      applyStatusTypography: frame.applyStatusTypography,
+      placeStatus: frame.placeStatus,
+      showMismatch: frame.showMismatch,
+      hideMismatch: frame.hideMismatch,
+      installResources: frame.installResources,
+      cleanupArtifacts: frame.cleanupArtifacts,
       getCard: cards.getCard,
       assertCard: cards.assertCard,
       isCardCurrent: cards.isCurrent,
@@ -890,7 +1625,7 @@
         frame.orderChildren(parent, desired);
       },
       applyGeometry: frame.applyGeometry,
-      diagnostics: cards.diagnostics
+      diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics() })
     });
   }
 
@@ -2233,446 +2968,6 @@
       return tUi("initTime", { seconds: formatUiNumber(seconds, 2) });
     }
     return Object.freeze({ getUiLocale, getLogLocale, tUi, tUiPlural, tLog, formatUiNumber, formatItemCount, formatInitializationTime });
-  }
-
-  // src/grid/styles.js
-  var stylesheet = `
-            [${SECTION_ATTR}="true"] {
-                position: relative !important;
-                overflow: visible !important;
-            }
-
-            /* Keep the native carousel visible and fully interactive. */
-            [${SECTION_ATTR}="true"] > .${SOURCE_SCAN_CLASS},
-            [${SECTION_ATTR}="true"] > .${SOURCE_PARKED_CLASS} {
-                opacity: 1 !important;
-                pointer-events: auto !important;
-                overflow: visible !important;
-            }
-
-            [${SECTION_ATTR}="true"].${ORIGINAL_HIDDEN_CLASS} > .${ORIGINAL_HEADER_CLASS},
-            [${SECTION_ATTR}="true"][${ORIGINAL_VISIBILITY_ATTR}="false"] > .${ORIGINAL_HEADER_CLASS} {
-                display: none !important;
-            }
-
-            [${SECTION_ATTR}="true"].${ORIGINAL_HIDDEN_CLASS} > .${SOURCE_PARKED_CLASS},
-            [${SECTION_ATTR}="true"][${ORIGINAL_VISIBILITY_ATTR}="false"] > .${SOURCE_PARKED_CLASS} {
-                position: absolute !important;
-                left: 0 !important;
-                top: 0 !important;
-                width: 100% !important;
-                height: 1px !important;
-                min-height: 0 !important;
-                margin: 0 !important;
-                opacity: 0 !important;
-                pointer-events: none !important;
-                overflow: visible !important;
-                z-index: -1 !important;
-            }
-
-            [${SECTION_ATTR}="true"].${ORIGINAL_HIDDEN_CLASS} #${STATUS_ID},
-            [${SECTION_ATTR}="true"][${ORIGINAL_VISIBILITY_ATTR}="false"] #${STATUS_ID} {
-                --tm-row-gap: 0px !important;
-            }
-
-            /* Suppress native slide animation only for script-driven moves. */
-            [${SECTION_ATTR}="true"].${FAST_MOVE_CLASS} .tm-netflix-mylist-v15-track {
-                transition: none !important;
-                animation: none !important;
-            }
-
-            #${STATUS_ID} {
-                box-sizing: border-box;
-                position: relative;
-                z-index: 5;
-                margin: var(--tm-row-gap, 24px) 0 10px;
-                padding: 0;
-                min-height: 17px;
-                color: rgba(255,255,255,.72);
-                font-size: inherit;
-                line-height: normal;
-                pointer-events: auto;
-                display: flex;
-                align-items: baseline;
-                flex-wrap: nowrap;
-                white-space: nowrap;
-                gap: 8px;
-                overflow: visible;
-            }
-
-            #${STATUS_ID} .${STATUS_TEXT_CLASS} {
-                display: flex;
-                align-items: baseline;
-                gap: 8px;
-                white-space: nowrap;
-                flex: 0 0 auto;
-            }
-
-            #${STATUS_ID} .${STATUS_LABEL_CLASS} {
-                font: inherit;
-                color: inherit;
-                white-space: nowrap;
-            }
-
-            #${STATUS_ID} .${STATUS_META_CLASS},
-            #${LOG_LINK_ID} {
-                font-size: .80em;
-                font-weight: 400;
-                line-height: 1.2;
-            }
-
-            #${LOG_LINK_ID} {
-                margin-left: 0;
-                flex: 0 0 auto;
-                align-self: baseline;
-                color: rgba(255,255,255,.88);
-                text-decoration: underline;
-                text-underline-offset: 2px;
-                cursor: pointer;
-                white-space: nowrap;
-            }
-
-            #${ORDER_MISMATCH_DIALOG_ID} {
-                box-sizing: border-box;
-                position: fixed !important;
-                left: 50% !important;
-                bottom: 14vh !important;
-                transform: translateX(-50%) !important;
-                z-index: 2147483647 !important;
-                width: max-content;
-                max-width: min(760px, calc(100vw - 48px));
-                padding: 18px 22px;
-                border-radius: 4px;
-                background: rgba(38,38,38,.98);
-                color: #fff;
-                box-shadow: 0 4px 18px rgba(0,0,0,.55);
-                font-family: "Netflix Sans", "Helvetica Neue", "Segoe UI", sans-serif;
-                font-size: 16px;
-                line-height: 1.45;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                gap: 14px;
-                text-align: center;
-                pointer-events: auto !important;
-            }
-
-            #${ORDER_MISMATCH_DIALOG_ID} [data-tm-order-message] {
-                min-width: 0;
-                max-width: 520px;
-            }
-
-            #${ORDER_MISMATCH_DIALOG_ID} [data-tm-order-actions] {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 10px;
-                flex: 0 0 auto;
-            }
-
-            #${ORDER_MISMATCH_DIALOG_ID} button {
-                box-sizing: border-box;
-                min-width: 88px;
-                min-height: 36px;
-                padding: 7px 14px;
-                border-radius: 3px;
-                border: 1px solid rgba(255,255,255,.72);
-                background: transparent;
-                color: #fff;
-                font: inherit;
-                font-size: 14px;
-                font-weight: 600;
-                line-height: 1.2;
-                cursor: pointer;
-            }
-
-            #${ORDER_MISMATCH_DIALOG_ID} button[data-tm-order-ok] {
-                border-color: #fff;
-                background: #fff;
-                color: #181818;
-            }
-
-            #${ORDER_MISMATCH_DIALOG_ID} button:hover {
-                opacity: .86;
-            }
-
-            @media (max-width: 700px) {
-                #${ORDER_MISMATCH_DIALOG_ID} {
-                    width: calc(100vw - 32px);
-                    max-width: none;
-                    padding: 16px 18px;
-                    gap: 14px;
-                    align-items: stretch;
-                }
-
-                #${ORDER_MISMATCH_DIALOG_ID} [data-tm-order-actions] {
-                    justify-content: flex-end;
-                }
-            }
-
-            #${GRID_ID}[data-tm-responsive-refreshing="true"] {
-                pointer-events: none !important;
-            }
-
-            #${GRID_ID}[data-tm-empty="true"] {
-                display: none !important;
-            }
-
-            #${LEGACY_EMPTY_STATE_ID} {
-                position: relative;
-                z-index: 0;
-                box-sizing: border-box;
-            }
-
-            #${LEGACY_EMPTY_STATE_ID}[data-tm-empty-source="provisional-fallback"] {
-                min-height: 116px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 24px;
-                color: rgba(255,255,255,.72);
-                text-align: center;
-            }
-
-            #${LEGACY_EMPTY_STATE_ID}[data-tm-empty-source="provisional-fallback"] > p {
-                margin: 0;
-                font: inherit;
-            }
-
-            #${GRID_ID} {
-                --tm-cols: 5;
-                --tm-gap: 8px;
-                --tm-grid-width: 1000px;
-                --tm-grid-left: 0px;
-                display: grid;
-                grid-template-columns: repeat(var(--tm-cols), minmax(0, 1fr));
-                gap: var(--tm-gap);
-                box-sizing: border-box;
-                width: var(--tm-grid-width);
-                max-width: var(--tm-grid-width);
-                margin: 0 0 0 var(--tm-grid-left);
-                padding: 0;
-                overflow: visible;
-                position: relative;
-                z-index: 0;
-            }
-
-            #${GRID_ID} > [data-virtual-slot],
-            #${GRID_ID} [data-tm-watch-grid] > [data-virtual-slot] {
-                min-width: 0 !important;
-                width: auto !important;
-                max-width: none !important;
-                flex: none !important;
-                transform: none !important;
-                translate: none !important;
-                overflow: visible !important;
-                position: relative !important;
-            }
-
-            #${GRID_ID} [data-uia="standard-card"] {
-                display: block;
-                width: 100%;
-                pointer-events: auto !important;
-            }
-
-            #${GRID_ID} img {
-                display: block;
-                width: 100%;
-                max-width: 100%;
-                height: auto;
-            }
-
-            #${GRID_ID} [data-tm-viewing-actions] {
-                display: flex;
-                flex-wrap: wrap;
-                align-items: center;
-                gap: 4px;
-                padding-top: 6px;
-                position: relative;
-                z-index: 1;
-            }
-
-            #${GRID_ID} [data-tm-viewing-actions] > button {
-                border: 1px solid rgba(255,255,255,.18);
-                border-radius: 5px;
-                padding: 5px 8px;
-                background: #242424;
-                color: rgba(255,255,255,.85);
-                font: inherit;
-                font-size: 12px;
-                line-height: 1.3;
-                cursor: pointer;
-            }
-
-            #${GRID_ID} [data-tm-viewing-actions] > button:hover,
-            #${GRID_ID} [data-tm-viewing-actions] > button:focus-visible {
-                border-color: #fff;
-                color: #fff;
-                outline: 2px solid #fff;
-                outline-offset: 2px;
-            }
-
-            #${GRID_ID} [data-tm-viewing-actions] > button:disabled { opacity: .45; cursor: default; }
-            #${GRID_ID} [data-tm-viewing-actions] > button[hidden] { display: none; }
-            #${GRID_ID} [data-tm-manual-choice] {
-                display: inline-flex;
-                align-items: center;
-                gap: 4px;
-                padding-inline: 4px;
-                color: rgba(255,255,255,.65);
-                font: inherit;
-                font-size: 11px;
-                line-height: 1.3;
-            }
-            #${GRID_ID} [data-tm-manual-choice]::before {
-                content: '';
-                width: 5px;
-                height: 5px;
-                flex: 0 0 5px;
-                border-radius: 50%;
-                background: currentColor;
-            }
-            #${GRID_ID} [data-tm-manual-choice][hidden] { display: none; }
-
-            #${GRID_ID} > [data-tm-watch-section],
-            #${GRID_ID} > [data-tm-type-filter],
-            #${GRID_ID} > [data-tm-watch-controls],
-            #${GRID_ID} > [data-tm-watch-empty] {
-                grid-column: 1 / -1;
-                min-width: 0;
-                margin: 12px 0;
-                color: rgba(255,255,255,.8);
-                font: inherit;
-            }
-
-            #${GRID_ID} [data-tm-watch-grid] {
-                display: grid;
-                grid-template-columns: repeat(var(--tm-cols), minmax(0, 1fr));
-                gap: var(--tm-gap);
-                margin-top: 16px;
-            }
-
-            #${GRID_ID} [data-tm-watch-section]:not([open]) > :not(summary),
-            #${GRID_ID} [data-tm-type-hidden="true"] {
-                display: none !important;
-            }
-
-            #${GRID_ID} [data-tm-type-filter] {
-                display: flex;
-                flex-wrap: wrap;
-                align-items: center;
-                gap: 6px;
-                padding: 5px;
-                border: 1px solid rgba(255,255,255,.12);
-                border-radius: 12px;
-                background: rgba(255,255,255,.035);
-                width: fit-content;
-                max-width: 100%;
-                box-sizing: border-box;
-                margin: 4px 0 18px;
-            }
-
-            #${GRID_ID} [data-tm-type-filter] > button {
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                gap: 10px;
-                min-height: 40px;
-                padding: 8px 16px;
-                border: 1px solid transparent;
-                border-radius: 8px;
-                background: transparent;
-                color: rgba(255,255,255,.7);
-                font: inherit;
-                font-size: .9em;
-                cursor: pointer;
-            }
-
-            #${GRID_ID} [data-tm-type-filter] > button:hover {
-                background: rgba(255,255,255,.08);
-                color: #fff;
-            }
-
-            #${GRID_ID} [data-tm-type-filter] > button[aria-pressed="true"] {
-                background: #e50914;
-                color: #fff;
-                font-weight: 600;
-            }
-
-            #${GRID_ID} [data-tm-type-filter] > button:focus-visible {
-                outline: 2px solid #fff;
-                outline-offset: 3px;
-            }
-
-            #${GRID_ID} [data-tm-type-count] {
-                min-width: 1.5em;
-                padding: 2px 6px;
-                border-radius: 5px;
-                background: rgba(255,255,255,.1);
-                font-size: .8em;
-                font-variant-numeric: tabular-nums;
-                text-align: center;
-            }
-
-            #${GRID_ID} [data-tm-watch-section] {
-                border: 1px solid rgba(255,255,255,.14);
-                border-radius: 12px;
-                padding: 12px 18px;
-                background: rgba(255,255,255,.025);
-            }
-
-            #${GRID_ID} [data-tm-watch-section] > summary {
-                cursor: pointer;
-                padding: 8px 0;
-                font-size: 1.15em;
-                font-weight: 600;
-            }
-
-            #${GRID_ID} [data-tm-watch-section] > [data-tm-type-filter] {
-                margin-top: 14px;
-            }
-
-            #${GRID_ID} [data-tm-watch-controls] {
-                display: flex;
-                flex-wrap: wrap;
-                align-items: center;
-                justify-content: space-between;
-                gap: 12px;
-                font-size: .9em;
-            }
-
-            #${GRID_ID} [data-tm-watch-controls] > button {
-                border: 1px solid rgba(255,255,255,.4);
-                border-radius: 4px;
-                background: transparent;
-                color: inherit;
-                font: inherit;
-                padding: 6px 10px;
-                cursor: pointer;
-            }
-
-            #${GRID_ID} [data-tm-watch-controls] > button:disabled {
-                opacity: .6;
-                cursor: default;
-            }
-
-            #${GRID_ID} [data-tm-watch-empty][hidden] {
-                display: none !important;
-            }
-
-        `;
-  function installStyles(document2) {
-    const current = document2.getElementById(STYLE_ID);
-    if (current) return current;
-    const style = document2.createElement("style");
-    style.id = STYLE_ID;
-    style.textContent = stylesheet;
-    document2.head.appendChild(style);
-    return style;
-  }
-  function removeStyles(document2) {
-    document2.getElementById(STYLE_ID)?.remove();
   }
 
   // src/netflix/list-data.js
@@ -8979,6 +9274,7 @@
       document,
       Element,
       location,
+      getComputedStyle,
       readGraphqlIdentity: () => listData.myListDomIdentity()
     });
     const { nativeCardIdentity, videoIdFromHref, decodeTrackingContext } = netflixDom;
@@ -9020,7 +9316,12 @@
       prepareCard: (clone) => ensureManualViewingControls(clone),
       installHover: ensureGridHoverBehavior,
       onRetire: retireGridCard,
-      onReplace: onGridCardReplaced
+      onReplace: onGridCardReplaced,
+      tLog,
+      copyLogs: copyDiagnosticLogs,
+      setTimeout,
+      clearTimeout,
+      isActive: () => targetSessionActive && isTargetPage()
     });
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
@@ -9063,7 +9364,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.32";
+    const SCRIPT_VERSION = "1.4.33";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -9250,7 +9551,6 @@
     let targetListenersActive = false;
     let viewOriginalMyList = true;
     let viewOriginalMenuId = null;
-    let logFeedbackTimer = null;
     let missingSectionSince = 0;
     let pendingMyListMutations = /* @__PURE__ */ new Map();
     let recentRemovedMyListItems = /* @__PURE__ */ new Map();
@@ -9911,12 +10211,8 @@
       clearSourceAlignment();
       invalidateGridReact();
       gridView.dispose();
-      document.getElementById(GRID_ID)?.remove();
-      document.getElementById(STATUS_ID)?.remove();
       document.getElementById(LEGACY_EMPTY_STATE_ID)?.remove();
-      document.getElementById(ORDER_MISMATCH_DIALOG_ID)?.remove();
       orderMismatchDialogOpen = false;
-      removeStyles(document);
       nativePresentationLease?.release();
       nativePresentationLease = null;
       const synthetic = document.getElementById(SYNTHETIC_SECTION_ID);
@@ -10411,30 +10707,15 @@
       }
       return report;
     }
-    function copyLogsTooltip() {
-      return tLog("copyLogsTooltip");
-    }
-    function showLogCopiedFeedback(link) {
-      clearTimeout(logFeedbackTimer);
-      link.textContent = tLog("copied");
-      link.title = tLog("copied");
-      logFeedbackTimer = setTimeout(() => {
-        if (!link?.isConnected) return;
-        link.textContent = "CopyLogs";
-        link.title = copyLogsTooltip();
-      }, 2500);
-    }
-    async function handleLogClick(event) {
-      event.preventDefault();
-      const link = event.currentTarget;
+    async function copyDiagnosticLogs() {
       log(tLog("copyLogsRequested"), collectRuntimeSnapshot());
       try {
         const method = await diagnosticReport.copy();
-        showLogCopiedFeedback(link);
         log(tLog("copyLogsCompleted"), { method, entries: logger.size() });
+        return method;
       } catch (error) {
         warn(tLog("copyLogsFailed"), error);
-        link.title = tLog("copyFailed", { message: error?.message || error });
+        throw error;
       }
     }
     function loadSettings() {
@@ -10497,16 +10778,18 @@
       if (!sourceState?.section && !isTargetPage()) return;
       if (!nativeSourcePresentation(void 0, void 0, void 0, { visible: viewOriginalMyList })) return;
       if (sourceState?.status) {
-        sourceState.status.style.setProperty("--tm-row-gap", `${viewOriginalMyList ? sourceState.layout?.rowGap || 0 : 0}px`);
+        layoutFrameStatus(sourceState.status, null, viewOriginalMyList ? sourceState.layout?.rowGap || 0 : 0);
       }
     }
     function sleep(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
     function cleanupOldArtifacts() {
-      for (const id of OLD_IDS) document.getElementById(id)?.remove();
-      for (const id of OLD_STYLE_IDS) document.getElementById(id)?.remove();
       const state = sourceState, sessionToken = sessionScope.token;
+      gridView.cleanupArtifacts(() => {
+        assertRouteSession(sessionToken);
+        if (sourceState !== state) throw createRouteSessionCancelledError();
+      });
       nativeCarousel.cleanupArtifacts({ sessionToken, assertCurrent() {
         assertRouteSession(sessionToken);
         if (sourceState !== state) throw initializationError("NATIVE_SOURCE_REPLACED", "native-presentation", "Artifact cleanup caller changed");
@@ -10716,8 +10999,7 @@
             emptyState.layout = nextLayout;
             const geometry = applyGridGeometry(section, frame.grid, nextLayout);
             if (sourceState !== emptyState || !nativeCarousel.isBindingCurrent(emptyBinding)) return;
-            frame.status.style.marginLeft = `${geometry.left}px`;
-            frame.status.style.width = `${geometry.width}px`;
+            layoutFrameStatus(frame.status, geometry);
             applyLegacyEmptyStateGeometry(section, nextLayout);
           });
         } catch (error) {
@@ -12136,9 +12418,7 @@
             state.layout = nextLayout;
             const geometry = applyGridGeometry(section, state.grid, nextLayout);
             if (sourceState !== state || !nativeCarousel.isBindingCurrent(binding)) return;
-            state.status.style.marginLeft = `${geometry.left}px`;
-            state.status.style.width = `${geometry.width}px`;
-            state.status.style.setProperty("--tm-row-gap", `${viewOriginalMyList ? nextLayout.rowGap || 0 : 0}px`);
+            layoutFrameStatus(state.status, geometry, viewOriginalMyList ? nextLayout.rowGap || 0 : 0);
             applyLegacyEmptyStateGeometry(section, nextLayout);
           });
         } catch (error) {
@@ -12167,7 +12447,7 @@
       synthetic.setAttribute(SECTION_ATTR, "true");
       clearLegacyEmptyState({ restoreGrid: false });
       nativeCarousel.assertObservation(observed);
-      synthetic.appendChild(status);
+      gridView.placeStatus(status, { section: synthetic, assertCurrent: () => nativeCarousel.assertObservation(observed) });
       status.insertAdjacentElement("afterend", grid);
       if (sourceState !== state) throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Synthetic layout parent was replaced");
       attachNativeBinding(state, synthetic);
@@ -12177,9 +12457,7 @@
       sourceState.grid = grid;
       gridView.setEmpty(true);
       const geometry = applyGridGeometry(synthetic, grid, layout);
-      status.style.marginLeft = `${geometry.left}px`;
-      status.style.width = `${geometry.width}px`;
-      status.style.setProperty("--tm-row-gap", "0px");
+      layoutFrameStatus(status, geometry, 0);
       syncLegacyEmptyState(synthetic, { allowProvisional: true });
       completedSection = synthetic;
       applyOriginalMyListVisibility();
@@ -12211,7 +12489,11 @@
       nativeCarousel.assertObservation(observed);
       nativeCarousel.assertObservation(live);
       parkSource(live.section, live.scroller, live.track);
-      live.scroller.insertAdjacentElement("afterend", status);
+      gridView.placeStatus(status, {
+        section: live.section,
+        anchor: live.scroller,
+        assertCurrent: () => nativeCarousel.assertObservation(observed)
+      });
       status.insertAdjacentElement("afterend", grid);
       if (sourceState !== state) throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Incoming layout parent was replaced");
       attachNativeBinding(state, live.section, live.scroller, live.track);
@@ -12221,9 +12503,7 @@
       sourceState.empty = (sourceState.items?.length ?? 0) === 0;
       if (!sourceState.empty) waitingForNativeEmpty = false;
       const geometry = applyGridGeometry(live.section, grid, layout);
-      status.style.marginLeft = `${geometry.left}px`;
-      status.style.width = `${geometry.width}px`;
-      status.style.setProperty("--tm-row-gap", `${viewOriginalMyList ? layout.rowGap || 0 : 0}px`);
+      layoutFrameStatus(status, geometry, viewOriginalMyList ? layout.rowGap || 0 : 0);
       syncStatusTypography(live.section, status);
       completedSection = live.section;
       if (oldSynthetic && oldSynthetic !== live.section) oldSynthetic.remove();
@@ -12265,8 +12545,11 @@
       const originalAnchor = markOriginalHeader(live.section);
       nativeCarousel.assertObservation(observed);
       nativeCarousel.assertObservation(live);
-      if (originalAnchor) originalAnchor.insertAdjacentElement("afterend", status);
-      else live.section.prepend(status);
+      gridView.placeStatus(status, {
+        section: live.section,
+        anchor: originalAnchor,
+        assertCurrent: () => nativeCarousel.assertObservation(observed)
+      });
       status.insertAdjacentElement("afterend", grid);
       if (sourceState !== state) throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Incoming empty layout parent was replaced");
       attachNativeBinding(state, live.section);
@@ -12278,10 +12561,9 @@
       waitingForNativeEmpty = false;
       syncLegacyEmptyState(live.section, { allowProvisional: true });
       const geometry = applyGridGeometry(live.section, grid, layout);
-      status.style.marginLeft = `${geometry.left}px`;
-      status.style.width = `${geometry.width}px`;
+      layoutFrameStatus(status, geometry);
       applyLegacyEmptyStateGeometry(live.section, layout);
-      status.style.setProperty("--tm-row-gap", `${viewOriginalMyList ? layout.rowGap || 0 : 0}px`);
+      layoutFrameStatus(status, null, viewOriginalMyList ? layout.rowGap || 0 : 0);
       syncStatusTypography(live.section, status);
       completedSection = live.section;
       if (oldSynthetic && oldSynthetic !== live.section) oldSynthetic.remove();
@@ -12378,7 +12660,7 @@
       const elapsed = sourceState.initializationElapsedMs;
       sourceState.status = updateStatus(formatHeaderParts(items.length, items.length, elapsed, true));
       if (sourceState.status && sourceState.layout) {
-        sourceState.status.style.setProperty("--tm-row-gap", `${viewOriginalMyList && !sourceState.empty ? sourceState.layout.rowGap || 0 : 0}px`);
+        layoutFrameStatus(sourceState.status, null, viewOriginalMyList && !sourceState.empty ? sourceState.layout.rowGap || 0 : 0);
       }
     }
     function applyLegacyRemoval(videoId, reason = "click-delta") {
@@ -12791,47 +13073,10 @@
       queueMyListMutation(descriptor);
     }
     function updateStatus(content) {
-      let node = document.getElementById(STATUS_ID);
-      if (!node) {
-        node = document.createElement("div");
-        node.id = STATUS_ID;
-      }
-      let textNode = node.querySelector(`.${STATUS_TEXT_CLASS}`);
-      if (!textNode) {
-        textNode = document.createElement("span");
-        textNode.className = STATUS_TEXT_CLASS;
-        node.appendChild(textNode);
-      }
-      let labelNode = textNode.querySelector(`.${STATUS_LABEL_CLASS}`);
-      if (!labelNode) {
-        labelNode = document.createElement("span");
-        labelNode.className = STATUS_LABEL_CLASS;
-        textNode.appendChild(labelNode);
-      }
-      let metaNode = textNode.querySelector(`.${STATUS_META_CLASS}`);
-      if (!metaNode) {
-        metaNode = document.createElement("span");
-        metaNode.className = STATUS_META_CLASS;
-        textNode.appendChild(metaNode);
-      }
-      const label = content && typeof content === "object" ? content.label || "" : String(content ?? "");
-      const meta = content && typeof content === "object" ? content.meta || "" : "";
-      if (labelNode.textContent !== label) labelNode.textContent = label;
-      if (metaNode.textContent !== meta) metaNode.textContent = meta;
-      let link = node.querySelector(`#${LOG_LINK_ID}`);
-      if (!link) {
-        link = document.createElement("a");
-        link.id = LOG_LINK_ID;
-        link.href = "#";
-        link.textContent = "CopyLogs";
-        link.title = copyLogsTooltip();
-        link.addEventListener("click", handleLogClick);
-        node.appendChild(link);
-      }
-      return node;
+      return gridView.updateStatus(content);
     }
     function hideOrderMismatchDialog() {
-      document.getElementById(ORDER_MISMATCH_DIALOG_ID)?.remove();
+      gridView.hideMismatch();
       orderMismatchDialogOpen = false;
     }
     function resetOrderMismatchStateAfterInitialization() {
@@ -12915,60 +13160,50 @@
     }
     function showOrderMismatchDialog(item, expectedPage, visibleIds = []) {
       if (orderMismatchDismissed || orderMismatchDialogOpen || orderMismatchReinitializing) return;
+      const state = sourceState, sessionToken = sessionScope.token;
+      const detail = { item: itemSummary(item), expectedPage, visibleIds: [...visibleIds] };
+      gridView.showMismatch({
+        message: tUi("orderChangedPrompt"),
+        acceptLabel: tUi("orderChangedOk"),
+        cancelLabel: tUi("orderChangedCancel"),
+        assertCurrent() {
+          assertRouteSession(sessionToken);
+          if (sourceState !== state) throw createRouteSessionCancelledError();
+        },
+        onAccept() {
+          log(tLog("orderMismatchPromptAccepted"), detail);
+          void reinitializeAfterOrderMismatch();
+        },
+        onCancel() {
+          orderMismatchDismissed = true;
+          hideOrderMismatchDialog();
+          log(tLog("orderMismatchPromptCancelled"), detail);
+        }
+      });
       orderMismatchDialogOpen = true;
-      const dialog = document.createElement("div");
-      dialog.id = ORDER_MISMATCH_DIALOG_ID;
-      dialog.setAttribute("role", "alertdialog");
-      dialog.setAttribute("aria-modal", "false");
-      dialog.setAttribute("aria-label", tUi("orderChangedPrompt"));
-      const message = document.createElement("div");
-      message.setAttribute("data-tm-order-message", "true");
-      message.textContent = tUi("orderChangedPrompt");
-      const actions = document.createElement("div");
-      actions.setAttribute("data-tm-order-actions", "true");
-      const okButton = document.createElement("button");
-      okButton.type = "button";
-      okButton.setAttribute("data-tm-order-ok", "true");
-      okButton.textContent = tUi("orderChangedOk");
-      const cancelButton = document.createElement("button");
-      cancelButton.type = "button";
-      cancelButton.setAttribute("data-tm-order-cancel", "true");
-      cancelButton.textContent = tUi("orderChangedCancel");
-      okButton.addEventListener("click", () => {
-        log(tLog("orderMismatchPromptAccepted"), {
-          item: itemSummary(item),
-          expectedPage,
-          visibleIds
-        });
-        void reinitializeAfterOrderMismatch();
-      }, { once: true });
-      cancelButton.addEventListener("click", () => {
-        orderMismatchDismissed = true;
-        hideOrderMismatchDialog();
-        log(tLog("orderMismatchPromptCancelled"), {
-          item: itemSummary(item),
-          expectedPage,
-          visibleIds
-        });
-      }, { once: true });
-      actions.append(okButton, cancelButton);
-      dialog.append(message, actions);
-      (document.body || document.documentElement).appendChild(dialog);
-      log(tLog("orderMismatchPromptShown"), {
-        item: itemSummary(item),
-        expectedPage,
-        visibleIds
+      log(tLog("orderMismatchPromptShown"), detail);
+    }
+    function layoutFrameStatus(status, geometry = null, rowGap) {
+      const state = sourceState, sessionToken = sessionScope.token;
+      const section = state?.section, scroller = state?.scroller, track = state?.track;
+      const grid = state?.grid, layout = state?.layout, previousStatus = state?.status;
+      gridView.layoutStatus(status, geometry, rowGap, () => {
+        assertRouteSession(sessionToken);
+        if (sourceState !== state || state?.section !== section || state?.scroller !== scroller || state?.track !== track || state?.grid !== grid || state?.layout !== layout || state?.status !== previousStatus) {
+          throw createRouteSessionCancelledError();
+        }
       });
     }
     function syncStatusTypography(section, status) {
-      const heading = section?.querySelector("h2") || document.querySelector(`${NETFLIX_DOM_SELECTORS.browseSections} section h2`);
-      if (!heading || !status) return;
-      const style = getComputedStyle(heading);
-      for (const property of ["font-family", "font-size", "font-weight", "line-height", "letter-spacing"]) {
-        const value = style.getPropertyValue(property);
-        if (value) status.style.setProperty(property, value);
-      }
-      status.style.color = style.color || "rgb(255, 255, 255)";
+      if (!status) return;
+      const state = sourceState, sessionToken = sessionScope.token;
+      const typography = netflixDom.readHeadingTypography(section);
+      assertRouteSession(sessionToken);
+      if (sourceState !== state) throw createRouteSessionCancelledError();
+      gridView.applyStatusTypography(status, typography, () => {
+        assertRouteSession(sessionToken);
+        if (sourceState !== state) throw createRouteSessionCancelledError();
+      });
     }
     function nativeSourceDiagnostics(section = sourceState?.section, scroller = sourceState?.scroller, track = sourceState?.track, discover = false) {
       return nativeCarousel.diagnostics({ source: { section, scroller, track, discover } }).source;
@@ -14798,9 +15033,7 @@
     function updateResponsiveStatus(layout, note = "") {
       if (!sourceState?.status || !sourceState?.items) return;
       const geometry = applyGridGeometry(sourceState.section, sourceState.grid, layout);
-      sourceState.status.style.marginLeft = `${geometry.left}px`;
-      sourceState.status.style.width = `${geometry.width}px`;
-      sourceState.status.style.setProperty("--tm-row-gap", `${viewOriginalMyList ? layout.rowGap || sourceState.layout?.rowGap || 0 : 0}px`);
+      layoutFrameStatus(sourceState.status, geometry, viewOriginalMyList ? layout.rowGap || sourceState.layout?.rowGap || 0 : 0);
       updateStatus(formatHeaderParts(
         sourceState.items.length,
         sourceState.totalCount,
@@ -15088,8 +15321,7 @@
             }
             state.layout = layout;
             const geometry = applyGridGeometry(state.section, state.grid, layout);
-            state.status.style.marginLeft = `${geometry.left}px`;
-            state.status.style.width = `${geometry.width}px`;
+            layoutFrameStatus(state.status, geometry);
             return;
           }
           ensureLiveNativeBinding("responsive-check");
@@ -15394,7 +15626,10 @@
         nativeCarousel.assertObservation(discovered);
         cleanupOldArtifacts();
         nativeCarousel.assertObservation(discovered);
-        installStyles(document);
+        gridView.installResources(() => {
+          assertRouteSession(sessionToken);
+          nativeCarousel.assertObservation(discovered);
+        });
         markOriginalHeader(section);
         nativeCarousel.assertObservation(discovered);
       } catch (error) {
@@ -15540,8 +15775,7 @@
         assertRouteSession(sessionToken);
         if (sourceWait.nativeSection) {
           invalidateGridReact();
-          document.getElementById(GRID_ID)?.remove();
-          document.getElementById(STATUS_ID)?.remove();
+          gridView.dispose();
           if (section.id === SYNTHETIC_SECTION_ID) section.remove();
           nativeCarousel.clearBinding();
           sourceState = null;
@@ -15815,12 +16049,14 @@
         });
         nativeCarousel.assertObservation(layoutObservation);
         const status = updateStatus(formatHeaderParts(0, totalCount, null));
-        scroller.insertAdjacentElement("afterend", status);
+        gridView.placeStatus(status, {
+          section,
+          anchor: scroller,
+          assertCurrent: () => nativeCarousel.assertObservation(layoutObservation)
+        });
         syncStatusTypography(section, status);
         const initialStatusGeometry = currentGridGeometry(section, layout);
-        status.style.marginLeft = `${initialStatusGeometry.left}px`;
-        status.style.width = `${initialStatusGeometry.width}px`;
-        status.style.setProperty("--tm-row-gap", `${layout.rowGap}px`);
+        layoutFrameStatus(status, initialStatusGeometry, layout.rowGap);
         nativeCarousel.assertObservation(layoutObservation);
         nativeSourcePresentation(section, scroller, track, { phase: "mounted" });
         waitingForNativeEmpty = false;

@@ -26,7 +26,8 @@ export function readVideoIdFromHref(href, baseHref) {
     }
 }
 
-export function createNetflixPageDom({ document, Element, location, readGraphqlIdentity = () => null }) {
+export function createNetflixPageDom({ document, Element, location, readGraphqlIdentity = () => null,
+    getComputedStyle = () => ({}) }) {
     const videoIdFromHref = href => readVideoIdFromHref(href, location.href);
 
     function nativeCardIdentity(slot) {
@@ -279,6 +280,17 @@ export function createNetflixPageDom({ document, Element, location, readGraphqlI
         return { sectionId: String(section?.id || ''),
             get videoIds() { return videoIds ||= [...netflixDom.sectionVideoIds(section)]; } };
     }
+    function readHeadingTypography(section) {
+        const heading = section?.querySelector('h2') || document.querySelector(`${NETFLIX_DOM_SELECTORS.browseSections} section h2`);
+        if (!heading) return Object.freeze({});
+        const style = getComputedStyle(heading), facts = {};
+        for (const property of ['font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing']) {
+            const value = style.getPropertyValue(property);
+            if (value) facts[property] = value;
+        }
+        facts.color = style.color || 'rgb(255, 255, 255)';
+        return Object.freeze(facts);
+    }
     return Object.freeze({ ...netflixDom, findMyListSection, readMyListAnchor, nativeCardIdentity, videoIdFromHref,
-        decodeTrackingContext, describeMembershipClick });
+        decodeTrackingContext, describeMembershipClick, readHeadingTypography });
 }
