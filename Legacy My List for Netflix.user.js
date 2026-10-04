@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.31
+// @version      1.4.32
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -456,6 +456,442 @@
       return template.querySelector(NETFLIX_DOM_SELECTORS.standardCard) ? template : null;
     }
     return Object.freeze({ capture, createClone, normalize, captureTemplate });
+  }
+
+  // src/grid/cards.js
+  function createCards({ markup, keyFor, createError, prepareCard, onRetire, onReplace, readRoot }) {
+    let entries = /* @__PURE__ */ new Map(), view = readOnlyView(entries), generation = 0, revision = 0, retirementFailures = 0;
+    const handles = /* @__PURE__ */ new WeakMap(), retained = /* @__PURE__ */ new Map();
+    function readOnlyView(map) {
+      return Object.freeze({
+        get size() {
+          return map.size;
+        },
+        get: (key) => map.get(key)?.node || null,
+        has: (key) => map.has(key),
+        *values() {
+          for (const entry of map.values()) yield entry.node;
+        },
+        *entries() {
+          for (const [key, entry] of map) yield [key, entry.node];
+        },
+        [Symbol.iterator]() {
+          return this.entries();
+        }
+      });
+    }
+    function register(map, item, node) {
+      const key = keyFor(item);
+      if (map.has(key)) throw createError("GRID_DUPLICATE_CARD", "Duplicate grid card: " + key);
+      const handle = Object.freeze({ key, generation: ++generation, node });
+      const entry = { item, node, handle };
+      handles.set(handle, entry);
+      map.set(key, entry);
+      return handle;
+    }
+    function isCurrent(handle) {
+      const entry = handle && handles.get(handle);
+      return Boolean(entry && entries.get(handle.key) === entry && entry.node.isConnected && readRoot()?.contains(entry.node));
+    }
+    function assertCard(handle) {
+      if (!isCurrent(handle)) throw createError("GRID_CARD_RETIRED", "Grid card is no longer current");
+      return handle;
+    }
+    function getCard(item) {
+      if (!item) return null;
+      const entry = entries.get(typeof item === "string" ? item : keyFor(item));
+      return entry && (typeof item === "string" || entry.item === item) ? entry.handle : null;
+    }
+    function materialFor(item, correlationId = item?.undoId) {
+      if (!item) return null;
+      if (item.snapshot) return item.snapshot;
+      const entry = entries.get(keyFor(item));
+      if (entry?.item === item) return entry.node;
+      const removed = retained.get(correlationId);
+      if (removed?.item === item) return removed.node;
+      return item.cardTemplate || null;
+    }
+    function createClone(item, correlationId) {
+      const source = materialFor(item, correlationId);
+      if (!source) throw createError("GRID_CARD_MATERIAL_MISSING", "No card markup available for " + keyFor(item));
+      return markup.createClone(source, item, source === item.cardTemplate);
+    }
+    function prepare(node, item, index, detail = {}) {
+      markup.normalize(node);
+      if (index !== null && index !== void 0) node.setAttribute("data-tm-item-order", String(index));
+      node.setAttribute("data-tm-item-page", String(item.page));
+      node.setAttribute("data-tm-item-video-id", item.videoId || "");
+      node.__tmMyListItem = item;
+      prepareCard(node, item, detail);
+    }
+    function releaseStartup(item) {
+      if (item.snapshot) item.snapshot = null;
+      if (item.cardTemplate) item.cardTemplate = null;
+      if (item.imageUrl) item.imageUrl = "";
+    }
+    function stage(items, root, index, map) {
+      const item = items[index], node = createClone(item);
+      prepare(node, item, index);
+      root.appendChild(node);
+      register(map, item, node);
+    }
+    function retireForPublication(guard) {
+      const previous = entries;
+      for (const entry of previous.values()) {
+        guard();
+        onRetire(entry.handle, { reason: "publication" });
+        guard();
+      }
+    }
+    function publish(map) {
+      entries.clear();
+      entries = map;
+      view = readOnlyView(map);
+      revision++;
+    }
+    function replaceCard(expected, { node, create, assertCurrent = () => {
+    }, attempt = null } = {}) {
+      const guard = () => {
+        assertCurrent();
+        assertCard(expected);
+      };
+      guard();
+      const entry = handles.get(expected);
+      const fresh = node || create(expected);
+      guard();
+      if (!fresh || fresh === expected.node || fresh.isConnected) throw createError("GRID_REPLACEMENT_INVALID", "Replacement must be detached fresh markup");
+      const order = expected.node.getAttribute("data-tm-item-order");
+      prepare(fresh, entry.item, order === null ? null : Number(order), { replacement: true, attempt });
+      guard();
+      onRetire(expected, { reason: "replacement", attempt });
+      guard();
+      try {
+        expected.node.replaceWith(fresh);
+      } catch (error) {
+        if (entries.get(expected.key) === entry) {
+          entries.delete(expected.key);
+          revision++;
+          if (fresh.isConnected && readRoot()?.contains(fresh)) {
+            const current = register(entries, entry.item, fresh);
+            try {
+              onReplace(expected, current, { attempt: null });
+            } catch (_) {
+            }
+            try {
+              onRetire(current, { reason: "replacement-commit-failed", attempt: null });
+            } catch (_) {
+              retirementFailures++;
+            }
+          } else if (expected.node.isConnected && readRoot()?.contains(expected.node)) {
+            entries.set(expected.key, entry);
+          }
+        }
+        throw error;
+      }
+      entries.delete(expected.key);
+      const next = register(entries, entry.item, fresh);
+      revision++;
+      try {
+        onReplace(expected, next, { attempt });
+        assertCurrent();
+        assertCard(next);
+      } catch (error) {
+        try {
+          onRetire(next, { reason: "replacement-presentation-failed", attempt: null });
+        } catch (_) {
+          retirementFailures++;
+        }
+        throw error;
+      }
+      return next;
+    }
+    function removeCard(expected, { correlationId = null, assertCurrent = () => {
+    } } = {}) {
+      assertCurrent();
+      assertCard(expected);
+      const entry = handles.get(expected);
+      onRetire(expected, { reason: "removal", attempt: null });
+      assertCurrent();
+      assertCard(expected);
+      entries.delete(expected.key);
+      revision++;
+      entry.node.remove();
+      if (correlationId !== null) retained.set(correlationId, { item: entry.item, node: entry.node });
+      return true;
+    }
+    function insertCard(item, { index = 0, correlationId = item?.undoId, before = null, assertCurrent = () => {
+    } } = {}) {
+      assertCurrent();
+      if (entries.has(keyFor(item))) throw createError("GRID_DUPLICATE_CARD", "Card is already displayed");
+      const root = readRoot();
+      if (!root?.isConnected) throw createError("GRID_FRAME_RETIRED", "Grid is not mounted");
+      const node = createClone(item, correlationId);
+      prepare(node, item, index);
+      assertCurrent();
+      if (readRoot() !== root || entries.has(keyFor(item))) throw createError("GRID_FRAME_RETIRED", "Grid changed during insertion");
+      root.insertBefore(node, before);
+      try {
+        assertCurrent();
+        if (readRoot() !== root || entries.has(keyFor(item))) throw createError("GRID_FRAME_RETIRED", "Grid changed during insertion");
+      } catch (error) {
+        node.remove();
+        throw error;
+      }
+      const handle = register(entries, item, node);
+      revision++;
+      releaseStartup(item);
+      retained.delete(correlationId);
+      return handle;
+    }
+    function updateCard(expected, item, index = null) {
+      assertCard(expected);
+      if (handles.get(expected).item !== item) throw createError("GRID_CARD_RETIRED", "Grid card record changed");
+      const node = expected.node;
+      if (index !== null) node.setAttribute("data-tm-item-order", String(index));
+      node.setAttribute("data-tm-item-page", String(item.page));
+      node.setAttribute("data-tm-item-video-id", item.videoId || "");
+    }
+    function dispose() {
+      const old = entries;
+      entries = /* @__PURE__ */ new Map();
+      view = readOnlyView(entries);
+      retained.clear();
+      revision++;
+      for (const entry of old.values()) {
+        try {
+          onRetire(entry.handle, { reason: "dispose", attempt: null });
+        } catch (_) {
+          retirementFailures++;
+        }
+      }
+      old.clear();
+    }
+    return {
+      get view() {
+        return view;
+      },
+      get revision() {
+        return revision;
+      },
+      getCard,
+      isCurrent,
+      assertCard,
+      materialFor,
+      createClone,
+      stage,
+      retireForPublication,
+      publish,
+      releaseStartup,
+      replaceCard,
+      removeCard,
+      insertCard,
+      updateCard,
+      dispose,
+      hasRetained: (id, item) => retained.get(id)?.item === item,
+      releaseRetained: (id) => retained.delete(id),
+      clearRetained: () => retained.clear(),
+      diagnostics: () => ({ activeCards: entries.size, retainedCards: retained.size, retirementFailures })
+    };
+  }
+
+  // src/grid/frame.js
+  function createFrame({ document: document2 }) {
+    let root = null;
+    function createRoot() {
+      const node = document2.createElement("div");
+      node.id = GRID_ID;
+      node.setAttribute("data-tm-purpose", "exact-items-and-live-react-hover");
+      return node;
+    }
+    function applyGeometry(node, geometry, layout) {
+      const properties = {
+        "--tm-cols": String(geometry.columns),
+        "--tm-grid-width": `${geometry.width}px`,
+        "--tm-grid-left": `${geometry.left}px`,
+        "--tm-gap": `${layout.gap}px`
+      };
+      for (const [property, value] of Object.entries(properties)) {
+        if (node.style.getPropertyValue(property) !== value) node.style.setProperty(property, value);
+      }
+      node.__tmAppliedGeometry = geometry;
+      return geometry;
+    }
+    function publish(node, { section, anchor, status, geometry, layout, visible = true, assertCurrent }) {
+      assertCurrent();
+      applyGeometry(node, geometry, layout);
+      if (anchor?.isConnected) anchor.insertAdjacentElement("afterend", status);
+      else section.prepend(status);
+      status.style.marginLeft = `${geometry.left}px`;
+      status.style.width = `${geometry.width}px`;
+      status.style.setProperty("--tm-row-gap", `${visible ? layout.rowGap || 0 : 0}px`);
+      assertCurrent();
+      const previous = root || document2.getElementById(GRID_ID);
+      status.insertAdjacentElement("afterend", node);
+      node.style.marginTop = "0px";
+      try {
+        assertCurrent();
+      } catch (error) {
+        node.remove();
+        throw error;
+      }
+      root = node;
+      if (previous !== node) previous?.remove();
+    }
+    function mount(options) {
+      const node = root || document2.getElementById(GRID_ID) || createRoot();
+      if (!node.children.length) node.setAttribute("data-tm-empty", "true");
+      publish(node, options);
+      return node;
+    }
+    function clearCards() {
+      root?.replaceChildren();
+      root?.setAttribute("data-tm-empty", "true");
+    }
+    function setEmpty(empty) {
+      if (empty) root?.setAttribute("data-tm-empty", "true");
+      else root?.removeAttribute("data-tm-empty");
+    }
+    function moveCard(node, parent, before = null) {
+      if (before !== node) parent.insertBefore(node, before);
+    }
+    function orderChildren(parent, desired) {
+      let reference = parent.children[0] || null;
+      for (const child of desired) {
+        if (child !== reference) parent.insertBefore(child, reference);
+        reference = child.nextElementSibling;
+      }
+    }
+    function retire() {
+      const previous = root;
+      root = null;
+      return previous;
+    }
+    function assertParent(parent) {
+      if (!root?.isConnected || !root.contains(parent)) throw Object.assign(new Error("Grid frame is no longer current"), { code: "GRID_FRAME_RETIRED" });
+    }
+    return { get root() {
+      return root;
+    }, createRoot, applyGeometry, publish, mount, clearCards, setEmpty, moveCard, orderChildren, retire, assertParent };
+  }
+
+  // src/grid/grid.js
+  function createGrid({
+    document: document2,
+    location: location2,
+    runChunks,
+    createError = (code, message) => Object.assign(new Error(message), { code }),
+    prepareCard = () => {
+    },
+    onRetire = () => {
+    },
+    onReplace = () => {
+    },
+    installHover = () => {
+    }
+  }) {
+    const markup = createCardMarkup({ location: location2 });
+    const frame = createFrame({ document: document2 });
+    let buildGeneration = 0;
+    const cards = createCards({
+      markup,
+      createError,
+      prepareCard,
+      onRetire,
+      onReplace,
+      readRoot: () => frame.root,
+      keyFor: (item) => item.videoId ? `v:${item.videoId}` : `h:${item.href}`
+    });
+    async function publish({ items, assertCurrent, ...mount }) {
+      const owner = ++buildGeneration;
+      const revision = cards.revision;
+      const guard = () => {
+        assertCurrent();
+        if (owner !== buildGeneration || revision !== cards.revision) throw createError("GRID_BUILD_REPLACED", "Grid build was superseded");
+      };
+      guard();
+      const root = frame.createRoot(), staged = /* @__PURE__ */ new Map();
+      installHover(root);
+      guard();
+      try {
+        await runChunks(items.length, (index) => cards.stage(items, root, index, staged), guard);
+        guard();
+        cards.retireForPublication(guard);
+        frame.publish(root, { ...mount, assertCurrent: guard });
+        cards.publish(staged);
+        frame.setEmpty(staged.size === 0);
+        items.forEach(cards.releaseStartup);
+        return root;
+      } catch (error) {
+        if (frame.root !== root) root.remove();
+        throw error;
+      }
+    }
+    function dispose() {
+      ++buildGeneration;
+      const previous = frame.retire();
+      try {
+        cards.dispose();
+      } finally {
+        previous?.remove();
+      }
+    }
+    function clearCards(assertCurrent = () => {
+    }) {
+      ++buildGeneration;
+      cards.retireForPublication(assertCurrent);
+      assertCurrent();
+      frame.clearCards();
+      cards.publish(/* @__PURE__ */ new Map());
+    }
+    return Object.freeze({
+      publish,
+      dispose,
+      clearCards,
+      mount: frame.mount,
+      cancelBuild: () => {
+        ++buildGeneration;
+      },
+      get cards() {
+        return cards.view;
+      },
+      get root() {
+        return frame.root;
+      },
+      getCard: cards.getCard,
+      assertCard: cards.assertCard,
+      isCardCurrent: cards.isCurrent,
+      replaceCard: cards.replaceCard,
+      removeCard: (...args) => {
+        const result = cards.removeCard(...args);
+        frame.setEmpty(cards.view.size === 0);
+        return result;
+      },
+      insertCard: (...args) => {
+        const result = cards.insertCard(...args);
+        frame.setEmpty(false);
+        return result;
+      },
+      setEmpty: frame.setEmpty,
+      updateCard: cards.updateCard,
+      materialFor: cards.materialFor,
+      hasRetained: cards.hasRetained,
+      releaseRetained: cards.releaseRetained,
+      clearRetained: cards.clearRetained,
+      captureCard: markup.capture,
+      captureTemplate: markup.captureTemplate,
+      normalizeCard: markup.normalize,
+      moveCard: (handle, parent, before) => {
+        cards.assertCard(handle);
+        frame.assertParent(parent);
+        frame.moveCard(handle.node, parent, before);
+      },
+      orderChildren: (parent, desired) => {
+        frame.assertParent(parent);
+        frame.orderChildren(parent, desired);
+      },
+      applyGeometry: frame.applyGeometry,
+      diagnostics: cards.diagnostics
+    });
   }
 
   // src/diagnostics/logger.js
@@ -8546,8 +8982,7 @@
       readGraphqlIdentity: () => listData.myListDomIdentity()
     });
     const { nativeCardIdentity, videoIdFromHref, decodeTrackingContext } = netflixDom;
-    const cardMarkup = createCardMarkup({ location });
-    const itemFromSlot = cardMarkup.capture;
+    const itemFromSlot = (...args) => gridView.captureCard(...args);
     const {
       getUiLocale,
       getLogLocale,
@@ -8576,6 +9011,16 @@
       setTimeout,
       clearTimeout,
       requestTimeoutMs: FRESH_MY_LIST_FETCH_TIMEOUT_MS
+    });
+    const gridView = createGrid({
+      document,
+      location,
+      runChunks: runConstructionChunks,
+      createError: (code, message) => initializationError(code, "grid-cards", message),
+      prepareCard: (clone) => ensureManualViewingControls(clone),
+      installHover: ensureGridHoverBehavior,
+      onRetire: retireGridCard,
+      onReplace: onGridCardReplaced
     });
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
@@ -8618,7 +9063,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.31";
+    const SCRIPT_VERSION = "1.4.32";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -8697,7 +9142,7 @@
         columns: Math.max(1, sourceState.layout?.columns || 1)
       } : null,
       readGraphqlCount: () => listData.readMyListTotalCount(),
-      cardMarkup,
+      cardMarkup: { capture: gridView.captureCard, captureTemplate: gridView.captureTemplate },
       createError: initializationError,
       log,
       warn,
@@ -9031,7 +9476,8 @@
         hoverPreparation: snapshots.hoverPreparation,
         popupInvestigation: popupInspection.diagnostics(),
         ...snapshots,
-        nativeCollection: nativeCarousel.diagnostics().collection
+        nativeCollection: nativeCarousel.diagnostics().collection,
+        grid: gridView.diagnostics()
       };
     }
     function createNavigationDiagnosticSink(token) {
@@ -9451,6 +9897,7 @@
       activeSourceSlot = null;
       activeGeometryProxy = null;
       missingSectionSince = 0;
+      gridView.cancelBuild();
       document.getElementById(LEGACY_EMPTY_STATE_ID)?.remove();
       clearPendingMyListMutations();
       clearUndoEntries();
@@ -9463,6 +9910,7 @@
       restoreActiveCarouselStyles();
       clearSourceAlignment();
       invalidateGridReact();
+      gridView.dispose();
       document.getElementById(GRID_ID)?.remove();
       document.getElementById(STATUS_ID)?.remove();
       document.getElementById(LEGACY_EMPTY_STATE_ID)?.remove();
@@ -10115,26 +10563,24 @@
       } });
     }
     function placeLegacyFrame(section, scroller, layout, { elapsedMs = null, finalized = false, totalCount = null } = {}) {
+      const state = sourceState, sessionToken = sessionScope.token;
       markOriginalHeader(section);
-      let grid = document.getElementById(GRID_ID);
-      if (!grid) {
-        grid = document.createElement("div");
-        grid.id = GRID_ID;
-        grid.setAttribute("data-tm-purpose", "exact-items-and-live-react-hover");
-      }
-      if (!grid.children.length) grid.setAttribute("data-tm-empty", "true");
-      const geometry = applyGridGeometry(section, grid, layout);
+      const geometry = currentGridGeometry(section, layout);
       const status = updateStatus(formatHeaderParts(0, totalCount, elapsedMs, finalized));
       const header = markOriginalHeader(section);
-      const anchor = scroller?.isConnected ? scroller : header;
-      if (anchor) anchor.insertAdjacentElement("afterend", status);
-      else section.prepend(status);
+      const grid = gridView.mount({
+        section,
+        anchor: scroller?.isConnected ? scroller : header,
+        status,
+        geometry,
+        layout,
+        visible: viewOriginalMyList,
+        assertCurrent() {
+          assertRouteSession(sessionToken);
+          if (sourceState !== state) throw initializationError("NATIVE_SOURCE_REPLACED", "grid-frame", "Frame caller changed");
+        }
+      });
       syncStatusTypography(section, status);
-      status.style.marginLeft = `${geometry.left}px`;
-      status.style.width = `${geometry.width}px`;
-      status.style.setProperty("--tm-row-gap", `${viewOriginalMyList ? layout.rowGap || 0 : 0}px`);
-      status.insertAdjacentElement("afterend", grid);
-      grid.style.marginTop = "0px";
       return { status, grid, geometry };
     }
     function clearLegacyEmptyState({ restoreGrid = true } = {}) {
@@ -10227,11 +10673,13 @@
     }
     function finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, reason = "empty", admission = null) {
       if (admission) nativeCarousel.assertObservation(admission);
-      document.getElementById(GRID_ID)?.replaceChildren();
+      gridView.clearCards(() => {
+        if (admission) nativeCarousel.assertObservation(admission);
+      });
       const elapsedMs = performance.now() - initializationStarted;
       const frame = placeLegacyFrame(section, scroller, layout, { elapsedMs, finalized: true, totalCount: 0 });
       if (admission) nativeCarousel.assertObservation(admission);
-      frame.grid.setAttribute("data-tm-empty", "true");
+      gridView.setEmpty(true);
       nativeSourcePresentation(section, scroller, track, { phase: "parked" });
       sourceState = attachNativeBinding({
         layout,
@@ -10239,13 +10687,13 @@
         totalCount: 0,
         grid: frame.grid,
         status: frame.status,
-        cloneMap: /* @__PURE__ */ new Map(),
         itemMap: /* @__PURE__ */ new Map(),
         empty: true,
         resizeViewportSignature: responsiveViewportSignature(),
         initializationStartedAt: initializationStarted,
         initializationElapsedMs: elapsedMs
       }, section, scroller || null, track || null);
+      attachGridRegistry(sourceState);
       waitingForNativeEmpty = false;
       syncLegacyEmptyState(section, { allowProvisional: true });
       completedSection = section;
@@ -11078,12 +11526,8 @@
         watchedEmpty
       };
     }
-    function syncWatchChildOrder(parent, children) {
-      let reference = parent.firstElementChild;
-      for (const child of children) {
-        if (child !== reference) parent.insertBefore(child, reference);
-        reference = child.nextElementSibling;
-      }
+    function syncWatchChildOrder(parent, desired) {
+      gridView.orderChildren(parent, desired);
     }
     function syncWatchGroups(state, changedIds = null, reason = "reconcile") {
       if (sourceState !== state || !state.grid?.isConnected || !state.watchStatus) return;
@@ -11202,7 +11646,7 @@
               break;
             }
           }
-          parent.insertBefore(entry.clone, reference);
+          gridView.moveCard(gridView.getCard(entry.item), parent, reference);
           work.categoryMoves++;
         }
       }
@@ -11211,8 +11655,8 @@
         for (const entry of index.entries.values()) (entry.group === "watched" ? completed : remaining).push(entry.clone);
         const mainOrder = [ui.mainFilter.root, ...remaining, ui.empty, ui.controls, ui.details];
         work.categoryMoves += updates.filter((update) => update.moved).length;
-        syncWatchChildOrder(ui.watchedGrid, completed);
         syncWatchChildOrder(state.grid, mainOrder);
+        syncWatchChildOrder(ui.watchedGrid, completed);
       }
       watch.completedCount = counts.watched.all;
       watch.unknownCount = index.unknown;
@@ -11517,7 +11961,7 @@
             totalCount
           });
         }
-        const template = templateSource ? cardMarkup.captureTemplate(templateSource.slot) : null;
+        const template = templateSource ? gridView.captureTemplate(templateSource.slot) : null;
         if (templateSource) nativeCarousel.assertSource(templateSource);
         assertCurrent();
         const data = await listData.collectRecords({ bootstrap, totalCount, sessionToken });
@@ -11574,6 +12018,7 @@
       clearUndoExpiryTimer();
       performanceDiagnostics.undoRetention.cleared += recentRemovedMyListItems.size;
       recentRemovedMyListItems.clear();
+      gridView.clearRetained();
     }
     function scheduleUndoExpiry() {
       let dueAt = Infinity;
@@ -11598,7 +12043,9 @@
       }, Math.max(0, dueAt - performance.now()));
     }
     function forgetUndoEntry(videoId) {
+      const entry = recentRemovedMyListItems.get(String(videoId));
       if (!recentRemovedMyListItems.delete(String(videoId))) return;
+      gridView.releaseRetained(entry.correlationId);
       performanceDiagnostics.undoRetention.consumed++;
       scheduleUndoExpiry();
     }
@@ -11608,6 +12055,7 @@
         if (!Number.isFinite(entry?.removedAt) || now - entry.removedAt >= UNDO_ENTRY_TTL_MS) {
           if (entry?.item && pendingMyListMutations.get(videoId)?.fallbackItem === entry.item) pendingFallbacksPreserved++;
           recentRemovedMyListItems.delete(videoId);
+          if (pendingMyListMutations.get(videoId)?.fallbackItem !== entry?.item) gridView.releaseRetained(entry?.correlationId);
           expired++;
         }
       }
@@ -11616,10 +12064,11 @@
       if (expired) log(tLog("undoEntriesExpired"), { expired, remaining: recentRemovedMyListItems.size, pendingFallbacksPreserved });
     }
     function rememberUndoEntry(item, index) {
-      if (!item?.videoId || !item.snapshot) return;
+      if (!item?.videoId || !gridView.hasRetained(item.undoId, item)) return;
       pruneUndoEntries();
       recentRemovedMyListItems.set(String(item.videoId), {
         videoId: String(item.videoId),
+        correlationId: item.undoId,
         item,
         index: Math.max(0, Number.isFinite(index) ? Math.floor(index) : 0),
         title: normalizeNetflixUiText(item.ariaLabel || ""),
@@ -11726,7 +12175,7 @@
       sourceState.empty = true;
       sourceState.status = status;
       sourceState.grid = grid;
-      grid.setAttribute("data-tm-empty", "true");
+      gridView.setEmpty(true);
       const geometry = applyGridGeometry(synthetic, grid, layout);
       status.style.marginLeft = `${geometry.left}px`;
       status.style.width = `${geometry.width}px`;
@@ -11916,10 +12365,7 @@
         syncLogicalPageModelAfterDelta(reason);
         if (items.length) scheduleResponsiveRefresh(140, "my-list-delta");
       }
-      if (sourceState.grid) {
-        if (items.length) sourceState.grid.removeAttribute("data-tm-empty");
-        else sourceState.grid.setAttribute("data-tm-empty", "true");
-      }
+      gridView.setEmpty(items.length === 0);
       if (items.length) {
         waitingForNativeEmpty = false;
         clearLegacyEmptyState();
@@ -11940,7 +12386,10 @@
       const key = `v:${videoId}`;
       const index = sourceState.items.findIndex((item) => itemKey(item) === key);
       if (index < 0) return false;
-      const [removed] = sourceState.items.splice(index, 1);
+      const state = sourceState, items = state.items, removed = items[index];
+      const assertCurrent = () => {
+        if (sourceState !== state || state.items !== items || items[index] !== removed) throw createRouteSessionCancelledError();
+      };
       const clone = sourceState.cloneMap?.get(key);
       if (activeVideoId === String(videoId) || activeClone === clone) {
         advanceHoverToken("source");
@@ -11949,11 +12398,14 @@
         activeClone = null;
         activePage = null;
       }
-      releaseGridReact(clone);
-      clone?.remove();
-      if (clone) removed.snapshot = clone;
+      const handle = gridView.getCard(removed);
+      if (handle) {
+        removed.undoId = "undo:" + sessionScope.token + ":" + ++myListMutationSequence;
+        gridView.removeCard(handle, { correlationId: removed.undoId, assertCurrent });
+      }
+      assertCurrent();
+      items.splice(index, 1);
       rememberUndoEntry(removed, index);
-      sourceState.cloneMap?.delete(key);
       sourceState.itemMap?.delete(key);
       reindexLegacyItemsAfterDelta("mutation-reindex");
       mutationSourceRecoveryPending = true;
@@ -11971,28 +12423,25 @@
       if (!sourceState || !item?.videoId || !cardSourceForItem(item)) return false;
       const key = itemKey(item);
       if (sourceState.itemMap?.has(key) || sourceState.items?.some((existing) => itemKey(existing) === key)) return false;
+      const state = sourceState;
       const items = sourceState.items || (sourceState.items = []);
+      const assertCurrent = () => {
+        if (sourceState !== state || state.items !== items || state.itemMap?.has(key)) throw createRouteSessionCancelledError();
+      };
       const grid = sourceState.grid || document.getElementById(GRID_ID);
       if (!grid) return false;
       ensureGridHoverBehavior(grid);
       const index = Math.max(0, Math.min(items.length, Number.isFinite(preferredIndex) ? Math.floor(preferredIndex) : 0));
-      const clone = createItemClone(item);
       item.page = Math.floor(index / Math.max(1, sourceState.layout?.columns || 1));
-      normalizeClone(clone);
-      copyItemAttributes(clone, item, index);
-      associateGridHoverItem(item, clone);
       const before = sourceState.watchStatus ? null : grid.children[index] || null;
-      grid.insertBefore(clone, before);
+      gridView.insertCard(item, { index, before, correlationId: item.undoId, assertCurrent });
       items.splice(index, 0, item);
-      sourceState.cloneMap ||= /* @__PURE__ */ new Map();
-      sourceState.cloneMap.set(key, clone);
       sourceState.itemMap ||= /* @__PURE__ */ new Map();
       sourceState.itemMap.set(key, item);
-      releaseItemCardSnapshot(item);
       forgetUndoEntry(item.videoId);
       waitingForNativeEmpty = false;
       sourceState.empty = false;
-      grid.removeAttribute("data-tm-empty");
+      gridView.setEmpty(false);
       reindexLegacyItemsAfterDelta("mutation-reindex");
       mutationSourceRecoveryPending = true;
       log(tLog("legacyItemAddedByDifferentialUpdate"), {
@@ -12050,7 +12499,7 @@
           if (!clone) continue;
           const targetIndex = insertion + i;
           const reference = grid.children[targetIndex] || null;
-          if (reference !== clone) grid.insertBefore(clone, reference);
+          if (reference !== clone) gridView.moveCard(gridView.getCard(ordered[i]), grid, reference);
         }
       }
       reindexLegacyItemsAfterDelta();
@@ -12070,6 +12519,8 @@
       }
       if (mutation.timeoutId !== null && mutation.timeoutId !== void 0) clearTimeout(mutation.timeoutId);
       pendingMyListMutations.delete(key);
+      const item = mutation.fallbackItem;
+      if (item?.undoId && recentRemovedMyListItems.get(key)?.item !== item) gridView.releaseRetained(item.undoId);
     }
     function scheduleMyListMutationTimeout(mutation) {
       if (!mutation || pendingMyListMutations.get(mutation.videoId) !== mutation) return;
@@ -12608,25 +13059,8 @@
     function waitStableCurrentPage(...args) {
       return nativeCarousel.stablePage(...args);
     }
-    function createItemClone(item) {
-      const source = cardSourceForItem(item);
-      if (!source) throw new Error(`No card markup available for ${itemKey(item)}`);
-      return cardMarkup.createClone(source, item, source === item.cardTemplate);
-    }
     function cardSourceForItem(item) {
-      if (!item) return null;
-      if (item.snapshot) return item.snapshot;
-      const key = itemKey(item);
-      if (sourceState?.itemMap?.get(key) === item) {
-        const clone = sourceState.cloneMap?.get(key);
-        if (clone) return clone;
-      }
-      return item.cardTemplate || null;
-    }
-    function releaseItemCardSnapshot(item) {
-      if (item.snapshot) item.snapshot = null;
-      if (item.cardTemplate) item.cardTemplate = null;
-      if (item.imageUrl) item.imageUrl = "";
+      return gridView.materialFor(item);
     }
     function itemKey(item) {
       return item.videoId ? `v:${item.videoId}` : `h:${item.href}`;
@@ -12698,7 +13132,7 @@
       return result.items;
     }
     function normalizeClone(slot) {
-      cardMarkup.normalize(slot);
+      gridView.normalizeCard(slot);
       ensureManualViewingControls(slot);
     }
     function currentGridGeometry(section, layout) {
@@ -12715,18 +13149,7 @@
       });
     }
     function applyGridGeometry(section, grid, layout) {
-      const geometry = currentGridGeometry(section, layout);
-      const properties = {
-        "--tm-cols": String(geometry.columns),
-        "--tm-grid-width": `${geometry.width}px`,
-        "--tm-grid-left": `${geometry.left}px`,
-        "--tm-gap": `${layout.gap}px`
-      };
-      for (const [property, value] of Object.entries(properties)) {
-        if (grid.style.getPropertyValue(property) !== value) grid.style.setProperty(property, value);
-      }
-      grid.__tmAppliedGeometry = geometry;
-      return geometry;
+      return gridView.applyGeometry(grid, currentGridGeometry(section, layout), layout);
     }
     function pairDomTrees(sourceRoot, cloneRoot) {
       const domMap = /* @__PURE__ */ new Map();
@@ -12986,7 +13409,7 @@
             const oldPage = visibleItem.page;
             visibleItem.page = result.page;
             const visibleClone = findGridClone(visibleItem);
-            if (visibleClone) visibleClone.setAttribute("data-tm-item-page", String(result.page));
+            if (visibleClone) copyItemAttributes(visibleClone, visibleItem);
             log(tLog("itemPageMappingCorrected"), {
               item: itemSummary(visibleItem),
               oldPage,
@@ -13004,20 +13427,34 @@
       });
     }
     function copyItemAttributes(target, item, index = null) {
-      if (index !== null) target.setAttribute("data-tm-item-order", String(index));
-      target.setAttribute("data-tm-item-page", String(item.page));
-      target.setAttribute("data-tm-item-video-id", item.videoId || "");
-      target.__tmMyListItem = item;
+      const handle = gridView.getCard(item);
+      if (!handle || handle.node !== target) throw initializationError("GRID_CARD_RETIRED", "grid-cards", "Card record changed");
+      gridView.updateCard(handle, item, index);
     }
     function findGridClone(item) {
-      return sourceState?.cloneMap?.get(itemKey(item)) || null;
+      return gridView.getCard(item)?.node || null;
     }
-    function setGridClone(item, clone) {
-      if (!sourceState?.cloneMap) return;
-      const previous = findGridClone(item);
-      if (previous && previous !== clone) releaseGridReact(previous);
-      sourceState.cloneMap.set(itemKey(item), clone);
-      if (sourceState.watchStatus) {
+    function attachGridRegistry(state) {
+      Object.defineProperty(state, "cloneMap", { enumerable: true, configurable: true, get: () => gridView.cards });
+      return state;
+    }
+    function retireGridCard(handle, detail) {
+      const clone = handle.node;
+      if (detail.reason.endsWith("-failed") && clone?.getAttribute("data-tm-react-grafted") === "true") graftedGridClones.add(clone);
+      releaseGridReact(clone);
+      if (detail.reason === "replacement" && detail.attempt?.token === hoverToken && isRouteSessionActive(detail.attempt.sessionToken)) return;
+      if (clone === activeClone || clone === pendingGridHoverClone || clone.getAttribute("data-tm-preparing") === "true" && clone.getAttribute("data-tm-hover-token") === String(hoverToken)) {
+        advanceHoverToken("source");
+        cancelPendingGridHover("source");
+        clearSourceAlignment();
+        activeClone = null;
+        activeVideoId = null;
+        activePage = null;
+      }
+    }
+    function onGridCardReplaced(previous, next) {
+      const clone = next.node, item = clone.__tmMyListItem;
+      if (sourceState?.watchStatus) {
         syncManualViewingCard(sourceState, clone, item, effectiveViewingStatus(sourceState.watchStatus, String(item.videoId)));
         const entry = sourceState.watchStatus.groupIndex?.entries.get(String(item.videoId));
         if (entry) entry.clone = clone;
@@ -13530,16 +13967,20 @@
       }));
     }
     function makeLiveClone(sourceSlot, item, oldClone, actualPage, assertCurrent = () => {
-    }) {
-      assertCurrent();
+    }, token = hoverToken, sessionToken = sessionScope.token) {
+      const expected = gridView.getCard(item);
+      if (!expected || expected.node !== oldClone) throw initializationError("GRID_CARD_RETIRED", "grid-cards", "Preparation card changed");
+      const assertExpected = () => {
+        assertCurrent();
+        gridView.assertCard(expected);
+      };
+      assertExpected();
       const fresh = sourceSlot.cloneNode(true);
-      assertCurrent();
+      assertExpected();
       const stats = netflixReactHover.graftTreeToClone(sourceSlot, fresh);
-      assertCurrent();
+      assertExpected();
       normalizeClone(fresh);
-      assertCurrent();
-      const order = oldClone?.getAttribute("data-tm-item-order");
-      copyItemAttributes(fresh, item, order === null || order === void 0 ? null : Number(order));
+      assertExpected();
       fresh.setAttribute("data-tm-hover-ready", String(Boolean(stats?.fiberAssignments || stats?.propsAssignments)));
       fresh.setAttribute("data-tm-backed-page", String(actualPage));
       fresh.__tmHoverActivationGeneration = oldClone?.__tmHoverActivationGeneration;
@@ -13550,16 +13991,19 @@
         fresh.setAttribute("data-tm-hover-token", String(hoverToken));
         fresh.__tmHoverReplacementToken = hoverToken;
       }
-      assertCurrent();
+      assertExpected();
       ensureGridHoverBehavior(sourceState.grid);
-      assertCurrent();
+      assertExpected();
       associateGridHoverItem(item, fresh);
-      assertCurrent();
-      return { fresh, stats };
+      assertExpected();
+      const handle = gridView.replaceCard(expected, { node: fresh, assertCurrent, attempt: { token, sessionToken } });
+      return { fresh: handle.node, stats, handle };
     }
     async function prepareMountedPage(page, targetItem = null, triggerEvent = null, token = null, sessionToken = null) {
       assertRouteSession(sessionToken);
       if (hoverPreparationCancelled(token)) return null;
+      let targetCard = targetItem ? gridView.getCard(targetItem) : null;
+      if (targetItem) gridView.assertCard(targetCard);
       performanceDiagnostics.hoverPreparation.calls++;
       const hoverTiming = performanceDiagnostics.hoverTiming;
       ensureLiveNativeBinding("hover-prepare-start");
@@ -13805,7 +14249,7 @@
           if (!staleSourceRecovery && pageItem.page !== actualPage) {
             pageItem.page = actualPage;
             const mappedClone = findGridClone(pageItem);
-            if (mappedClone?.isConnected) mappedClone.setAttribute("data-tm-item-page", String(actualPage));
+            if (mappedClone?.isConnected) copyItemAttributes(mappedClone, pageItem);
             nativeCarousel.assertObservation(pageView);
           }
           if (targetItem && itemKey(pageItem) !== itemKey(targetItem)) {
@@ -13813,30 +14257,31 @@
             performanceDiagnostics.hoverPreparation.neighborsSkipped++;
             continue;
           }
-          const oldClone = findGridClone(pageItem);
+          if (targetItem) gridView.assertCard(targetCard);
+          const oldClone = targetItem ? targetCard.node : findGridClone(pageItem);
           if (!oldClone?.isConnected) continue;
           const graftStarted = performance.now();
-          let fresh, stats;
+          let fresh, stats, handle;
           try {
-            ({ fresh, stats } = makeLiveClone(
+            ({ fresh, stats, handle } = makeLiveClone(
               sourceSlot,
               pageItem,
               oldClone,
               actualPage,
-              () => nativeCarousel.assertObservation(pageView)
+              () => nativeCarousel.assertObservation(pageView),
+              token,
+              sessionToken
             ));
           } finally {
             recordHoverTiming(hoverTiming, "graft", graftStarted);
           }
+          if (targetItem) targetCard = handle;
           nativeCarousel.assertObservation(pageView);
           refreshedCount++;
           performanceDiagnostics.hoverPreparation.clonesRebuilt++;
           fiberAssignments += stats?.fiberAssignments || 0;
           propsAssignments += stats?.propsAssignments || 0;
-          fresh.setAttribute("data-tm-item-page", String(pageItem.page));
           fresh.setAttribute("data-tm-backed-page", String(actualPage));
-          oldClone.replaceWith(fresh);
-          setGridClone(pageItem, fresh);
           nativeCarousel.assertObservation(pageView);
           if (targetItem && itemKey(pageItem) === itemKey(targetItem)) {
             try {
@@ -14099,7 +14544,8 @@
       }
     }
     function gridHoverTargetActive(clone, generation, triggerEvent = null) {
-      return !gridHoverSuppressed() && Boolean(sourceState?.grid?.isConnected) && Boolean(clone?.isConnected) && gridOwnsClone(clone, sourceState.grid) && !clone.__tmViewingControlHovered && generation === clone.__tmHoverActivationGeneration && (clone.matches(":hover") || gridHoverReplacementUnderPointer(clone, triggerEvent));
+      const handle = clone?.__tmMyListItem ? gridView.getCard(clone.__tmMyListItem) : null;
+      return Boolean(handle && handle.node === clone && gridView.isCardCurrent(handle)) && !gridHoverSuppressed() && Boolean(sourceState?.grid?.isConnected) && Boolean(clone?.isConnected) && gridOwnsClone(clone, sourceState.grid) && !clone.__tmViewingControlHovered && generation === clone.__tmHoverActivationGeneration && (clone.matches(":hover") || gridHoverReplacementUnderPointer(clone, triggerEvent));
     }
     function cancelPendingGridHover(reason = "other") {
       const clone = pendingGridHoverClone;
@@ -14246,46 +14692,28 @@
         }
       };
       assertBuildActive();
-      const grid = document.createElement("div");
-      grid.id = GRID_ID;
-      grid.setAttribute("data-tm-purpose", "exact-items-and-live-react-hover");
-      grid.removeAttribute("data-tm-empty");
-      ensureGridHoverBehavior(grid);
-      const cloneMap = /* @__PURE__ */ new Map();
-      const itemMap = /* @__PURE__ */ new Map();
-      await runConstructionChunks(items.length, (index) => {
-        const item = items[index];
-        const clone = createItemClone(item);
-        normalizeClone(clone);
-        copyItemAttributes(clone, item, index);
-        associateGridHoverItem(item, clone);
-        grid.appendChild(clone);
-        const key = itemKey(item);
-        cloneMap.set(key, clone);
-        itemMap.set(key, item);
-      }, assertBuildActive);
-      assertBuildActive();
-      clearLegacyEmptyState({ restoreGrid: false });
-      invalidateGridReact();
-      document.getElementById(GRID_ID)?.remove();
-      buildState.cloneMap = cloneMap;
-      buildState.itemMap = itemMap;
-      const geometry = applyGridGeometry(section, grid, layout);
+      const geometry = currentGridGeometry(section, layout);
       const status = updateStatus(formatHeaderParts(items.length, totalCount, null));
-      scroller.insertAdjacentElement("afterend", status);
       syncStatusTypography(section, status);
-      status.style.marginLeft = `${geometry.left}px`;
-      status.style.width = `${geometry.width}px`;
-      status.style.setProperty("--tm-row-gap", `${viewOriginalMyList ? layout.rowGap || 0 : 0}px`);
-      status.insertAdjacentElement("afterend", grid);
-      grid.style.marginTop = "0px";
+      const grid = await gridView.publish({
+        items,
+        section,
+        anchor: scroller,
+        status,
+        geometry,
+        layout,
+        visible: viewOriginalMyList,
+        assertCurrent: assertBuildActive
+      });
+      clearLegacyEmptyState({ restoreGrid: false });
+      buildState.itemMap = new Map(items.map((item) => [itemKey(item), item]));
+      attachGridRegistry(buildState);
       sourceState.items = items;
       sourceState.totalCount = totalCount;
       sourceState.grid = grid;
       sourceState.status = status;
       sourceState.layout = layout;
       if (sourceState.watchStatus) syncWatchGroups(sourceState);
-      items.forEach(releaseItemCardSnapshot);
       lastResponsiveSignature = responsiveSignature(layout);
       lastPageShape = responsivePageShape(layout);
       buildState.resizeViewportSignature = responsiveViewportSignature();
@@ -14301,7 +14729,7 @@
         totalCount,
         geometry,
         layout: layoutSummary(layout),
-        gridCards: cloneMap.size
+        gridCards: gridView.cards.size
       });
       return grid;
     }
@@ -14463,7 +14891,7 @@
           if (item.page !== page) changed++;
           item.page = page;
           const clone = cloneMap?.get(itemKey(item));
-          if (clone?.isConnected) clone.setAttribute("data-tm-item-page", String(page));
+          if (clone?.isConnected) copyItemAttributes(clone, item);
           assertPublication();
         });
         assertPublication();
@@ -14503,7 +14931,7 @@
           if (item.page !== page) changed++;
           item.page = page;
           const clone = cloneMap?.get(itemKey(item));
-          if (clone) clone.setAttribute("data-tm-item-page", String(page));
+          if (clone) copyItemAttributes(clone, item);
           nativeCarousel.assertObservation(runtime);
         }));
       }
@@ -15005,7 +15433,6 @@
         totalCount: null,
         grid: provisionalFrame.grid,
         status: provisionalFrame.status,
-        cloneMap: /* @__PURE__ */ new Map(),
         itemMap: /* @__PURE__ */ new Map(),
         empty: false,
         resizeViewportSignature: responsiveViewportSignature(),

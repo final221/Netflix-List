@@ -54,6 +54,16 @@ export class Element extends EventTarget {
     removeAttribute(name) { this.attributes.delete(name); }
     appendChild(node) { node.remove(); node.parentElement = this; this.children.push(node); return node; }
     append(...nodes) { nodes.forEach(node => this.appendChild(node)); }
+    insertBefore(node, reference) {
+        if (node === reference) return node;
+        if (reference && reference.parentElement !== this) throw new Error('Invalid insertion reference');
+        node.remove();
+        node.parentElement = this;
+        this.children.splice(reference ? this.children.indexOf(reference) : this.children.length, 0, node);
+        return node;
+    }
+    replaceWith(node) { this.parentElement.insertBefore(node, this); this.remove(); }
+    replaceChildren(...nodes) { [...this.children].forEach(node => node.remove()); this.append(...nodes); }
     prepend(node) { node.remove(); node.parentElement = this; this.children.unshift(node); }
     remove() {
         if (this.parentElement) this.parentElement.children.splice(this.parentElement.children.indexOf(this), 1);

@@ -11,6 +11,8 @@ const { createPopupInspection } = require('../src/netflix/popup-inspection.js');
 const { createNetflixContext } = require('../src/netflix/context.js');
 const { createNetflixPageDom } = require('../src/netflix/page-dom.js');
 const { createCardMarkup } = require('../src/netflix/card-markup.js');
+const { createGrid } = require('../src/grid/grid.js');
+const { GRID_ID: OWNED_GRID_ID } = require('../src/dom-names.js');
 const { createListData } = require('../src/netflix/list-data.js');
 const { createViewingData } = require('../src/netflix/viewing-data.js');
 const { createSessionScope } = require('../src/app/session-scope.js');
@@ -139,7 +141,7 @@ function environment(names, overrides = {}) {
         activeNativeHover: null,
         orderMismatchDialogOpen: false, orderMismatchReinitializing: false, responsiveRefreshPromise: null,
         routeSessionToken: 1, targetSessionActive: true,
-        recentRemovedMyListItems: new Map(), undoExpiryTimer: null,
+        recentRemovedMyListItems: new Map(), undoExpiryTimer: null, myListMutationSequence: 0,
         sourceState: null,
         nativeInitializationFailure: null,
         imageResourceObserver: null, IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES: 4000,
@@ -159,7 +161,7 @@ function environment(names, overrides = {}) {
     vm.runInContext(source.match(/^    const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_INTERRUPTION_LOG_LIMIT = \d+;/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_CANCELLATION_REASONS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
-    for (const name of ['attachNativeBinding', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
+    for (const name of ['attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
         'hoverScrollElapsed', 'recordHoverCancellation', 'advanceHoverToken', 'hoverIntentDiagnosticSnapshot', 'hoverScrollStateSnapshot',
@@ -183,6 +185,54 @@ function environment(names, overrides = {}) {
         readGraphqlIdentity: () => c.listData?.myListDomIdentity?.() });
     c.netflixDom ||= pageDom;
     c.cardMarkup = createCardMarkup({ location });
+    // Supplementary residual-policy fixtures inject a grid collaborator. Card ownership itself
+    // is exercised through the real public grid in constructionEnvironment and grid-cards.test.js.
+    const fixtureHandles = new WeakMap();
+    function fixtureCard(item) {
+        const node = c.findGridClone && !String(c.findGridClone).includes('gridView.getCard') ? c.findGridClone(item) : c.sourceState?.cloneMap?.get(c.itemKey ? c.itemKey(item) : 'v:' + item.videoId);
+        if (!node) return null;
+        if (!fixtureHandles.has(node)) fixtureHandles.set(node, Object.freeze({ node, key: item.videoId }));
+        return fixtureHandles.get(node);
+    }
+    c.gridView ||= {
+        get cards() { return c.sourceState?.cloneMap || new Map(); },
+        getCard: fixtureCard, assertCard(handle) { assert.ok(handle?.node?.isConnected); return handle; },
+        isCardCurrent: handle => Boolean(handle?.node?.isConnected),
+        replaceCard(handle, { node, assertCurrent = () => {} }) {
+            assertCurrent(); assert.ok(handle.node.isConnected);
+            node.__tmMyListItem = handle.node.__tmMyListItem;
+            node.setAttribute('data-tm-item-order', handle.node.getAttribute('data-tm-item-order') || '0');
+            handle.node.replaceWith(node);
+            c.setGridClone?.(node.__tmMyListItem, node);
+            c.onGridCardReplaced?.(handle, { node });
+            return fixtureCard(node.__tmMyListItem) || { node };
+        },
+        updateCard(handle, item, index = null) {
+            if (index !== null) handle.node.setAttribute('data-tm-item-order', String(index));
+            handle.node.setAttribute('data-tm-item-page', String(item.page));
+            handle.node.setAttribute('data-tm-item-video-id', item.videoId || '');
+        },
+        removeCard(handle) { c.releaseGridReact?.(handle.node); handle.node.remove(); c.sourceState?.cloneMap?.delete(handle.key); },
+        materialFor: item => item.snapshot || item.cardTemplate || fixtureCard(item)?.node || null,
+        createClone: item => c.cardMarkup.createClone(item.snapshot || fixtureCard(item)?.node || item.cardTemplate, item, Boolean(item.cardTemplate)),
+        captureCard: (...args) => c.cardMarkup.capture(...args), captureTemplate: (...args) => c.cardMarkup.captureTemplate(...args),
+        normalizeCard: node => c.cardMarkup.normalize(node),
+        diagnostics: () => ({ activeCards: c.sourceState?.cloneMap?.size || 0, retainedCards: 0, retirementFailures: 0 }),
+        setEmpty() {},
+        clearCards() { c.sourceState?.grid?.replaceChildren?.(); },
+        mount({ section, anchor, status }) {
+            const root = c.sourceState?.grid || c.document.getElementById(c.GRID_ID);
+            if (anchor) anchor.insertAdjacentElement('afterend', status); else section.prepend(status);
+            status.insertAdjacentElement('afterend', root);
+            return root;
+        },
+        clearRetained() {}, releaseRetained() {}, hasRetained: () => false, cancelBuild() {}, dispose() {},
+        applyGeometry: () => ({ left: 10, width: 600, columns: 6 }),
+        orderChildren(parent, desired) { let reference = parent.children[0] || null; for (const child of desired) {
+            if (child !== reference) parent.insertBefore(child, reference); reference = child.nextElementSibling; } },
+        moveCard(handle, parent, before) { parent.insertBefore(handle.node, before); }
+    };
+
     for (const [name, operation] of Object.entries({ getHtmlLanguage: c.netflixContext.getHtmlLanguage,
         getNetflixLanguage: c.netflixContext.getNetflixLanguage, viewingRequestContext: c.netflixContext.viewingRequestContext,
         graphqlData: c.netflixContext.readGraphqlBootstrap, nativeCardIdentity: pageDom.nativeCardIdentity,
@@ -467,6 +517,7 @@ test('short visits, lost hover, and superseded targets do not prepare obsolete c
 
     const next = new Element('next', e.grid);
     next.__tmMyListItem = { videoId: '456' };
+    e.c.findGridClone = item => item.videoId === '456' ? next : e.clone;
     e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
     e.c.handleGridClonePointerOver(pointer(next), next, next.__tmMyListItem);
     assert.equal(e.timers.size, 1);
@@ -3131,6 +3182,7 @@ test('ready hover and frame replay share reads while refreshing original geometr
     const item = { videoId: '6', href: '/watch/6', page: 1 };
     const grid = new Element('grid', e.section);
     const clone = new Element('clone', grid);
+    clone.__tmMyListItem = item;
     clone.__tmHoverActivationGeneration = 1;
     clone.setAttribute('data-tm-hover-ready', 'true');
     clone.setAttribute('data-tm-backed-page', '1');
@@ -3207,7 +3259,7 @@ test('binding adoption clears old grafts and does not retain reads collected bef
 
 function graftEnvironment(extraNames = [], overrides = {}) {
     const cleared = [];
-    const e = environment(['releaseGridReact', 'invalidateGridReact', 'findGridClone', 'setGridClone', ...extraNames], {
+    const e = environment(['releaseGridReact', 'invalidateGridReact', 'findGridClone', ...extraNames], {
         graftedGridClones: new Set(), sourceState: { cloneMap: new Map() },
         itemKey: item => item.videoId,
         netflixReactHover: { clearClone: clone => { cleared.push(clone); delete clone.__reactProps$test; } },
@@ -3219,7 +3271,9 @@ function graftEnvironment(extraNames = [], overrides = {}) {
         clone.setAttribute('data-tm-backed-page', '0');
         clone.setAttribute('data-tm-react-grafted', 'true');
         clone.__reactProps$test = { onMouseOver() {} };
-        e.c.setGridClone({ videoId: id }, clone);
+        e.c.releaseGridReact(e.c.sourceState.cloneMap.get(e.c.itemKey ? e.c.itemKey({ videoId: id }) : id));
+        e.c.sourceState.cloneMap.set(e.c.itemKey ? e.c.itemKey({ videoId: id }) : id, clone);
+        e.c.onGridCardReplaced(null, { node: clone });
         return clone;
     }
     return { ...e, cleared, add };
@@ -3228,7 +3282,7 @@ function graftEnvironment(extraNames = [], overrides = {}) {
 test('graft invalidation visits only six tracked cards for 30, 150, and 600-card grids', () => {
     for (const size of [30, 150, 600]) {
         const e = graftEnvironment([], { document: { getElementById() { throw new Error('Full-grid lookup'); } } });
-        for (let index = 0; index < size; index++) e.c.setGridClone({ videoId: String(index) }, new Element());
+        for (let index = 0; index < size; index++) e.c.sourceState.cloneMap.set(String(index), new Element());
         const clones = Array.from({ length: 6 }, (_, index) => e.add(String(index)));
         e.c.invalidateGridReact(clones[0]);
         assert.equal(e.cleared.length, 5);
@@ -3351,6 +3405,7 @@ class ConstructionNode extends Element {
     }
 }
 
+const gridOwnersForTests = new WeakMap();
 function constructionEnvironment() {
     const section = new ConstructionNode('section');
     section.setConnected(true);
@@ -3374,7 +3429,7 @@ function constructionEnvironment() {
         'buildGrid', 'normalizeClone', 'ensureManualViewingControls', 'copyItemAttributes', 'associateGridHoverItem', 'ensureGridHoverBehavior',
         'itemKey', 'clearRunningSession', 'retryPendingMyListMutations', 'tryApplyMyListMutation',
         'applyLegacyRemoval', 'applyLegacyAddition', 'disposeMyListMutation',
-        'cardSourceForItem', 'createItemClone', 'releaseItemCardSnapshot',
+        'cardSourceForItem',
         'alignLegacyVisiblePageOrder',
         'rememberUndoEntry', 'pruneUndoEntries', 'normalizeNetflixUiText', 'videoIdFromHref',
         'itemFromSlot', 'visibleNativeItems', 'findNativeMyListItemByVideoId'
@@ -3393,7 +3448,7 @@ function constructionEnvironment() {
         UNDO_ENTRY_TTL_MS: 30000,
         running: true, runningSessionToken: 1, responsiveRefreshing: false,
         clearLegacyEmptyState() {}, invalidateGridReact() {}, releaseGridReact() {}, clearSourceAlignment() {},
-        applyGridGeometry: () => ({ left: 10, width: 600 }),
+        applyGridGeometry: () => ({ left: 10, width: 600 }), currentGridGeometry: () => ({ left: 10, width: 600, columns: 6 }),
         updateStatus: () => status, formatHeaderParts: () => 'header', syncStatusTypography() {},
         responsiveSignature: () => 'geometry', responsivePageShape: () => 'pages',
         resizeObserver: null, ResizeObserver: class { observe() {} disconnect() {} }, viewOriginalMyList: true,
@@ -3404,6 +3459,17 @@ function constructionEnvironment() {
         reindexLegacyItemsAfterDelta() {},
         log: (name, details) => logs.push({ name, details }), warn: (name, details) => warnings.push({ name, details })
     });
+    oldGrid.id = OWNED_GRID_ID;
+    e.c.GRID_ID = OWNED_GRID_ID;
+    e.c.gridView = createGrid({ document: e.c.document, location: e.c.location,
+        runChunks: (...args) => e.c.runConstructionChunks(...args),
+        createError: (code, message) => e.c.initializationError(code, 'grid-cards', message),
+        prepareCard: clone => e.c.ensureManualViewingControls(clone),
+        installHover: root => e.c.ensureGridHoverBehavior(root),
+        onRetire: (handle, detail) => e.c.retireGridCard(handle, detail),
+        onReplace: (old, next) => e.c.onGridCardReplaced(old, next) });
+    e.c.attachGridRegistry(e.c.sourceState);
+    gridOwnersForTests.set(e.c.sourceState, e.c.gridView);
     function records(count) {
         return Array.from({ length: count }, (_, index) => ({ videoId: String(index + 1),
             href: `https://www.netflix.com/browse?jbv=${index + 1}`, ariaLabel: `Title ${index + 1}`,
@@ -3482,7 +3548,7 @@ test('compact GraphQL items preserve exact order, labels, artwork, pages, and fr
         assert.equal(item.cardTemplate.markup, 'original-template');
         assert.equal(item.cardTemplate.isConnected, false);
         assert.equal(item.snapshot, undefined);
-        const clone = e.c.createItemClone(item);
+        const clone = e.c.cardMarkup.createClone(e.c.cardSourceForItem(item), item, e.c.cardSourceForItem(item) === item.cardTemplate);
         assert.equal(clone.querySelector('card').href, `https://www.netflix.com/browse?jbv=${index + 1}`);
         assert.equal(clone.querySelector('img').src, `https://images.test/${index + 1}.jpg`);
         assert.equal(clone.querySelector('img').getAttribute('srcset'), null);
@@ -3702,8 +3768,8 @@ test('GraphQL template capture rejects replaced native admission before starting
     const e = initializationEnvironment(6), runs = [];
     let requests = 0, captures = 0;
     e.c.listData.collectRecords = async () => { requests++; return { bootstrap: { totalCount: 6 }, records: e.records(6) }; };
-    const capture = e.c.cardMarkup.captureTemplate;
-    e.c.cardMarkup = { ...e.c.cardMarkup, captureTemplate(slot) {
+    const capture = e.c.gridView.captureTemplate;
+    e.c.gridView = { ...e.c.gridView, captureTemplate(slot) {
         captures++;
         const material = capture(slot);
         e.c.nativeCarousel.clearBinding(); e.c.nativeCarousel.bind(e.section, e.scroller, e.track);
@@ -4226,7 +4292,7 @@ test('native-source replacement during grid construction restarts initialization
     const completion = e.c.runScript(1);
     await e.flush();
     for (let attempts = 0; attempts < 20 && e.created.length === 0 && e.timers.size; attempts++) await e.advance(0);
-    assert.equal(e.created.filter(node => node.id === 'grid').length, 1, e.warnings.map(entry => entry.details.error?.message).join(', '));
+    assert.equal(e.created.filter(node => node.id === OWNED_GRID_ID).length, 1, e.warnings.map(entry => entry.details.error?.message).join(', '));
     assert.equal(e.created[0].children.length, 24);
     const mutation = { videoId: '2', action: 'remove' };
     e.c.pendingMyListMutations.set('2', mutation);
@@ -4265,6 +4331,7 @@ test('small builds revalidate cancellation before their awaited result can be pu
 
 function retainedCardTrees(state, undoEntries = new Map()) {
     const roots = new Set(state.cloneMap.values());
+    for (const entry of undoEntries.values()) { const tree = gridOwnersForTests.get(state)?.materialFor(entry.item, entry.correlationId); if (tree) roots.add(tree); }
     const items = [...state.items, ...[...undoEntries.values()].map(entry => entry.item)];
     for (const item of items) {
         if (item.snapshot) roots.add(item.snapshot);
@@ -4417,7 +4484,7 @@ test('remove and Undo retain only the removed tree then restore membership, orde
         const entry = e.c.recentRemovedMyListItems.get('3');
         assert.equal(entry.item, item);
         assert.equal(entry.index, 2);
-        assert.equal(entry.item.snapshot, removed);
+        assert.equal(e.c.gridView.materialFor(entry.item, entry.correlationId), removed);
         assert.equal(removed.parentElement, null);
         assert.equal(removed.__reactProps$test, undefined);
         assert.equal(e.c.graftedGridClones.size, 0);
@@ -4432,7 +4499,7 @@ test('remove and Undo retain only the removed tree then restore membership, orde
         assert.equal(restored.__reactProps$test, undefined);
         for (const name of ['data-tm-hover-ready', 'data-tm-backed-page', 'data-tm-react-grafted',
             'data-tm-preparing', 'data-tm-hover-token']) assert.equal(restored.getAttribute(name), null);
-        assert.equal(item.snapshot, null);
+        assert.equal(item.snapshot ?? null, null);
         assert.equal(e.c.recentRemovedMyListItems.size, 0);
         assert.equal(retainedCardTrees(e.c.sourceState).size, 6);
     }
@@ -4440,7 +4507,7 @@ test('remove and Undo retain only the removed tree then restore membership, orde
 
 test('hover replacements become the sole card source for rebuild and Undo without retaining the old tree', async () => {
     const e = constructionEnvironment();
-    for (const name of ['makeLiveClone', 'findGridClone', 'setGridClone', 'releaseGridReact']) {
+    for (const name of ['makeLiveClone', 'findGridClone', 'onGridCardReplaced', 'releaseGridReact']) {
         vm.runInContext(declaration(name), e.c);
     }
     e.c.graftedGridClones = new Set();
@@ -4459,17 +4526,16 @@ test('hover replacements become the sole card source for rebuild and Undo withou
     liveSource.markup = 'fresh-live-markup';
     liveSource.querySelector('card').href = item.href;
     const { fresh } = e.c.makeLiveClone(liveSource, item, old, 0);
-    old.replaceWith(fresh);
-    e.c.setGridClone(item, fresh);
+
     assert.equal(e.c.cardSourceForItem(item), fresh);
-    assert.equal(item.snapshot, null);
+    assert.equal(item.snapshot ?? null, null);
     assert.equal(item.cardTemplate, undefined);
-    const rebuilt = e.c.createItemClone(item);
+    const rebuilt = e.c.cardMarkup.createClone(e.c.cardSourceForItem(item), item, e.c.cardSourceForItem(item) === item.cardTemplate);
     assert.equal(rebuilt.markup, 'fresh-live-markup');
     assert.equal(rebuilt.getAttribute('data-tm-hover-ready'), null);
     assert.equal(rebuilt.__reactProps$test, undefined);
     assert.equal(e.c.applyLegacyRemoval('1'), true);
-    assert.equal(e.c.recentRemovedMyListItems.get('1').item.snapshot, fresh);
+    assert.equal(e.c.gridView.materialFor(item, e.c.recentRemovedMyListItems.get('1').correlationId), fresh);
     assert.equal(fresh.__reactProps$test, undefined);
     assert.equal(e.c.applyLegacyAddition(item, 0, 'undo'), true);
     assert.equal(grid.children[0].markup, 'fresh-live-markup');
@@ -4482,7 +4548,7 @@ test('expired Undo entries release their last retained snapshot reference when p
     const items = e.items(6);
     await e.c.buildGrid(e.section, e.scroller, items, e.layout, 6, 1);
     e.c.applyLegacyRemoval('1');
-    const removed = e.c.recentRemovedMyListItems.get('1').item.snapshot;
+    const removed = e.c.gridView.materialFor(e.c.recentRemovedMyListItems.get('1').item);
     assert.equal(retainedCardTrees(e.c.sourceState, e.c.recentRemovedMyListItems).has(removed), true);
     await e.advance(30001);
     e.c.pruneUndoEntries();
@@ -4543,13 +4609,14 @@ test('Undo expiry preserves a queued mutation fallback after removing the Undo c
     await e.c.buildGrid(e.section, e.scroller, e.items(6), e.layout, 6, 1);
     e.c.applyLegacyRemoval('1');
     const entry = e.c.recentRemovedMyListItems.get('1');
-    const snapshot = entry.item.snapshot;
+    const snapshot = e.c.gridView.materialFor(entry.item);
     const mutation = { videoId: '1', action: 'add', fallbackItem: entry.item, preferredIndex: entry.index,
         timeoutId: null, observer: null };
     e.c.pendingMyListMutations.set('1', mutation);
     await e.advance(30000);
     assert.equal(e.c.recentRemovedMyListItems.size, 0);
-    assert.equal(mutation.fallbackItem.snapshot, snapshot);
+    assert.equal(mutation.fallbackItem.snapshot ?? null, null, 'removed records carry no retained tree');
+    assert.equal(e.c.gridView.materialFor(mutation.fallbackItem), snapshot);
     assert.equal(e.c.cardSourceForItem(mutation.fallbackItem), snapshot);
     const expiry = e.logs.find(row => row.name === 'undoEntriesExpired');
     assert.equal(expiry.details.pendingFallbacksPreserved, 1);
@@ -4574,7 +4641,11 @@ test('Undo expiry clears route-owned timers and ignores an obsolete callback aft
     e.c.scheduleRun = () => {};
     e.c.startTargetSession('undo-test-enter');
     e.c.isRouteSessionActive = token => e.c.targetSessionActive && token === e.c.routeSessionToken;
-    e.c.rememberUndoEntry(e.items(1)[0], 0);
+    e.c.sourceState = e.c.attachNativeBinding({ layout: e.layout, itemMap: new Map(), items: [] }, e.section, e.scroller, e.track);
+    const newItems = e.items(1);
+    const newBuild = e.c.buildGrid(e.section, e.scroller, newItems, e.layout, 1, e.c.routeSessionToken);
+    await e.drain(); await newBuild;
+    e.c.applyLegacyRemoval('1');
     const currentTimer = e.c.undoExpiryTimer;
     obsoleteCallback();
     assert.equal(e.c.undoExpiryTimer, currentTimer);
@@ -4591,7 +4662,7 @@ test('stale same-id item objects cannot borrow another item tree', async () => {
     await e.c.buildGrid(e.section, e.scroller, items, e.layout, 1, 1);
     const stale = { videoId: '1', href: items[0].href };
     assert.equal(e.c.cardSourceForItem(stale), null);
-    assert.throws(() => e.c.createItemClone(stale), /No card markup/);
+    assert.throws(() => e.c.gridView.insertCard(stale), { code: 'GRID_DUPLICATE_CARD' });
     assert.equal(e.c.cardSourceForItem(items[0]), e.c.sourceState.grid.children[0]);
 });
 
@@ -6480,8 +6551,7 @@ test('native hover replacements preserve the visibility of filtered sibling card
     const item = e.state.items.find(item => item.videoId === '5');
     const old = e.state.cloneMap.get('v:5');
     const { fresh } = e.c.makeLiveClone(e.template, item, old, item.page);
-    old.replaceWith(fresh);
-    e.state.cloneMap.set('v:5', fresh);
+
     assert.equal(fresh.getAttribute('data-tm-type-hidden'), 'true');
     assert.equal(e.c.gridOwnsClone(fresh, e.state.grid), false);
     assert.deepEqual(filteredViewingIds(e), ['2', '3']);
@@ -6974,6 +7044,7 @@ function thumbnailEnvironment() {
     for (const name of ['collectThumbnailDiagnostics', 'sampleThumbnailGeometry', 'collectThumbnailResourceTiming']) {
         vm.runInContext(declaration(name), e.c);
     }
+    Object.defineProperty(e.c.sourceState, 'cloneMap', { value: new Map(), configurable: true });
     const reads = { queries: 0, rects: 0, styles: 0 };
     const computedStyle = e.c.getComputedStyle;
     e.c.getComputedStyle = node => { reads.styles++; return computedStyle(node); };
@@ -7687,8 +7758,7 @@ test('rebuilds and card replacements keep one working action row and reject obso
     const replacement = clone.cloneNode(true);
     e.c.normalizeClone(replacement);
     replacement.__tmMyListItem = clone.__tmMyListItem;
-    clone.replaceWith(replacement);
-    e.state.cloneMap.set('v:2', replacement);
+    e.c.gridView.replaceCard(e.c.gridView.getCard(clone.__tmMyListItem), { node: replacement });
     e.c.syncWatchGroups(e.state);
     assert.equal(replacement.children.filter(child => child.getAttribute('data-tm-viewing-actions') === 'true').length, 1);
     clickManualViewing(e, '2', 'toggle', e.state.grid, clone.__tmViewingControls.toggle);
@@ -7794,12 +7864,10 @@ test('native hover clone replacement publishes correctly labeled manual controls
     await e.start();
     e.c.graftedGridClones = new Set();
     e.c.netflixReactHover = { graftTreeToClone: () => ({ fiberAssignments: 0, propsAssignments: 0 }) };
-    for (const name of ['makeLiveClone', 'findGridClone', 'setGridClone']) vm.runInContext(declaration(name), e.c);
+    for (const name of ['makeLiveClone', 'findGridClone']) vm.runInContext(declaration(name), e.c);
     const item = e.state.items.find(item => item.videoId === '2');
     const old = e.state.cloneMap.get('v:2');
     const { fresh } = e.c.makeLiveClone(e.template, item, old, item.page);
-    old.replaceWith(fresh);
-    e.c.setGridClone(item, fresh);
     assert.equal(fresh.__tmViewingControls.toggle.textContent, 'Mark watched');
     clickManualViewing(e, '2');
     assert.ok(completedViewingIds(e).includes('2'));
@@ -8265,14 +8333,14 @@ test('unchanged publication avoids card and layout reads, and filters reuse stor
 
 test('incremental groups follow hover replacement ownership without retaining or revisiting the old card', async () => {
     const e = await unfinishedMovieGrid(10);
-    for (const name of ['findGridClone', 'setGridClone']) vm.runInContext(declaration(name), e.c);
+    for (const name of ['findGridClone']) vm.runInContext(declaration(name), e.c);
     e.c.graftedGridClones = new Set();
     const item = e.state.items[9];
     const old = e.state.cloneMap.get('v:10');
     const fresh = old.cloneNode(true);
     fresh.__tmMyListItem = item;
-    old.replaceWith(fresh);
-    e.c.setGridClone(item, fresh);
+    e.c.gridView.replaceCard(e.c.gridView.getCard(item), { node: fresh });
+
     assert.equal(e.state.watchStatus.groupIndex.entries.get('10').clone, fresh);
     clickManualViewing(e, '10');
     assert.equal(fresh.parentElement, e.state.watchStatus.ui.watchedGrid);
@@ -9137,4 +9205,43 @@ test('a failed issued click cannot restore motion styles acquired by its replace
     assert.equal(properties.get('transition'), 'original');
     assert.equal(properties.get('animation'), 'original');
     assert.equal(classes.has('fast'), false);
+});
+
+
+test('actual grid admission rejects an obsolete preparation before native capture and preserves the replacement controls', async () => {
+    const e = constructionEnvironment();
+    const items = e.items(1);
+    await e.c.buildGrid(e.section, e.scroller, items, e.layout, 1, 1);
+    vm.runInContext(declaration('makeLiveClone'), e.c);
+    const oldHandle = e.c.gridView.getCard(items[0]), old = oldHandle.node;
+    const next = e.c.gridView.replaceCard(oldHandle, { node: old.cloneNode(true) });
+    let captures = 0;
+    const native = { cloneNode() { captures++; return e.template.cloneNode(true); } };
+    assert.throws(() => e.c.makeLiveClone(native, items[0], old, 0), { code: 'GRID_CARD_RETIRED' });
+    assert.equal(captures, 0);
+    e.c.gridView.assertCard(next);
+    assert.ok(next.node.__tmViewingControls);
+});
+
+test('actual grid replacement hands the admitted hover attempt to its new handle and cancels unrelated replacement', async () => {
+    const e = constructionEnvironment();
+    const items = e.items(1);
+    await e.c.buildGrid(e.section, e.scroller, items, e.layout, 1, 1);
+    vm.runInContext(declaration('makeLiveClone'), e.c);
+    e.c.netflixReactHover = { graftTreeToClone() { return { propsAssignments: 1 }; } };
+    const old = e.c.gridView.getCard(items[0]);
+    e.c.hoverToken = 3;
+    e.c.activeClone = old.node;
+    old.node.setAttribute('data-tm-preparing', 'true');
+    old.node.setAttribute('data-tm-hover-token', '3');
+    const { fresh, handle } = e.c.makeLiveClone(e.template, items[0], old.node, 0, () => {}, 3, 1);
+    assert.equal(e.c.hoverToken, 3);
+    assert.equal(e.c.gridView.isCardCurrent(old), false);
+    e.c.gridView.assertCard(handle);
+    assert.equal(fresh.__tmHoverReplacementToken, 3);
+    assert.ok(fresh.__tmViewingControls);
+    e.c.activeClone = fresh;
+    e.c.gridView.replaceCard(handle, { node: fresh.cloneNode(true) });
+    assert.equal(e.c.hoverToken, 4);
+    assert.equal(e.c.activeClone, null);
 });

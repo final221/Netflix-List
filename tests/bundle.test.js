@@ -296,15 +296,14 @@ test('production graph rejects private cross-feature access and real import cycl
     const { checkUserscript } = await import('../scripts/check.mjs');
     await fixture(async directory => {
         await mkdir(path.join(directory, 'src/grid'), { recursive: true });
-        await writeFile(path.join(directory, 'src/grid/cards.js'), 'export const cards = [];\n');
         const main = path.join(directory, 'src/main.js');
         await writeFile(main, "import './grid/cards.js';\n" + await readFile(main, 'utf8'));
         await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*main\.js.*grid\/cards\.js/);
     });
     await fixture(async directory => {
         await mkdir(path.join(directory, 'src/grid'), { recursive: true });
-        await writeFile(path.join(directory, 'src/grid/grid.js'), "import './cards.js';\n");
-        await writeFile(path.join(directory, 'src/grid/cards.js'), "import './grid.js';\n");
+        const cards = path.join(directory, 'src/grid/cards.js');
+        await writeFile(cards, "import './grid.js';\n" + await readFile(cards, 'utf8'));
         const main = path.join(directory, 'src/main.js');
         await writeFile(main, "import './grid/grid.js';\n" + await readFile(main, 'utf8'));
         await assert.rejects(checkUserscript({ root: directory }), /Production import cycle.*grid/);
@@ -315,15 +314,15 @@ test('production graph rejects dormant source and unlisted legacy bridges', asyn
     const { checkUserscript } = await import('../scripts/check.mjs');
     await fixture(async directory => {
         await mkdir(path.join(directory, 'src/grid'), { recursive: true });
-        await writeFile(path.join(directory, 'src/grid/grid.js'), 'export function createGrid() {}\n');
-        await assert.rejects(checkUserscript({ root: directory }), /Unreachable production module.*grid\/grid\.js/);
+        await writeFile(path.join(directory, 'src/grid/dormant.js'), 'export function createGrid() {}\n');
+        await assert.rejects(checkUserscript({ root: directory }), /Unreachable production module.*grid\/dormant\.js/);
     });
     await fixture(async directory => {
         await mkdir(path.join(directory, 'src/grid'), { recursive: true });
-        await writeFile(path.join(directory, 'src/grid/grid.js'), 'export function createGrid() {}\n');
+        await writeFile(path.join(directory, 'src/grid/dormant.js'), 'export function createDormant() {}\n');
         const legacy = path.join(directory, 'src/legacy.js');
-        await writeFile(legacy, "import './grid/grid.js';\n" + await readFile(legacy, 'utf8'));
-        await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*legacy\.js.*grid\/grid\.js/);
+        await writeFile(legacy, "import './grid/dormant.js';\n" + await readFile(legacy, 'utf8'));
+        await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*legacy\.js.*grid\/dormant\.js/);
     });
 });
 
