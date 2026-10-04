@@ -114,7 +114,7 @@ export function startLegacy() {
         readListShape: section => sourceState?.section === section ? { totalCount: sourceState.totalCount,
             columns: Math.max(1, sourceState.layout?.columns || 1) } : null,
         readGraphqlCount: () => listData.readMyListTotalCount(), cardMarkup, createError: initializationError,
-        log, warn, trace, tLog, logTimeout: logOperationTimeout, describeSlot: slotDescriptor, MutationObserver,
+        log, warn, trace, tLog, logTimeout: logOperationTimeout, MutationObserver,
         isHoverCancelled: hoverPreparationCancelled, readHoverToken: () => hoverToken,
         navigationDiagnostics: createNavigationDiagnosticSink,
         checkRoute: () => { if (location.href !== lastObservedUrl) handleRouteChange('MutationObserver-url'); },
@@ -907,23 +907,7 @@ export function startLegacy() {
     }
 
     function slotDescriptor(slot) {
-        if (!slot) return null;
-        const card = slot.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard);
-        const href = card?.href || card?.getAttribute?.('href') || '';
-        const itemIndex = netflixItemIndexFromSlot(slot);
-        const logicalIndex = normalizeNetflixLogicalIndex(itemIndex, sourceState?.totalCount);
-        return {
-            slot: slot.getAttribute?.('data-virtual-slot') || '',
-            itemIndex,
-            logicalIndex,
-            videoId: videoIdFromHref(href),
-            href,
-            ariaLabel: card?.getAttribute?.('aria-label') || '',
-            tabindex: card?.getAttribute?.('tabindex') || '',
-            connected: Boolean(slot.isConnected),
-            inlineTransform: slot.style?.getPropertyValue?.('transform') || '',
-            rect: rectSummary(slot.getBoundingClientRect ? nativeRect(slot) : null)
-        };
+        return nativeCarousel.diagnostics({ card: slot, totalCount: sourceState?.totalCount }).card;
     }
 
     function itemSummary(item) {
@@ -3834,11 +3818,11 @@ export function startLegacy() {
         return nativeCarousel.profile(...args);
     }
 
-    function nativeSourceObservation(state = sourceState) {
+    function nativeSourceObservation(state = sourceState, { count, provisionalTotalCount } = {}) {
         if (!state?.section) return null;
         const { section, scroller, track } = state;
         const sessionToken = sessionScope.token;
-        return nativeCarousel.observeSource({ section, scroller, track, sessionToken,
+        return nativeCarousel.observeSource({ section, scroller, track, sessionToken, count, provisionalTotalCount,
             assertCurrent() {
                 assertRouteSession(sessionToken);
                 if (sourceState !== state) throw createRouteSessionCancelledError();
@@ -3983,10 +3967,6 @@ export function startLegacy() {
         return nativeCarousel.diagnoseIndices(...args);
     }
 
-    function nativeReactCarouselTotalCount(...args) {
-        return nativeCarousel.readCount(...args);
-    }
-
     function isResizeResponsiveReason(reason) {
         return reason === 'ResizeObserver' || reason === 'responsive-resize-retry';
     }
@@ -4002,7 +3982,9 @@ export function startLegacy() {
         let nativeCountState = null;
         let nativeCountConverged = false;
         if (myListCountConvergencePending && sourceState?.scroller?.isConnected && sourceState?.track?.isConnected) {
-            nativeCountState = nativeReactCarouselTotalCount(sourceState.scroller, sourceState.track);
+            const observation = nativeSourceObservation(sourceState, { count: 'optional' });
+            nativeCountState = observation.count;
+            nativeCarousel.assertObservation(observation);
             nativeCountConverged =
                 Number.isSafeInteger(nativeCountState.totalCount) &&
                 nativeCountState.totalCount === (sourceState.items?.length ?? sourceState.totalCount ?? 0);
@@ -4020,18 +4002,6 @@ export function startLegacy() {
             nativeCountReadings: nativeCountState?.readings || [],
             nativeCountUniqueReadings: nativeCountState?.uniqueReadings || []
         };
-    }
-
-    function requireNativeReactCarouselTotalCount(...args) {
-        return nativeCarousel.requireCount(...args);
-    }
-
-    function netflixItemIndexFromSlot(...args) {
-        return nativeCarousel.itemIndex(...args);
-    }
-
-    function normalizeNetflixLogicalIndex(...args) {
-        return nativeCarousel.logicalIndex(...args);
     }
 
     function expectedLogicalIndicesForPage(...args) {
@@ -4258,13 +4228,14 @@ export function startLegacy() {
         return { ...result, reason: 'position-deviation-before-source-search', positionMismatch };
     }
 
-    function nativePositionDeviation(item, slot) {
-        if (!item || !slot || !sourceState?.items?.length) return null;
+    function nativePositionDeviation(item, source) {
+        if (!item || !source || !sourceState?.items?.length) return null;
+        nativeCarousel.assertSource(source);
         const expectedIndexFromItems = sourceState.items.indexOf(item);
         const expectedIndex = Number.isSafeInteger(expectedIndexFromItems) && expectedIndexFromItems >= 0
             ? expectedIndexFromItems
             : item.logicalIndex;
-        const actualIndex = nativeCarousel.indexReading(slot).value;
+        const actualIndex = source.itemIndex;
         if (!Number.isSafeInteger(expectedIndex) || expectedIndex < 0 ||
             !Number.isSafeInteger(actualIndex) || actualIndex < 0) {
             return null;
@@ -4293,10 +4264,11 @@ export function startLegacy() {
         return null;
     }
 
-    function rejectLargeNativePositionDeviation(item, slot, expectedPage, visibleIds = []) {
-        const deviation = nativePositionDeviation(item, slot);
+    function rejectLargeNativePositionDeviation(item, source, expectedPage, visibleIds = []) {
+        const state = sourceState;
+        const deviation = nativePositionDeviation(item, source);
         if (!deviation || deviation.absoluteDelta < ORDER_MISMATCH_POSITION_THRESHOLD) return false;
-        const actualVideoId = videoIdFromHref(slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard)?.href || '');
+        const actualVideoId = source.videoId;
         const diagnostic = {
             item: itemSummary(item),
             expectedPage,
@@ -4304,9 +4276,11 @@ export function startLegacy() {
             actualIndex: deviation.actualIndex,
             delta: deviation.delta,
             threshold: ORDER_MISMATCH_POSITION_THRESHOLD,
-            source: slotDescriptor(slot)
+            source: slotDescriptor(source.slot)
         };
         warn('Native My List position deviates beyond order-mismatch threshold', diagnostic);
+        nativeCarousel.assertSource(source);
+        if (sourceState !== state) throw createRouteSessionCancelledError();
         showOrderMismatchDialog(
             item,
             expectedPage,
@@ -5032,7 +5006,7 @@ export function startLegacy() {
 
             assertCurrent();
             if (located?.status === 'found' && located.slot) {
-                if (rejectLargeNativePositionDeviation(targetItem, located.slot, page)) return null;
+                if (rejectLargeNativePositionDeviation(targetItem, located.source, page)) return null;
                 mutationSourceRecoveryPending = false;
                 targetSourceSlot = located.slot;
                 resolvedSource = located.source || null;
@@ -5073,7 +5047,7 @@ export function startLegacy() {
                     }
                     assertCurrent();
                     if (repaired?.slot) {
-                        if (rejectLargeNativePositionDeviation(targetItem, repaired.slot, page, located?.visibleIds || [])) return null;
+                        if (rejectLargeNativePositionDeviation(targetItem, repaired.source, page, located?.visibleIds || [])) return null;
                         mutationSourceRecoveryPending = false;
                         staleSourceRecovery = true;
                         targetSourceSlot = repaired.slot;
@@ -6603,8 +6577,10 @@ export function startLegacy() {
         }
 
         if (mountedMode === 'logical') {
+            const countOwner = sourceState;
             try {
-                const mountedCountState = requireNativeReactCarouselTotalCount(scroller, track, earlyTotalCount);
+                const countObservation = nativeSourceObservation(countOwner, { count: 'required', provisionalTotalCount: earlyTotalCount });
+                const mountedCountState = countObservation.count;
                 const mountedTotalCount = mountedCountState.totalCount;
                 if (mountedTotalCount !== earlyTotalCount) {
                     warn('Netflix My List totalCount reconciled from mounted carousel', {
@@ -6623,9 +6599,15 @@ export function startLegacy() {
                         entryKind: targetSessionEntryKind
                     });
                 }
+                nativeCarousel.assertObservation(countObservation);
                 earlyTotalCount = mountedTotalCount;
                 if (sourceState) sourceState.totalCount = mountedTotalCount;
             } catch (error) {
+                if (error?.code === 'NATIVE_SOURCE_REPLACED' || sourceState !== countOwner) {
+                    clearRunningSession(sessionToken, false);
+                    if (!recoverNativeInitialization(sessionToken, 'native-count-source-replaced')) scheduleRun(0, sessionToken);
+                    return;
+                }
                 if (!isRouteSessionCancelledError(error)) {
                     initializationBlockedSessionToken = sessionToken;
                     warn(tLog('initializationFailed'), {

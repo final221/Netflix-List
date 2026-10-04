@@ -13,7 +13,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     performance, setTimeout, clearTimeout, requestAnimationFrame, cancelAnimationFrame,
     readListShape = () => null, readGraphqlCount = () => null, createError: initializationError,
     log = () => {}, warn = () => {}, trace = () => {}, tLog = value => value, logTimeout: logOperationTimeout = () => {},
-    describeSlot: slotDescriptor = () => ({}), ownedUi = {}, MutationObserver,
+    ownedUi = {}, MutationObserver,
     checkRoute = () => {}, onMutationDelivery = () => {}, isInitializationBlocked = () => false,
     onBlockedMutation = () => {}, isGridDetached = () => false, shouldCoalesce = () => false,
     onRelevantMutation = () => {}, isHoverCancelled = () => false, readHoverToken = () => null,
@@ -791,12 +791,54 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         return withNativeReadScope(() => {
             const operation = observationOperation(options), runtime = operation.model.view;
             const attempts = runtime.logicalRemapRetryCount;
+            const count = options.count === 'required'
+                ? requireNativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track,
+                    options.provisionalTotalCount ?? null, operation.guard)
+                : options.count === 'optional' ? nativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track) : null;
+            const countFacts = count ? Object.freeze({ ...count, readings: Object.freeze([...count.readings]),
+                uniqueReadings: Object.freeze([...count.uniqueReadings]) }) : null;
             return observationResult(operation, { mode: runtime.profile.pageMode,
-                needsRemapping: Boolean(runtime.pageMappingStale), remapAttempts: attempts }, () => {
+                needsRemapping: Boolean(runtime.pageMappingStale), remapAttempts: attempts,
+                ...(countFacts ? { count: countFacts } : {}) }, () => {
                 if (runtime.logicalRemapRetryCount !== attempts) throw initializationError('NATIVE_SOURCE_REPLACED',
                     'native-observation', 'Native remapping observation changed');
+                if (countFacts) {
+                    const current = nativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track);
+                    if (current.totalCount !== countFacts.totalCount || current.slots !== countFacts.slots ||
+                        current.readings.length !== countFacts.readings.length ||
+                        !current.readings.every((value, index) => Object.is(value, countFacts.readings[index]))) {
+                        throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Native count observation changed');
+                    }
+                }
             });
         });
+    }
+
+    function slotDescriptor(slot, totalCount = undefined) {
+        try {
+            if (!slot) return null;
+            if (totalCount === undefined) totalCount = acceptedBinding ? readListShape(acceptedBinding.section)?.totalCount : null;
+            const card = slot.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard);
+            const href = card?.href || card?.getAttribute?.('href') || '';
+            const itemIndex = netflixItemIndexFromSlot(slot);
+            const rect = slot.getBoundingClientRect ? nativeRect(slot) : null;
+            const rectangle = rect ? Object.freeze(Object.fromEntries(['left', 'top', 'width', 'height', 'right', 'bottom']
+                .map(key => [key, Math.round(rect[key] * 10) / 10]))) : null;
+            return Object.freeze({ slot: slot.getAttribute?.('data-virtual-slot') || '', itemIndex,
+                logicalIndex: normalizeNetflixLogicalIndex(itemIndex, totalCount), videoId: netflixDom.videoIdFromHref(href), href,
+                ariaLabel: card?.getAttribute?.('aria-label') || '', tabindex: card?.getAttribute?.('tabindex') || '',
+                connected: Boolean(slot.isConnected), inlineTransform: slot.style?.getPropertyValue?.('transform') || '', rect: rectangle });
+        } catch (_) { return null; }
+    }
+    function diagnostics(options = {}) {
+        const snapshot = { bindingGeneration, readScopeActive: Boolean(nativeReadScope), navigation: navigation.diagnostics(),
+            collection: collection.diagnostics(), collectionOperations: collection.pending(), mountedSourceWaits: mountedWaits.size,
+            discoveryActive: Boolean(targetDocumentObserver), pendingMutationFrame: targetMutationFrame !== null };
+        if (Object.hasOwn(options, 'card')) {
+            try { snapshot.card = withNativeReadScope(() => slotDescriptor(options.card, options.totalCount)); }
+            catch (_) { snapshot.card = null; }
+        }
+        return snapshot;
     }
     function pageCards(options) {
         return withNativeReadScope(() => {
@@ -1679,8 +1721,9 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         };
     }
 
-    function requireNativeReactCarouselTotalCount(scroller, track, provisionalTotalCount = null) {
+    function requireNativeReactCarouselTotalCount(scroller, track, provisionalTotalCount = null, assertCurrent = () => {}) {
         const state = nativeReactCarouselTotalCount(scroller, track);
+        assertCurrent();
         if (Number.isSafeInteger(state.totalCount) && state.totalCount >= 0) return state;
         throw initializationError(
             'NATIVE_TOTAL_COUNT_UNAVAILABLE',
@@ -2034,15 +2077,13 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         selectedPage, pageCount, navigationControl: carouselMoveButton, controlDisabled: carouselMoveButtonDisabled,
         readiness: nativeCarouselReadiness, ready: waitForNativeCarouselReady, waitForSource: waitForNativeSource,
         layout: measureVisibleLayout, emptyLayout: measureEmptyLayout, slotLayoutFormula: parseSlotLayoutFormula,
-        observe: readNativeMyListDomState, readCount: nativeReactCarouselTotalCount, requireCount: requireNativeReactCarouselTotalCount,
-        itemIndex: netflixItemIndexFromSlot, indexReading: slot => netflixReactCarousel.readItemIndex(slot),
+        observe: readNativeMyListDomState,
+        itemIndex: netflixItemIndexFromSlot,
         positions: logicalSlotPositions, logicalWindow: nativeLogicalPageState, requireLogicalWindow: requireNativeLogicalPageState,
-        logicalIndex: normalizeNetflixLogicalIndex, expectedPageIndices: expectedLogicalIndicesForPage,
+        expectedPageIndices: expectedLogicalIndicesForPage,
         pageForPositions: logicalPageFromSlotPositions, wrappedTail: wrappedTailLogicalPageInfo,
         wrappedTailForRebuild: wrappedTailLogicalPageForRebuild,
         diagnoseIndices: logVirtualRawIndexDiagnostic,
-        diagnostics: () => ({ bindingGeneration, readScopeActive: Boolean(nativeReadScope), navigation: navigation.diagnostics(),
-            collection: collection.diagnostics(), collectionOperations: collection.pending(), mountedSourceWaits: mountedWaits.size,
-            discoveryActive: Boolean(targetDocumentObserver), pendingMutationFrame: targetMutationFrame !== null })
+        diagnostics
     });
 }

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.23
+// @version      1.4.24
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -5853,7 +5853,6 @@
     tLog = (value) => value,
     logTimeout: logOperationTimeout = () => {
     },
-    describeSlot: slotDescriptor = () => ({}),
     ownedUi = {},
     MutationObserver: MutationObserver2,
     checkRoute = () => {
@@ -6882,18 +6881,81 @@
       return withNativeReadScope(() => {
         const operation = observationOperation(options), runtime = operation.model.view;
         const attempts = runtime.logicalRemapRetryCount;
+        const count = options.count === "required" ? requireNativeReactCarouselTotalCount(
+          operation.binding.scroller,
+          operation.binding.track,
+          options.provisionalTotalCount ?? null,
+          operation.guard
+        ) : options.count === "optional" ? nativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track) : null;
+        const countFacts = count ? Object.freeze({
+          ...count,
+          readings: Object.freeze([...count.readings]),
+          uniqueReadings: Object.freeze([...count.uniqueReadings])
+        }) : null;
         return observationResult(operation, {
           mode: runtime.profile.pageMode,
           needsRemapping: Boolean(runtime.pageMappingStale),
-          remapAttempts: attempts
+          remapAttempts: attempts,
+          ...countFacts ? { count: countFacts } : {}
         }, () => {
           if (runtime.logicalRemapRetryCount !== attempts) throw initializationError(
             "NATIVE_SOURCE_REPLACED",
             "native-observation",
             "Native remapping observation changed"
           );
+          if (countFacts) {
+            const current = nativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track);
+            if (current.totalCount !== countFacts.totalCount || current.slots !== countFacts.slots || current.readings.length !== countFacts.readings.length || !current.readings.every((value, index) => Object.is(value, countFacts.readings[index]))) {
+              throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native count observation changed");
+            }
+          }
         });
       });
+    }
+    function slotDescriptor(slot, totalCount = void 0) {
+      try {
+        if (!slot) return null;
+        if (totalCount === void 0) totalCount = acceptedBinding ? readListShape(acceptedBinding.section)?.totalCount : null;
+        const card = slot.querySelector?.(NETFLIX_DOM_SELECTORS2.standardCard);
+        const href = card?.href || card?.getAttribute?.("href") || "";
+        const itemIndex = netflixItemIndexFromSlot(slot);
+        const rect = slot.getBoundingClientRect ? nativeRect(slot) : null;
+        const rectangle = rect ? Object.freeze(Object.fromEntries(["left", "top", "width", "height", "right", "bottom"].map((key) => [key, Math.round(rect[key] * 10) / 10]))) : null;
+        return Object.freeze({
+          slot: slot.getAttribute?.("data-virtual-slot") || "",
+          itemIndex,
+          logicalIndex: normalizeNetflixLogicalIndex(itemIndex, totalCount),
+          videoId: netflixDom.videoIdFromHref(href),
+          href,
+          ariaLabel: card?.getAttribute?.("aria-label") || "",
+          tabindex: card?.getAttribute?.("tabindex") || "",
+          connected: Boolean(slot.isConnected),
+          inlineTransform: slot.style?.getPropertyValue?.("transform") || "",
+          rect: rectangle
+        });
+      } catch (_) {
+        return null;
+      }
+    }
+    function diagnostics(options = {}) {
+      const snapshot = {
+        bindingGeneration,
+        readScopeActive: Boolean(nativeReadScope),
+        navigation: navigation.diagnostics(),
+        collection: collection.diagnostics(),
+        collectionOperations: collection.pending(),
+        mountedSourceWaits: mountedWaits.size,
+        discoveryActive: Boolean(targetDocumentObserver),
+        pendingMutationFrame: targetMutationFrame !== null
+      };
+      if (Object.hasOwn(options, "card")) {
+        try {
+          snapshot.card = withNativeReadScope(() => slotDescriptor(options.card, options.totalCount));
+        } catch (_) {
+          snapshot.card = null;
+        }
+      }
+      return snapshot;
     }
     function pageCards(options) {
       return withNativeReadScope(() => {
@@ -7681,8 +7743,10 @@
         uniqueReadings: unique
       };
     }
-    function requireNativeReactCarouselTotalCount(scroller, track, provisionalTotalCount = null) {
+    function requireNativeReactCarouselTotalCount(scroller, track, provisionalTotalCount = null, assertCurrent = () => {
+    }) {
       const state = nativeReactCarouselTotalCount(scroller, track);
+      assertCurrent();
       if (Number.isSafeInteger(state.totalCount) && state.totalCount >= 0) return state;
       throw initializationError(
         "NATIVE_TOTAL_COUNT_UNAVAILABLE",
@@ -8057,29 +8121,16 @@
       emptyLayout: measureEmptyLayout,
       slotLayoutFormula: parseSlotLayoutFormula,
       observe: readNativeMyListDomState,
-      readCount: nativeReactCarouselTotalCount,
-      requireCount: requireNativeReactCarouselTotalCount,
       itemIndex: netflixItemIndexFromSlot,
-      indexReading: (slot) => netflixReactCarousel.readItemIndex(slot),
       positions: logicalSlotPositions,
       logicalWindow: nativeLogicalPageState,
       requireLogicalWindow: requireNativeLogicalPageState,
-      logicalIndex: normalizeNetflixLogicalIndex,
       expectedPageIndices: expectedLogicalIndicesForPage,
       pageForPositions: logicalPageFromSlotPositions,
       wrappedTail: wrappedTailLogicalPageInfo,
       wrappedTailForRebuild: wrappedTailLogicalPageForRebuild,
       diagnoseIndices: logVirtualRawIndexDiagnostic,
-      diagnostics: () => ({
-        bindingGeneration,
-        readScopeActive: Boolean(nativeReadScope),
-        navigation: navigation.diagnostics(),
-        collection: collection.diagnostics(),
-        collectionOperations: collection.pending(),
-        mountedSourceWaits: mountedWaits.size,
-        discoveryActive: Boolean(targetDocumentObserver),
-        pendingMutationFrame: targetMutationFrame !== null
-      })
+      diagnostics
     });
   }
 
@@ -8176,7 +8227,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.23";
+    const SCRIPT_VERSION = "1.4.24";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -8262,7 +8313,6 @@
       trace,
       tLog,
       logTimeout: logOperationTimeout,
-      describeSlot: slotDescriptor,
       MutationObserver,
       isHoverCancelled: hoverPreparationCancelled,
       readHoverToken: () => hoverToken,
@@ -9200,23 +9250,7 @@
       };
     }
     function slotDescriptor(slot) {
-      if (!slot) return null;
-      const card = slot.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard);
-      const href = card?.href || card?.getAttribute?.("href") || "";
-      const itemIndex = netflixItemIndexFromSlot(slot);
-      const logicalIndex = normalizeNetflixLogicalIndex2(itemIndex, sourceState?.totalCount);
-      return {
-        slot: slot.getAttribute?.("data-virtual-slot") || "",
-        itemIndex,
-        logicalIndex,
-        videoId: videoIdFromHref(href),
-        href,
-        ariaLabel: card?.getAttribute?.("aria-label") || "",
-        tabindex: card?.getAttribute?.("tabindex") || "",
-        connected: Boolean(slot.isConnected),
-        inlineTransform: slot.style?.getPropertyValue?.("transform") || "",
-        rect: rectSummary(slot.getBoundingClientRect ? nativeRect(slot) : null)
-      };
+      return nativeCarousel.diagnostics({ card: slot, totalCount: sourceState?.totalCount }).card;
     }
     function itemSummary(item) {
       if (!item) return null;
@@ -12025,7 +12059,7 @@
     function detectCarouselDomProfile(...args) {
       return nativeCarousel.profile(...args);
     }
-    function nativeSourceObservation(state = sourceState) {
+    function nativeSourceObservation(state = sourceState, { count, provisionalTotalCount } = {}) {
       if (!state?.section) return null;
       const { section, scroller, track } = state;
       const sessionToken = sessionScope.token;
@@ -12034,6 +12068,8 @@
         scroller,
         track,
         sessionToken,
+        count,
+        provisionalTotalCount,
         assertCurrent() {
           assertRouteSession(sessionToken);
           if (sourceState !== state) throw createRouteSessionCancelledError();
@@ -12169,9 +12205,6 @@
     function logVirtualRawIndexDiagnostic(...args) {
       return nativeCarousel.diagnoseIndices(...args);
     }
-    function nativeReactCarouselTotalCount(...args) {
-      return nativeCarousel.readCount(...args);
-    }
     function isResizeResponsiveReason(reason) {
       return reason === "ResizeObserver" || reason === "responsive-resize-retry";
     }
@@ -12181,7 +12214,9 @@
       let nativeCountState = null;
       let nativeCountConverged = false;
       if (myListCountConvergencePending && sourceState?.scroller?.isConnected && sourceState?.track?.isConnected) {
-        nativeCountState = nativeReactCarouselTotalCount(sourceState.scroller, sourceState.track);
+        const observation = nativeSourceObservation(sourceState, { count: "optional" });
+        nativeCountState = observation.count;
+        nativeCarousel.assertObservation(observation);
         nativeCountConverged = Number.isSafeInteger(nativeCountState.totalCount) && nativeCountState.totalCount === (sourceState.items?.length ?? sourceState.totalCount ?? 0);
         if (nativeCountConverged) myListCountConvergencePending = false;
       }
@@ -12196,15 +12231,6 @@
         nativeCountReadings: nativeCountState?.readings || [],
         nativeCountUniqueReadings: nativeCountState?.uniqueReadings || []
       };
-    }
-    function requireNativeReactCarouselTotalCount(...args) {
-      return nativeCarousel.requireCount(...args);
-    }
-    function netflixItemIndexFromSlot(...args) {
-      return nativeCarousel.itemIndex(...args);
-    }
-    function normalizeNetflixLogicalIndex2(...args) {
-      return nativeCarousel.logicalIndex(...args);
     }
     function expectedLogicalIndicesForPage2(...args) {
       return nativeCarousel.expectedPageIndices(...args);
@@ -12438,11 +12464,12 @@
       });
       return { ...result, reason: "position-deviation-before-source-search", positionMismatch };
     }
-    function nativePositionDeviation(item, slot) {
-      if (!item || !slot || !sourceState?.items?.length) return null;
+    function nativePositionDeviation(item, source) {
+      if (!item || !source || !sourceState?.items?.length) return null;
+      nativeCarousel.assertSource(source);
       const expectedIndexFromItems = sourceState.items.indexOf(item);
       const expectedIndex = Number.isSafeInteger(expectedIndexFromItems) && expectedIndexFromItems >= 0 ? expectedIndexFromItems : item.logicalIndex;
-      const actualIndex = nativeCarousel.indexReading(slot).value;
+      const actualIndex = source.itemIndex;
       if (!Number.isSafeInteger(expectedIndex) || expectedIndex < 0 || !Number.isSafeInteger(actualIndex) || actualIndex < 0) {
         return null;
       }
@@ -12467,10 +12494,11 @@
       }
       return null;
     }
-    function rejectLargeNativePositionDeviation(item, slot, expectedPage, visibleIds = []) {
-      const deviation = nativePositionDeviation(item, slot);
+    function rejectLargeNativePositionDeviation(item, source, expectedPage, visibleIds = []) {
+      const state = sourceState;
+      const deviation = nativePositionDeviation(item, source);
       if (!deviation || deviation.absoluteDelta < ORDER_MISMATCH_POSITION_THRESHOLD) return false;
-      const actualVideoId = videoIdFromHref(slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard)?.href || "");
+      const actualVideoId = source.videoId;
       const diagnostic = {
         item: itemSummary(item),
         expectedPage,
@@ -12478,9 +12506,11 @@
         actualIndex: deviation.actualIndex,
         delta: deviation.delta,
         threshold: ORDER_MISMATCH_POSITION_THRESHOLD,
-        source: slotDescriptor(slot)
+        source: slotDescriptor(source.slot)
       };
       warn("Native My List position deviates beyond order-mismatch threshold", diagnostic);
+      nativeCarousel.assertSource(source);
+      if (sourceState !== state) throw createRouteSessionCancelledError();
       showOrderMismatchDialog(
         item,
         expectedPage,
@@ -13205,7 +13235,7 @@
         }
         assertCurrent();
         if (located?.status === "found" && located.slot) {
-          if (rejectLargeNativePositionDeviation(targetItem, located.slot, page)) return null;
+          if (rejectLargeNativePositionDeviation(targetItem, located.source, page)) return null;
           mutationSourceRecoveryPending = false;
           targetSourceSlot = located.slot;
           resolvedSource = located.source || null;
@@ -13246,7 +13276,7 @@
             }
             assertCurrent();
             if (repaired?.slot) {
-              if (rejectLargeNativePositionDeviation(targetItem, repaired.slot, page, located?.visibleIds || [])) return null;
+              if (rejectLargeNativePositionDeviation(targetItem, repaired.source, page, located?.visibleIds || [])) return null;
               mutationSourceRecoveryPending = false;
               staleSourceRecovery = true;
               targetSourceSlot = repaired.slot;
@@ -14680,8 +14710,10 @@
         }
       }
       if (mountedMode === "logical") {
+        const countOwner = sourceState;
         try {
-          const mountedCountState = requireNativeReactCarouselTotalCount(scroller, track, earlyTotalCount);
+          const countObservation = nativeSourceObservation(countOwner, { count: "required", provisionalTotalCount: earlyTotalCount });
+          const mountedCountState = countObservation.count;
           const mountedTotalCount = mountedCountState.totalCount;
           if (mountedTotalCount !== earlyTotalCount) {
             warn("Netflix My List totalCount reconciled from mounted carousel", {
@@ -14698,9 +14730,15 @@
               entryKind: targetSessionEntryKind
             });
           }
+          nativeCarousel.assertObservation(countObservation);
           earlyTotalCount = mountedTotalCount;
           if (sourceState) sourceState.totalCount = mountedTotalCount;
         } catch (error) {
+          if (error?.code === "NATIVE_SOURCE_REPLACED" || sourceState !== countOwner) {
+            clearRunningSession(sessionToken, false);
+            if (!recoverNativeInitialization(sessionToken, "native-count-source-replaced")) scheduleRun(0, sessionToken);
+            return;
+          }
           if (!isRouteSessionCancelledError(error)) {
             initializationBlockedSessionToken = sessionToken;
             warn(tLog("initializationFailed"), {

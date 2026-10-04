@@ -38,7 +38,7 @@ function environment(overrides = {}) {
         requestAnimationFrame: scheduler.requestAnimationFrame, cancelAnimationFrame: scheduler.cancelAnimationFrame,
         readListShape: () => ({ totalCount: 19, columns: 4 }), readGraphqlCount: () => 19,
         createError: (code, stage, message, details) => Object.assign(new Error(message), { code, stage, details }),
-        log() {}, warn() {}, tLog: value => value, logTimeout() {}, describeSlot: () => ({}),
+        log() {}, warn() {}, tLog: value => value, logTimeout() {},
         MutationObserver, ...overrides });
     return { document, scheduler, scope, carousel, host, section, scroller, track, control, pageDom, observers };
 }
@@ -653,6 +653,105 @@ test('page observations own wrapped-tail inclusion and borrow current cards thro
     e.slots[2].querySelector('a').href = 'https://www.netflix.com/title/99';
     assert.equal(e.carousel.isObservationCurrent(result), false, 'buffer recycling also invalidates the observed inclusion rule');
     assert.throws(() => e.carousel.assertObservation(result), { code: 'NATIVE_SOURCE_REPLACED' });
+});
+
+test('source count observations preserve optional uncertainty and required native count truth', () => {
+    const e = mountedEnvironment();
+    let reads = 0;
+    for (const slot of e.slots) Object.defineProperty(slot.__reactFiber$mounted.memoizedProps, 'totalCount',
+        { configurable: true, get() { reads++; return 3; } });
+    assert.equal(e.carousel.observeSource(e.options).count, undefined);
+    assert.equal(reads, 0, 'mode/remap observation adds no count work');
+    const observed = e.carousel.observeSource({ ...e.options, count: 'required', provisionalTotalCount: 999 });
+    assert.deepEqual(observed.count, { totalCount: 3, readings: [3, 3, 3], slots: 3, uniqueReadings: [3] });
+    assert.ok(Object.isFrozen(observed.count) && Object.isFrozen(observed.count.readings) && Object.isFrozen(observed.count.uniqueReadings));
+    assert.equal(e.carousel.isObservationCurrent(observed), true);
+    Object.defineProperty(e.slots[1].__reactFiber$mounted.memoizedProps, 'totalCount', { value: 4, writable: true });
+    const uncertain = e.carousel.observeSource({ ...e.options, count: 'optional' });
+    assert.deepEqual(uncertain.count, { totalCount: null, readings: [3, 4, 3], slots: 3, uniqueReadings: [3, 4] });
+    assert.throws(() => e.carousel.observeSource({ ...e.options, count: 'required', provisionalTotalCount: 999 }), error => {
+        assert.equal(error.code, 'NATIVE_TOTAL_COUNT_UNAVAILABLE');
+        assert.equal(error.stage, 'native-react-total-count');
+        assert.deepEqual(error.details, { provisionalTotalCount: 999, slots: 3, readings: [3, 4, 3], uniqueReadings: [3, 4] });
+        return true;
+    });
+    for (const slot of e.slots) Object.defineProperty(slot.__reactFiber$mounted.memoizedProps, 'totalCount', { value: 0, writable: true });
+    assert.equal(e.carousel.observeSource({ ...e.options, count: 'required' }).count.totalCount, 0);
+    for (const slot of e.slots) slot.__reactFiber$mounted.memoizedProps.totalCount = null;
+    assert.equal(e.carousel.observeSource({ ...e.options, count: 'optional' }).count.totalCount, null);
+    assert.throws(() => e.carousel.observeSource({ ...e.options, count: 'required' }), { code: 'NATIVE_TOTAL_COUNT_UNAVAILABLE' });
+    assert.deepEqual(e.directions, []);
+    assert.equal(e.scheduler.timers.size, 0);
+});
+
+test('native count observations reject changed readings, copied results and replaced admission', () => {
+    for (const change of ['count', 'binding', 'mapping', 'parent', 'route']) {
+        const e = mountedEnvironment();
+        let current = true;
+        const options = { ...e.options, count: 'optional', assertCurrent() {
+            if (!current) throw Object.assign(new Error('caller replaced'), { code: 'CALLER_REPLACED' });
+        } };
+        const observation = e.carousel.observeSource(options);
+        assert.equal(e.carousel.isObservationCurrent({ ...observation }), false);
+        if (change === 'count') e.slots[0].__reactFiber$mounted.memoizedProps.totalCount = 4;
+        if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
+        if (change === 'mapping') e.carousel.refreshMapping({ ...e.options, mode: 'delta', totalCount: 6, columns: 3 });
+        if (change === 'parent') current = false;
+        if (change === 'route') e.scope.begin();
+        assert.equal(e.carousel.isObservationCurrent(observation), false, change);
+        assert.throws(() => e.carousel.assertObservation(observation));
+        assert.equal(observation.count.totalCount, 3, 'previous facts are copied scalars');
+    }
+});
+
+test('carousel owns passive card descriptions and isolates diagnostic failures from source authority', () => {
+    const e = mountedEnvironment();
+    const slot = e.slots[0], card = slot.querySelector('a');
+    slot.setAttribute('data-virtual-slot', 'native-0');
+    slot.style.setProperty('transform', 'translateX(5px)');
+    const source = e.carousel.mountedCard({ ...e.options, item: { videoId: '1' } });
+    const description = e.carousel.diagnostics({ card: slot, totalCount: 3 }).card;
+    assert.equal(description.itemIndex, 0);
+    assert.equal(description.logicalIndex, 0);
+    assert.equal(description.slot, 'native-0');
+    assert.equal(description.videoId, '1');
+    assert.equal(description.href, card.href);
+    assert.equal(description.ariaLabel, 'Title 1');
+    assert.equal(description.tabindex, '0');
+    assert.equal(description.connected, true);
+    assert.equal(description.inlineTransform, 'translateX(5px)');
+    assert.equal(description.rect.left, 0);
+    assert.ok(Object.isFrozen(description) && Object.isFrozen(description.rect));
+    assert.equal(e.carousel.isObservationCurrent(description), false, 'diagnostic facts cannot authorize publication');
+    slot.__reactFiber$mounted.memoizedProps.itemIndex = 9;
+    const changed = e.carousel.diagnostics({ card: slot, totalCount: 3 }).card;
+    assert.equal(changed.itemIndex, 9);
+    assert.equal(changed.logicalIndex, null);
+    assert.equal(description.itemIndex, 0);
+    slot.__reactFiber$mounted.memoizedProps.itemIndex = 0;
+    slot.getBoundingClientRect = () => { throw new Error('private native diagnostic failure'); };
+    assert.equal(e.carousel.diagnostics({ card: slot }).card, null);
+    assert.equal(e.carousel.isSourceCurrent(source), true);
+    assert.deepEqual(e.directions, []);
+    assert.equal(e.scheduler.timers.size, 0);
+    assert.equal(e.scheduler.frames.size, 0);
+});
+
+test('native recovery can publish a valid source when its card description fails', async () => {
+    const traces = [];
+    const e = mountedEnvironment({ trace: factory => traces.push(factory()) });
+    const card = e.slots[0].querySelector('a'), attribute = card.getAttribute.bind(card);
+    card.getAttribute = name => {
+        if (name === 'aria-label') throw new Error('private description unavailable');
+        return attribute(name);
+    };
+    const result = await e.settle(e.carousel.resolveCard({ ...e.options, mode: 'search', preferredPage: 0,
+        maxRadius: 0, columns: 3, repairLogicalMapping: false, item: { videoId: '1' } }));
+    assert.equal(result.status, 'found');
+    assert.equal(e.carousel.isSourceCurrent(result.source), true);
+    assert.ok(traces.some(([, details]) => details.source === null));
+    assert.deepEqual(e.directions, []);
+    assert.equal(e.scheduler.timers.size, 0);
 });
 
 test('page observations reject an obsolete resolved handle or admission rather than borrowing a new source', () => {

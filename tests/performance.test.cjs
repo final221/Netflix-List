@@ -15,6 +15,7 @@ const { createListData } = require('../src/netflix/list-data.js');
 const { createViewingData } = require('../src/netflix/viewing-data.js');
 const { createSessionScope } = require('../src/app/session-scope.js');
 const { createCarousel } = require('../src/netflix/carousel/carousel.js');
+const { normalizeNetflixLogicalIndex } = require('../src/netflix/carousel/page-model.js');
 const { createNavigation } = require('../src/netflix/carousel/navigation.js');
 const { createCollection } = require('../src/netflix/carousel/collection.js');
 const { carouselPayload, atom, reference, viewingVideo } = require('./helpers/fixtures.js');
@@ -23,7 +24,8 @@ const { carouselPayload, atom, reference, viewingVideo } = require('./helpers/fi
 // Generated-bundle startup and lifecycle are covered separately in bundle.test.js.
 const { source, declaration } = require('./helpers/legacy-source.cjs');
 const privateNavigationFunctions = new Set(['createLogicalMoveSignal', 'waitLogicalPageChange', 'waitPageByPolling', 'waitPage', 'waitForScriptMoveSettle']);
-const fixtureModelReads = new Set(['getCarouselDomRuntime', 'logicalSlotPositions', 'wrappedTailLogicalPageInfo']);
+const fixtureModelReads = new Set(['getCarouselDomRuntime', 'logicalSlotPositions', 'wrappedTailLogicalPageInfo',
+    'netflixItemIndexFromSlot', 'normalizeNetflixLogicalIndex']);
 const migratedAdapterFunctions = new Set(['getHtmlLanguage', 'getNetflixLanguage', 'netflixModelData',
     'graphqlData', 'viewingRequestContext', 'nativeCardIdentity', 'videoIdFromHref', 'decodeTrackingContext',
     'videoIdFromToggleContext', 'findMyListSection', 'itemFromSlot']);
@@ -210,7 +212,7 @@ function environment(names, overrides = {}) {
         readGraphqlCount: () => c.listData?.readMyListTotalCount?.() ?? null, cardMarkup: c.cardMarkup,
         createError: (...args) => c.initializationError?.(...args) || Object.assign(new Error(args[2]), { code: args[0], stage: args[1] }),
         log: (...args) => c.log(...args), warn: (...args) => c.warn(...args), trace: (...args) => c.trace(...args), tLog: (...args) => c.tLog(...args),
-        logTimeout: (...args) => c.logOperationTimeout?.(...args), describeSlot: (...args) => c.slotDescriptor?.(...args),
+        logTimeout: (...args) => c.logOperationTimeout?.(...args),
         ownedUi: { grid: c.GRID_ID, status: c.STATUS_ID, empty: c.LEGACY_EMPTY_STATE_ID, dialog: c.ORDER_MISMATCH_DIALOG_ID, fastMove: c.FAST_MOVE_CLASS },
         isHoverCancelled: token => c.hoverPreparationCancelled?.(token) || false, readHoverToken: () => c.hoverToken,
         navigationDiagnostics: token => c.createNavigationDiagnosticSink(token),
@@ -229,6 +231,8 @@ function environment(names, overrides = {}) {
     c.getCarouselDomRuntime ||= section => c.nativeCarousel.model(section);
     c.logicalSlotPositions ||= (...args) => c.nativeCarousel.positions(...args);
     c.wrappedTailLogicalPageInfo ||= (...args) => c.nativeCarousel.wrappedTail(...args);
+    c.netflixItemIndexFromSlot ||= slot => c.nativeCarousel.itemIndex(slot);
+    c.normalizeNetflixLogicalIndex ||= normalizeNetflixLogicalIndex;
     vm.runInContext(declaration('nativeSourceObservation'), c);
     if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
     Object.defineProperty(c, 'nativeReadScope', { get: () => c.nativeCarousel.diagnostics().readScopeActive ? true : null });
@@ -2042,6 +2046,68 @@ test('differential reindexing rejects an obsolete source observation before copy
     }
 });
 
+test('native mismatch comparison consumes source-handle indices and rejects obsolete diagnostic publication', () => {
+    for (const replacement of ['none', 'binding', 'parent']) {
+        const e = preparedHoverEnvironment();
+        vm.runInContext(declaration('createRouteSessionCancelledError'), e.c);
+        vm.runInContext(declaration('nativePositionDeviation'), e.c);
+        vm.runInContext(declaration('rejectLargeNativePositionDeviation'), e.c);
+        const state = e.c.sourceState, item = e.clone.__tmMyListItem;
+        e.sourceSlot.__reactFiber$mismatch = { memoizedProps: { itemIndex: 42 }, return: null };
+        const source = e.c.nativeCarousel.mountedCard({ section: state.section, scroller: state.scroller,
+            track: state.track, item, sessionToken: 1 });
+        e.c.warn = () => {
+            if (replacement === 'binding') {
+                e.c.nativeCarousel.clearBinding();
+                e.c.nativeCarousel.borrowBinding(state.section, state.scroller, state.track);
+            } else if (replacement === 'parent') e.c.sourceState = { ...state, itemMap: new Map() };
+        };
+        if (replacement === 'none') {
+            assert.deepEqual(JSON.parse(JSON.stringify(e.c.nativePositionDeviation(item, source))),
+                { expectedIndex: 0, actualIndex: 42, delta: 42, absoluteDelta: 42 });
+            assert.equal(e.c.rejectLargeNativePositionDeviation(item, source, 0), true);
+            assert.equal(e.calls.dialogs, 1);
+        } else {
+            assert.throws(() => e.c.rejectLargeNativePositionDeviation(item, source, 0),
+                { code: replacement === 'parent' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'NATIVE_SOURCE_REPLACED' });
+            assert.equal(e.calls.dialogs, 0, replacement);
+        }
+        assert.equal(e.events.length, 0);
+        assert.equal(e.timers.size, 0);
+    }
+});
+
+test('count convergence clears pending work only through a current native observation', () => {
+    for (const scenario of ['match', 'missing', 'wrong', 'binding', 'parent']) {
+        const e = preparedHoverEnvironment();
+        for (const name of ['createRouteSessionCancelledError', 'isResizeResponsiveReason', 'orderMismatchPromptSuppressionState']) {
+            vm.runInContext(declaration(name), e.c);
+        }
+        Object.assign(e.c, { lastResponsiveReason: '', activeResponsiveReason: '', responsiveRefreshTimer: null,
+            responsiveRefreshing: false, myListCountConvergencePending: true });
+        const state = e.c.sourceState;
+        e.sourceSlot.__reactFiber$count = { memoizedProps: { get totalCount() {
+            if (scenario === 'binding') {
+                e.c.nativeCarousel.clearBinding();
+                e.c.nativeCarousel.borrowBinding(state.section, state.scroller, state.track);
+            } else if (scenario === 'parent') e.c.sourceState = { ...state, items: [...state.items] };
+            return scenario === 'missing' ? null : scenario === 'wrong' ? 2 : 1;
+        } }, return: null };
+        if (['binding', 'parent'].includes(scenario)) {
+            assert.throws(() => e.c.orderMismatchPromptSuppressionState(),
+                { code: scenario === 'parent' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'NATIVE_SOURCE_REPLACED' });
+            assert.equal(e.c.myListCountConvergencePending, true);
+        } else {
+            const result = e.c.orderMismatchPromptSuppressionState();
+            assert.equal(result.nativeCountConverged, scenario === 'match');
+            assert.equal(result.suppress, scenario !== 'match');
+            assert.equal(e.c.myListCountConvergencePending, scenario !== 'match');
+            assert.deepEqual([...result.nativeCountReadings], [scenario === 'missing' ? null : scenario === 'wrong' ? 2 : 1]);
+        }
+        assert.equal(e.timers.size, 0);
+    }
+});
+
 test('an order-mismatch dialog stops preparation without an extra hover retry', async () => {
     const e = preparedHoverEnvironment();
     e.c.resolveExpectedPageSourceItem = async () => {
@@ -3465,6 +3531,7 @@ function initializationEnvironment(count = 150) {
     e.track.appendChild(e.template);
     e.template.querySelector('card').href = 'https://www.netflix.com/browse?jbv=1';
     e.template.querySelector('card').setAttribute('tabindex', '0');
+    e.template.__reactFiber$count = { memoizedProps: { get totalCount() { return e.c.mountedCount ?? count; }, itemIndex: 0 }, return: null };
     e.track.style.getPropertyValue = key => key === 'display' ? 'flex' : '';
     vm.runInContext(declaration('waitForNativeCarouselReady'), e.c);
     const prepare = e.c.waitForNativeCarouselReady;
@@ -3486,7 +3553,6 @@ function initializationEnvironment(count = 150) {
         placeLegacyFrame: () => ({ grid: e.oldGrid, status: e.status }), applyOriginalMyListVisibility() {},
         waitForMyListTotalCount: async () => count,
         getCarouselDomRuntime: section => e.c.nativeCarousel.model(section),
-        requireNativeReactCarouselTotalCount: () => ({ totalCount: count }),
         currentPageSlots: () => [e.template],
         netflixDom: { findTrack: () => e.track, filledSlots: () => [e.template], directSlots: () => [e.template] },
         selectedPage: () => 0, pageCount: () => Math.ceil(count / 6), carouselDomProfileSummary: () => ({}),
@@ -3586,6 +3652,64 @@ test('fast collection revalidates its accepted native observation after logging 
     assert.equal(e.c.pendingMyListMutations.size, 1);
     assert.equal(e.c.completedSection, null);
     assert.deepEqual(runs, [[0, 1]]);
+});
+
+test('initialization rejects obsolete native count after logging and preserves queued mutations for its existing retry', async () => {
+    for (const replacement of ['count', 'binding', 'parent']) {
+        const e = initializationEnvironment(6);
+        const log = e.c.log, runs = [];
+        let collections = 0, publishedOwner = null, previousCount;
+        const collect = e.c.collectLogicalListItems;
+        e.c.collectLogicalListItems = (...args) => { collections++; return collect(...args); };
+        e.c.scheduleRun = (...args) => runs.push(args);
+        e.c.pendingMyListMutations.set('2', { videoId: '2', action: 'remove' });
+        e.c.log = (name, details) => {
+            log(name, details);
+            if (name !== 'Netflix My List mounted totalCount confirmed') return;
+            publishedOwner = e.c.sourceState;
+            previousCount = publishedOwner.totalCount;
+            if (replacement === 'count') e.c.mountedCount = 7;
+            else if (replacement === 'parent') e.c.sourceState = { ...publishedOwner, totalCount: 99 };
+            else {
+                e.c.nativeCarousel.clearBinding();
+                e.c.nativeCarousel.bind(e.section, e.scroller, e.track);
+            }
+        };
+        const completion = e.c.runScript(1);
+        await e.flush(); await e.drain(); await completion;
+        assert.ok(publishedOwner, replacement);
+        assert.equal(collections, 0, replacement);
+        assert.equal(e.c.sourceState.totalCount, replacement === 'parent' ? 99 : previousCount);
+        assert.equal(e.c.pendingMyListMutations.size, 1);
+        assert.equal(e.c.completedSection, null);
+        assert.deepEqual(runs, [[0, 1]]);
+        assert.equal(e.logs.filter(row => row.name === 'legacyGridBuilt').length, 0);
+        assert.equal(e.c.nativeCarousel.model(e.section).pageCountFinalized, false);
+    }
+});
+
+test('initialization never substitutes a provisional count for absent or contradictory native counts', async () => {
+    for (const scenario of ['missing', 'conflicting']) {
+        const e = initializationEnvironment(6);
+        let collections = 0;
+        e.c.collectLogicalListItems = () => collections++;
+        if (scenario === 'missing') Object.defineProperty(e.template.__reactFiber$count.memoizedProps, 'totalCount', { value: null });
+        else {
+            const other = e.template.cloneNode(true);
+            other.querySelector('card').href = 'https://www.netflix.com/watch/2';
+            other.__reactFiber$count = { memoizedProps: { totalCount: 7, itemIndex: 1 }, return: null };
+            e.track.appendChild(other);
+            e.c.netflixDom.filledSlots = e.c.netflixDom.directSlots = track => track.children;
+        }
+        const completion = e.c.runScript(1);
+        await e.flush(); await e.drain(); await completion;
+        assert.equal(collections, 0, scenario);
+        assert.equal(e.c.completedSection, null, scenario);
+        assert.equal(e.c.initializationBlockedSessionToken, 1, scenario);
+        assert.equal(e.c.nativeCarousel.model(e.section).pageCountFinalized, false, scenario);
+        assert.ok(e.warnings.some(row => row.name === 'initializationFailed' && row.details.code === 'NATIVE_TOTAL_COUNT_UNAVAILABLE'), scenario);
+        assert.equal(e.logs.filter(row => row.name === 'legacyGridBuilt').length, 0);
+    }
 });
 
 test('GraphQL adapter awaits snapshot chunks and initialization awaits grid publication before becoming idle', async () => {
@@ -4302,7 +4426,6 @@ function mountedSinglePageEnvironment(count = 6) {
         }),
         nativeReactCarouselTotalCount: (_, track) => ({ totalCount: e.c.mountedCount,
             slots: track.children.length, uniqueReadings: [e.c.mountedCount] }),
-        requireNativeReactCarouselTotalCount: () => ({ totalCount: e.c.mountedCount }),
         netflixItemIndexFromSlot: slot => slot.index,
         netflixDom: { findTrack: () => e.track, directSlots: track => track.children, filledSlots: track => track.children }
     });
@@ -4311,6 +4434,8 @@ function mountedSinglePageEnvironment(count = 6) {
     const slots = e.items(count).map((item, index) => {
         const slot = item.snapshot;
         slot.index = index;
+        slot.__reactFiber$count = { memoizedProps: { get totalCount() { return e.c.mountedCount; },
+            get itemIndex() { return slot.index; } }, return: null };
         slot.setAttribute('native-variant', String(index));
         e.track.appendChild(slot);
         return slot;
