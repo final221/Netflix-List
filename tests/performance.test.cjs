@@ -25,7 +25,8 @@ const { carouselPayload, atom, reference, viewingVideo } = require('./helpers/fi
 const { source, declaration } = require('./helpers/legacy-source.cjs');
 const privateNavigationFunctions = new Set(['createLogicalMoveSignal', 'waitLogicalPageChange', 'waitPageByPolling', 'waitPage', 'waitForScriptMoveSettle']);
 const fixtureModelReads = new Set(['getCarouselDomRuntime', 'logicalSlotPositions', 'wrappedTailLogicalPageInfo',
-    'netflixItemIndexFromSlot', 'normalizeNetflixLogicalIndex', 'detectCarouselDomProfile', 'carouselDomProfileSummary']);
+    'netflixItemIndexFromSlot', 'normalizeNetflixLogicalIndex', 'detectCarouselDomProfile', 'carouselDomProfileSummary',
+    'selectedPage', 'pageCount']);
 const migratedAdapterFunctions = new Set(['getHtmlLanguage', 'getNetflixLanguage', 'netflixModelData',
     'graphqlData', 'viewingRequestContext', 'nativeCardIdentity', 'videoIdFromHref', 'decodeTrackingContext',
     'videoIdFromToggleContext', 'findMyListSection', 'itemFromSlot']);
@@ -233,6 +234,8 @@ function environment(names, overrides = {}) {
     c.wrappedTailLogicalPageInfo ||= (...args) => c.nativeCarousel.wrappedTail(...args);
     c.netflixItemIndexFromSlot ||= slot => c.nativeCarousel.itemIndex(slot);
     c.normalizeNetflixLogicalIndex ||= normalizeNetflixLogicalIndex;
+    c.selectedPage ||= section => c.nativeCarousel.selectedPage(section);
+    c.pageCount ||= section => c.nativeCarousel.pageCount(section);
     vm.runInContext(declaration('nativeSourceObservation'), c);
     vm.runInContext(declaration('nativeSourceDiagnostics'), c);
     if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
@@ -396,6 +399,7 @@ test('intentional hover still reuses an already-mounted native card after the dw
         alignSourceSlotToClone: () => { alignments++; return true; },
         slotDescriptor: () => ({}), scheduleNativeHoverReplay: () => { replays++; return true; }
     });
+    mountNativeControls(e.section);
     e.clone.setAttribute('data-tm-hover-ready', 'true');
     e.clone.setAttribute('data-tm-backed-page', '0');
     e.c.handleGridClonePointerOver(pointer(e.clone), e.clone, e.clone.__tmMyListItem);
@@ -482,6 +486,7 @@ test('old async cleanup preserves a newer preparation marker on the same card', 
     const e = hoverEnvironment(['activateClone'], {
         selectedPage: () => 0, prepareMountedPage: () => preparation.promise
     });
+    mountNativeControls(e.section);
     e.c.findGridClone = () => e.clone;
     e.clone.__tmHoverActivationGeneration = 1;
     const activation = e.c.activateClone(e.clone.__tmMyListItem, e.clone, pointer(e.clone), 1);
@@ -3783,6 +3788,68 @@ test('count-detection timeout keeps its primary error when native profile diagno
     await e.advance(20);
     await rejected;
     assert.equal(e.timers.size, 0);
+});
+
+test('manual reinitialization retains its parent and native binding before tearing down the session', async () => {
+    for (const replacement of ['none', 'parent', 'binding', 'parent-wait', 'binding-wait']) {
+        const e = preparedHoverEnvironment();
+        const gate = deferred(), calls = { navigate: 0, suspend: 0, start: 0, status: 0, warnings: 0 };
+        const waiting = replacement.endsWith('-wait'), responsive = deferred();
+        for (const name of ['createRouteSessionCancelledError', 'isRouteSessionCancelledError', 'reinitializeAfterOrderMismatch']) {
+            vm.runInContext(declaration(name), e.c);
+        }
+        Object.assign(e.c, { running: false, orderMismatchReinitializing: false, orderMismatchDismissed: false,
+            hideOrderMismatchDialog() {}, collectRuntimeSnapshot: () => ({}), formatInitializationErrorMeta: () => 'failure',
+            updateStatus: () => calls.status++, warn: () => calls.warnings++,
+            suspendTargetSession: () => calls.suspend++, startTargetSession: () => calls.start++,
+            goToPage: () => { calls.navigate++; return gate.promise; } });
+        if (waiting) e.c.responsiveRefreshPromise = responsive.promise;
+        const state = e.c.sourceState;
+        const pending = e.c.reinitializeAfterOrderMismatch();
+        await e.flush();
+        assert.equal(calls.navigate, waiting ? 0 : 1);
+        if (replacement.startsWith('parent')) e.c.sourceState = { ...state };
+        if (replacement.startsWith('binding')) { e.c.nativeCarousel.clearBinding(); e.c.nativeCarousel.bind(state.section, state.scroller, state.track); }
+        responsive.resolve();
+        gate.resolve(0);
+        await pending;
+        assert.equal(calls.navigate, waiting ? 0 : 1);
+        assert.equal(calls.suspend, replacement === 'none' ? 1 : 0, replacement);
+        assert.equal(calls.start, replacement === 'none' ? 1 : 0, replacement);
+        assert.equal(calls.status, 0);
+        assert.equal(calls.warnings, 0);
+    }
+});
+
+test('ready hover validates admitted page ownership after logging before requesting native replay', async () => {
+    for (const replacement of ['parent', 'binding']) {
+        const e = preparedHoverEnvironment();
+        let replays = 0;
+        e.clone.setAttribute('data-tm-hover-ready', 'true');
+        e.clone.setAttribute('data-tm-backed-page', '0');
+        const state = e.c.sourceState;
+        e.c.log = name => {
+            if (name !== 'hoverReusedImmediately') return;
+            if (replacement === 'parent') e.c.sourceState = { ...state };
+            else { e.c.nativeCarousel.clearBinding(); e.c.nativeCarousel.bind(state.section, state.scroller, state.track); }
+        };
+        e.c.scheduleNativeHoverReplay = async () => { replays++; return false; };
+        const pending = e.start();
+        await e.flush();
+        e.c.hoverToken++;
+        await e.advance(200);
+        await pending;
+        assert.equal(replays, 0, replacement);
+        assert.equal(e.events.length, 0);
+    }
+});
+
+test('responsive page signature cannot publish after layout formatting replaces its parent', () => {
+    const e = resizeEnvironment();
+    const state = e.c.sourceState, layout = { ...state.layout };
+    Object.defineProperty(layout, 'cardWidth', { get() { e.c.sourceState = { ...state }; return 100; } });
+    vm.runInContext(declaration('createRouteSessionCancelledError'), e.c);
+    assert.throws(() => e.c.responsiveSignature(layout), { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
 });
 
 test('GraphQL adapter awaits snapshot chunks and initialization awaits grid publication before becoming idle', async () => {
@@ -7983,14 +8050,26 @@ function resizeEnvironment() {
         window: viewport, responsiveRefreshTimer: null, responsiveRefreshing: false,
         SOURCE_PARKED_CLASS: 'parked', ORIGINAL_VISIBILITY_ATTR: 'original-visible',
         log: (name, details) => logs.push({ name, details }),
-        pageCount: () => pages, layoutSummary: value => value,
+        layoutSummary: value => value,
         measureVisibleLayout: () => { calls.measures++; return { ...measured }; },
         measureNativeCarouselGap: () => 10, updateResponsiveStatus: () => calls.styles++,
         currentGridGeometry: () => ({ width: 640, left: 20, columns: 6 }),
         refreshResponsiveLayout: () => { calls.refreshes++; e.c.cancelResizeHover(); }
     });
     e.c.attachNativeBinding(e.c.sourceState, e.section, new Element('scroller'), new Element('track'));
-    mountNativeControls(e.section);
+    mountNativeControls(e.section, 'indicator');
+    const queryAll = e.section.querySelectorAll.bind(e.section);
+    let indicators = [];
+    const setPages = value => {
+        pages = value;
+        indicators = Array.from({ length: pages }, (_, index) => {
+            const indicator = new Element('native-indicator', e.section);
+            if (index === 0) indicator.setAttribute('data-indicator-selected', 'true');
+            return indicator;
+        });
+    };
+    setPages(pages);
+    e.section.querySelectorAll = selector => selector === '[data-uia="carousel-page-indicator-item"]' ? indicators : queryAll(selector);
     const runtime = e.c.nativeCarousel.model(e.section);
     e.c.getCarouselDomRuntime = section => e.c.nativeCarousel.model(section);
     Object.assign(e.c.sourceState, { layout, resizeViewportSignature: e.c.responsiveViewportSignature() });
@@ -7998,7 +8077,7 @@ function resizeEnvironment() {
     e.grid.__tmAppliedGeometry = { width: 640, left: 20, columns: 6 };
     e.c.lastPageShape = e.c.responsivePageShape(layout);
     e.c.activeClone = e.clone;
-    return { ...e, viewport, calls, logs, measured, runtime, setPages: value => { pages = value; } };
+    return { ...e, viewport, calls, logs, measured, runtime, setPages };
 }
 
 function parkedResizeEnvironment() {

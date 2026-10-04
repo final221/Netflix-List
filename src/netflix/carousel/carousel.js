@@ -791,6 +791,8 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         return withNativeReadScope(() => {
             const operation = observationOperation(options), runtime = operation.model.view;
             const attempts = runtime.logicalRemapRetryCount;
+            const position = options.position ? Object.freeze({ page: selectedPage(operation.binding.section),
+                pages: pageCount(operation.binding.section) }) : null;
             const count = options.count === 'required'
                 ? requireNativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track,
                     options.provisionalTotalCount ?? null, operation.guard)
@@ -799,9 +801,13 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                 uniqueReadings: Object.freeze([...count.uniqueReadings]) }) : null;
             return observationResult(operation, { mode: runtime.profile.pageMode,
                 needsRemapping: Boolean(runtime.pageMappingStale), remapAttempts: attempts,
-                ...(countFacts ? { count: countFacts } : {}) }, () => {
+                ...(countFacts ? { count: countFacts } : {}), ...(position ? { position } : {}) }, () => {
                 if (runtime.logicalRemapRetryCount !== attempts) throw initializationError('NATIVE_SOURCE_REPLACED',
                     'native-observation', 'Native remapping observation changed');
+                if (position && (selectedPage(operation.binding.section) !== position.page ||
+                    pageCount(operation.binding.section) !== position.pages)) {
+                    throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Native position observation changed');
+                }
                 if (countFacts) {
                     const current = nativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track);
                     if (current.totalCount !== countFacts.totalCount || current.slots !== countFacts.slots ||

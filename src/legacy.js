@@ -3679,6 +3679,7 @@ export function startLegacy() {
     async function reinitializeAfterOrderMismatch() {
         if (orderMismatchReinitializing || running || !isTargetPage() || !targetSessionActive) return;
         const sessionToken = sessionScope.token;
+        const state = sourceState;
         orderMismatchReinitializing = true;
         orderMismatchDismissed = true;
         hideOrderMismatchDialog();
@@ -3695,15 +3696,10 @@ export function startLegacy() {
         });
 
         try {
-            try { await Promise.resolve(responsiveRefreshPromise); } catch (_) {}
-            await nativeCarousel.whenNavigationIdle();
-            if (!isRouteSessionActive(sessionToken)) return;
-
             // Reinitialization must begin from Netflix's first native My List page.
             // Keep the current source state alive until page 0 is confirmed so the
             // logical carousel can still resolve its native page number correctly.
-            const section = sourceState?.section;
-            const scroller = sourceState?.scroller;
+            const { section, scroller, track } = state || {};
             if (!section?.isConnected || !scroller?.isConnected) {
                 throw initializationError(
                     'REINITIALIZATION_SOURCE_UNAVAILABLE',
@@ -3712,25 +3708,41 @@ export function startLegacy() {
                 );
             }
 
-            const fromPage = selectedPage(section);
+            const nativeOwner = nativeCarousel.borrowBinding(section, scroller, track);
+            const assertCurrent = () => {
+                assertRouteSession(sessionToken);
+                nativeCarousel.assertBinding(nativeOwner);
+                if (sourceState !== state || state.section !== section || state.scroller !== scroller || state.track !== track) {
+                    throw createRouteSessionCancelledError();
+                }
+            };
+            assertCurrent();
+            try { await Promise.resolve(responsiveRefreshPromise); } catch (_) {}
+            await nativeCarousel.whenNavigationIdle();
+            assertCurrent();
+            const before = nativeSourceObservation(state, { position: true });
+            const fromPage = before.position.page;
             const returnedPage = await goToPage(section, scroller, 0, null, sessionToken);
-            assertRouteSession(sessionToken);
-            if (returnedPage !== 0 || selectedPage(section) !== 0) {
+            assertCurrent();
+            const after = nativeSourceObservation(state, { position: true });
+            nativeCarousel.assertObservation(after);
+            if (returnedPage !== 0 || after.position.page !== 0) {
                 throw initializationError(
                     'REINITIALIZATION_START_PAGE_NOT_REACHED',
                     'return-native-my-list-to-start',
                     'Could not return the native My List carousel to the first page',
-                    { fromPage, returnedPage, selectedPage: selectedPage(section) }
+                    { fromPage, returnedPage, selectedPage: after.position.page }
                 );
             }
 
             // Fully discard the existing My List for Netflix session using the same
             // teardown path as a route leave, then start a fresh normal session.
+            assertCurrent();
             suspendTargetSession('order-mismatch-reinitialize');
             if (!isTargetPage()) return;
             startTargetSession('order-mismatch-reinitialize');
         } catch (error) {
-            if (!isRouteSessionCancelledError(error)) {
+            if (!isRouteSessionCancelledError(error) && error?.code !== 'NATIVE_SOURCE_REPLACED') {
                 orderMismatchDismissed = false;
                 warn(tLog('initializationFailed'), {
                     code: error?.code || null,
@@ -3819,11 +3831,11 @@ export function startLegacy() {
         return nativeCarousel.diagnostics({ source: { section, scroller, track } }).source;
     }
 
-    function nativeSourceObservation(state = sourceState, { count, provisionalTotalCount } = {}) {
+    function nativeSourceObservation(state = sourceState, { count, provisionalTotalCount, position } = {}) {
         if (!state?.section) return null;
         const { section, scroller, track } = state;
         const sessionToken = sessionScope.token;
-        return nativeCarousel.observeSource({ section, scroller, track, sessionToken, count, provisionalTotalCount,
+        return nativeCarousel.observeSource({ section, scroller, track, sessionToken, count, provisionalTotalCount, position,
             assertCurrent() {
                 assertRouteSession(sessionToken);
                 if (sourceState !== state) throw createRouteSessionCancelledError();
@@ -3840,14 +3852,6 @@ export function startLegacy() {
 
     function normalizeLogicalPages(...args) {
         return nativeCarousel.normalizePages(...args);
-    }
-
-    function selectedPage(...args) {
-        return nativeCarousel.selectedPage(...args);
-    }
-
-    function pageCount(...args) {
-        return nativeCarousel.pageCount(...args);
     }
 
     function carouselMoveButton(...args) {
@@ -5099,7 +5103,8 @@ export function startLegacy() {
                 hoverToken: token
             });
             if (hoverPreparationCancelled(token)) return null;
-            actualPage = selectedPage(section);
+            assertCurrent();
+            actualPage = nativeSourceObservation(state, { position: true }).position.page;
         }
 
         trace(() => {
@@ -5307,60 +5312,67 @@ export function startLegacy() {
                     current.getAttribute('data-tm-hover-token') !== String(token)) break;
 
                 clearSourceAlignment();
-                const { selected, backedPage, sourceSlot } = withNativeReadScope(() => {
+                const { selected, sourceSlot, reused } = withNativeReadScope(() => {
                     if (!attempt && current.getAttribute('data-tm-hover-ready') === 'true') {
                         ensureLiveNativeBinding('hover-reuse');
                     }
-                    const selected = selectedPage(sourceState.section);
+                    const observation = nativeSourceObservation(sourceState, { position: true });
+                    const selected = observation.position.page;
                     const backedPage = Number(current.getAttribute('data-tm-backed-page'));
                     const sourceSlot = !attempt && current.getAttribute('data-tm-hover-ready') === 'true' &&
                         Number.isFinite(backedPage) && selected === backedPage ? findActiveSourceSlot(item) : null;
-                    return { selected, backedPage, sourceSlot };
-                });
-                if (attempt) {
-                    log('Retrying native page preparation after transient hydration', {
-                        seq,
-                        item: itemSummary(item),
-                        token,
-                        selectedPage: selected
-                    });
-                }
+                    nativeCarousel.assertObservation(observation);
+                    if (attempt) {
+                        log('Retrying native page preparation after transient hydration', {
+                            seq,
+                            item: itemSummary(item),
+                            token,
+                            selectedPage: selected
+                        });
+                        nativeCarousel.assertObservation(observation);
+                    }
 
-                let reused = false;
-                if (!attempt && sourceSlot) {
-                    performanceDiagnostics.hoverLifecycle.duplicateAlignmentsAvoided++;
-                    reused = true;
-                    activePage = selected;
-                    activeVideoId = item.videoId;
-                    activeClone = current;
-                    log(tLog('hoverReusedImmediately'), {
-                        seq,
-                        group,
-                        intent: intentDiagnostic,
-                        item: itemSummary(item),
-                        selectedPage: selected,
-                        backedPage,
-                        elapsedMs: Math.round(performance.now() - started)
-                    });
+                    let reused = false;
+                    if (!attempt && sourceSlot) {
+                        performanceDiagnostics.hoverLifecycle.duplicateAlignmentsAvoided++;
+                        reused = true;
+                        activePage = selected;
+                        activeVideoId = item.videoId;
+                        activeClone = current;
+                        log(tLog('hoverReusedImmediately'), {
+                            seq,
+                            group,
+                            intent: intentDiagnostic,
+                            item: itemSummary(item),
+                            selectedPage: selected,
+                            backedPage,
+                            elapsedMs: Math.round(performance.now() - started)
+                        });
+                        nativeCarousel.assertObservation(observation);
+                    } else {
+                        log(tLog('hoverRequestedNativePagePreparation'), {
+                            seq,
+                            group,
+                            intent: intentDiagnostic,
+                            directPageDistance: Math.abs(selected - item.page),
+                            item: itemSummary(item),
+                            selectedPage: selected,
+                            targetPage: item.page,
+                            backedPage: Number.isFinite(backedPage) ? backedPage : null,
+                            hoverReady: current.getAttribute('data-tm-hover-ready') === 'true',
+                            token,
+                            triggerEvent: triggerEvent?.type || ''
+                        });
+                        nativeCarousel.assertObservation(observation);
+                    }
+                    return { selected, sourceSlot, reused };
+                });
+                if (reused) {
                     const replayed = await scheduleNativeHoverReplay(
                         sourceSlot, item, current, triggerEvent, selected, 'immediate-reuse', token, sessionToken
                     );
                     fresh = replayed ? current : null;
-                }
-                if (!reused) {
-                    log(tLog('hoverRequestedNativePagePreparation'), {
-                        seq,
-                        group,
-                        intent: intentDiagnostic,
-                        directPageDistance: Math.abs(selected - item.page),
-                        item: itemSummary(item),
-                        selectedPage: selected,
-                        targetPage: item.page,
-                        backedPage: Number.isFinite(backedPage) ? backedPage : null,
-                        hoverReady: current.getAttribute('data-tm-hover-ready') === 'true',
-                        token,
-                        triggerEvent: triggerEvent?.type || ''
-                    });
+                } else {
                     fresh = await prepareMountedPage(item.page, item, triggerEvent, token, sessionToken);
                 }
                 if (fresh || hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) ||
@@ -5678,15 +5690,18 @@ export function startLegacy() {
 
     function responsiveSignature(layout) {
         if (!sourceState) return '';
-        return [
+        const observation = nativeSourceObservation(sourceState, { position: true });
+        const signature = [
             Math.max(1, layout.columns),
-            pageCount(sourceState.section),
+            observation.position.pages,
             Math.round(layout.cardWidth),
             Math.round(layout.gridWidth),
             Math.round(layout.gridLeft),
             Math.round(layout.sidePadding || 0),
             Math.round(layout.scrollerWidth)
         ].join('|');
+        nativeCarousel.assertObservation(observation);
+        return signature;
     }
 
     function responsiveViewportSignature() {
@@ -5717,7 +5732,10 @@ export function startLegacy() {
 
     function responsivePageShape(layout) {
         if (!sourceState) return '';
-        return `${Math.max(1, layout.columns)}|${pageCount(sourceState.section)}`;
+        const observation = nativeSourceObservation(sourceState, { position: true });
+        const shape = `${Math.max(1, layout.columns)}|${observation.position.pages}`;
+        nativeCarousel.assertObservation(observation);
+        return shape;
     }
 
     function updateResponsiveStatus(layout, note = '') {
@@ -5829,11 +5847,11 @@ export function startLegacy() {
         const state = sourceState;
         const { section, items, cloneMap } = state;
         const columns = Math.max(1, layout.columns);
-        const runtime = nativeSourceObservation(state);
+        const runtime = nativeSourceObservation(state, { position: true });
         const logicalMode = runtime?.mode === 'logical';
         const pages = logicalMode
             ? Math.max(1, Math.ceil(items.length / columns))
-            : Math.max(1, pageCount(section));
+            : Math.max(1, runtime.position.pages);
         let changed = 0;
 
         if (logicalMode) {

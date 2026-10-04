@@ -403,7 +403,7 @@ test('motion release attempts every restoration and releases ownership when one 
 
 function navigationEnvironment({ mode = 'logical', count = 3, onClick = null, overrides = {} } = {}) {
     let hoverToken = 1;
-    const e = environment({ ...overrides, readListShape: () => null, readHoverToken: () => hoverToken,
+    const e = environment({ ...overrides, readListShape: overrides.readListShape || (() => null), readHoverToken: () => hoverToken,
         isHoverCancelled: token => token !== null && token !== hoverToken });
     const pages = Array.from({ length: count }, (_, page) => {
         const slot = new Element('div');
@@ -631,6 +631,58 @@ test('source observations expose only validated mode and remapping facts without
     const indicator = navigationEnvironment({ mode: 'indicator' });
     assert.equal(indicator.carousel.observeSource({ section: indicator.section, scroller: indicator.scroller,
         track: indicator.track, sessionToken: indicator.scope.token }).mode, 'indicator');
+});
+
+test('position observations own logical and indicator page facts without exposing model commands', () => {
+    const logical = mountedEnvironment();
+    assert.equal(logical.carousel.observeSource(logical.options).position, undefined);
+    const current = logical.carousel.observeSource({ ...logical.options, position: true });
+    assert.deepEqual(current.position, { page: 0, pages: 1 });
+    assert.ok(Object.isFrozen(current.position));
+    assert.equal(logical.carousel.isObservationCurrent(current), true);
+    assert.equal(logical.carousel.isObservationCurrent({ ...current }), false);
+    logical.carousel.refreshMapping({ ...logical.options, mode: 'delta', totalCount: 9, columns: 3 });
+    assert.equal(logical.carousel.isObservationCurrent(current), false);
+    assert.equal(logical.carousel.observeSource({ ...logical.options, position: true }).position.pages, 3);
+    const indicator = navigationEnvironment({ mode: 'indicator' });
+    const options = { section: indicator.section, scroller: indicator.scroller, track: indicator.track,
+        sessionToken: indicator.scope.token, position: true };
+    const observed = indicator.carousel.observeSource(options);
+    assert.deepEqual(observed.position, { page: 0, pages: 3 });
+    indicator.setPage(2);
+    assert.equal(indicator.carousel.isObservationCurrent(observed), false);
+    assert.equal(indicator.carousel.observeSource(options).position.page, 2);
+    assert.equal(indicator.scheduler.timers.size, 0);
+});
+
+test('fresh position admission interprets a changed logical window and rejects prior page facts', () => {
+    const e = mountedEnvironment({ readListShape: () => ({ totalCount: 9, columns: 3 }) });
+    const prior = e.carousel.observeSource({ ...e.options, position: true });
+    e.slots.forEach((slot, index) => { slot.__reactFiber$mounted.memoizedProps.itemIndex = index + 3; });
+    const fresh = e.carousel.observeSource({ ...e.options, position: true });
+    assert.equal(fresh.position.page, 1);
+    assert.equal(e.carousel.isObservationCurrent(prior), false);
+    assert.equal(e.carousel.isObservationCurrent(fresh), true);
+    assert.equal(e.scheduler.timers.size, 0);
+});
+
+test('position admission rejects parent replacement and indicator count change on the same elements', () => {
+    const e = navigationEnvironment({ mode: 'indicator' });
+    let current = true;
+    const options = { section: e.section, scroller: e.scroller, track: e.track,
+        sessionToken: e.scope.token, position: true, assertCurrent() {
+            if (!current) throw Object.assign(new Error('parent replaced'), { code: 'CALLER_REPLACED' });
+        } };
+    const observed = e.carousel.observeSource(options);
+    const queryAll = e.section.querySelectorAll.bind(e.section), extra = new Element('native-indicator');
+    e.section.querySelectorAll = selector => selector === '[data-uia="carousel-page-indicator-item"]'
+        ? [...queryAll(selector), extra] : queryAll(selector);
+    assert.equal(e.carousel.isObservationCurrent(observed), false);
+    const changed = e.carousel.observeSource(options);
+    assert.equal(changed.position.pages, 4);
+    current = false;
+    assert.equal(e.carousel.isObservationCurrent(changed), false);
+    assert.throws(() => e.carousel.observeSource(options), { code: 'CALLER_REPLACED' });
 });
 
 test('page observations own wrapped-tail inclusion and borrow current cards through source handles', () => {

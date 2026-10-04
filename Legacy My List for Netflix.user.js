@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.25
+// @version      1.4.26
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -6881,6 +6881,10 @@
       return withNativeReadScope(() => {
         const operation = observationOperation(options), runtime = operation.model.view;
         const attempts = runtime.logicalRemapRetryCount;
+        const position = options.position ? Object.freeze({
+          page: selectedPage(operation.binding.section),
+          pages: pageCount(operation.binding.section)
+        }) : null;
         const count = options.count === "required" ? requireNativeReactCarouselTotalCount(
           operation.binding.scroller,
           operation.binding.track,
@@ -6896,13 +6900,17 @@
           mode: runtime.profile.pageMode,
           needsRemapping: Boolean(runtime.pageMappingStale),
           remapAttempts: attempts,
-          ...countFacts ? { count: countFacts } : {}
+          ...countFacts ? { count: countFacts } : {},
+          ...position ? { position } : {}
         }, () => {
           if (runtime.logicalRemapRetryCount !== attempts) throw initializationError(
             "NATIVE_SOURCE_REPLACED",
             "native-observation",
             "Native remapping observation changed"
           );
+          if (position && (selectedPage(operation.binding.section) !== position.page || pageCount(operation.binding.section) !== position.pages)) {
+            throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native position observation changed");
+          }
           if (countFacts) {
             const current = nativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track);
             if (current.totalCount !== countFacts.totalCount || current.slots !== countFacts.slots || current.readings.length !== countFacts.readings.length || !current.readings.every((value, index) => Object.is(value, countFacts.readings[index]))) {
@@ -8253,7 +8261,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.25";
+    const SCRIPT_VERSION = "1.4.26";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -11968,6 +11976,7 @@
     async function reinitializeAfterOrderMismatch() {
       if (orderMismatchReinitializing || running || !isTargetPage() || !targetSessionActive) return;
       const sessionToken = sessionScope.token;
+      const state = sourceState;
       orderMismatchReinitializing = true;
       orderMismatchDismissed = true;
       hideOrderMismatchDialog();
@@ -11981,14 +11990,7 @@
         items: sourceState?.items?.length ?? null
       });
       try {
-        try {
-          await Promise.resolve(responsiveRefreshPromise);
-        } catch (_) {
-        }
-        await nativeCarousel.whenNavigationIdle();
-        if (!isRouteSessionActive(sessionToken)) return;
-        const section = sourceState?.section;
-        const scroller = sourceState?.scroller;
+        const { section, scroller, track } = state || {};
         if (!section?.isConnected || !scroller?.isConnected) {
           throw initializationError(
             "REINITIALIZATION_SOURCE_UNAVAILABLE",
@@ -11996,22 +11998,41 @@
             "The native My List carousel is unavailable before reinitialization"
           );
         }
-        const fromPage = selectedPage(section);
+        const nativeOwner = nativeCarousel.borrowBinding(section, scroller, track);
+        const assertCurrent = () => {
+          assertRouteSession(sessionToken);
+          nativeCarousel.assertBinding(nativeOwner);
+          if (sourceState !== state || state.section !== section || state.scroller !== scroller || state.track !== track) {
+            throw createRouteSessionCancelledError();
+          }
+        };
+        assertCurrent();
+        try {
+          await Promise.resolve(responsiveRefreshPromise);
+        } catch (_) {
+        }
+        await nativeCarousel.whenNavigationIdle();
+        assertCurrent();
+        const before = nativeSourceObservation(state, { position: true });
+        const fromPage = before.position.page;
         const returnedPage = await goToPage(section, scroller, 0, null, sessionToken);
-        assertRouteSession(sessionToken);
-        if (returnedPage !== 0 || selectedPage(section) !== 0) {
+        assertCurrent();
+        const after = nativeSourceObservation(state, { position: true });
+        nativeCarousel.assertObservation(after);
+        if (returnedPage !== 0 || after.position.page !== 0) {
           throw initializationError(
             "REINITIALIZATION_START_PAGE_NOT_REACHED",
             "return-native-my-list-to-start",
             "Could not return the native My List carousel to the first page",
-            { fromPage, returnedPage, selectedPage: selectedPage(section) }
+            { fromPage, returnedPage, selectedPage: after.position.page }
           );
         }
+        assertCurrent();
         suspendTargetSession("order-mismatch-reinitialize");
         if (!isTargetPage()) return;
         startTargetSession("order-mismatch-reinitialize");
       } catch (error) {
-        if (!isRouteSessionCancelledError(error)) {
+        if (!isRouteSessionCancelledError(error) && error?.code !== "NATIVE_SOURCE_REPLACED") {
           orderMismatchDismissed = false;
           warn(tLog("initializationFailed"), {
             code: error?.code || null,
@@ -12086,7 +12107,7 @@
     function nativeSourceDiagnostics(section = sourceState?.section, scroller = sourceState?.scroller, track = sourceState?.track) {
       return nativeCarousel.diagnostics({ source: { section, scroller, track } }).source;
     }
-    function nativeSourceObservation(state = sourceState, { count, provisionalTotalCount } = {}) {
+    function nativeSourceObservation(state = sourceState, { count, provisionalTotalCount, position } = {}) {
       if (!state?.section) return null;
       const { section, scroller, track } = state;
       const sessionToken = sessionScope.token;
@@ -12097,6 +12118,7 @@
         sessionToken,
         count,
         provisionalTotalCount,
+        position,
         assertCurrent() {
           assertRouteSession(sessionToken);
           if (sourceState !== state) throw createRouteSessionCancelledError();
@@ -12111,12 +12133,6 @@
     }
     function normalizeLogicalPages(...args) {
       return nativeCarousel.normalizePages(...args);
-    }
-    function selectedPage(...args) {
-      return nativeCarousel.selectedPage(...args);
-    }
-    function pageCount(...args) {
-      return nativeCarousel.pageCount(...args);
     }
     function carouselMoveButton(...args) {
       return nativeCarousel.navigationControl(...args);
@@ -13354,7 +13370,8 @@
           hoverToken: token
         });
         if (hoverPreparationCancelled(token)) return null;
-        actualPage = selectedPage(section);
+        assertCurrent();
+        actualPage = nativeSourceObservation(state, { position: true }).position.page;
       }
       trace(() => {
         const native = nativeSourceDiagnostics(section, scroller, track);
@@ -13557,39 +13574,60 @@
           const current = attempt ? findGridClone(item) : clone;
           if (hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) || orderMismatchDialogOpen || orderMismatchReinitializing || !gridHoverTargetActive(current, generation, triggerEvent) || current.getAttribute("data-tm-hover-token") !== String(token)) break;
           clearSourceAlignment();
-          const { selected, backedPage, sourceSlot } = withNativeReadScope(() => {
+          const { selected, sourceSlot, reused } = withNativeReadScope(() => {
             if (!attempt && current.getAttribute("data-tm-hover-ready") === "true") {
               ensureLiveNativeBinding("hover-reuse");
             }
-            const selected2 = selectedPage(sourceState.section);
-            const backedPage2 = Number(current.getAttribute("data-tm-backed-page"));
-            const sourceSlot2 = !attempt && current.getAttribute("data-tm-hover-ready") === "true" && Number.isFinite(backedPage2) && selected2 === backedPage2 ? findActiveSourceSlot(item) : null;
-            return { selected: selected2, backedPage: backedPage2, sourceSlot: sourceSlot2 };
+            const observation = nativeSourceObservation(sourceState, { position: true });
+            const selected2 = observation.position.page;
+            const backedPage = Number(current.getAttribute("data-tm-backed-page"));
+            const sourceSlot2 = !attempt && current.getAttribute("data-tm-hover-ready") === "true" && Number.isFinite(backedPage) && selected2 === backedPage ? findActiveSourceSlot(item) : null;
+            nativeCarousel.assertObservation(observation);
+            if (attempt) {
+              log("Retrying native page preparation after transient hydration", {
+                seq,
+                item: itemSummary(item),
+                token,
+                selectedPage: selected2
+              });
+              nativeCarousel.assertObservation(observation);
+            }
+            let reused2 = false;
+            if (!attempt && sourceSlot2) {
+              performanceDiagnostics.hoverLifecycle.duplicateAlignmentsAvoided++;
+              reused2 = true;
+              activePage = selected2;
+              activeVideoId = item.videoId;
+              activeClone = current;
+              log(tLog("hoverReusedImmediately"), {
+                seq,
+                group,
+                intent: intentDiagnostic,
+                item: itemSummary(item),
+                selectedPage: selected2,
+                backedPage,
+                elapsedMs: Math.round(performance.now() - started)
+              });
+              nativeCarousel.assertObservation(observation);
+            } else {
+              log(tLog("hoverRequestedNativePagePreparation"), {
+                seq,
+                group,
+                intent: intentDiagnostic,
+                directPageDistance: Math.abs(selected2 - item.page),
+                item: itemSummary(item),
+                selectedPage: selected2,
+                targetPage: item.page,
+                backedPage: Number.isFinite(backedPage) ? backedPage : null,
+                hoverReady: current.getAttribute("data-tm-hover-ready") === "true",
+                token,
+                triggerEvent: triggerEvent?.type || ""
+              });
+              nativeCarousel.assertObservation(observation);
+            }
+            return { selected: selected2, sourceSlot: sourceSlot2, reused: reused2 };
           });
-          if (attempt) {
-            log("Retrying native page preparation after transient hydration", {
-              seq,
-              item: itemSummary(item),
-              token,
-              selectedPage: selected
-            });
-          }
-          let reused = false;
-          if (!attempt && sourceSlot) {
-            performanceDiagnostics.hoverLifecycle.duplicateAlignmentsAvoided++;
-            reused = true;
-            activePage = selected;
-            activeVideoId = item.videoId;
-            activeClone = current;
-            log(tLog("hoverReusedImmediately"), {
-              seq,
-              group,
-              intent: intentDiagnostic,
-              item: itemSummary(item),
-              selectedPage: selected,
-              backedPage,
-              elapsedMs: Math.round(performance.now() - started)
-            });
+          if (reused) {
             const replayed = await scheduleNativeHoverReplay(
               sourceSlot,
               item,
@@ -13601,21 +13639,7 @@
               sessionToken
             );
             fresh = replayed ? current : null;
-          }
-          if (!reused) {
-            log(tLog("hoverRequestedNativePagePreparation"), {
-              seq,
-              group,
-              intent: intentDiagnostic,
-              directPageDistance: Math.abs(selected - item.page),
-              item: itemSummary(item),
-              selectedPage: selected,
-              targetPage: item.page,
-              backedPage: Number.isFinite(backedPage) ? backedPage : null,
-              hoverReady: current.getAttribute("data-tm-hover-ready") === "true",
-              token,
-              triggerEvent: triggerEvent?.type || ""
-            });
+          } else {
             fresh = await prepareMountedPage(item.page, item, triggerEvent, token, sessionToken);
           }
           if (fresh || hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) || orderMismatchDialogOpen || orderMismatchReinitializing) break;
@@ -13897,15 +13921,18 @@
     }
     function responsiveSignature(layout) {
       if (!sourceState) return "";
-      return [
+      const observation = nativeSourceObservation(sourceState, { position: true });
+      const signature = [
         Math.max(1, layout.columns),
-        pageCount(sourceState.section),
+        observation.position.pages,
         Math.round(layout.cardWidth),
         Math.round(layout.gridWidth),
         Math.round(layout.gridLeft),
         Math.round(layout.sidePadding || 0),
         Math.round(layout.scrollerWidth)
       ].join("|");
+      nativeCarousel.assertObservation(observation);
+      return signature;
     }
     function responsiveViewportSignature() {
       const viewport = typeof window === "undefined" ? {} : window;
@@ -13949,7 +13976,10 @@
     }
     function responsivePageShape(layout) {
       if (!sourceState) return "";
-      return `${Math.max(1, layout.columns)}|${pageCount(sourceState.section)}`;
+      const observation = nativeSourceObservation(sourceState, { position: true });
+      const shape = `${Math.max(1, layout.columns)}|${observation.position.pages}`;
+      nativeCarousel.assertObservation(observation);
+      return shape;
     }
     function updateResponsiveStatus(layout, note = "") {
       if (!sourceState?.status || !sourceState?.items) return;
@@ -14072,9 +14102,9 @@
       const state = sourceState;
       const { section, items, cloneMap } = state;
       const columns = Math.max(1, layout.columns);
-      const runtime = nativeSourceObservation(state);
+      const runtime = nativeSourceObservation(state, { position: true });
       const logicalMode = runtime?.mode === "logical";
-      const pages = logicalMode ? Math.max(1, Math.ceil(items.length / columns)) : Math.max(1, pageCount(section));
+      const pages = logicalMode ? Math.max(1, Math.ceil(items.length / columns)) : Math.max(1, runtime.position.pages);
       let changed = 0;
       if (logicalMode) {
         changed = await rebuildLogicalPageModelFromNativePosition(layout, "responsive-remap", sessionToken);
