@@ -31,16 +31,17 @@ function environment(overrides = {}) {
         findMyListSection: () => section, findTrack: () => track, directSlots: () => [], filledSlots: () => [],
         nativeCardIdentity: () => 'same-title',
         videoIdFromHref: createNetflixPageDom({ document, Element, location: { origin: 'https://www.netflix.com' } }).videoIdFromHref };
+    const window = overrides.window || { innerWidth: 1280 };
     const carousel = createCarousel({ scope, pageDom, document, Element,
         cardMarkup: createCardMarkup({ location: { href: 'https://www.netflix.com/browse/my-list' } }),
-        window: { innerWidth: 1280 }, getComputedStyle: () => ({}), performance: scheduler.performance,
+        window, getComputedStyle: () => ({}), performance: scheduler.performance,
         setTimeout: scheduler.setTimeout, clearTimeout: scheduler.clearTimeout,
         requestAnimationFrame: scheduler.requestAnimationFrame, cancelAnimationFrame: scheduler.cancelAnimationFrame,
         readListShape: () => ({ totalCount: 19, columns: 4 }), readGraphqlCount: () => 19,
         createError: (code, stage, message, details) => Object.assign(new Error(message), { code, stage, details }),
         log() {}, warn() {}, tLog: value => value, logTimeout() {},
         MutationObserver, ...overrides });
-    return { document, scheduler, scope, carousel, host, section, scroller, track, control, pageDom, observers };
+    return { document, scheduler, scope, carousel, host, section, scroller, track, control, pageDom, observers, window };
 }
 
 test('binding replacement invalidates old handles even for connected sources with matching title identity', () => {
@@ -989,6 +990,65 @@ test('opt-in readiness observations copy native facts and reject changed or repl
         assert.equal(e.scheduler.timers.size, 0);
         assert.deepEqual(e.directions, []);
     }
+});
+
+test('layout observations own copied visible geometry and reject changed, copied or obsolete admission', () => {
+    for (const change of ['geometry', 'viewport', 'binding', 'parent', 'route']) {
+        const e = mountedEnvironment();
+        let width = 300, current = true;
+        e.scroller.getBoundingClientRect = () => ({ left: 0, right: width, width, height: 100 });
+        const options = { ...e.options, assertCurrent() {
+            if (!current) throw Object.assign(new Error('parent replaced'), { code: 'CALLER_REPLACED' });
+        } };
+        const result = e.carousel.measureLayout(options);
+        assert.equal(result.layout.columns, 3);
+        assert.equal(result.layout.scrollerWidth, 300);
+        assert.ok(Object.isFrozen(result) && Object.isFrozen(result.layout) && Object.isFrozen(result.bounds));
+        assert.equal(e.carousel.isObservationCurrent(result), true);
+        assert.equal(e.carousel.isObservationCurrent({ ...result }), false);
+        if (change === 'geometry') width++;
+        if (change === 'viewport') e.window.innerWidth++;
+        if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
+        if (change === 'parent') current = false;
+        if (change === 'route') e.scope.begin();
+        assert.equal(e.carousel.isObservationCurrent(result), false, change);
+        assert.equal(result.layout.scrollerWidth, 300);
+        assert.equal(e.scheduler.timers.size, 0);
+    }
+});
+
+test('incoming and empty geometry can be observed before binding without adopting another source', () => {
+    const e = mountedEnvironment();
+    const accepted = e.carousel.currentBinding();
+    const incoming = e.host.appendChild(new Element('section'));
+    incoming.getBoundingClientRect = () => ({ left: 50, right: 1250, width: 1200, height: 100 });
+    const content = incoming.appendChild(new Element('div'));
+    content.setAttribute('data-uia', 'empty-carousel-section+content');
+    content.getBoundingClientRect = () => ({ left: 70, right: 1230, width: 1160, height: 60 });
+    const result = e.carousel.measureLayout({ section: incoming, sessionToken: e.scope.token });
+    assert.equal(result.layout.gridLeft, 20);
+    assert.equal(result.layout.gridWidth, 1160);
+    assert.equal(e.carousel.currentBinding(), accepted);
+    assert.equal(e.carousel.isObservationCurrent(result), true);
+    e.carousel.bind(incoming);
+    assert.equal(e.carousel.isObservationCurrent(result), false, 'adoption ends the incoming measurement admission');
+    assert.deepEqual(e.directions, []);
+});
+
+test('bounds-only observations share the native sample and perform no card or layout reads', () => {
+    const e = mountedEnvironment();
+    let boundsReads = 0;
+    e.section.getBoundingClientRect = () => { boundsReads++; return { left: 20, right: 660, width: 640, top: 0, bottom: 100, height: 100 }; };
+    e.pageDom.directSlots = e.pageDom.filledSlots = () => { throw new Error('bounds must not scan cards'); };
+    e.carousel.sample(() => {
+        const result = e.carousel.measureLayout({ section: e.section, mode: 'bounds', sessionToken: e.scope.token });
+        assert.equal(result.layout, undefined);
+        assert.equal(result.bounds.right, 660);
+        assert.equal(result.viewportWidth, 1280);
+        e.carousel.assertObservation(result);
+        assert.equal(boundsReads, 1);
+    });
+    assert.equal(e.scheduler.timers.size, 0);
 });
 
 test('delta mapping anchors native positions or visible title hints synchronously without rewriting membership', () => {

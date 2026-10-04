@@ -26,7 +26,8 @@ const { source, declaration } = require('./helpers/legacy-source.cjs');
 const privateNavigationFunctions = new Set(['createLogicalMoveSignal', 'waitLogicalPageChange', 'waitPageByPolling', 'waitPage', 'waitForScriptMoveSettle']);
 const fixtureModelReads = new Set(['getCarouselDomRuntime', 'logicalSlotPositions', 'wrappedTailLogicalPageInfo',
     'netflixItemIndexFromSlot', 'normalizeNetflixLogicalIndex', 'detectCarouselDomProfile', 'carouselDomProfileSummary',
-    'selectedPage', 'pageCount', 'currentPageSlots', 'nativeCarouselReadiness', 'visibleSignature']);
+    'selectedPage', 'pageCount', 'currentPageSlots', 'nativeCarouselReadiness', 'visibleSignature',
+    'nativeRect']);
 const migratedAdapterFunctions = new Set(['getHtmlLanguage', 'getNetflixLanguage', 'netflixModelData',
     'graphqlData', 'viewingRequestContext', 'nativeCardIdentity', 'videoIdFromHref', 'decodeTrackingContext',
     'videoIdFromToggleContext', 'findMyListSection', 'itemFromSlot']);
@@ -127,6 +128,7 @@ function environment(names, overrides = {}) {
         orderMismatchDialogOpen: false, orderMismatchReinitializing: false, responsiveRefreshPromise: null,
         routeSessionToken: 1, targetSessionActive: true,
         recentRemovedMyListItems: new Map(), undoExpiryTimer: null,
+        sourceState: null,
         nativeInitializationFailure: null,
         imageResourceObserver: null, IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES: 4000,
         hoverFrameDiagnosticOwner: null, startHoverFrameDiagnostics: () => {},
@@ -239,9 +241,12 @@ function environment(names, overrides = {}) {
     c.currentPageSlots ||= (...args) => c.nativeCarousel.currentSlots(...args);
     c.nativeCarouselReadiness ||= (...args) => c.nativeCarousel.readiness(...args);
     c.visibleSignature ||= (...args) => c.nativeCarousel.signatureOf(...args);
+    c.nativeRect ||= (...args) => c.nativeCarousel.rect(...args);
+    if (!c.initializationError) vm.runInContext(declaration('initializationError'), c);
     vm.runInContext(declaration('nativeSourceObservation'), c);
     vm.runInContext(declaration('nativeSourceDiagnostics'), c);
     vm.runInContext(declaration('nativePageObservation'), c);
+    vm.runInContext(declaration('nativeLayoutObservation'), c);
     if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
     Object.defineProperty(c, 'nativeReadScope', { get: () => c.nativeCarousel.diagnostics().readScopeActive ? true : null });
     // Supplementary characterization of private acknowledgement resources. Full
@@ -3113,7 +3118,7 @@ test('binding adoption clears old grafts and does not retain reads collected bef
         STATUS_ID: 'status', GRID_ID: 'grid', SYNTHETIC_SECTION_ID: 'synthetic',
         SECTION_ATTR: 'section', document: { getElementById: () => null },
         clearLegacyEmptyState() {}, markOriginalHeader() {},
-        measureVisibleLayout: () => ({ columns: 6 }), measureNativeCarouselGap: () => 0,
+        measureNativeCarouselGap: () => 0,
         parkSource() { e.mount([6, 7, 8, 9, 10, 11]); },
         applyGridGeometry: () => ({ left: 0, width: 600 }),
         syncStatusTypography() {}, applyOriginalMyListVisibility() {},
@@ -3539,6 +3544,7 @@ function initializationEnvironment(count = 150) {
     const bootstrap = { totalCount: count, source: 'graphql', pageCount: 2, edgeCount: count, hasMore: false };
     mountNativeControls(e.section);
     e.track.appendChild(e.template);
+    e.template.setAttribute('style', 'width: calc((100% - 80px) / 6)');
     e.template.querySelector('card').href = 'https://www.netflix.com/browse?jbv=1';
     e.template.querySelector('card').setAttribute('tabindex', '0');
     e.template.__reactFiber$count = { memoizedProps: { get totalCount() { return e.c.mountedCount ?? count; }, itemIndex: 0 }, return: null };
@@ -3559,7 +3565,7 @@ function initializationEnvironment(count = 150) {
         TOTAL_COUNT_TIMEOUT_MS: 5000, NATIVE_READY_TIMEOUT_MS: 8000,
         SOURCE_PARKED_CLASS: 'parked',
         findMyListSection: () => e.section, cleanupOldArtifacts() {}, installStyles() {}, markOriginalHeader() {},
-        measureVisibleLayout: () => e.layout, measureNativeCarouselGap: () => 10,
+        measureNativeCarouselGap: () => 10,
         placeLegacyFrame: () => ({ grid: e.oldGrid, status: e.status }), applyOriginalMyListVisibility() {},
         waitForMyListTotalCount: async () => count,
         getCarouselDomRuntime: section => e.c.nativeCarousel.model(section),
@@ -3871,13 +3877,11 @@ test('initialization never substitutes a provisional count for absent or contrad
 
 test('actual initialization survives failure of passive native source descriptions after admission', async () => {
     const e = initializationEnvironment(6);
-    const log = e.c.log;
-    e.c.log = (name, details) => {
-        log(name, details);
-        if (name === 'initializationStarted') {
-            e.c.netflixDom.directSlots = e.c.netflixDom.filledSlots = () => { throw new Error('native diagnostic unavailable'); };
-        }
-    };
+    const diagnostics = e.c.nativeCarousel.diagnostics;
+    e.c.nativeCarousel = { ...e.c.nativeCarousel, diagnostics(options) {
+        if (options?.source) return { ...diagnostics(), source: null };
+        return diagnostics(options);
+    } };
     const completion = e.c.runScript(1);
     await e.flush(); await e.drain(); await completion;
     assert.equal(e.c.completedSection, e.section);
@@ -4640,7 +4644,6 @@ function fetchEnvironment(count = 150) {
             entities: { totalCount: count }, eventListeners: [{ notificationMessageRegex: 'UPDATE_PLAYLIST' }] } },
         netflixModelData: () => null,
         tryMountedSinglePageFastBootstrap: async () => null,
-        measureEmptyLayout: () => e.layout,
         beginSourceScan() {}, ensureFreshIndicatorPageZeroAnchor: async () => {},
         fetch: async (url, options) => {
             const request = { url, options, body: options.body ? JSON.parse(options.body) : null };
@@ -8191,27 +8194,44 @@ test('six mounted cards rebuild only the hover target, and another card prepares
         .every(entry => entry.details.refreshedCount === 1 && entry.details.preparationScope === 'target-card'));
 });
 
+function mountLayoutFixture(e, measured, onMeasure = () => {}) {
+    const { section, scroller, track } = e.c.sourceState;
+    const slot = new Element('layout-slot', track);
+    slot.getAttribute = name => name === 'style' ? `width: calc((100% - 80px) / ${measured.columns})` : null;
+    scroller.getBoundingClientRect = () => {
+        onMeasure();
+        const left = measured.gridLeft - (measured.sidePaddingLeft ?? measured.sidePadding);
+        return { left, right: left + measured.scrollerWidth, width: measured.scrollerWidth, height: measured.scrollerHeight };
+    };
+    section.getBoundingClientRect = () => ({ left: 0, right: 1280, width: 1280, height: 100 });
+    e.c.netflixDom = { ...e.c.netflixDom, directSlots: () => [slot] };
+    e.c.getComputedStyle = () => ({ columnGap: String(measured.gap),
+        paddingLeft: String(measured.sidePaddingLeft ?? measured.sidePadding),
+        paddingRight: String(measured.sidePaddingRight ?? measured.sidePadding) });
+    return { ...e.c.nativeCarousel.measureLayout({ section, scroller, track, sessionToken: 1 }).layout, rowGap: 10 };
+}
+
 function resizeEnvironment() {
     const viewport = { innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1,
         visualViewport: { width: 1280, height: 800, scale: 1, offsetLeft: 0, offsetTop: 0 } };
     const calls = { measures: 0, styles: 0, refreshes: 0 };
     const logs = [];
     let pages = 4;
-    const layout = { columns: 6, cardWidth: 100, gridWidth: 640, gridLeft: 20, sidePadding: 20,
+    const measured = { columns: 6, gridLeft: 20, sidePadding: 20,
         scrollerWidth: 680, scrollerHeight: 60, gap: 8, rowGap: 10 };
-    const measured = { ...layout };
     const e = hoverEnvironment(['handleTargetWindowResize', 'handleTargetVisualViewportResize', 'scheduleResponsiveRefresh',
         'responsiveSignature', 'responsivePageShape', 'realignActiveSource'], {
         window: viewport, responsiveRefreshTimer: null, responsiveRefreshing: false,
         SOURCE_PARKED_CLASS: 'parked', ORIGINAL_VISIBILITY_ATTR: 'original-visible',
         log: (name, details) => logs.push({ name, details }),
         layoutSummary: value => value,
-        measureVisibleLayout: () => { calls.measures++; return { ...measured }; },
         measureNativeCarouselGap: () => 10, updateResponsiveStatus: () => calls.styles++,
         currentGridGeometry: () => ({ width: 640, left: 20, columns: 6 }),
         refreshResponsiveLayout: () => { calls.refreshes++; e.c.cancelResizeHover(); }
     });
     e.c.attachNativeBinding(e.c.sourceState, e.section, new Element('scroller'), new Element('track'));
+    const layout = mountLayoutFixture(e, measured, () => calls.measures++);
+    calls.measures = 0;
     mountNativeControls(e.section, 'indicator');
     const queryAll = e.section.querySelectorAll.bind(e.section);
     let indicators = [];
@@ -8294,8 +8314,8 @@ test('hidden height transitions cannot bypass source, viewport, signature, mappi
         e => { delete e.c.sourceState.resizeViewportSignature; },
         e => e.viewport.innerWidth++, e => e.viewport.innerHeight++,
         e => e.viewport.visualViewport.scale++, e => e.viewport.devicePixelRatio++,
-        e => e.measured.columns++, e => e.measured.cardWidth++, e => e.measured.scrollerWidth++,
-        e => e.measured.gridWidth++, e => e.measured.gridLeft++, e => e.measured.sidePaddingLeft = 10,
+        e => e.measured.columns++, e => e.measured.scrollerWidth++,
+        e => e.measured.gridLeft++, e => e.measured.sidePaddingLeft = 10,
         e => e.measured.sidePaddingRight = 10, e => e.measured.gap++,
         e => { e.c.sourceState.layout.rowGap = 0; },
         e => e.measured.scrollerHeight = 2,
@@ -8388,17 +8408,18 @@ test('a first real native preparation survives the parked-height startup check a
     }
     const nativeSource = deferred();
     let refreshes = 0;
-    const layout = { columns: 6, cardWidth: 100, gridWidth: 640, gridLeft: 20, sidePadding: 20,
+    const measured = { columns: 6, gridLeft: 20, sidePadding: 20,
         scrollerWidth: 680, scrollerHeight: 60, gap: 8, rowGap: 10 };
     Object.assign(e.c, {
         SOURCE_PARKED_CLASS: 'parked', ORIGINAL_VISIBILITY_ATTR: 'original-visible',
         window: { innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1 },
         responsiveRefreshTimer: null, responsiveRefreshing: false, pageCount: () => 1,
-        measureVisibleLayout: () => ({ ...layout, scrollerHeight: 1 }),
         currentGridGeometry: () => ({ width: 640, left: 20, columns: 6 }),
         refreshResponsiveLayout: () => { refreshes++; e.c.cancelResizeHover(); },
         resolveExpectedPageSourceItem: () => nativeSource.promise
     });
+    const layout = mountLayoutFixture(e, measured);
+    measured.scrollerHeight = 1;
     e.section.setAttribute('original-visible', 'false');
     e.c.sourceState.scroller.classList = { contains: key => key === 'parked' };
     Object.assign(e.c.sourceState, { layout, resizeViewportSignature: e.c.responsiveViewportSignature() });
@@ -8539,6 +8560,122 @@ test('grid clipping changes require refresh even when carousel geometry signatur
     assert.equal(e.c.activeClone, null);
 });
 
+test('obsolete empty-frame resize callbacks cannot measure or rewrite a replacement layout', () => {
+    const section = new Element('empty-section'), grid = new Element('grid'), status = new Element('status');
+    section.querySelector = () => null; section.querySelectorAll = () => [];
+    status.style = { setProperty() {} };
+    const callbacks = [], layout = { columns: 6 };
+    let measurements = 0;
+    const e = environment(['installEmptyFrameResizeObserver'], {
+        sourceState: { section, scroller: null, track: null, grid, status, layout, empty: true },
+        resizeObserver: null, ResizeObserver: class { constructor(callback) { callbacks.push(callback); } observe() {} disconnect() {} },
+        measureNativeCarouselGap: () => 10,
+        applyGridGeometry: () => ({ left: 20, width: 640 }), applyLegacyEmptyStateGeometry() {}, viewOriginalMyList: true
+    });
+    section.getBoundingClientRect = () => { measurements++; return { left: 0, right: 100, width: 100 }; };
+    e.c.installEmptyFrameResizeObserver(section);
+    const replacement = e.c.sourceState = { ...e.c.sourceState };
+    callbacks[0]();
+    assert.equal(measurements, 0);
+    assert.equal(replacement.layout, layout);
+});
+
+test('current empty-frame resize publishes copied layout and keeps its next callback usable', () => {
+    const section = new Element('empty-section'), grid = new Element('grid'), status = new Element('status');
+    section.querySelector = () => null; section.querySelectorAll = () => [];
+    status.style = { setProperty() {} };
+    let callback, measurements = 0, applications = 0;
+    section.getBoundingClientRect = () => { measurements++; return { left: 0, right: 1200, width: 1200, height: 100 }; };
+    const e = environment(['installEmptyFrameResizeObserver'], {
+        sourceState: { section, scroller: null, track: null, grid, status, layout: { columns: 6 }, empty: true },
+        window: { innerWidth: 1280 }, resizeObserver: null,
+        ResizeObserver: class { constructor(value) { callback = value; } observe() {} disconnect() {} },
+        measureNativeCarouselGap: () => 10, applyGridGeometry: () => ({ left: 20, width: 640 }),
+        applyLegacyEmptyStateGeometry() { applications++; }, viewOriginalMyList: true
+    });
+    e.c.installEmptyFrameResizeObserver(section);
+    callback(); callback();
+    assert.equal(measurements, 2, 'one native sample per callback');
+    assert.equal(applications, 2);
+    assert.equal(e.c.sourceState.layout.rowGap, 10);
+    assert.equal(Object.isFrozen(e.c.sourceState.layout), false, 'presentation owns its copy');
+    assert.equal(status.style.width, '640px');
+});
+
+test('responsive formatting replacement discards its observation without publishing or refreshing', async () => {
+    const e = resizeEnvironment();
+    const layout = e.c.sourceState.layout;
+    e.c.responsiveSignature = () => { e.c.sourceState = { ...e.c.sourceState }; return 'obsolete'; };
+    e.c.scheduleResponsiveRefresh(140, 'ResizeObserver');
+    await e.advance(140);
+    assert.equal(e.c.sourceState.layout, layout);
+    assert.equal(e.calls.refreshes, 0);
+    assert.equal(e.c.performanceDiagnostics.resize.unchanged, 0);
+    assert.equal(e.timers.size, 0);
+});
+
+test('initialization geometry admission survives replacement without publishing an old frame or collection', async () => {
+    for (const phase of ['provisional-gap', 'final-layout-log']) {
+        const e = initializationEnvironment(6);
+        let frames = 0, parks = 0, retries = 0;
+        const frame = e.c.placeLegacyFrame, log = e.c.log;
+        e.c.placeLegacyFrame = (...args) => { frames++; return frame(...args); };
+        e.c.parkSource = () => parks++;
+        e.c.scheduleRun = () => retries++;
+        if (phase === 'provisional-gap') e.c.measureNativeCarouselGap = () => { e.c.sourceState = { ...e.c.sourceState }; return 10; };
+        else e.c.log = (name, details) => {
+            log(name, details);
+            if (name === 'initialLayoutMeasured') e.c.sourceState = { ...e.c.sourceState };
+        };
+        const completion = e.c.runScript(1);
+        await e.flush(); await e.drain(); await completion;
+        assert.equal(frames, phase === 'provisional-gap' ? 0 : 1, phase);
+        assert.equal(parks, 0, phase);
+        assert.equal(retries, 1, phase);
+        assert.equal(e.c.completedSection, null, phase);
+        assert.equal(e.c.initializationBlockedSessionToken, null, phase);
+        assert.equal(e.logs.some(row => row.name === 'legacyGridBuilt'), false, phase);
+    }
+});
+
+test('grid geometry formatting cannot return a measurement into a replacement parent', () => {
+    const e = nativeReadEnvironment();
+    e.c.window = { innerWidth: 1280 };
+    vm.runInContext(declaration('currentGridGeometry'), e.c);
+    const state = e.c.sourceState;
+    const layout = { columns: 6, cardWidth: 100, gridWidth: 640, get gridLeft() {
+        e.c.sourceState = { ...state };
+        return 20;
+    } };
+    assert.throws(() => e.c.currentGridGeometry(e.section, layout), { code: 'NATIVE_SOURCE_REPLACED' });
+});
+
+test('incoming layout replacement rejects adoption before releasing the current grid interaction', () => {
+    const e = nativeReadEnvironment();
+    e.mount([0, 1, 2, 3, 4, 5]);
+    vm.runInContext(declaration('adoptLiveMyListSection'), e.c);
+    const state = e.c.sourceState;
+    const incoming = new Element('incoming'), scroller = new Element('incoming-scroller', incoming), track = new Element('incoming-track', scroller);
+    const status = new Element('status'), grid = new Element('grid');
+    status.style = { setProperty() {} };
+    Object.assign(state, { status, grid });
+    incoming.getBoundingClientRect = () => { e.c.sourceState = { ...state }; return { left: 0, right: 680, width: 680, height: 100 }; };
+    scroller.getBoundingClientRect = () => ({ left: 0, right: 680, width: 680, height: 100 });
+    let released = 0;
+    Object.assign(e.c, {
+        document: { getElementById: () => null }, clearSourceAlignment: () => released++, invalidateGridReact: () => released++,
+        clearLegacyEmptyState() {}, markOriginalHeader() {}, measureNativeCarouselGap: () => 10,
+        parkSource() {},
+        applyGridGeometry: () => ({ left: 20, width: 640 }), syncStatusTypography() {}, applyOriginalMyListVisibility() {},
+        resizeObserver: null, ResizeObserver: class { observe() {} }, viewOriginalMyList: true,
+        layoutSummary: value => value, SECTION_ATTR: 'source', STATUS_ID: 'status', GRID_ID: 'grid', SYNTHETIC_SECTION_ID: 'synthetic'
+    });
+    scroller.insertAdjacentElement = status.insertAdjacentElement = () => {};
+    assert.throws(() => e.c.adoptLiveMyListSection({ section: incoming, scroller, track }), { code: 'NATIVE_SOURCE_REPLACED' });
+    assert.equal(released, 0);
+    assert.equal(e.c.sourceState.section, state.section);
+});
+
 test('one responsive sample shares the section rectangle between native layout and grid geometry', () => {
     const section = new Element('section'), scroller = new Element('scroller'), track = new Element('track');
     let sectionReads = 0, scrollerReads = 0;
@@ -8546,13 +8683,13 @@ test('one responsive sample shares the section rectangle between native layout a
     scroller.getBoundingClientRect = () => { scrollerReads++; return { left: 0, width: 680, height: 60 }; };
     const slot = new Element('slot', track);
     slot.setAttribute('style', 'width: calc((100% - 80px) / 6)');
-    const e = environment(['measureVisibleLayout', 'currentGridGeometry'], {
+    const e = environment(['currentGridGeometry'], {
         window: { innerWidth: 1280 },
         netflixDom: { directSlots: () => [slot] },
         getComputedStyle: () => ({ columnGap: '8px', paddingLeft: '20px', paddingRight: '20px' })
     });
     e.c.withNativeReadScope(() => {
-        const layout = e.c.measureVisibleLayout(section, scroller, track);
+        const layout = e.c.nativeCarousel.measureLayout({ section, scroller, track, sessionToken: 1 }).layout;
         assert.equal(e.c.currentGridGeometry(section, layout).width, 640);
     });
     assert.equal(sectionReads, 1);
@@ -8609,7 +8746,7 @@ test('obsolete responsive refreshes cannot update replacement grids or clear a n
 
 test('responsive settling stops before another native read when its source owner is replaced', async () => {
     const e = resizeEnvironment();
-    e.c.measureVisibleLayout = () => { throw new Error('An obsolete carousel must not be measured'); };
+    e.c.sourceState.scroller.getBoundingClientRect = () => { throw new Error('An obsolete carousel must not be measured'); };
     for (const name of ['sleep', 'createRouteSessionCancelledError', 'isRouteSessionCancelledError', 'assertRouteSession', 'waitResponsiveLayoutSettled']) {
         vm.runInContext(declaration(name), e.c);
     }

@@ -777,7 +777,9 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         const ticket = observationTickets.get(result);
         if (ticket) {
             return withNativeReadScope(() => {
-                ticket.operation.guard(); getModel(ticket.operation.binding.section); ticket.operation.guard();
+                ticket.operation.guard();
+                if (ticket.operation.model) getModel(ticket.operation.binding.section);
+                ticket.operation.guard();
                 ticket.validate(); ticket.operation.guard();
                 return result;
             });
@@ -786,6 +788,52 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     }
     function isObservationCurrent(result) {
         try { assertObservation(result); return true; } catch (_) { return false; }
+    }
+    function measureLayout({ section, scroller = null, track = null, mode = 'auto', binding = null,
+        sessionToken = null, assertCurrent = () => {} }) {
+        return withNativeReadScope(() => {
+            const generation = bindingGeneration, route = scope.token;
+            const guard = () => {
+                assertRouteSession(sessionToken); assertCurrent();
+                if (!section || section.isConnected === false || scroller?.isConnected === false || track?.isConnected === false ||
+                    bindingGeneration !== generation || scope.token !== route) {
+                    throw initializationError('NATIVE_SOURCE_REPLACED', 'native-layout', 'Native layout admission changed');
+                }
+                if (binding) {
+                    assertBinding(binding);
+                    if (binding.section !== section || (scroller && binding.scroller !== scroller) || (track && binding.track !== track)) {
+                        throw initializationError('NATIVE_SOURCE_REPLACED', 'native-layout', 'Layout binding does not match its source');
+                    }
+                }
+            };
+            guard();
+            const kind = mode === 'auto' ? (scroller && track ? 'visible' : 'empty') : mode;
+            const read = () => {
+                let entries = nativeReadScope.layouts.get(section);
+                if (!entries) nativeReadScope.layouts.set(section, entries = []);
+                const prior = entries.find(entry => entry.scroller === scroller && entry.track === track && entry.kind === kind);
+                if (prior) return prior.facts;
+                const rect = nativeRect(section);
+                const bounds = Object.freeze(Object.fromEntries(['left', 'top', 'right', 'bottom', 'width', 'height']
+                    .map(key => [key, rect[key]])));
+                const layout = kind === 'bounds' ? null : kind === 'visible'
+                    ? measureVisibleLayout(section, scroller, track) : measureEmptyLayout(section);
+                const facts = { bounds, viewportWidth: window.innerWidth,
+                    ...(layout ? { layout: Object.freeze({ ...layout }) } : {}) };
+                entries.push({ scroller, track, kind, facts });
+                return facts;
+            };
+            const facts = read();
+            const same = (left, right) => Boolean(left && right && Object.keys(left).length === Object.keys(right).length &&
+                Object.keys(left).every(key => Object.is(left[key], right[key])));
+            return observationResult({ binding: { section }, guard }, { ...facts }, () => {
+                const current = read();
+                if (window.innerWidth !== facts.viewportWidth || !same(current.bounds, facts.bounds) ||
+                    (facts.layout && !same(current.layout, facts.layout))) {
+                    throw initializationError('NATIVE_SOURCE_REPLACED', 'native-layout', 'Observed native layout changed');
+                }
+            });
+        });
     }
     function observeSource(options) {
         return withNativeReadScope(() => {
@@ -1047,7 +1095,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
 
     function createNativeReadScope() {
         return { profiles: new WeakMap(), indicators: new WeakMap(), filled: new WeakMap(),
-            slots: new WeakMap(), rects: new WeakMap(), indices: new WeakMap() };
+            slots: new WeakMap(), rects: new WeakMap(), indices: new WeakMap(), layouts: new WeakMap() };
     }
 
     function withNativeReadScope(read) {
@@ -1558,11 +1606,11 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         }
 
         // Fallback: prefer the current page card count instead of the number visible in the viewport.
-        const activeSlots = netflixDom.filledSlots(track).filter(slot => {
+        const activeSlots = nativeFilledSlots(track).filter(slot => {
             const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
             return card?.getAttribute('tabindex') === '0';
         });
-        const sample = activeSlots.length ? activeSlots : netflixDom.filledSlots(track);
+        const sample = activeSlots.length ? activeSlots : nativeFilledSlots(track);
         const rects = sample
             .map(slot => nativeRect(slot))
             .filter(rect => rect.width > 1)
@@ -1597,11 +1645,11 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     }
 
     function measureEmptyLayout(section) {
-        const sectionRect = section.getBoundingClientRect();
+        const sectionRect = nativeRect(section);
         const content = section.querySelector(':scope > [data-uia="empty-carousel-section+content"]');
         const heading = section.querySelector(':scope > [data-uia="empty-carousel-section+title"], :scope > h2');
         const reference = content || heading;
-        const referenceRect = reference?.getBoundingClientRect?.();
+        const referenceRect = reference?.getBoundingClientRect ? nativeRect(reference) : null;
 
         let gridLeft = 0;
         let gridWidth = 0;
@@ -2117,7 +2165,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         markCycle: section => modelForWrite(section)?.markCycle(),
         completeCollection: (section, pages) => modelForWrite(section)?.finishCollection(pages),
         prepareSource, acceptCollection, isPreparationCurrent, assertPreparation,
-        observeSource, pageCards, assertObservation, isObservationCurrent,
+        observeSource, pageCards, measureLayout, assertObservation, isObservationCurrent,
         anchorAfterDelta: (section, facts) => modelForWrite(section)?.anchor(facts),
         markMappingStale: section => modelForWrite(section)?.markStale(),
         deferMapping: section => modelForWrite(section)?.deferMapping(),
@@ -2127,7 +2175,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         signatureOf: visibleSignature, visiblePageSignature: logicalVisibleSignature,
         selectedPage, pageCount, navigationControl: carouselMoveButton, controlDisabled: carouselMoveButtonDisabled,
         readiness: nativeCarouselReadiness, ready: waitForNativeCarouselReady, waitForSource: waitForNativeSource,
-        layout: measureVisibleLayout, emptyLayout: measureEmptyLayout, slotLayoutFormula: parseSlotLayoutFormula,
+        slotLayoutFormula: parseSlotLayoutFormula,
         observe: readNativeMyListDomState,
         itemIndex: netflixItemIndexFromSlot,
         positions: logicalSlotPositions, logicalWindow: nativeLogicalPageState, requireLogicalWindow: requireNativeLogicalPageState,

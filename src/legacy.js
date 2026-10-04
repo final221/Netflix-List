@@ -562,10 +562,6 @@ export function startLegacy() {
         return nativeCarousel.invalidateReads(...args);
     }
 
-    function nativeRect(...args) {
-        return nativeCarousel.rect(...args);
-    }
-
     function nativeFilledSlots(...args) {
         return nativeCarousel.filledSlots(...args);
     }
@@ -1384,12 +1380,19 @@ export function startLegacy() {
         return nativeCarousel.slotLayoutFormula(...args);
     }
 
-    function measureVisibleLayout(...args) {
-        return nativeCarousel.layout(...args);
-    }
-
-    function measureEmptyLayout(...args) {
-        return nativeCarousel.emptyLayout(...args);
+    function nativeLayoutObservation(section, scroller = null, track = null, mode = 'auto', state = sourceState) {
+        const sessionToken = sessionScope.token;
+        const ownerSection = state?.section, ownerScroller = state?.scroller, ownerTrack = state?.track;
+        const grid = state?.grid, layout = state?.layout, status = state?.status;
+        const gridConnected = Boolean(grid?.isConnected);
+        return nativeCarousel.measureLayout({ section, scroller, track, mode, sessionToken, assertCurrent() {
+            assertRouteSession(sessionToken);
+            if (sourceState !== state || state?.section !== ownerSection || state?.scroller !== ownerScroller ||
+                state?.track !== ownerTrack || state?.grid !== grid || state?.layout !== layout || state?.status !== status ||
+                (gridConnected && !grid.isConnected)) {
+                throw initializationError('NATIVE_SOURCE_REPLACED', 'native-layout', 'Native layout caller was replaced');
+            }
+        } });
     }
 
     function placeLegacyFrame(section, scroller, layout, { elapsedMs = null, finalized = false, totalCount = null } = {}) {
@@ -1524,10 +1527,12 @@ export function startLegacy() {
         return nativeCarousel.waitForSource(...args);
     }
 
-    function finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, reason = 'empty') {
+    function finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, reason = 'empty', admission = null) {
+        if (admission) nativeCarousel.assertObservation(admission);
         document.getElementById(GRID_ID)?.replaceChildren();
         const elapsedMs = performance.now() - initializationStarted;
         const frame = placeLegacyFrame(section, scroller, layout, { elapsedMs, finalized: true, totalCount: 0 });
+        if (admission) nativeCarousel.assertObservation(admission);
         frame.grid.setAttribute('data-tm-empty', 'true');
         if (scroller && track) {
             track.classList.add('tm-netflix-mylist-v15-track');
@@ -1555,18 +1560,26 @@ export function startLegacy() {
         resetOrderMismatchStateAfterInitialization();
         applyOriginalMyListVisibility();
         resizeObserver?.disconnect();
+        const emptyState = sourceState, emptySessionToken = sessionScope.token;
+        const emptyBinding = nativeCarousel.borrowBinding(section, scroller, track);
         resizeObserver = new ResizeObserver(() => {
-            if (!frame.grid.isConnected) return;
-            if (sourceState?.empty) {
-                const nextLayout = sourceState.scroller && sourceState.track
-                    ? measureVisibleLayout(section, sourceState.scroller, sourceState.track)
-                    : measureEmptyLayout(section);
-                nextLayout.rowGap = measureNativeCarouselGap(section);
-                sourceState.layout = nextLayout;
-                const geometry = applyGridGeometry(section, frame.grid, nextLayout);
-                frame.status.style.marginLeft = `${geometry.left}px`;
-                frame.status.style.width = `${geometry.width}px`;
-                applyLegacyEmptyStateGeometry(section, nextLayout);
+            if (!isRouteSessionActive(emptySessionToken) || sourceState !== emptyState || !emptyState.empty ||
+                !frame.grid.isConnected || !nativeCarousel.isBindingCurrent(emptyBinding)) return;
+            try {
+                withNativeReadScope(() => {
+                    const observed = nativeLayoutObservation(section, emptyState.scroller, emptyState.track, 'auto', emptyState);
+                    const nextLayout = { ...observed.layout };
+                    nextLayout.rowGap = measureNativeCarouselGap(section);
+                    nativeCarousel.assertObservation(observed);
+                    emptyState.layout = nextLayout;
+                    const geometry = applyGridGeometry(section, frame.grid, nextLayout);
+                    if (sourceState !== emptyState || !nativeCarousel.isBindingCurrent(emptyBinding)) return;
+                    frame.status.style.marginLeft = `${geometry.left}px`;
+                    frame.status.style.width = `${geometry.width}px`;
+                    applyLegacyEmptyStateGeometry(section, nextLayout);
+                });
+            } catch (error) {
+                if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
             }
         });
         resizeObserver.observe(section);
@@ -2946,17 +2959,29 @@ export function startLegacy() {
     }
 
     function installEmptyFrameResizeObserver(section) {
+        const state = sourceState, sessionToken = sessionScope.token;
+        const binding = nativeCarousel.borrowBinding(section, state?.scroller, state?.track);
         resizeObserver?.disconnect();
         resizeObserver = new ResizeObserver(() => {
-            if (!sourceState?.empty || !sourceState.grid?.isConnected || !sourceState.status?.isConnected) return;
-            const nextLayout = measureEmptyLayout(section);
-            nextLayout.rowGap = measureNativeCarouselGap(section);
-            sourceState.layout = nextLayout;
-            const geometry = applyGridGeometry(section, sourceState.grid, nextLayout);
-            sourceState.status.style.marginLeft = `${geometry.left}px`;
-            sourceState.status.style.width = `${geometry.width}px`;
-            sourceState.status.style.setProperty('--tm-row-gap', `${viewOriginalMyList ? (nextLayout.rowGap || 0) : 0}px`);
-            applyLegacyEmptyStateGeometry(section, nextLayout);
+            if (!isRouteSessionActive(sessionToken) || sourceState !== state || state.section !== section || !state.empty ||
+                !state.grid?.isConnected || !state.status?.isConnected || !nativeCarousel.isBindingCurrent(binding)) return;
+            try {
+                withNativeReadScope(() => {
+                    const observed = nativeLayoutObservation(section, null, null, 'empty', state);
+                    const nextLayout = { ...observed.layout };
+                    nextLayout.rowGap = measureNativeCarouselGap(section);
+                    nativeCarousel.assertObservation(observed);
+                    state.layout = nextLayout;
+                    const geometry = applyGridGeometry(section, state.grid, nextLayout);
+                    if (sourceState !== state || !nativeCarousel.isBindingCurrent(binding)) return;
+                    state.status.style.marginLeft = `${geometry.left}px`;
+                    state.status.style.width = `${geometry.width}px`;
+                    state.status.style.setProperty('--tm-row-gap', `${viewOriginalMyList ? (nextLayout.rowGap || 0) : 0}px`);
+                    applyLegacyEmptyStateGeometry(section, nextLayout);
+                });
+            } catch (error) {
+                if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
+            }
         });
         resizeObserver.observe(section);
     }
@@ -2972,14 +2997,18 @@ export function startLegacy() {
         const status = sourceState.status || document.getElementById(STATUS_ID);
         const grid = sourceState.grid || document.getElementById(GRID_ID);
         if (!status || !grid) return false;
-
+        const state = sourceState;
+        const observed = nativeLayoutObservation(synthetic, null, null, 'empty', state);
+        const layout = { ...observed.layout };
+        layout.rowGap = measureNativeCarouselGap(synthetic);
+        nativeCarousel.assertObservation(observed);
         synthetic.setAttribute(SECTION_ATTR, 'true');
         clearLegacyEmptyState({ restoreGrid: false });
+        nativeCarousel.assertObservation(observed);
         synthetic.appendChild(status);
         status.insertAdjacentElement('afterend', grid);
-        const layout = measureEmptyLayout(synthetic);
-        layout.rowGap = measureNativeCarouselGap(synthetic);
-        attachNativeBinding(sourceState, synthetic);
+        if (sourceState !== state) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-layout', 'Synthetic layout parent was replaced');
+        attachNativeBinding(state, synthetic);
         sourceState.layout = layout;
         sourceState.empty = true;
         sourceState.status = status;
@@ -3002,23 +3031,28 @@ export function startLegacy() {
     function adoptLiveMyListSection(live) {
         if (!sourceState || !live?.section || !live?.scroller || !live?.track) return false;
         if (sourceState.section === live.section && sourceState.scroller === live.scroller && sourceState.track === live.track) return false;
-
-        const status = sourceState.status || document.getElementById(STATUS_ID);
-        const grid = sourceState.grid || document.getElementById(GRID_ID);
+        const state = sourceState;
+        const status = state.status || document.getElementById(STATUS_ID);
+        const grid = state.grid || document.getElementById(GRID_ID);
         if (!status || !grid) return false;
-
+        const observed = nativeLayoutObservation(live.section, live.scroller, live.track, 'auto', state);
+        const layout = { ...observed.layout };
+        layout.rowGap = measureNativeCarouselGap(live.section);
+        nativeCarousel.assertObservation(observed);
         clearSourceAlignment();
+        nativeCarousel.assertObservation(observed);
         invalidateGridReact();
+        nativeCarousel.assertObservation(observed);
         const oldSynthetic = document.getElementById(SYNTHETIC_SECTION_ID);
         clearLegacyEmptyState({ restoreGrid: false });
         live.section.setAttribute(SECTION_ATTR, 'true');
         markOriginalHeader(live.section);
-        const layout = measureVisibleLayout(live.section, live.scroller, live.track);
-        layout.rowGap = measureNativeCarouselGap(live.section);
+        nativeCarousel.assertObservation(observed);
         parkSource(live.scroller);
         live.scroller.insertAdjacentElement('afterend', status);
         status.insertAdjacentElement('afterend', grid);
-        attachNativeBinding(sourceState, live.section, live.scroller, live.track);
+        if (sourceState !== state) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-layout', 'Incoming layout parent was replaced');
+        attachNativeBinding(state, live.section, live.scroller, live.track);
         sourceState.layout = layout;
         sourceState.status = status;
         sourceState.grid = grid;
@@ -3055,22 +3089,28 @@ export function startLegacy() {
         const status = sourceState.status || document.getElementById(STATUS_ID);
         const grid = sourceState.grid || document.getElementById(GRID_ID);
         if (!status || !grid) return false;
-
+        const state = sourceState;
+        const observed = nativeLayoutObservation(live.section, null, null, 'empty', state);
+        const layout = { ...observed.layout };
+        layout.rowGap = measureNativeCarouselGap(live.section);
+        nativeCarousel.assertObservation(observed);
         clearSourceAlignment();
+        nativeCarousel.assertObservation(observed);
         invalidateGridReact();
+        nativeCarousel.assertObservation(observed);
         const oldSynthetic = document.getElementById(SYNTHETIC_SECTION_ID);
         live.section.setAttribute(SECTION_ATTR, 'true');
         markOriginalHeader(live.section);
 
-        const layout = measureEmptyLayout(live.section);
-        layout.rowGap = measureNativeCarouselGap(live.section);
+        nativeCarousel.assertObservation(observed);
         const emptyContent = live.section.querySelector(':scope > [data-uia="empty-carousel-section+content"]');
         const originalAnchor = emptyContent || markOriginalHeader(live.section);
         if (originalAnchor) originalAnchor.insertAdjacentElement('afterend', status);
         else live.section.prepend(status);
         status.insertAdjacentElement('afterend', grid);
 
-        attachNativeBinding(sourceState, live.section);
+        if (sourceState !== state) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-layout', 'Incoming empty layout parent was replaced');
+        attachNativeBinding(state, live.section);
         sourceState.layout = layout;
         sourceState.empty = true;
         sourceState.status = status;
@@ -4059,14 +4099,17 @@ export function startLegacy() {
     }
 
     function currentGridGeometry(section, layout) {
-        const sectionRect = nativeRect(section);
-        const left = Math.max(0, layout.gridLeft);
-        const viewportRight = Math.min(window.innerWidth, sectionRect.right);
-        const available = Math.max(layout.cardWidth, viewportRight - sectionRect.left - left);
-        const width = Math.max(layout.cardWidth, Math.min(layout.gridWidth, available));
-
-        // Use the currently measured native Netflix column count instead of recalculating from the startup ratio.
-        return { width, left, columns: Math.max(1, layout.columns) };
+        return withNativeReadScope(() => {
+            const observed = nativeLayoutObservation(section, null, null, 'bounds');
+            const sectionRect = observed.bounds;
+            const left = Math.max(0, layout.gridLeft);
+            const viewportRight = Math.min(observed.viewportWidth, sectionRect.right);
+            const available = Math.max(layout.cardWidth, viewportRight - sectionRect.left - left);
+            const width = Math.max(layout.cardWidth, Math.min(layout.gridWidth, available));
+            const geometry = { width, left, columns: Math.max(1, layout.columns) };
+            nativeCarousel.assertObservation(observed);
+            return geometry;
+        });
     }
 
     function applyGridGeometry(section, grid, layout) {
@@ -5789,9 +5832,11 @@ export function startLegacy() {
                 !section.isConnected || !scroller.isConnected || !track.isConnected || !state.grid?.isConnected) {
                 throw createRouteSessionCancelledError();
             }
-            latest = measureVisibleLayout(section, scroller, track);
+            const observed = nativeLayoutObservation(section, scroller, track, 'auto', state);
+            latest = { ...observed.layout };
             latest.rowGap = sourceState?.layout?.rowGap || measureNativeCarouselGap(section);
             const sig = responsiveSignature(latest);
+            nativeCarousel.assertObservation(observed);
             if (sig === previous) {
                 stable++;
                 if (stable >= 2) return latest;
@@ -6033,118 +6078,128 @@ export function startLegacy() {
         const state = sourceState;
         lastResponsiveReason = reason;
         clearTimeout(responsiveRefreshTimer);
-        responsiveRefreshTimer = setTimeout(() => {
+        responsiveRefreshTimer = setTimeout(() => withNativeReadScope(() => {
             responsiveRefreshTimer = null;
-            if (!isRouteSessionActive(sessionToken) || responsiveRefreshing || sourceState !== state || !state.grid?.isConnected) return;
-            performanceDiagnostics.resize.checks++;
-            if (state.empty && (!state.scroller || !state.track)) {
-                const layout = measureEmptyLayout(state.section);
-                layout.rowGap = measureNativeCarouselGap(state.section);
-                if (responsiveLayoutMatches(state.layout, layout)) {
-                    performanceDiagnostics.resize.unchanged++;
+            try {
+                if (!isRouteSessionActive(sessionToken) || responsiveRefreshing || sourceState !== state || !state.grid?.isConnected) return;
+                performanceDiagnostics.resize.checks++;
+                if (state.empty && (!state.scroller || !state.track)) {
+                    const observed = nativeLayoutObservation(state.section, null, null, 'empty', state);
+                    const layout = { ...observed.layout };
+                    layout.rowGap = measureNativeCarouselGap(state.section);
+                    nativeCarousel.assertObservation(observed);
+                    if (responsiveLayoutMatches(state.layout, layout)) {
+                        performanceDiagnostics.resize.unchanged++;
+                        return;
+                    }
+                    state.layout = layout;
+                    const geometry = applyGridGeometry(state.section, state.grid, layout);
+                    state.status.style.marginLeft = `${geometry.left}px`;
+                    state.status.style.width = `${geometry.width}px`;
                     return;
                 }
-                state.layout = layout;
-                const geometry = applyGridGeometry(state.section, state.grid, layout);
-                state.status.style.marginLeft = `${geometry.left}px`;
-                state.status.style.width = `${geometry.width}px`;
-                return;
-            }
-            ensureLiveNativeBinding('responsive-check');
-            if (sourceState !== state || !state.section?.isConnected || !state.scroller?.isConnected || !state.track?.isConnected) return;
+                ensureLiveNativeBinding('responsive-check');
+                if (sourceState !== state || !state.section?.isConnected || !state.scroller?.isConnected || !state.track?.isConnected) return;
 
-            // Skip the expensive rescan when measured geometry has not changed.
-            // Keep active-slot alignment here and clear it only when the responsive state actually changes.
-            const sample = withNativeReadScope(() => {
-                const measured = measureVisibleLayout(state.section, state.scroller, state.track);
-                measured.rowGap = state.layout?.rowGap || measureNativeCarouselGap(state.section);
-                return { measured, signature: responsiveSignature(measured), geometry: currentGridGeometry(state.section, measured) };
-            });
-            const measured = sample.measured;
-            const sig = sample.signature;
-            if (sourceState !== state) return;
-            const sourceObservation = nativeSourceObservation(state);
-            const logicalMappingStale = Boolean(sourceObservation?.needsRemapping);
-            const applied = state.grid.__tmAppliedGeometry;
-            const layoutUnchanged = responsiveLayoutMatches(state.layout, measured);
-            // Parking a hidden source changes its own height, not the displayed
-            // grid. Preserve the first hover only after all other checks agree.
-            const parkedHeightOnlyChange = !layoutUnchanged && lastResponsiveReason === 'ResizeObserver' &&
-                sig === lastResponsiveSignature && !logicalMappingStale &&
-                state.section.getAttribute(ORIGINAL_VISIBILITY_ATTR) === 'false' &&
-                state.scroller.classList.contains(SOURCE_PARKED_CLASS) &&
-                state.resizeViewportSignature === responsiveViewportSignature() &&
-                Number.isFinite(state.layout?.scrollerHeight) && state.layout.scrollerHeight > 1.5 &&
-                Number.isFinite(measured.scrollerHeight) && measured.scrollerHeight >= 1 && measured.scrollerHeight <= 1.5 &&
-                responsiveLayoutMatches(state.layout, measured, true);
-            const geometryUnchanged = (layoutUnchanged || parkedHeightOnlyChange) && applied &&
-                ['width', 'left', 'columns'].every(key => Math.abs(applied[key] - sample.geometry[key]) <= 0.5);
-            if (!nativeCarousel.isObservationCurrent(sourceObservation)) return;
-            if (sig === lastResponsiveSignature && geometryUnchanged && !logicalMappingStale) {
-                const previousScrollerHeight = state.layout.scrollerHeight;
-                sourceState.layout = measured;
-                realignActiveSource();
-                performanceDiagnostics.resize.unchanged++;
-                const hoverPreserved = Boolean(activeClone || pendingGridHoverClone ||
-                    activeHoverPreparationDiagnostic?.token === hoverToken);
-                if (hoverPreserved) performanceDiagnostics.resize.hoverPreserved++;
-                if (parkedHeightOnlyChange) {
-                    const counters = performanceDiagnostics.resize;
-                    counters.parkedHeightChangesIgnored++;
-                    if (hoverPreserved) counters.parkedHeightHoverPreserved++;
-                    // One event per route; later occurrences remain in Copy Logs.
-                    if (counters.parkedHeightChangesIgnored === 1) {
-                        try { log(tLog('responsiveRemeasurementNoShapeChange'), {
-                            reason: lastResponsiveReason, signature: sig, parkedHeightOnlyChange: true,
-                            previousScrollerHeight, scrollerHeight: measured.scrollerHeight, hoverPreserved
-                        }); } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
-                    }
-                } else trace(() => [tLog('responsiveRemeasurementNoShapeChange'), {
-                    reason: lastResponsiveReason,
-                    signature: sig,
-                    layout: layoutSummary(measured)
-                }]);
-                return;
-            }
-
-            // Netflix can change only the carousel page count after a My List removal
-            // settles (for example, after the Undo window) without changing responsive
-            // geometry. Treat that as content-state convergence, not a responsive relayout,
-            // so an active hover is not invalidated unnecessarily.
-            if (lastResponsiveReason === 'ResizeObserver') {
-                const previousParts = String(lastResponsiveSignature || '').split('|');
-                const currentParts = String(sig || '').split('|');
-                const pageCountOnlyChanged =
-                    previousParts.length === 7 &&
-                    currentParts.length === 7 &&
-                    previousParts[1] !== currentParts[1] &&
-                    previousParts.every((part, index) => index === 1 || part === currentParts[index]);
-
-                if (pageCountOnlyChanged && geometryUnchanged && !logicalMappingStale) {
-                    const previousSignature = lastResponsiveSignature;
+                // Skip the expensive rescan when measured geometry has not changed.
+                // Keep active-slot alignment here and clear it only when the responsive state actually changes.
+                const sample = withNativeReadScope(() => {
+                    const observed = nativeLayoutObservation(state.section, state.scroller, state.track, 'auto', state);
+                    const measured = { ...observed.layout };
+                    measured.rowGap = state.layout?.rowGap || measureNativeCarouselGap(state.section);
+                    const result = { measured, signature: responsiveSignature(measured), geometry: currentGridGeometry(state.section, measured), observed };
+                    nativeCarousel.assertObservation(observed);
+                    return result;
+                });
+                const measured = sample.measured;
+                const sig = sample.signature;
+                if (sourceState !== state) return;
+                const sourceObservation = nativeSourceObservation(state);
+                const logicalMappingStale = Boolean(sourceObservation?.needsRemapping);
+                const applied = state.grid.__tmAppliedGeometry;
+                const layoutUnchanged = responsiveLayoutMatches(state.layout, measured);
+                // Parking a hidden source changes its own height, not the displayed
+                // grid. Preserve the first hover only after all other checks agree.
+                const parkedHeightOnlyChange = !layoutUnchanged && lastResponsiveReason === 'ResizeObserver' &&
+                    sig === lastResponsiveSignature && !logicalMappingStale &&
+                    state.section.getAttribute(ORIGINAL_VISIBILITY_ATTR) === 'false' &&
+                    state.scroller.classList.contains(SOURCE_PARKED_CLASS) &&
+                    state.resizeViewportSignature === responsiveViewportSignature() &&
+                    Number.isFinite(state.layout?.scrollerHeight) && state.layout.scrollerHeight > 1.5 &&
+                    Number.isFinite(measured.scrollerHeight) && measured.scrollerHeight >= 1 && measured.scrollerHeight <= 1.5 &&
+                    responsiveLayoutMatches(state.layout, measured, true);
+                const geometryUnchanged = (layoutUnchanged || parkedHeightOnlyChange) && applied &&
+                    ['width', 'left', 'columns'].every(key => Math.abs(applied[key] - sample.geometry[key]) <= 0.5);
+                if (!nativeCarousel.isObservationCurrent(sourceObservation)) return;
+                if (!nativeCarousel.isObservationCurrent(sample.observed)) return;
+                if (sig === lastResponsiveSignature && geometryUnchanged && !logicalMappingStale) {
+                    const previousScrollerHeight = state.layout.scrollerHeight;
                     sourceState.layout = measured;
-                    lastResponsiveSignature = sig;
-                    lastPageShape = responsivePageShape(measured);
                     realignActiveSource();
                     performanceDiagnostics.resize.unchanged++;
-                    if (activeClone || pendingGridHoverClone) performanceDiagnostics.resize.hoverPreserved++;
-                    log(tLog('responsiveRemeasurementNoShapeChange'), {
+                    const hoverPreserved = Boolean(activeClone || pendingGridHoverClone ||
+                        activeHoverPreparationDiagnostic?.token === hoverToken);
+                    if (hoverPreserved) performanceDiagnostics.resize.hoverPreserved++;
+                    if (parkedHeightOnlyChange) {
+                        const counters = performanceDiagnostics.resize;
+                        counters.parkedHeightChangesIgnored++;
+                        if (hoverPreserved) counters.parkedHeightHoverPreserved++;
+                        // One event per route; later occurrences remain in Copy Logs.
+                        if (counters.parkedHeightChangesIgnored === 1) {
+                            try { log(tLog('responsiveRemeasurementNoShapeChange'), {
+                                reason: lastResponsiveReason, signature: sig, parkedHeightOnlyChange: true,
+                                previousScrollerHeight, scrollerHeight: measured.scrollerHeight, hoverPreserved
+                            }); } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
+                        }
+                    } else trace(() => [tLog('responsiveRemeasurementNoShapeChange'), {
                         reason: lastResponsiveReason,
                         signature: sig,
-                        previousSignature,
-                        pageCountOnlyChange: true,
                         layout: layoutSummary(measured)
-                    });
+                    }]);
                     return;
                 }
-            }
 
-            const refreshPromise = refreshResponsiveLayout(sessionToken);
-            responsiveRefreshPromise = refreshPromise;
-            Promise.resolve(refreshPromise).finally(() => {
-                if (responsiveRefreshPromise === refreshPromise) responsiveRefreshPromise = null;
-            });
-        }, delay);
+                // Netflix can change only the carousel page count after a My List removal
+                // settles (for example, after the Undo window) without changing responsive
+                // geometry. Treat that as content-state convergence, not a responsive relayout,
+                // so an active hover is not invalidated unnecessarily.
+                if (lastResponsiveReason === 'ResizeObserver') {
+                    const previousParts = String(lastResponsiveSignature || '').split('|');
+                    const currentParts = String(sig || '').split('|');
+                    const pageCountOnlyChanged =
+                        previousParts.length === 7 &&
+                        currentParts.length === 7 &&
+                        previousParts[1] !== currentParts[1] &&
+                        previousParts.every((part, index) => index === 1 || part === currentParts[index]);
+
+                    if (pageCountOnlyChanged && geometryUnchanged && !logicalMappingStale) {
+                        const previousSignature = lastResponsiveSignature;
+                        sourceState.layout = measured;
+                        lastResponsiveSignature = sig;
+                        lastPageShape = responsivePageShape(measured);
+                        realignActiveSource();
+                        performanceDiagnostics.resize.unchanged++;
+                        if (activeClone || pendingGridHoverClone) performanceDiagnostics.resize.hoverPreserved++;
+                        log(tLog('responsiveRemeasurementNoShapeChange'), {
+                            reason: lastResponsiveReason,
+                            signature: sig,
+                            previousSignature,
+                            pageCountOnlyChange: true,
+                            layout: layoutSummary(measured)
+                        });
+                        return;
+                    }
+                }
+
+                const refreshPromise = refreshResponsiveLayout(sessionToken);
+                responsiveRefreshPromise = refreshPromise;
+                Promise.resolve(refreshPromise).finally(() => {
+                    if (responsiveRefreshPromise === refreshPromise) responsiveRefreshPromise = null;
+                });
+            } catch (error) {
+                if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
+            }
+        }), delay);
     }
 
     function beginSourceScan(section, scroller, track) {
@@ -6378,9 +6433,21 @@ export function startLegacy() {
         const initializationStarted = performance.now();
         let scroller = section.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller);
         let track = scroller && netflixDom.findTrack(scroller);
-        let provisionalLayout = scroller && track ? measureVisibleLayout(section, scroller, track) : measureEmptyLayout(section);
-        provisionalLayout.rowGap = measureNativeCarouselGap(section);
-        const provisionalFrame = placeLegacyFrame(section, scroller, provisionalLayout, { elapsedMs: null, finalized: false, totalCount: null });
+        let provisionalLayout, provisionalFrame;
+        try {
+            withNativeReadScope(() => {
+                const observed = nativeLayoutObservation(section, scroller, track);
+                provisionalLayout = { ...observed.layout };
+                provisionalLayout.rowGap = measureNativeCarouselGap(section);
+                nativeCarousel.assertObservation(observed);
+                provisionalFrame = placeLegacyFrame(section, scroller, provisionalLayout, { elapsedMs: null, finalized: false, totalCount: null });
+                nativeCarousel.assertObservation(observed);
+            });
+        } catch (error) {
+            if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
+            if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
+            return;
+        }
         sourceState = attachNativeBinding({
             layout: provisionalLayout,
             items: [],
@@ -6473,7 +6540,19 @@ export function startLegacy() {
             return;
         }
         if (earlyTotalCount === 0) {
-            finalizeEmptyLegacyList(section, scroller, track, provisionalLayout, initializationStarted, 'totalCount-0');
+            try {
+                withNativeReadScope(() => {
+                    const observed = nativeLayoutObservation(section, scroller, track);
+                    const layout = { ...observed.layout, rowGap: measureNativeCarouselGap(section) };
+                    nativeCarousel.assertObservation(observed);
+                    finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, 'totalCount-0', observed);
+                });
+            } catch (error) {
+                if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
+                clearRunningSession(sessionToken, false);
+                if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
+                return;
+            }
             clearRunningSession(sessionToken);
             return;
         }
@@ -6578,9 +6657,20 @@ export function startLegacy() {
             return;
         }
         if (readiness.empty) {
-            const emptyLayout = measureVisibleLayout(section, scroller, track);
-            emptyLayout.rowGap = measureNativeCarouselGap(section);
-            finalizeEmptyLegacyList(section, scroller, track, emptyLayout, initializationStarted, readiness.reason);
+            try {
+                nativeCarousel.assertPreparation(readiness);
+                withNativeReadScope(() => {
+                    const observed = nativeLayoutObservation(section, scroller, track);
+                    const emptyLayout = { ...observed.layout, rowGap: measureNativeCarouselGap(section) };
+                    nativeCarousel.assertObservation(observed);
+                    finalizeEmptyLegacyList(section, scroller, track, emptyLayout, initializationStarted, readiness.reason, observed);
+                });
+            } catch (error) {
+                if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
+                clearRunningSession(sessionToken, false);
+                if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
+                return;
+            }
             clearRunningSession(sessionToken);
             return;
         }
@@ -6677,9 +6767,11 @@ export function startLegacy() {
             };
             try {
                 nativeCarousel.assertPreparation(readiness);
-                const graphqlLayout = measureVisibleLayout(section, scroller, track);
+                const graphqlGeometry = nativeLayoutObservation(section, scroller, track);
+                const graphqlLayout = graphqlGeometry.layout;
                 const templateView = nativePageObservation(sourceState, { template: true });
                 nativeCarousel.assertObservation(templateView);
+                nativeCarousel.assertObservation(graphqlGeometry);
                 const graphqlCollection = await collectLogicalListItems({
                     bootstrap: freshMyListBootstrap,
                     totalCount: earlyTotalCount,
@@ -6698,6 +6790,7 @@ export function startLegacy() {
                 fastCollectionSource = graphqlCollection.collectionSource || 'graphql';
                 if (graphqlCollection.error) throw graphqlCollection.error;
                 if (fastItems) {
+                    nativeCarousel.assertObservation(graphqlGeometry);
                     const accepted = nativeCarousel.acceptCollection({ preparation: readiness,
                         totalCount: earlyTotalCount, columns: graphqlLayout.columns, collectedCount: fastItems.length });
                     log(fastCollectionSource === 'mounted-single-page'
@@ -6726,7 +6819,7 @@ export function startLegacy() {
                     clearRunningSession(sessionToken);
                     return;
                 }
-                if (!nativeCarousel.isPreparationCurrent(readiness)) {
+                if (error?.code === 'NATIVE_SOURCE_REPLACED' || !nativeCarousel.isPreparationCurrent(readiness)) {
                     retryReplacedSource();
                     return;
                 }
@@ -6759,8 +6852,8 @@ export function startLegacy() {
         let retryGridBuild = false;
         let retryNativeCollection = false;
         try {
-            const layout = measureVisibleLayout(section, scroller, track);
-            layout.rowGap = measureNativeCarouselGap(section);
+            const layoutObservation = nativeLayoutObservation(section, scroller, track);
+            const layout = { ...layoutObservation.layout, rowGap: measureNativeCarouselGap(section) };
             const totalCount = earlyTotalCount;
             const measuredNative = nativeSourceDiagnostics(section, scroller, track);
             const initialPages = measuredNative?.pageCount ?? null;
@@ -6771,6 +6864,7 @@ export function startLegacy() {
                 selectedPage: measuredNative?.selectedPage ?? null,
                 currentPageCards: measuredNative?.currentPageCards ?? 0
             });
+            nativeCarousel.assertObservation(layoutObservation);
 
             const status = updateStatus(formatHeaderParts(0, totalCount, null));
             scroller.insertAdjacentElement('afterend', status);
@@ -6779,6 +6873,7 @@ export function startLegacy() {
             status.style.marginLeft = `${initialStatusGeometry.left}px`;
             status.style.width = `${initialStatusGeometry.width}px`;
             status.style.setProperty('--tm-row-gap', `${layout.rowGap}px`);
+            nativeCarousel.assertObservation(layoutObservation);
 
             // Fast collection skips beginSourceScan(), but hover-driven native
             // moves still need the track marker used by the animation suppression CSS.
@@ -6833,7 +6928,7 @@ export function startLegacy() {
                 const nowState = observed.readiness;
                 nativeCarousel.assertObservation(observed);
                 if (nowState.pages === 1 && nowState.cards === 0) {
-                    finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, 'collection-confirmed-empty');
+                    finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, 'collection-confirmed-empty', observed);
                     return;
                 }
                 const noCardsError = new Error(tLog('noNativeNetflixCardsCouldBeCollected'));
