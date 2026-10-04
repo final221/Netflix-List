@@ -918,6 +918,79 @@ test('page observation validates its selected page and preserves current versus 
     assert.equal(indicator.carousel.isObservationCurrent(empty), false, 'an empty window still belongs to its selected page');
 });
 
+test('page observations reject same-page window changes including cards mounting into an empty window', () => {
+    const e = mountedEnvironment();
+    let filled = [];
+    e.pageDom.filledSlots = () => filled;
+    const empty = e.carousel.pageCards({ ...e.options, totalCount: 3, columns: 3 });
+    assert.deepEqual(empty.cards, []);
+    filled = e.slots;
+    assert.equal(e.carousel.isObservationCurrent(empty), false, 'empty membership is part of the observation');
+    const populated = e.carousel.pageCards({ ...e.options, totalCount: 3, columns: 3 });
+    e.slots[1].querySelector('a').setAttribute('tabindex', '-1');
+    e.slots[1].getBoundingClientRect = () => ({ left: 1000, right: 1100, width: 100, height: 100 });
+    assert.equal(e.slots[1].isConnected, true);
+    assert.equal(e.carousel.isObservationCurrent(populated), false, 'still-connected cards can leave the current window');
+    assert.deepEqual(e.carousel.pageCards({ ...e.options, totalCount: 3, columns: 3 }).cards.map(entry => entry.source.videoId), ['1', '3']);
+    assert.equal(e.scheduler.timers.size, 0);
+});
+
+test('page observations own current signatures and opt-in template fallback with validated selection', () => {
+    const e = mountedEnvironment();
+    const options = { ...e.options, totalCount: 3, columns: 3 };
+    const current = e.carousel.pageCards(options);
+    assert.equal(current.signature, e.slots.map(slot => slot.querySelector('a').href).join('|'));
+    assert.equal(current.template, undefined, 'ordinary page observations do not select a template');
+    const selected = e.carousel.pageCards({ ...options, template: true });
+    assert.equal(selected.template, selected.cards[0].source);
+    e.slots.forEach((slot, index) => {
+        slot.querySelector('a').setAttribute('tabindex', '-1');
+        slot.getBoundingClientRect = () => ({ left: 1000 + index * 100, right: 1100 + index * 100, width: 100, height: 100 });
+    });
+    const fallback = e.carousel.pageCards({ ...options, template: true });
+    assert.deepEqual(fallback.cards, []);
+    assert.equal(fallback.signature, '');
+    assert.equal(fallback.template.slot, e.slots[0]);
+    assert.equal(e.carousel.isObservationCurrent(fallback), true);
+    e.pageDom.filledSlots = () => e.slots.slice(1);
+    assert.equal(e.carousel.isObservationCurrent(fallback), false);
+    e.pageDom.filledSlots = () => [];
+    const missing = e.carousel.pageCards({ ...options, template: true });
+    assert.equal(missing.template, null);
+    assert.equal(e.carousel.isObservationCurrent({ ...missing }), false);
+    assert.deepEqual(e.directions, []);
+});
+
+test('opt-in readiness observations copy native facts and reject changed or replaced admission', () => {
+    for (const change of ['cards', 'style', 'parent', 'binding', 'route']) {
+        const e = mountedEnvironment();
+        let current = true;
+        const options = { ...e.options, readiness: true, assertCurrent() {
+            if (!current) throw Object.assign(new Error('parent replaced'), { code: 'CALLER_REPLACED' });
+        } };
+        let readinessReads = 0;
+        e.pageDom.directSlots = () => { readinessReads++; return e.track.children; };
+        assert.equal(e.carousel.observeSource(e.options).readiness, undefined);
+        assert.equal(readinessReads, 0, 'ordinary source observations add no readiness read');
+        const observed = e.carousel.observeSource(options);
+        assert.equal(observed.readiness.cards, 3);
+        assert.equal(observed.readiness.pages, 1);
+        assert.equal(observed.readiness.connected, true);
+        assert.ok(Object.isFrozen(observed.readiness) && Object.isFrozen(observed.readiness.capabilities));
+        assert.equal(e.carousel.isObservationCurrent(observed), true);
+        if (change === 'cards') e.pageDom.filledSlots = () => [];
+        if (change === 'style') for (const key of ['display', 'transform', 'will-change']) e.track.style.setProperty(key, '');
+        if (change === 'parent') current = false;
+        if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
+        if (change === 'route') e.scope.begin();
+        assert.equal(e.carousel.isObservationCurrent(observed), false, change);
+        assert.equal(observed.readiness.cards, 3);
+        assert.equal(e.carousel.isObservationCurrent({ ...observed }), false);
+        assert.equal(e.scheduler.timers.size, 0);
+        assert.deepEqual(e.directions, []);
+    }
+});
+
 test('delta mapping anchors native positions or visible title hints synchronously without rewriting membership', () => {
     const e = mountedEnvironment();
     const hints = new Map([['1', 1], ['2', 1], ['3', 0]]);

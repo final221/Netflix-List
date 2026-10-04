@@ -26,7 +26,7 @@ const { source, declaration } = require('./helpers/legacy-source.cjs');
 const privateNavigationFunctions = new Set(['createLogicalMoveSignal', 'waitLogicalPageChange', 'waitPageByPolling', 'waitPage', 'waitForScriptMoveSettle']);
 const fixtureModelReads = new Set(['getCarouselDomRuntime', 'logicalSlotPositions', 'wrappedTailLogicalPageInfo',
     'netflixItemIndexFromSlot', 'normalizeNetflixLogicalIndex', 'detectCarouselDomProfile', 'carouselDomProfileSummary',
-    'selectedPage', 'pageCount']);
+    'selectedPage', 'pageCount', 'currentPageSlots', 'nativeCarouselReadiness', 'visibleSignature']);
 const migratedAdapterFunctions = new Set(['getHtmlLanguage', 'getNetflixLanguage', 'netflixModelData',
     'graphqlData', 'viewingRequestContext', 'nativeCardIdentity', 'videoIdFromHref', 'decodeTrackingContext',
     'videoIdFromToggleContext', 'findMyListSection', 'itemFromSlot']);
@@ -236,8 +236,12 @@ function environment(names, overrides = {}) {
     c.normalizeNetflixLogicalIndex ||= normalizeNetflixLogicalIndex;
     c.selectedPage ||= section => c.nativeCarousel.selectedPage(section);
     c.pageCount ||= section => c.nativeCarousel.pageCount(section);
+    c.currentPageSlots ||= (...args) => c.nativeCarousel.currentSlots(...args);
+    c.nativeCarouselReadiness ||= (...args) => c.nativeCarousel.readiness(...args);
+    c.visibleSignature ||= (...args) => c.nativeCarousel.signatureOf(...args);
     vm.runInContext(declaration('nativeSourceObservation'), c);
     vm.runInContext(declaration('nativeSourceDiagnostics'), c);
+    vm.runInContext(declaration('nativePageObservation'), c);
     if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
     Object.defineProperty(c, 'nativeReadScope', { get: () => c.nativeCarousel.diagnostics().readScopeActive ? true : null });
     // Supplementary characterization of private acknowledgement resources. Full
@@ -3582,6 +3586,153 @@ function initializationEnvironment(count = 150) {
     return { ...e, flush, async drain() { await flush(); return e.drain(); } };
 }
 
+test('initial mounted-window admission rejects replacement before parallel readiness or fresh data work', async () => {
+    const e = initializationEnvironment(6), runs = [];
+    e.c.targetSessionEntryKind = 'spa';
+    e.c.tryMountedSinglePageFastBootstrap = async () => null;
+    const carousel = e.c.nativeCarousel;
+    e.c.nativeCarousel = Object.freeze({ ...carousel, pageCards(options) {
+        const observed = carousel.pageCards(options);
+        carousel.clearBinding(); carousel.bind(e.section, e.scroller, e.track);
+        return observed;
+    } });
+    let dataReads = 0, preparations = 0;
+    e.c.listData.fetchBootstrap = async () => { dataReads++; return { totalCount: 6 }; };
+    e.c.waitForNativeCarouselReady = () => { preparations++; throw new Error('obsolete work must not prepare'); };
+    const mutation = { videoId: '2', action: 'remove' };
+    e.c.pendingMyListMutations.set('2', mutation);
+    e.c.scheduleRun = (...args) => runs.push(args);
+    await e.c.runScript(1);
+    assert.equal(dataReads, 0);
+    assert.equal(preparations, 0);
+    assert.equal(e.c.initializationBlockedSessionToken, null);
+    assert.equal(e.c.pendingMyListMutations.get('2'), mutation);
+    assert.deepEqual(runs, [[0, 1]]);
+});
+
+test('visible native item capture rejects parent replacement before returning membership facts', () => {
+    const e = initializationEnvironment(6);
+    vm.runInContext(declaration('visibleNativeItems'), e.c);
+    const state = e.c.sourceState;
+    e.c.itemFromSlot = () => {
+        e.c.sourceState = e.c.attachNativeBinding({ ...state }, e.section, e.scroller, e.track);
+        return { videoId: '1', href: '/watch/1' };
+    };
+    assert.throws(() => e.c.visibleNativeItems({ section: e.section, scroller: e.scroller, track: e.track, selectedPage: 0 }));
+    assert.equal(e.c.sourceState.items, state.items);
+});
+
+test('GraphQL template capture rejects replaced native admission before starting data work', async () => {
+    const e = initializationEnvironment(6), runs = [];
+    let requests = 0, captures = 0;
+    e.c.listData.collectRecords = async () => { requests++; return { bootstrap: { totalCount: 6 }, records: e.records(6) }; };
+    const capture = e.c.cardMarkup.captureTemplate;
+    e.c.cardMarkup = { ...e.c.cardMarkup, captureTemplate(slot) {
+        captures++;
+        const material = capture(slot);
+        e.c.nativeCarousel.clearBinding(); e.c.nativeCarousel.bind(e.section, e.scroller, e.track);
+        return material;
+    } };
+    e.c.scheduleRun = (...args) => runs.push(args);
+    const completion = e.c.runScript(1);
+    await e.flush(); await completion;
+    assert.equal(captures, 1);
+    assert.equal(requests, 0);
+    assert.equal(e.logs.filter(entry => entry.name === 'legacyGridBuilt').length, 0);
+    assert.deepEqual(runs, [[0, 1]]);
+});
+
+test('post-collection empty admission rejects a replaced parent or binding and preserves pending mutations', async () => {
+    for (const change of ['parent', 'binding']) {
+        const e = initializationEnvironment(6), gate = deferred(), runs = [];
+        const mutation = { videoId: '2', action: 'remove' };
+        e.c.pendingMyListMutations.set('2', mutation);
+        e.c.collectLogicalListItems = async () => ({ bootstrap: { totalCount: 6 }, items: null });
+        e.c.beginSourceScan = () => {};
+        let collections = 0, empties = 0;
+        e.c.collectAllItems = () => { collections++; return gate.promise; };
+        e.c.finalizeEmptyLegacyList = () => { empties++; };
+        e.c.scheduleRun = (...args) => runs.push(args);
+        const completion = e.c.runScript(1);
+        await e.flush();
+        assert.equal(collections, 1);
+        const state = e.c.sourceState;
+        if (change === 'parent') e.c.sourceState = e.c.attachNativeBinding({ ...state }, e.section, e.scroller, e.track);
+        if (change === 'binding') { e.c.nativeCarousel.clearBinding(); e.c.nativeCarousel.bind(e.section, e.scroller, e.track); }
+        const replacement = e.c.sourceState;
+        e.c.netflixDom.filledSlots = e.c.netflixDom.directSlots = () => [];
+        gate.resolve([]);
+        await e.flush(); await completion;
+        assert.equal(empties, 0, change);
+        assert.equal(e.c.sourceState, replacement);
+        assert.equal(e.c.pendingMyListMutations.get('2'), mutation);
+        assert.equal(e.c.initializationBlockedSessionToken, null);
+        assert.deepEqual(runs, [[0, 1]]);
+    }
+});
+
+test('late native collection failure cannot block or publish status into a replacement parent', async () => {
+    const e = initializationEnvironment(6), gate = deferred(), runs = [];
+    e.c.collectLogicalListItems = async () => ({ bootstrap: { totalCount: 6 }, items: null });
+    e.c.beginSourceScan = () => {};
+    e.c.collectAllItems = async () => { await gate.promise; throw new Error('old collection failed'); };
+    e.c.scheduleRun = (...args) => runs.push(args);
+    const mutation = { videoId: '2', action: 'remove' };
+    e.c.pendingMyListMutations.set('2', mutation);
+    const completion = e.c.runScript(1);
+    await e.flush();
+    const replacement = e.c.sourceState = e.c.attachNativeBinding({ ...e.c.sourceState }, e.section, e.scroller, e.track);
+    gate.resolve();
+    await e.flush(); await completion;
+    assert.equal(e.c.sourceState, replacement);
+    assert.equal(e.c.initializationBlockedSessionToken, null);
+    assert.equal(e.c.pendingMyListMutations.get('2'), mutation);
+    assert.equal(e.warnings.some(entry => entry.name === 'initializationFailed'), false);
+    assert.deepEqual(runs, [[0, 1]]);
+});
+
+test('post-collection readiness preserves owned empty admission and missing-card failure distinctions', async () => {
+    for (const empty of [true, false]) {
+        const e = initializationEnvironment(6);
+        e.c.collectLogicalListItems = async () => ({ bootstrap: { totalCount: 6 }, items: null });
+        e.c.beginSourceScan = () => {};
+        e.c.collectAllItems = async () => {
+            if (empty) e.c.netflixDom.filledSlots = e.c.netflixDom.directSlots = () => [];
+            return [];
+        };
+        let empties = 0;
+        e.c.finalizeEmptyLegacyList = () => { empties++; };
+        const completion = e.c.runScript(1);
+        await e.flush(); await completion;
+        assert.equal(empties, empty ? 1 : 0);
+        assert.equal(e.c.initializationBlockedSessionToken, empty ? null : 1);
+        if (!empty) assert.equal(e.warnings.at(-1).details.code, 'NO_NATIVE_CARDS');
+    }
+});
+
+test('native collection revalidates after diagnostics before parking or publishing into a replacement parent', async () => {
+    const e = initializationEnvironment(6), runs = [];
+    e.c.collectLogicalListItems = async () => ({ bootstrap: { totalCount: 6 }, items: null });
+    e.c.beginSourceScan = () => {};
+    e.c.collectAllItems = async () => e.items(6);
+    const log = e.c.log;
+    let replacement = null, parked = 0;
+    e.c.parkSource = () => { parked++; };
+    e.c.log = (name, details) => {
+        log(name, details);
+        if (name !== 'fullCollectionResultFinalized') return;
+        replacement = e.c.sourceState = e.c.attachNativeBinding({ ...e.c.sourceState }, e.section, e.scroller, e.track);
+    };
+    e.c.scheduleRun = (...args) => runs.push(args);
+    const completion = e.c.runScript(1);
+    await e.flush(); await e.drain(); await completion;
+    assert.ok(replacement);
+    assert.equal(e.c.sourceState, replacement);
+    assert.equal(parked, 0);
+    assert.equal(e.logs.filter(entry => entry.name === 'legacyGridBuilt').length, 0);
+    assert.deepEqual(runs, [[0, 1]]);
+});
+
 test('late fast-collection completion cannot finalize the model or republish a replaced native binding', async () => {
     const e = initializationEnvironment(6);
     const gate = deferred(), runs = [];
@@ -4327,7 +4478,7 @@ function nativeCollectionEnvironment(mode, windows, totalCount = 4) {
     e.c.sourceState.layout.columns = 3;
     e.track.style.setProperty('transition', 'original-transition');
     e.track.style.setProperty('animation', 'original-animation');
-    for (const name of ['visibleSignature', 'itemKeyFromCard', 'collectAllItems']) {
+    for (const name of ['itemKeyFromCard', 'collectAllItems']) {
         vm.runInContext(declaration(name), e.c);
     }
     // Supplementary traversal characterization with controlled native windows.
@@ -4513,7 +4664,9 @@ function fetchEnvironment(count = 150) {
     e.c.listData = fixtureListData(e.c);
     function page(...args) { return { payload: carouselPayload(...args) }; }
     function collect(bootstrap, totalCount = count) {
-        return e.c.collectLogicalListItems({ bootstrap, totalCount, columns: 6, templateSlot: e.template, sessionToken: e.c.routeSessionToken });
+        const templateSource = e.c.nativeCarousel.pageCards({ section: e.section, scroller: e.scroller, track: e.track,
+            totalCount, columns: 6, template: true, sessionToken: e.c.routeSessionToken }).template;
+        return e.c.collectLogicalListItems({ bootstrap, totalCount, columns: 6, templateSource, sessionToken: e.c.routeSessionToken });
     }
     function routeLifecycle() {
         Object.assign(e.c, {
@@ -4773,7 +4926,7 @@ test('manual and initial entry cannot qualify mounted reuse and a stale route ca
     const before = e.template.cloneCounter.count;
     e.c.sessionScope.begin();
     await assert.rejects(e.c.collectLogicalListItems({ bootstrap, totalCount: 6, columns: 6,
-        templateSlot: e.template, sessionToken: 1 }), error => e.c.isRouteSessionCancelledError(error));
+        sessionToken: 1 }), error => e.c.isRouteSessionCancelledError(error));
     assert.equal(e.requests.length, 0);
     assert.equal(e.template.cloneCounter.count, before);
 });
@@ -7897,6 +8050,8 @@ test('readiness detachment retries one verified replacement and preserves queued
         if (++readinessCalls > 1) return prepare(...args);
         e.track.setConnected(false);
         e.scroller.appendChild(replacement);
+        replacement.appendChild(e.template);
+        replacement.style.setProperty('display', 'flex');
         e.c.netflixDom.findTrack = () => replacement;
         return { ready: false, reason: 'detached' };
     };

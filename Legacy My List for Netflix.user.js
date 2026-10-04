@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.26
+// @version      1.4.27
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -6896,12 +6896,22 @@
           readings: Object.freeze([...count.readings]),
           uniqueReadings: Object.freeze([...count.uniqueReadings])
         }) : null;
+        const readinessState = options.readiness ? nativeCarouselReadiness(
+          operation.binding.section,
+          operation.binding.scroller,
+          operation.binding.track
+        ) : null;
+        const readiness = readinessState ? Object.freeze({
+          ...readinessState,
+          capabilities: Object.freeze({ ...readinessState.capabilities })
+        }) : null;
         return observationResult(operation, {
           mode: runtime.profile.pageMode,
           needsRemapping: Boolean(runtime.pageMappingStale),
           remapAttempts: attempts,
           ...countFacts ? { count: countFacts } : {},
-          ...position ? { position } : {}
+          ...position ? { position } : {},
+          ...readiness ? { readiness } : {}
         }, () => {
           if (runtime.logicalRemapRetryCount !== attempts) throw initializationError(
             "NATIVE_SOURCE_REPLACED",
@@ -6915,6 +6925,12 @@
             const current = nativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track);
             if (current.totalCount !== countFacts.totalCount || current.slots !== countFacts.slots || current.readings.length !== countFacts.readings.length || !current.readings.every((value, index) => Object.is(value, countFacts.readings[index]))) {
               throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native count observation changed");
+            }
+          }
+          if (readiness) {
+            const current = nativeCarouselReadiness(operation.binding.section, operation.binding.scroller, operation.binding.track);
+            if (current.signature !== readiness.signature || current.connected !== readiness.connected || Object.keys(current.capabilities).length !== Object.keys(readiness.capabilities).length || Object.keys(readiness.capabilities).some((key) => current.capabilities[key] !== readiness.capabilities[key])) {
+              throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native readiness observation changed");
             }
           }
         });
@@ -7004,7 +7020,9 @@
           "Mounted native page changed before preparation"
         );
         const columns = Math.max(1, options.columns || 1);
-        const slots = options.window === "viewport" ? viewportPageSlots(scroller, track, columns) : currentPageSlots(scroller, track);
+        const viewport = options.window === "viewport", wantsTemplate = Boolean(options.template);
+        const readSlots = () => viewport ? viewportPageSlots(scroller, track, columns) : currentPageSlots(scroller, track);
+        const slots = readSlots().slice();
         const mode = operation.model.view.profile.pageMode;
         const tail = mode === "logical" ? wrappedTailLogicalPageInfo(logicalSlotPositions(slots, options.totalCount || 0), options.totalCount || 0, columns) : null;
         const revision = operation.model.revision;
@@ -7012,13 +7030,24 @@
           source: sourceHandle(operation.binding, slot, page),
           inPage: !(tail && tail.page === page && index >= tail.wrapIndex)
         })));
-        return observationResult(operation, { page, mode, cards }, () => {
-          if (operation.model.revision !== revision || selectedPage(section) !== page) throw initializationError(
+        const signature = cards.map((entry) => entry.source.href).filter(Boolean).join("|");
+        const templateSlot = wantsTemplate ? slots[0] || nativeFilledSlots(track)[0] || null : null;
+        const template = templateSlot ? cards[0]?.source || sourceHandle(operation.binding, templateSlot, page) : null;
+        return observationResult(operation, { page, mode, cards, signature, ...wantsTemplate ? { template } : {} }, () => {
+          if (selectedPage(section) !== page || operation.model.revision !== revision) throw initializationError(
             "NATIVE_SOURCE_REPLACED",
             "native-observation",
             "Observed native page mapping changed"
           );
+          const current = readSlots();
+          if (current.length !== slots.length || current.some((slot, index) => slot !== slots[index])) {
+            throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Observed native card window changed");
+          }
+          if (wantsTemplate && (current[0] || nativeFilledSlots(track)[0] || null) !== templateSlot) {
+            throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native template selection changed");
+          }
           for (const entry of cards) assertSource(entry.source);
+          if (template) assertSource(template);
         });
       });
     }
@@ -8261,7 +8290,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.26";
+    const SCRIPT_VERSION = "1.4.27";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -11166,10 +11195,12 @@
       assertRouteSession(sessionToken);
       return complete && items.length === totalCount ? items : null;
     }
-    async function collectLogicalListItems({ bootstrap, totalCount, columns, templateSlot, sessionToken = null }) {
+    async function collectLogicalListItems({ bootstrap, totalCount, columns, templateSource, sessionToken = null, assertCurrent = () => {
+    } }) {
       let current = bootstrap;
       try {
         assertRouteSession(sessionToken);
+        assertCurrent();
         if (bootstrap?.source === "mounted-single-page-fast-path") {
           const reuse = collectMountedSinglePageItems(bootstrap, totalCount, columns, sessionToken);
           const work = performanceDiagnostics.membershipReuse;
@@ -11187,7 +11218,9 @@
             totalCount
           });
         }
-        const template = templateSlot ? cardMarkup.captureTemplate(templateSlot) : null;
+        const template = templateSource ? cardMarkup.captureTemplate(templateSource.slot) : null;
+        if (templateSource) nativeCarousel.assertSource(templateSource);
+        assertCurrent();
         const data = await listData.collectRecords({ bootstrap, totalCount, sessionToken });
         current = data.bootstrap;
         assertRouteSession(sessionToken);
@@ -11640,7 +11673,20 @@
     }
     function visibleNativeItems(live) {
       if (!live?.scroller || !live?.track) return [];
-      return currentPageSlots(live.scroller, live.track).map((slot) => itemFromSlot(slot, live.selectedPage || 0, false)).filter((item) => item?.videoId);
+      const state = sourceState;
+      if (state?.scroller !== live.scroller || state?.track !== live.track) {
+        throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Visible cards no longer belong to the current parent");
+      }
+      return withNativeReadScope(() => {
+        const observed = nativePageObservation(state);
+        const items = observed.cards.map((entry) => {
+          const item = itemFromSlot(entry.source.slot, live.selectedPage || 0, false);
+          nativeCarousel.assertObservation(observed);
+          return item;
+        }).filter((item) => item?.videoId);
+        nativeCarousel.assertObservation(observed);
+        return items;
+      });
     }
     function preferredIndexForNativeItem(videoId, live) {
       const items = visibleNativeItems(live);
@@ -12125,6 +12171,28 @@
         }
       });
     }
+    function nativePageObservation(state = sourceState, { template = false } = {}) {
+      const { section, scroller, track, totalCount, layout } = state;
+      const sessionToken = sessionScope.token;
+      return nativeCarousel.pageCards({
+        section,
+        scroller,
+        track,
+        totalCount,
+        columns: layout?.columns,
+        window: "current",
+        template,
+        sessionToken,
+        assertCurrent() {
+          assertRouteSession(sessionToken);
+          if (sourceState !== state) throw initializationError(
+            "NATIVE_SOURCE_REPLACED",
+            "native-observation",
+            "Native card observation parent was replaced"
+          );
+        }
+      });
+    }
     function logicalVisibleSignature(...args) {
       return nativeCarousel.visiblePageSignature(...args);
     }
@@ -12145,15 +12213,6 @@
     }
     function goToPage(...args) {
       return nativeCarousel.navigateTo(...args);
-    }
-    function currentPageSlots(...args) {
-      return nativeCarousel.currentSlots(...args);
-    }
-    function visibleSignature(...args) {
-      return nativeCarousel.signatureOf(...args);
-    }
-    function nativeCarouselReadiness(...args) {
-      return nativeCarousel.readiness(...args);
     }
     function collectMountedSinglePageItems(bootstrap, totalCount, columns, sessionToken = null) {
       assertRouteSession(sessionToken);
@@ -13205,7 +13264,18 @@
         nativeCarousel.assertBinding(nativeOwner);
         if (sourceState !== state || state.items !== records || state.itemMap !== itemMap || state.cloneMap !== cloneMap || state.grid !== grid) throw createRouteSessionCancelledError();
       };
-      const beforeSignature = targetItem ? "" : visibleSignature(currentPageSlots(scroller, track));
+      const beforeView = targetItem ? null : nativeCarousel.pageCards({
+        section,
+        scroller,
+        track,
+        binding: nativeOwner,
+        totalCount: state.totalCount,
+        columns: state.layout?.columns,
+        sessionToken,
+        assertCurrent
+      });
+      const beforeSignature = beforeView?.signature || "";
+      if (beforeView) nativeCarousel.assertObservation(beforeView);
       const started = performance.now();
       log(tLog("nativePagePreparationStarted"), {
         requestedPage: page,
@@ -14610,8 +14680,10 @@
               elapsedMs: mountedFast.elapsedMs
             });
           } else {
-            if (scroller && track && currentPageSlots(scroller, track).length > 0) {
-              startParallelReadiness();
+            if (scroller && track) {
+              const mounted = nativePageObservation();
+              nativeCarousel.assertObservation(mounted);
+              if (mounted.cards.length > 0) startParallelReadiness();
             }
             freshMyListBootstrap = await listData.fetchBootstrap(sessionToken);
             earlyTotalCount = freshMyListBootstrap.totalCount;
@@ -14624,6 +14696,12 @@
         }
         assertRouteSession(sessionToken);
       } catch (error) {
+        if (error?.code === "NATIVE_SOURCE_REPLACED") {
+          log("Initial native card observation discarded after source replacement", { sessionToken });
+          clearRunningSession(sessionToken, false);
+          scheduleRun(0, sessionToken);
+          return;
+        }
         if (!isRouteSessionCancelledError(error)) {
           initializationBlockedSessionToken = sessionToken;
           warn(tLog("initializationFailed"), {
@@ -14823,13 +14901,15 @@
         try {
           nativeCarousel.assertPreparation(readiness);
           const graphqlLayout = measureVisibleLayout(section, scroller, track);
-          const templateSlot = currentPageSlots(scroller, track)[0] || netflixDom.filledSlots(track)[0];
+          const templateView = nativePageObservation(sourceState, { template: true });
+          nativeCarousel.assertObservation(templateView);
           const graphqlCollection = await collectLogicalListItems({
             bootstrap: freshMyListBootstrap,
             totalCount: earlyTotalCount,
             columns: graphqlLayout.columns,
-            templateSlot,
-            sessionToken
+            templateSource: templateView.template,
+            sessionToken,
+            assertCurrent: () => nativeCarousel.assertObservation(templateView)
           });
           assertRouteSession(sessionToken);
           if (!nativeCarousel.isPreparationCurrent(readiness)) {
@@ -14901,6 +14981,7 @@
         carouselDom: initializationNative?.carouselDom ?? null
       });
       let retryGridBuild = false;
+      let retryNativeCollection = false;
       try {
         const layout = measureVisibleLayout(section, scroller, track);
         layout.rowGap = measureNativeCarouselGap(section);
@@ -14924,6 +15005,17 @@
         track.classList.add("tm-netflix-mylist-v15-track");
         waitingForNativeEmpty = false;
         sourceState = attachNativeBinding({ layout, initializationStartedAt: initializationStarted, empty: false, collectedCount: 0, totalCount }, section, scroller, track);
+        const collectionState = sourceState;
+        const collectionBinding = nativeCarousel.borrowBinding(section, scroller, track);
+        const assertCollectionCurrent = () => {
+          assertRouteSession(sessionToken);
+          nativeCarousel.assertBinding(collectionBinding);
+          if (sourceState !== collectionState) throw initializationError(
+            "NATIVE_SOURCE_REPLACED",
+            "native-collection",
+            "Collection parent was replaced"
+          );
+        };
         let items;
         if (fastItems?.length === totalCount) {
           items = fastItems;
@@ -14946,10 +15038,27 @@
             sourceCards: scanNative?.sourceCards ?? 0,
             carouselDom: scanNative?.carouselDom ?? null
           });
-          items = await collectAllItems(section, scroller, track, totalCount, sessionToken);
+          assertCollectionCurrent();
+          try {
+            items = await collectAllItems(section, scroller, track, totalCount, sessionToken);
+          } catch (error) {
+            assertCollectionCurrent();
+            throw error;
+          }
         }
+        assertCollectionCurrent();
         if (!items.length) {
-          const nowState = nativeCarouselReadiness(section, scroller, track);
+          const observed = nativeCarousel.observeSource({
+            section,
+            scroller,
+            track,
+            binding: collectionBinding,
+            sessionToken,
+            readiness: true,
+            assertCurrent: assertCollectionCurrent
+          });
+          const nowState = observed.readiness;
+          nativeCarousel.assertObservation(observed);
           if (nowState.pages === 1 && nowState.cards === 0) {
             finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, "collection-confirmed-empty");
             return;
@@ -14971,6 +15080,7 @@
             stage: countError.stage,
             code: countError.code
           });
+          assertCollectionCurrent();
           throw countError;
         }
         log(tLog("fullCollectionResultFinalized"), {
@@ -14979,12 +15089,14 @@
           endingPage: nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null,
           items: items.map(itemSummary)
         });
+        assertCollectionCurrent();
         parkSource(scroller);
         const standbyNative = nativeSourceDiagnostics(section, scroller, track);
         log(tLog("nativeCarouselStandbyMode"), {
           selectedPage: standbyNative?.selectedPage ?? null,
           parked: standbyNative?.sourceParked ?? false
         });
+        assertCollectionCurrent();
         await buildGrid(section, scroller, items, layout, totalCount, sessionToken);
         assertRouteSession(sessionToken);
         sourceState.empty = false;
@@ -15021,6 +15133,9 @@
             sessionToken,
             url: location.href
           });
+        } else if (error?.code === "NATIVE_SOURCE_REPLACED") {
+          log("Native collection discarded after source replacement", { sessionToken });
+          retryNativeCollection = true;
         } else if (error?.code === "GRID_BUILD_SOURCE_REPLACED") {
           log("Grid construction discarded after native source replacement", { sessionToken });
           cleanupTargetSessionDom();
@@ -15041,8 +15156,11 @@
           updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
         }
       } finally {
-        clearRunningSession(sessionToken, !retryGridBuild);
-        if (retryGridBuild && isRouteSessionActive(sessionToken)) runScript(sessionToken);
+        clearRunningSession(sessionToken, !retryGridBuild && !retryNativeCollection);
+        if (isRouteSessionActive(sessionToken)) {
+          if (retryNativeCollection) scheduleRun(0, sessionToken);
+          else if (retryGridBuild) runScript(sessionToken);
+        }
       }
     }
     function scheduleRun(delayMs = 40, sessionToken = sessionScope.token) {

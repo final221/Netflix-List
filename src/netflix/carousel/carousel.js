@@ -799,9 +799,14 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                 : options.count === 'optional' ? nativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track) : null;
             const countFacts = count ? Object.freeze({ ...count, readings: Object.freeze([...count.readings]),
                 uniqueReadings: Object.freeze([...count.uniqueReadings]) }) : null;
+            const readinessState = options.readiness ? nativeCarouselReadiness(operation.binding.section,
+                operation.binding.scroller, operation.binding.track) : null;
+            const readiness = readinessState ? Object.freeze({ ...readinessState,
+                capabilities: Object.freeze({ ...readinessState.capabilities }) }) : null;
             return observationResult(operation, { mode: runtime.profile.pageMode,
                 needsRemapping: Boolean(runtime.pageMappingStale), remapAttempts: attempts,
-                ...(countFacts ? { count: countFacts } : {}), ...(position ? { position } : {}) }, () => {
+                ...(countFacts ? { count: countFacts } : {}), ...(position ? { position } : {}),
+                ...(readiness ? { readiness } : {}) }, () => {
                 if (runtime.logicalRemapRetryCount !== attempts) throw initializationError('NATIVE_SOURCE_REPLACED',
                     'native-observation', 'Native remapping observation changed');
                 if (position && (selectedPage(operation.binding.section) !== position.page ||
@@ -814,6 +819,14 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                         current.readings.length !== countFacts.readings.length ||
                         !current.readings.every((value, index) => Object.is(value, countFacts.readings[index]))) {
                         throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Native count observation changed');
+                    }
+                }
+                if (readiness) {
+                    const current = nativeCarouselReadiness(operation.binding.section, operation.binding.scroller, operation.binding.track);
+                    if (current.signature !== readiness.signature || current.connected !== readiness.connected ||
+                        Object.keys(current.capabilities).length !== Object.keys(readiness.capabilities).length ||
+                        Object.keys(readiness.capabilities).some(key => current.capabilities[key] !== readiness.capabilities[key])) {
+                        throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Native readiness observation changed');
                     }
                 }
             });
@@ -874,17 +887,30 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
             if (Number.isFinite(options.page) && options.page !== page) throw initializationError('NATIVE_SOURCE_REPLACED',
                 'native-observation', 'Mounted native page changed before preparation');
             const columns = Math.max(1, options.columns || 1);
-            const slots = options.window === 'viewport' ? viewportPageSlots(scroller, track, columns) : currentPageSlots(scroller, track);
+            const viewport = options.window === 'viewport', wantsTemplate = Boolean(options.template);
+            const readSlots = () => viewport ? viewportPageSlots(scroller, track, columns) : currentPageSlots(scroller, track);
+            const slots = readSlots().slice();
             const mode = operation.model.view.profile.pageMode;
             const tail = mode === 'logical'
                 ? wrappedTailLogicalPageInfo(logicalSlotPositions(slots, options.totalCount || 0), options.totalCount || 0, columns) : null;
             const revision = operation.model.revision;
             const cards = Object.freeze(slots.map((slot, index) => Object.freeze({ source: sourceHandle(operation.binding, slot, page),
                 inPage: !(tail && tail.page === page && index >= tail.wrapIndex) })));
-            return observationResult(operation, { page, mode, cards }, () => {
-                if (operation.model.revision !== revision || selectedPage(section) !== page) throw initializationError('NATIVE_SOURCE_REPLACED',
+            const signature = cards.map(entry => entry.source.href).filter(Boolean).join('|');
+            const templateSlot = wantsTemplate ? slots[0] || nativeFilledSlots(track)[0] || null : null;
+            const template = templateSlot ? cards[0]?.source || sourceHandle(operation.binding, templateSlot, page) : null;
+            return observationResult(operation, { page, mode, cards, signature, ...(wantsTemplate ? { template } : {}) }, () => {
+                if (selectedPage(section) !== page || operation.model.revision !== revision) throw initializationError('NATIVE_SOURCE_REPLACED',
                     'native-observation', 'Observed native page mapping changed');
+                const current = readSlots();
+                if (current.length !== slots.length || current.some((slot, index) => slot !== slots[index])) {
+                    throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Observed native card window changed');
+                }
+                if (wantsTemplate && (current[0] || nativeFilledSlots(track)[0] || null) !== templateSlot) {
+                    throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Native template selection changed');
+                }
                 for (const entry of cards) assertSource(entry.source);
+                if (template) assertSource(template);
             });
         });
     }

@@ -2746,10 +2746,11 @@ export function startLegacy() {
     }
 
     // Collection strategy remains here until P13; data results contain no wire fields or DOM.
-    async function collectLogicalListItems({ bootstrap, totalCount, columns, templateSlot, sessionToken = null }) {
+    async function collectLogicalListItems({ bootstrap, totalCount, columns, templateSource, sessionToken = null, assertCurrent = () => {} }) {
         let current = bootstrap;
         try {
             assertRouteSession(sessionToken);
+            assertCurrent();
             if (bootstrap?.source === 'mounted-single-page-fast-path') {
                 const reuse = collectMountedSinglePageItems(bootstrap, totalCount, columns, sessionToken);
                 const work = performanceDiagnostics.membershipReuse;
@@ -2763,7 +2764,9 @@ export function startLegacy() {
                     collectionSource: 'mounted-single-page', reason: reuse.reason, totalCount });
             }
             // One detached template survives pagination/normalization yields. Grid owns it after acceptance.
-            const template = templateSlot ? cardMarkup.captureTemplate(templateSlot) : null;
+            const template = templateSource ? cardMarkup.captureTemplate(templateSource.slot) : null;
+            if (templateSource) nativeCarousel.assertSource(templateSource);
+            assertCurrent();
             const data = await listData.collectRecords({ bootstrap, totalCount, sessionToken });
             current = data.bootstrap;
             assertRouteSession(sessionToken);
@@ -3259,9 +3262,20 @@ export function startLegacy() {
 
     function visibleNativeItems(live) {
         if (!live?.scroller || !live?.track) return [];
-        return currentPageSlots(live.scroller, live.track)
-            .map(slot => itemFromSlot(slot, live.selectedPage || 0, false))
-            .filter(item => item?.videoId);
+        const state = sourceState;
+        if (state?.scroller !== live.scroller || state?.track !== live.track) {
+            throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Visible cards no longer belong to the current parent');
+        }
+        return withNativeReadScope(() => {
+            const observed = nativePageObservation(state);
+            const items = observed.cards.map(entry => {
+                const item = itemFromSlot(entry.source.slot, live.selectedPage || 0, false);
+                nativeCarousel.assertObservation(observed);
+                return item;
+            }).filter(item => item?.videoId);
+            nativeCarousel.assertObservation(observed);
+            return items;
+        });
     }
 
     function preferredIndexForNativeItem(videoId, live) {
@@ -3842,6 +3856,17 @@ export function startLegacy() {
             } });
     }
 
+    function nativePageObservation(state = sourceState, { template = false } = {}) {
+        const { section, scroller, track, totalCount, layout } = state;
+        const sessionToken = sessionScope.token;
+        return nativeCarousel.pageCards({ section, scroller, track, totalCount, columns: layout?.columns,
+            window: 'current', template, sessionToken, assertCurrent() {
+                assertRouteSession(sessionToken);
+                if (sourceState !== state) throw initializationError('NATIVE_SOURCE_REPLACED',
+                    'native-observation', 'Native card observation parent was replaced');
+            } });
+    }
+
     function logicalVisibleSignature(...args) {
         return nativeCarousel.visiblePageSignature(...args);
     }
@@ -3868,18 +3893,6 @@ export function startLegacy() {
 
     function goToPage(...args) {
         return nativeCarousel.navigateTo(...args);
-    }
-
-    function currentPageSlots(...args) {
-        return nativeCarousel.currentSlots(...args);
-    }
-
-    function visibleSignature(...args) {
-        return nativeCarousel.signatureOf(...args);
-    }
-
-    function nativeCarouselReadiness(...args) {
-        return nativeCarousel.readiness(...args);
     }
 
     function collectMountedSinglePageItems(bootstrap, totalCount, columns, sessionToken = null) {
@@ -4929,7 +4942,10 @@ export function startLegacy() {
             if (sourceState !== state || state.items !== records || state.itemMap !== itemMap ||
                 state.cloneMap !== cloneMap || state.grid !== grid) throw createRouteSessionCancelledError();
         };
-        const beforeSignature = targetItem ? '' : visibleSignature(currentPageSlots(scroller, track));
+        const beforeView = targetItem ? null : nativeCarousel.pageCards({ section, scroller, track,
+            binding: nativeOwner, totalCount: state.totalCount, columns: state.layout?.columns, sessionToken, assertCurrent });
+        const beforeSignature = beforeView?.signature || '';
+        if (beforeView) nativeCarousel.assertObservation(beforeView);
         const started = performance.now();
 
         log(tLog('nativePagePreparationStarted'), {
@@ -6419,8 +6435,10 @@ export function startLegacy() {
                     // When a non-empty native carousel is already mounted, readiness and
                     // the authoritative fresh count are independent read-only checks. Run
                     // them together instead of serializing their latency.
-                    if (scroller && track && currentPageSlots(scroller, track).length > 0) {
-                        startParallelReadiness();
+                    if (scroller && track) {
+                        const mounted = nativePageObservation();
+                        nativeCarousel.assertObservation(mounted);
+                        if (mounted.cards.length > 0) startParallelReadiness();
                     }
                     freshMyListBootstrap = await listData.fetchBootstrap(sessionToken);
                     earlyTotalCount = freshMyListBootstrap.totalCount;
@@ -6433,6 +6451,12 @@ export function startLegacy() {
             }
             assertRouteSession(sessionToken);
         } catch (error) {
+            if (error?.code === 'NATIVE_SOURCE_REPLACED') {
+                log('Initial native card observation discarded after source replacement', { sessionToken });
+                clearRunningSession(sessionToken, false);
+                scheduleRun(0, sessionToken);
+                return;
+            }
             if (!isRouteSessionCancelledError(error)) {
                 initializationBlockedSessionToken = sessionToken;
                 warn(tLog('initializationFailed'), {
@@ -6654,13 +6678,15 @@ export function startLegacy() {
             try {
                 nativeCarousel.assertPreparation(readiness);
                 const graphqlLayout = measureVisibleLayout(section, scroller, track);
-                const templateSlot = currentPageSlots(scroller, track)[0] || netflixDom.filledSlots(track)[0];
+                const templateView = nativePageObservation(sourceState, { template: true });
+                nativeCarousel.assertObservation(templateView);
                 const graphqlCollection = await collectLogicalListItems({
                     bootstrap: freshMyListBootstrap,
                     totalCount: earlyTotalCount,
                     columns: graphqlLayout.columns,
-                    templateSlot,
-                    sessionToken
+                    templateSource: templateView.template,
+                    sessionToken,
+                    assertCurrent: () => nativeCarousel.assertObservation(templateView)
                 });
                 assertRouteSession(sessionToken);
                 if (!nativeCarousel.isPreparationCurrent(readiness)) {
@@ -6731,6 +6757,7 @@ export function startLegacy() {
         });
 
         let retryGridBuild = false;
+        let retryNativeCollection = false;
         try {
             const layout = measureVisibleLayout(section, scroller, track);
             layout.rowGap = measureNativeCarouselGap(section);
@@ -6758,6 +6785,14 @@ export function startLegacy() {
             track.classList.add('tm-netflix-mylist-v15-track');
             waitingForNativeEmpty = false;
             sourceState = attachNativeBinding({ layout, initializationStartedAt: initializationStarted, empty: false, collectedCount: 0, totalCount }, section, scroller, track);
+            const collectionState = sourceState;
+            const collectionBinding = nativeCarousel.borrowBinding(section, scroller, track);
+            const assertCollectionCurrent = () => {
+                assertRouteSession(sessionToken);
+                nativeCarousel.assertBinding(collectionBinding);
+                if (sourceState !== collectionState) throw initializationError('NATIVE_SOURCE_REPLACED',
+                    'native-collection', 'Collection parent was replaced');
+            };
             let items;
             if (fastItems?.length === totalCount) {
                 items = fastItems;
@@ -6783,10 +6818,20 @@ export function startLegacy() {
                     sourceCards: scanNative?.sourceCards ?? 0,
                     carouselDom: scanNative?.carouselDom ?? null
                 });
-                items = await collectAllItems(section, scroller, track, totalCount, sessionToken);
+                assertCollectionCurrent();
+                try {
+                    items = await collectAllItems(section, scroller, track, totalCount, sessionToken);
+                } catch (error) {
+                    assertCollectionCurrent();
+                    throw error;
+                }
             }
+            assertCollectionCurrent();
             if (!items.length) {
-                const nowState = nativeCarouselReadiness(section, scroller, track);
+                const observed = nativeCarousel.observeSource({ section, scroller, track, binding: collectionBinding,
+                    sessionToken, readiness: true, assertCurrent: assertCollectionCurrent });
+                const nowState = observed.readiness;
+                nativeCarousel.assertObservation(observed);
                 if (nowState.pages === 1 && nowState.cards === 0) {
                     finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, 'collection-confirmed-empty');
                     return;
@@ -6809,6 +6854,7 @@ export function startLegacy() {
                     stage: countError.stage,
                     code: countError.code
                 });
+                assertCollectionCurrent();
                 throw countError;
             }
 
@@ -6818,6 +6864,7 @@ export function startLegacy() {
                 endingPage: nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null,
                 items: items.map(itemSummary)
             });
+            assertCollectionCurrent();
 
             // Keep the native carousel at its normal position and size for React resynchronization.
             parkSource(scroller);
@@ -6826,6 +6873,7 @@ export function startLegacy() {
                 selectedPage: standbyNative?.selectedPage ?? null,
                 parked: standbyNative?.sourceParked ?? false
             });
+            assertCollectionCurrent();
             await buildGrid(section, scroller, items, layout, totalCount, sessionToken);
             assertRouteSession(sessionToken);
             sourceState.empty = false;
@@ -6864,6 +6912,9 @@ export function startLegacy() {
                     sessionToken,
                     url: location.href
                 });
+            } else if (error?.code === 'NATIVE_SOURCE_REPLACED') {
+                log('Native collection discarded after source replacement', { sessionToken });
+                retryNativeCollection = true;
             } else if (error?.code === 'GRID_BUILD_SOURCE_REPLACED') {
                 log('Grid construction discarded after native source replacement', { sessionToken });
                 cleanupTargetSessionDom();
@@ -6886,8 +6937,11 @@ export function startLegacy() {
         } finally {
             // Keep queued deltas deferred until the replacement source has a
             // complete grid, rather than applying them to an incomplete frame.
-            clearRunningSession(sessionToken, !retryGridBuild);
-            if (retryGridBuild && isRouteSessionActive(sessionToken)) runScript(sessionToken);
+            clearRunningSession(sessionToken, !retryGridBuild && !retryNativeCollection);
+            if (isRouteSessionActive(sessionToken)) {
+                if (retryNativeCollection) scheduleRun(0, sessionToken);
+                else if (retryGridBuild) runScript(sessionToken);
+            }
         }
     }
 
