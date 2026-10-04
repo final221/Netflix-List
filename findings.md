@@ -835,7 +835,7 @@ Plan/document consistency and whitespace checks pass: all 21 steps have the requ
 
 The subsequent persistent user goal, **Do the migration**, authorizes the full saved migration in dependency order. This supersedes the need to select each step again; retain the individual verification/release checkpoints and bounded scope. Current execution status is recorded below.
 
-**Platform scope, revised 2026-10-03:** the user limits this personal-script migration to Windows. Future implementation, compatibility work and required hosted verification target Windows only. Historical Windows/Linux CI records below describe completed past runs; Linux success is no longer an acceptance condition for any remaining step. P10.7 is selected and remains in progress.
+**Platform scope, revised 2026-10-03:** the user limits this personal-script migration to Windows. Future implementation, compatibility work and required hosted verification target Windows only. Historical Windows/Linux CI records below describe completed past runs; Linux success is no longer an acceptance condition for any remaining step. P10/P10.7 is complete; P11 is the next migration step.
 
 | Step | Outcome | Status |
 | --- | --- | --- |
@@ -848,7 +848,7 @@ The subsequent persistent user goal, **Do the migration**, authorizes the full s
 | P07 | Viewing data adapter | Complete — 1.4.11; 3c6b48a; Windows/Linux CI verified |
 | P08 | Session scopes and native binding/page model | Complete — scope 1.4.12 / 848b95f; native transfer 1.4.13 / b2b64c3; Windows/Linux CI verified |
 | P09 | Navigation queue and restoration | Complete — 1.4.15; b18ec49; Windows/Linux CI verified |
-| P10 | Native collection and carousel facade | In progress — final P10.7 facade/marker/caller audit ready locally at 1.4.31; exact-revision Windows CI and verified handoff remain |
+| P10 | Native collection and carousel facade | Complete — 1.4.31 / a858e38; P10.1–P10.7 and parent/P11 handoff pass; exact Windows CI verified |
 | P11 | Frame/card registry and resources | Planned — authorized goal |
 | P12 | Groups, filters and controls | Planned — authorized goal |
 | P13 | Membership/order and collection strategy | Planned — authorized goal |
@@ -1554,4 +1554,7 @@ The audit classifies every remaining native-adjacent legacy write instead of ass
 | Stylesheet install/remove, historical script UI cleanup | Existing presentation resources only; native historical hook/style cleanup is now carousel.cleanupArtifacts. | P11 grid resource lifetime |
 | Route listeners, mutation policy, settings/menu and feature counters/providers | Existing application/list/hover/viewing responsibilities, no competing carousel state/resources. | P14/P16/P18/P19 and P20 composition |
 
-P10.7's source/facade/native-write audit and the full P10 parent/handoff evidence are ready locally. **Keep P10/P10.7 in progress until the exact pushed 1.4.31 runtime revision passes Windows CI.** Once that gate is recorded, P10 is complete and the next goal action is **P11: grid frame/card registry and retained resources**, beginning with its dependency check and characterized structural replacement/material lifetimes. P11–P21 remain required for the full authorized migration; no later runtime step is implemented in this release.
+P10.7's source/facade/native-write audit and the full P10 parent/handoff evidence pass locally; the exact runtime release gate is verified below. The next goal action is **P11: grid frame/card registry and retained resources**, beginning with its dependency check and characterized structural replacement/material lifetimes. P11–P21 remain required for the full authorized migration; no later runtime step is implemented in this release.
+
+
+**P10 and P10.7 are complete.** Runtime **a858e38** (`a858e3848103c1948db1d9859e270872b8e97419`) is committed and pushed at **1.4.31**. [Hosted Windows run 37226663289](https://github.com/final221/Netflix-List/actions/runs/37226663289) completes successfully for that exact SHA, with exactly one **windows-latest** job and all 14 setup, verification and cleanup steps successful. Native presentation ownership, the complete facade/caller/native-write audit, equivalent retained scenarios, P10's parent evidence and the P10-to-P11 handoff all pass. The working tree is clean before this documentation handoff. The full migration goal remains active: **P11–P21 are still required**. Resume **P11** from this verified gate; preserve the completed carousel owner and transfer frame/card registry, structural replacement and material/resource lifetimes through its admitted mount/layout/source handles. Live Netflix compatibility remains user-owned; no browser inspection or authenticated Netflix request was performed.
