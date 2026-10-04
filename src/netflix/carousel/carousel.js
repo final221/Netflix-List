@@ -4,6 +4,7 @@ import { NETFLIX_DOM_SELECTORS as DEFAULT_SELECTORS } from '../page-dom.js';
 import { createNavigation } from './navigation.js';
 import { createCollection } from './collection.js';
 import { createReactReadings, readCardSignature } from './react-readings.js';
+import { createSourcePresentation } from './source-presentation.js';
 import { GRID_ID as DEFAULT_GRID_ID, STATUS_ID as DEFAULT_STATUS_ID, LEGACY_EMPTY_STATE_ID as DEFAULT_EMPTY_ID,
     ORDER_MISMATCH_DIALOG_ID as DEFAULT_DIALOG_ID, SYNTHETIC_SECTION_ID, ORIGINAL_HIDDEN_CLASS, ORIGINAL_VISIBILITY_ATTR,
     FAST_MOVE_CLASS, SOURCE_SCAN_CLASS, SOURCE_PARKED_CLASS } from '../../dom-names.js';
@@ -41,6 +42,8 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     let preparationOwner = null;
     let mappingSequence = 0;
     const mountedWaits = new Set();
+    const sourcePresentation = createSourcePresentation({ document, pageDom: netflixDom, scope,
+        generation: () => bindingGeneration, invalidateReads: invalidateNativeReadScope, createError: initializationError, warn });
     let discoveryOwner = null, targetDocumentObserver = null, targetMutationFrame = null;
     let targetObservedBrowseHost = null, targetObservedMyListSection = null, targetObservedAncestors = [];
     let targetDocumentDiscoveryActive = false;
@@ -915,10 +918,15 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                 operation.binding.scroller, operation.binding.track) : null;
             const readiness = readinessState ? Object.freeze({ ...readinessState,
                 capabilities: Object.freeze({ ...readinessState.capabilities }) }) : null;
+            const presentationFacts = () => ({
+                parked: Boolean(operation.binding.scroller?.classList?.contains(SOURCE_PARKED_CLASS)),
+                hidden: operation.binding.section?.getAttribute(ORIGINAL_VISIBILITY_ATTR) === 'false'
+            });
+            const presentation = options.presentation ? Object.freeze(presentationFacts()) : null;
             return observationResult(operation, { mode: runtime.profile.pageMode,
                 needsRemapping: Boolean(runtime.pageMappingStale), remapAttempts: attempts,
                 ...(countFacts ? { count: countFacts } : {}), ...(position ? { position } : {}),
-                ...(readiness ? { readiness } : {}) }, () => {
+                ...(readiness ? { readiness } : {}), ...(presentation ? { presentation } : {}) }, () => {
                 if (runtime.logicalRemapRetryCount !== attempts) throw initializationError('NATIVE_SOURCE_REPLACED',
                     'native-observation', 'Native remapping observation changed');
                 if (position && (selectedPage(operation.binding.section) !== position.page ||
@@ -939,6 +947,12 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                         Object.keys(current.capabilities).length !== Object.keys(readiness.capabilities).length ||
                         Object.keys(readiness.capabilities).some(key => current.capabilities[key] !== readiness.capabilities[key])) {
                         throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Native readiness observation changed');
+                    }
+                }
+                if (presentation) {
+                    const current = presentationFacts();
+                    if (current.parked !== presentation.parked || current.hidden !== presentation.hidden) {
+                        throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Native presentation observation changed');
                     }
                 }
             });
@@ -963,7 +977,12 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     }
     function sourceDescription(source) {
         try {
-            const { section, scroller = null, track = null } = source || {};
+            let { section, scroller = null, track = null } = source || {};
+            if (source?.discover) {
+                section ||= findMyListSection();
+                scroller ||= section?.querySelector?.(NETFLIX_DOM_SELECTORS.carouselScroller) || null;
+                track ||= (scroller && netflixDom.findTrack(scroller)) || null;
+            }
             if (!section) return null;
             const page = selectedPage(section), pages = pageCount(section);
             const profile = carouselDomProfileSummary(section);
@@ -979,7 +998,8 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     function diagnostics(options = {}) {
         const snapshot = { bindingGeneration, readScopeActive: Boolean(nativeReadScope), navigation: navigation.diagnostics(),
             collection: collection.diagnostics(), collectionOperations: collection.pending(), mountedSourceWaits: mountedWaits.size,
-            discoveryActive: Boolean(targetDocumentObserver), pendingMutationFrame: targetMutationFrame !== null };
+            discoveryActive: Boolean(targetDocumentObserver), pendingMutationFrame: targetMutationFrame !== null,
+            presentation: sourcePresentation.diagnostics() };
         if (Object.hasOwn(options, 'card')) {
             try { snapshot.card = withNativeReadScope(() => slotDescriptor(options.card, options.totalCount)); }
             catch (_) { snapshot.card = null; }
@@ -2143,7 +2163,8 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         resolveCard, mountedCard, isSourceCurrent, assertSource,
         refreshMapping, isMappingCurrent, assertMapping,
         collect: options => options.mode === 'mounted-single-page' ? collection.collectMounted(options) : collection.collect(options),
-        resetSource() { clearBinding(); collection.resetDiagnostics(); models = new WeakMap(); nativeReadScope = null; },
+        resetSource() { sourcePresentation.dispose(); clearBinding(); collection.resetDiagnostics(); models = new WeakMap(); nativeReadScope = null; },
+        presentSource: sourcePresentation.present, cleanupArtifacts: sourcePresentation.cleanupArtifacts,
         prepareSource, acceptCollection, isPreparationCurrent, assertPreparation,
         observeSource, pageCards, measureLayout, discoverSource, captureMountedItem, assertObservation, isObservationCurrent,
         sample: withNativeReadScope, invalidateReads: invalidateNativeReadScope, waitForSource: waitForNativeSource,

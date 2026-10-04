@@ -77,6 +77,7 @@ Netflix List/
 |   |       |-- carousel.js          Public native-source capability and binding ownership
 |   |       |-- page-model.js        Logical indices, page mapping and wrapped-tail rules
 |   |       |-- react-readings.js    Private bounded React index/count and signature reads
+|   |       |-- source-presentation.js Native source markers, visibility and restoration
 |   |       |-- navigation.js        Serialized movement, acknowledgement and restoration
 |   |       `-- collection.js        Native traversal collection and validation
 |   |
@@ -261,7 +262,7 @@ The names below define the intended responsibilities; implementation may refine 
 | Capability | Intended operations | Work hidden behind the boundary |
 | --- | --- | --- |
 | Page session | `start`, `reinitialize`, `dispose` | Composition, initialization phases, recovery, feature replacement and disposal order |
-| Carousel | `prepareSource`, `acceptCollection`, `collect`, `resolveCard`, `refreshMapping`, `discoverSource`, `captureMountedItem`, `observeSource`, `pageCards`, `measureLayout`, `diagnostics`, `dispose` | Discovery/capture and readiness admission, binding checks, private React indices, navigation serialization, acknowledgement, validated source/page/layout observations and mapping |
+| Carousel | `prepareSource`, `acceptCollection`, `collect`, `resolveCard`, `refreshMapping`, `discoverSource`, `captureMountedItem`, `observeSource`, `pageCards`, `measureLayout`, `presentSource`, `cleanupArtifacts`, `diagnostics`, `dispose` | Discovery/capture and readiness admission, binding checks, private React indices, navigation serialization, acknowledgement, validated source/page/layout observations and mapping, native markers/visibility/restoration |
 | List | `initialize`, `observeMembership`, `reconcileOrder`, `deferReconciliation`, `getItem`, `diagnostics`, `dispose` | Strategy selection, validated order, pending actions, deferral tickets and Undo bookkeeping |
 | Viewing | `start`, `refresh`, `place`, `getPlacement`, `diagnostics`, `dispose` | Profile checks, scan budgets, automatic/cache/manual precedence, persistence and choice expiry |
 | Grid | `mount`, `applyListChange`, `applyViewingChange`, `replaceCard`, `getCard`, `diagnostics`, `dispose` | Registry, rendering, controls, grouping/filter presentation and card retirement |
@@ -278,6 +279,12 @@ Network adapters own same-origin endpoint validation, credential construction, w
 Viewing data methods represent one bounded HTTP batch each: title reads, season/coverage reads, episode reads and direct episode repair. They expose normalized progress/coverage data rather than Falcor paths. Scan counts actual dispatched requests, drains the existing allocated wave before finalizing partial results, and stops new requests after a terminal failure. Profile/auth material is held only by the adapter's transient request context.
 
 Native layout observations include the validated slot dimensions, columns, relevant bounds and source-state hints. Grid receives the interpreted layout and a valid mount anchor for its owned UI; it does not discover Netflix sections or infer private page indices. Native parking and original-source visibility/style changes remain native integration operations.
+
+Carousel.presentSource owns section/header/track decoration, scan-to-parking transitions and original-source visibility. Its private source-presentation implementation returns an unforgeable, releasable native mount lease with a guarded anchor. Admission captures route/binding generation, connected native references and the narrow caller guard. Marker baselines and cleanup ownership remain private; a replaced lease cannot restore over a newer owner, even when both use the same connected elements. Release remains available after route invalidation, attempts remaining fields if restoration fails, and adds only bounded passive failure counters. Existing navigation motion leases continue to own animation styles and FAST_MOVE_CLASS; popup alignment/proxies remain assigned to native-popup in P17. Historical source-hook/style cleanup also belongs to carousel; old script UI removal remains with grid. These operations add no observer, timer, request or competing style owner.
+
+Optional presentation observations copy hidden/parked facts and reject changed native markers under the existing observeSource admission. Responsive policy uses these facts for its existing hidden-height shortcut, without inspecting native marker names or treating passive diagnostics as authority. Each synchronous paint also retains its own operation admission; reentrant updates cannot let an interrupted writer overwrite or release the newer lease.
+
+Passive source diagnostics may explicitly request fallback discovery when their supplied section/scroller/track references are incomplete. Carousel performs the same reference precedence and returns copied descriptions without DOM references or publication authority. Missing/failed discovery remains unavailable reporting, and counter-only diagnostics perform no discovery work.
 
 All work that awaits a timer, frame, request or response body validates its relevant owner before publishing. A stale operation cannot update a replacement grid, a new profile, or a newer hover attempt.
 
@@ -387,6 +394,7 @@ Mappings refer to named baseline functions rather than permanent line numbers. T
 | Falcor atoms/references, endpoint construction and `fetchViewingGraph` | `netflix/viewing-data.js`, `context.js` |
 | Readiness/binding reads and source resolution | `netflix/carousel/carousel.js` |
 | Bounded React index/count and card-signature interpretation | `netflix/carousel/react-readings.js` |
+| Native section/header/scan/parking/track markers, original visibility and source restoration | `netflix/carousel/source-presentation.js` |
 | Logical index normalization, expected page indices and wrapped tails | `netflix/carousel/page-model.js` |
 | `moveOnePage`, page waits, fast restoration/repair | `netflix/carousel/navigation.js` |
 | `collectAllItemsLogical`, `collectAllItems` and traversal validation | `netflix/carousel/collection.js` |

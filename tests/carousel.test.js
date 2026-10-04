@@ -5,7 +5,8 @@ import { createPageModel, expectedLogicalIndicesForPage, logicalPageFromSlotPosi
 import { createNetflixPageDom } from '../src/netflix/page-dom.js';
 import { createCardMarkup } from '../src/netflix/card-markup.js';
 import { createSessionScope } from '../src/app/session-scope.js';
-import { FAST_MOVE_CLASS, SOURCE_SCAN_CLASS, SOURCE_PARKED_CLASS } from '../src/dom-names.js';
+import { FAST_MOVE_CLASS, SOURCE_SCAN_CLASS, SOURCE_PARKED_CLASS, SECTION_ATTR,
+    ORIGINAL_HIDDEN_CLASS, ORIGINAL_VISIBILITY_ATTR, ORIGINAL_HEADER_CLASS } from '../src/dom-names.js';
 import { Element, createDocument } from './helpers/dom.js';
 import { createScheduler } from './helpers/scheduler.js';
 
@@ -90,6 +91,238 @@ test('carousel exposes admitted operations without raw native readers or model w
         'ready', 'slotLayoutFormula', 'itemIndex', 'positions', 'logicalWindow', 'requireLogicalWindow',
         'expectedPageIndices', 'pageForPositions', 'wrappedTail', 'wrappedTailForRebuild', 'diagnoseIndices', 'visibleVideoIds', 'pageKeys']) {
         assert.equal(e.carousel[name], undefined, name);
+    }
+});
+
+test('native source presentation owns scan, parking, visibility and idempotent restoration', () => {
+    const e = environment();
+    const header = e.section.appendChild(new Element('div'));
+    header.appendChild(new Element('h2'));
+    e.scroller.classList.add('scroller');
+    e.section.setAttribute(ORIGINAL_VISIBILITY_ATTR, 'native-baseline');
+    const lease = e.carousel.presentSource({ ...sourceOptions(e), phase: 'scan', visible: false });
+    assert.ok(Object.isFrozen(lease));
+    assert.equal(lease.anchor, header);
+    assert.equal(e.section.getAttribute(SECTION_ATTR), 'true');
+    assert.equal(header.classList.contains(ORIGINAL_HEADER_CLASS), true);
+    assert.equal(e.section.classList.contains(ORIGINAL_HIDDEN_CLASS), true);
+    assert.equal(e.section.getAttribute(ORIGINAL_VISIBILITY_ATTR), 'false');
+    assert.equal(e.scroller.classList.contains(SOURCE_SCAN_CLASS), true);
+    assert.equal(e.track.classList.contains('tm-netflix-mylist-v15-track'), true);
+    const parked = e.carousel.presentSource({ ...sourceOptions(e), phase: 'parked', visible: true });
+    assert.equal(parked, lease, 'same admitted presentation retains its lease');
+    assert.equal(e.scroller.classList.contains(SOURCE_SCAN_CLASS), false);
+    assert.equal(e.scroller.classList.contains(SOURCE_PARKED_CLASS), true);
+    assert.equal(e.section.classList.contains(ORIGINAL_HIDDEN_CLASS), false);
+    e.scope.dispose();
+    assert.throws(() => lease.anchor);
+    lease.release(); lease.release();
+    assert.equal(e.section.getAttribute(SECTION_ATTR), null);
+    assert.equal(e.section.getAttribute(ORIGINAL_VISIBILITY_ATTR), 'native-baseline');
+    assert.equal(header.classList.contains(ORIGINAL_HEADER_CLASS), false);
+    assert.equal(e.scroller.classList.contains(SOURCE_PARKED_CLASS), false);
+    assert.equal(e.track.classList.contains('tm-netflix-mylist-v15-track'), false);
+    assert.equal(e.carousel.diagnostics().presentation.owners, 0);
+    assert.equal(e.scheduler.timers.size, 0);
+});
+
+test('old presentation release cannot overwrite replacement ownership on the same native elements', () => {
+    const e = environment();
+    e.scroller.classList.add('scroller');
+    const first = e.carousel.presentSource({ ...sourceOptions(e), phase: 'scan', visible: false });
+    e.carousel.bind(e.section, e.scroller, e.track);
+    const replacement = e.carousel.presentSource({ ...sourceOptions(e), phase: 'parked', visible: true });
+    assert.notEqual(first, replacement);
+    assert.throws(() => first.anchor, { code: 'NATIVE_SOURCE_REPLACED' });
+    first.release();
+    assert.equal(e.section.getAttribute(SECTION_ATTR), 'true');
+    assert.equal(e.section.getAttribute(ORIGINAL_VISIBILITY_ATTR), 'true');
+    assert.equal(e.scroller.classList.contains(SOURCE_PARKED_CLASS), true);
+    replacement.release();
+    assert.equal(e.section.getAttribute(ORIGINAL_VISIBILITY_ATTR), null);
+    assert.equal(e.scroller.classList.contains(SOURCE_SCAN_CLASS), false);
+    assert.equal(e.scroller.classList.contains(SOURCE_PARKED_CLASS), false);
+});
+
+test('native presentation replacement restores old connected tracks while preserving shared source fields', () => {
+    const e = environment();
+    e.scroller.classList.add('scroller');
+    const first = e.carousel.presentSource({ ...sourceOptions(e), phase: 'scan', visible: false });
+    const track = e.scroller.appendChild(new Element('div'));
+    e.pageDom.findTrack = () => track;
+    e.carousel.bind(e.section, e.scroller, track);
+    const current = e.carousel.presentSource({ ...sourceOptions(e), track, phase: 'parked', visible: true });
+    assert.equal(e.track.isConnected, true);
+    assert.equal(e.track.classList.contains('tm-netflix-mylist-v15-track'), false);
+    assert.equal(track.classList.contains('tm-netflix-mylist-v15-track'), true);
+    first.release();
+    assert.equal(e.scroller.classList.contains(SOURCE_PARKED_CLASS), true);
+    current.release();
+    assert.equal(track.classList.contains('tm-netflix-mylist-v15-track'), false);
+    assert.equal(e.section.getAttribute(ORIGINAL_VISIBILITY_ATTR), null);
+});
+
+test('presentation observations are copied, optional and reject changed native markers', () => {
+    const e = environment();
+    e.carousel.bind(e.section, e.scroller, e.track);
+    assert.equal(Object.hasOwn(e.carousel.observeSource(sourceOptions(e)), 'presentation'), false);
+    e.scroller.classList.add(SOURCE_PARKED_CLASS);
+    e.section.setAttribute(ORIGINAL_VISIBILITY_ATTR, 'false');
+    const observation = e.carousel.observeSource({ ...sourceOptions(e), presentation: true });
+    assert.deepEqual(observation.presentation, { parked: true, hidden: true });
+    assert.ok(Object.isFrozen(observation.presentation));
+    e.section.setAttribute(ORIGINAL_VISIBILITY_ATTR, 'true');
+    assert.equal(observation.presentation.hidden, true);
+    assert.equal(e.carousel.isObservationCurrent(observation), false);
+    const current = e.carousel.observeSource({ ...sourceOptions(e), presentation: true });
+    e.scroller.classList.remove(SOURCE_PARKED_CLASS);
+    assert.equal(e.carousel.isObservationCurrent(current), false);
+});
+
+test('native empty presentation borrows its guarded content anchor and never adds carousel work', () => {
+    const e = environment();
+    e.scroller.remove();
+    const title = e.section.appendChild(new Element('div'));
+    title.setAttribute('data-uia', 'empty-carousel-section+title');
+    const content = e.section.appendChild(new Element('div'));
+    content.setAttribute('data-uia', 'empty-carousel-section+content');
+    const lease = e.carousel.presentSource({ section: e.section, scroller: null, track: null, visible: false });
+    assert.equal(lease.anchor, content);
+    assert.equal(title.classList.contains(ORIGINAL_HEADER_CLASS), true);
+    assert.equal(content.classList.contains(ORIGINAL_HEADER_CLASS), true);
+    assert.equal(e.carousel.currentBinding(), null);
+    assert.equal(e.scheduler.timers.size, 0);
+    assert.equal(e.scheduler.frames.size, 0);
+    content.remove();
+    assert.throws(() => lease.anchor, { code: 'NATIVE_SOURCE_REPLACED' });
+    lease.release();
+    assert.equal(title.classList.contains(ORIGINAL_HEADER_CLASS), false);
+    assert.equal(content.classList.contains(ORIGINAL_HEADER_CLASS), false);
+});
+
+test('presentation rejects replaced native references and caller admission during marker writes', () => {
+    for (const change of ['caller', 'native', 'route']) {
+        const e = environment();
+        e.scroller.classList.add('scroller');
+        let current = true;
+        const set = e.section.setAttribute.bind(e.section);
+        e.section.setAttribute = (name, value) => {
+            set(name, value);
+            if (name !== SECTION_ATTR) return;
+            if (change === 'caller') current = false;
+            if (change === 'native') e.scroller.classList.remove('scroller');
+            if (change === 'route') e.scope.dispose();
+        };
+        assert.throws(() => e.carousel.presentSource({ ...sourceOptions(e), phase: 'scan',
+            assertCurrent() { if (!current) throw Object.assign(new Error('caller replaced'), { code: 'CALLER_REPLACED' }); } }),
+            { code: change === 'caller' ? 'CALLER_REPLACED' : change === 'route' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'NATIVE_SOURCE_REPLACED' });
+        assert.equal(e.section.getAttribute(SECTION_ATTR), null);
+        assert.equal(e.scroller.classList.contains(SOURCE_SCAN_CLASS), false);
+        assert.equal(e.track.classList.contains('tm-netflix-mylist-v15-track'), false);
+        assert.equal(e.carousel.diagnostics().presentation.owners, 0);
+    }
+});
+
+test('restoration attempts remaining native fields and cannot erase a reentrant replacement lease', () => {
+    const warnings = [];
+    const e = environment({ warn: (...args) => { warnings.push(args); throw new Error('diagnostic failed'); } });
+    e.scroller.classList.add('scroller');
+    const lease = e.carousel.presentSource({ ...sourceOptions(e), phase: 'scan', visible: false });
+    const remove = e.scroller.classList.remove.bind(e.scroller);
+    e.scroller.classList.remove = name => {
+        if (name === SOURCE_SCAN_CLASS) throw new Error('field cannot restore');
+        remove(name);
+    };
+    assert.doesNotThrow(() => lease.release());
+    assert.equal(e.section.getAttribute(SECTION_ATTR), null);
+    assert.equal(e.section.getAttribute(ORIGINAL_VISIBILITY_ATTR), null);
+    assert.equal(e.track.classList.contains('tm-netflix-mylist-v15-track'), false);
+    assert.deepEqual(e.carousel.diagnostics().presentation, { owners: 0, restoreFailures: 1 });
+    assert.equal(warnings.length, 1);
+    e.scroller.classList.remove = remove;
+    remove(SOURCE_SCAN_CLASS);
+    const old = e.carousel.presentSource({ ...sourceOptions(e), phase: 'scan', visible: false });
+    const removeAttribute = e.section.removeAttribute.bind(e.section);
+    let replacement = null;
+    e.section.removeAttribute = name => {
+        removeAttribute(name);
+        if (name === SECTION_ATTR && !replacement) replacement = e.carousel.presentSource({ ...sourceOptions(e), phase: 'parked', visible: true });
+    };
+    old.release();
+    assert.equal(e.section.getAttribute(ORIGINAL_VISIBILITY_ATTR), 'true');
+    assert.equal(e.scroller.classList.contains(SOURCE_PARKED_CLASS), true);
+    e.section.removeAttribute = removeAttribute;
+    replacement.release();
+    assert.equal(e.section.getAttribute(ORIGINAL_VISIBILITY_ATTR), null);
+    assert.equal(e.scroller.classList.contains(SOURCE_SCAN_CLASS), false);
+    assert.equal(e.scroller.classList.contains(SOURCE_PARKED_CLASS), false);
+});
+
+test('presentation cleanup leaves the separate navigation motion owner intact', () => {
+    const e = environment();
+    e.scroller.classList.add('scroller');
+    e.carousel.bind(e.section, e.scroller, e.track);
+    const presentation = e.carousel.presentSource({ ...sourceOptions(e), phase: 'scan' });
+    const motion = e.carousel.suppressMotion(e.section, e.track);
+    presentation.release();
+    assert.equal(e.section.classList.contains(FAST_MOVE_CLASS), true);
+    assert.equal(e.track.style.getPropertyValue('transition'), 'none');
+    motion.release();
+    assert.equal(e.section.classList.contains(FAST_MOVE_CLASS), false);
+    assert.equal(e.track.style.getPropertyValue('transition'), '');
+});
+
+test('a reentrant presentation update supersedes the interrupted paint without releasing its newer lease', () => {
+    const e = environment();
+    e.scroller.classList.add('scroller');
+    const set = e.section.setAttribute.bind(e.section);
+    let replacement = null, replacing = false;
+    e.section.setAttribute = (name, value) => {
+        set(name, value);
+        if (name !== SECTION_ATTR || replacing || replacement) return;
+        replacing = true;
+        replacement = e.carousel.presentSource({ ...sourceOptions(e), phase: 'parked', visible: true });
+        replacing = false;
+    };
+    assert.throws(() => e.carousel.presentSource({ ...sourceOptions(e), phase: 'scan', visible: false }),
+        { code: 'NATIVE_SOURCE_REPLACED' });
+    assert.equal(e.section.getAttribute(ORIGINAL_VISIBILITY_ATTR), 'true');
+    assert.equal(e.scroller.classList.contains(SOURCE_PARKED_CLASS), true);
+    assert.equal(e.scroller.classList.contains(SOURCE_SCAN_CLASS), false);
+    assert.equal(e.carousel.diagnostics().presentation.owners, 1);
+    replacement.release();
+    assert.equal(e.section.getAttribute(ORIGINAL_VISIBILITY_ATTR), null);
+});
+
+test('historical native artifact cleanup restores only source hooks and stops on obsolete admission', () => {
+    for (const replacement of [false, true]) {
+        const e = environment();
+        e.section.setAttribute('data-tm-mylist-v14', 'true');
+        e.section.style.setProperty('--tm-source-width', '10px');
+        e.scroller.classList.add('tm-netflix-mylist-v14-source');
+        e.scroller.style.setProperty('--slot-width', '20px');
+        const slot = e.track.appendChild(new Element('div'));
+        slot.setAttribute('data-tm-source-aligned', 'true');
+        slot.style.setProperty('transform', 'translateX(5px)');
+        let current = true;
+        const remove = e.section.removeAttribute.bind(e.section);
+        e.section.removeAttribute = name => { remove(name); if (replacement) current = false; };
+        const cleanup = () => e.carousel.cleanupArtifacts({ assertCurrent() {
+            if (!current) throw Object.assign(new Error('caller replaced'), { code: 'CALLER_REPLACED' });
+        } });
+        if (replacement) {
+            assert.throws(cleanup, { code: 'CALLER_REPLACED' });
+            assert.equal(e.scroller.style.getPropertyValue('--slot-width'), '20px');
+            assert.equal(slot.style.getPropertyValue('transform'), 'translateX(5px)');
+        } else {
+            cleanup();
+            assert.equal(e.section.getAttribute('data-tm-mylist-v14'), null);
+            assert.equal(e.section.style.getPropertyValue('--tm-source-width'), '');
+            assert.equal(e.scroller.style.getPropertyValue('--slot-width'), '');
+            assert.equal(slot.style.getPropertyValue('transform'), '');
+            assert.equal(slot.getAttribute('data-tm-source-aligned'), null);
+        }
+        assert.equal(e.scheduler.timers.size, 0);
     }
 });
 
@@ -983,6 +1216,28 @@ test('source diagnostics describe incomplete discovery and isolate failure witho
     assert.equal(e.carousel.isBindingCurrent(handle), true);
     assert.equal(e.carousel.diagnostics().readScopeActive, false);
     assert.equal(e.scheduler.timers.size, 0);
+});
+
+test('passive fallback discovery stays inside carousel without adopting a binding or adding default reads', () => {
+    const e = mountedEnvironment();
+    e.scroller.classList.add('scroller');
+    let discoveries = 0;
+    e.pageDom.findMyListSection = () => { discoveries++; return e.section; };
+    const binding = e.carousel.currentBinding();
+    e.carousel.diagnostics();
+    assert.equal(discoveries, 0);
+    const native = e.carousel.diagnostics({ source: { discover: true } }).source;
+    assert.equal(native.sourceCards, 3);
+    assert.equal(native.currentPageCards, 3);
+    assert.equal(native.selectedPage, 0);
+    assert.equal(discoveries, 1);
+    assert.equal(e.carousel.currentBinding(), binding);
+    assert.equal(e.carousel.isObservationCurrent(native), false);
+    e.carousel.diagnostics({ source: { ...sourceOptions(e), discover: true } });
+    assert.equal(discoveries, 1, 'provided references keep their existing precedence');
+    e.pageDom.findMyListSection = () => { throw new Error('discovery unavailable'); };
+    assert.equal(e.carousel.diagnostics({ source: { discover: true } }).source, null);
+    assert.equal(e.carousel.currentBinding(), binding);
 });
 
 test('source descriptions preserve indicator page interpretation without granting observation authority', () => {

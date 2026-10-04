@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.30
+// @version      1.4.31
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -5907,6 +5907,226 @@
     }).filter(Boolean).join("|");
   }
 
+  // src/netflix/carousel/source-presentation.js
+  function createSourcePresentation({ document: document2, pageDom, scope, generation, invalidateReads, createError, warn }) {
+    const owners = /* @__PURE__ */ new Map(), properties = /* @__PURE__ */ new WeakMap();
+    let restoreFailures = 0;
+    const replaced = () => createError("NATIVE_SOURCE_REPLACED", "native-presentation", "Native presentation admission changed");
+    function propertyMap(node) {
+      if (!properties.has(node)) properties.set(node, /* @__PURE__ */ new Map());
+      return properties.get(node);
+    }
+    function write(owner, node, kind, name, value) {
+      owner.guard();
+      const map = propertyMap(node), key = kind + ":" + name;
+      let entry = map.get(key);
+      if (!entry) {
+        entry = { node, kind, name, key, baseline: kind === "class" ? node.classList.contains(name) : node.getAttribute(name) };
+        map.set(key, entry);
+      }
+      entry.owner = owner;
+      owner.entries.add(entry);
+      if (kind === "class") node.classList[value ? "add" : "remove"](name);
+      else if (value === null) node.removeAttribute(name);
+      else node.setAttribute(name, value);
+      owner.guard();
+    }
+    function release(owner) {
+      if (owner.released) return;
+      owner.released = true;
+      if (owners.get(owner.section) === owner) owners.delete(owner.section);
+      let failures = 0;
+      for (const entry of owner.entries) {
+        if (entry.owner !== owner) continue;
+        const map = properties.get(entry.node);
+        if (map?.get(entry.key) !== entry) continue;
+        map.delete(entry.key);
+        try {
+          if (entry.kind === "class") entry.node.classList[entry.baseline ? "add" : "remove"](entry.name);
+          else if (entry.baseline === null) entry.node.removeAttribute(entry.name);
+          else entry.node.setAttribute(entry.name, entry.baseline);
+        } catch (_) {
+          failures++;
+        }
+      }
+      owner.entries.clear();
+      invalidateReads();
+      if (failures) {
+        restoreFailures = Math.min(Number.MAX_SAFE_INTEGER, restoreFailures + failures);
+        try {
+          warn("Native source presentation restoration failed", { failedFields: failures });
+        } catch (_) {
+        }
+      }
+    }
+    function present(options = {}) {
+      const token = scope.token, admittedGeneration = generation();
+      const assertCaller = options.assertCurrent || (() => {
+      });
+      const admit = () => {
+        scope.assertCurrent(options.sessionToken ?? token);
+        assertCaller();
+        if (scope.token !== token || generation() !== admittedGeneration) throw replaced();
+      };
+      admit();
+      if (options.phase !== void 0 && !["mounted", "scan", "parked"].includes(options.phase)) {
+        throw new TypeError("Invalid native presentation phase");
+      }
+      const section = options.section === void 0 ? pageDom.findMyListSection() : options.section;
+      if (!section) {
+        admit();
+        return null;
+      }
+      const scroller = options.scroller === void 0 ? section.querySelector(pageDom.selectors.carouselScroller) : options.scroller;
+      const track = options.track === void 0 ? scroller && pageDom.findTrack(scroller) : options.track;
+      const references = () => {
+        if (section.isConnected === false || scroller?.isConnected === false || track?.isConnected === false || scroller && section.contains && !section.contains(scroller) || track && scroller?.contains && !scroller.contains(track) || (section.querySelector(pageDom.selectors.carouselScroller) || null) !== (scroller || null) || (scroller && pageDom.findTrack(scroller)) !== track) throw replaced();
+      };
+      admit();
+      references();
+      const previous = owners.get(section);
+      const previousOperation = previous?.activeOperation;
+      const title = section.querySelector(':scope > [data-uia="empty-carousel-section+title"]');
+      const content = title && section.querySelector(':scope > [data-uia="empty-carousel-section+content"]');
+      let anchor = content || title || section.querySelector("h2");
+      if (!title && anchor) {
+        while (anchor.parentElement && anchor.parentElement !== section) anchor = anchor.parentElement;
+        if (anchor.parentElement !== section) anchor = null;
+      }
+      admit();
+      references();
+      if (owners.get(section) !== previous || previous?.activeOperation !== previousOperation) throw replaced();
+      let owner = previous;
+      try {
+        owner?.guard();
+      } catch (_) {
+        owner = null;
+      }
+      if (owners.get(section) !== previous || previous?.activeOperation !== previousOperation) throw replaced();
+      if (!owner || owner.scroller !== scroller || owner.track !== track || owner.anchor !== anchor) {
+        owner = {
+          section,
+          scroller,
+          track,
+          token,
+          generation: admittedGeneration,
+          entries: /* @__PURE__ */ new Set(),
+          released: false,
+          phase: previous?.phase || "mounted",
+          anchor
+        };
+        owners.set(section, owner);
+        if (previous) {
+          for (const entry of previous.entries) {
+            if (entry.owner !== previous) continue;
+            if (![section, scroller, track, title, anchor].includes(entry.node)) continue;
+            entry.owner = owner;
+            owner.entries.add(entry);
+          }
+          release(previous);
+        }
+        owner.lease = Object.freeze({
+          get anchor() {
+            owner.guard();
+            return owner.anchor;
+          },
+          assertCurrent() {
+            owner.guard();
+            return owner.lease;
+          },
+          release: () => release(owner)
+        });
+      }
+      owner.guard = () => {
+        admit();
+        references();
+        if (owner.released || owners.get(section) !== owner || owner.anchor?.isConnected === false || owner.anchor && owner.anchor.parentElement !== section) throw replaced();
+      };
+      const operation = {};
+      owner.activeOperation = operation;
+      const assertOperation = () => {
+        if (owner.activeOperation !== operation) throw replaced();
+        owner.guard();
+        if (owner.activeOperation !== operation) throw replaced();
+      };
+      const paint = (node, kind, name, value) => {
+        assertOperation();
+        write(owner, node, kind, name, value);
+        assertOperation();
+      };
+      try {
+        const phase = options.phase ?? owner.phase;
+        paint(section, "attribute", SECTION_ATTR, "true");
+        if (title) paint(title, "class", ORIGINAL_HEADER_CLASS, true);
+        if (anchor) paint(anchor, "class", ORIGINAL_HEADER_CLASS, true);
+        owner.anchor = anchor;
+        if (track) paint(track, "class", "tm-netflix-mylist-v15-track", true);
+        if (scroller && phase !== "mounted") {
+          paint(scroller, "class", SOURCE_SCAN_CLASS, phase === "scan");
+          paint(scroller, "class", SOURCE_PARKED_CLASS, phase === "parked");
+        }
+        if (Object.hasOwn(options, "visible")) {
+          paint(section, "class", ORIGINAL_HIDDEN_CLASS, !options.visible);
+          paint(section, "attribute", ORIGINAL_VISIBILITY_ATTR, options.visible ? "true" : "false");
+        }
+        assertOperation();
+        owner.phase = phase;
+        invalidateReads();
+        return owner.lease;
+      } catch (error) {
+        if (owner.activeOperation === operation) release(owner);
+        throw error;
+      }
+    }
+    function cleanupArtifacts({ sessionToken = scope.token, assertCurrent = () => {
+    } } = {}) {
+      const admittedGeneration = generation();
+      const guard = () => {
+        scope.assertCurrent(sessionToken);
+        assertCurrent();
+        if (generation() !== admittedGeneration) throw replaced();
+      };
+      guard();
+      for (const section of document2.querySelectorAll("[data-tm-mylist-v14], [data-tm-mylist-100-demo], [data-tm-mylist-clone-demo]")) {
+        guard();
+        for (const name of ["data-tm-mylist-v14", "data-tm-mylist-100-demo", "data-tm-mylist-clone-demo"]) {
+          guard();
+          section.removeAttribute(name);
+        }
+        guard();
+        section.style.removeProperty("--tm-source-width");
+      }
+      for (const scroller of document2.querySelectorAll(".tm-netflix-mylist-v14-source, .tm-netflix-mylist-100-demo-source, .tm-netflix-mylist-100-demo-source-parked")) {
+        guard();
+        scroller.classList.remove("tm-netflix-mylist-v14-source", "tm-netflix-mylist-100-demo-source", "tm-netflix-mylist-100-demo-source-parked");
+        for (const name of ["--tm-source-width", "--slot-width", "--sp-slot-width"]) {
+          guard();
+          scroller.style.removeProperty(name);
+        }
+      }
+      for (const slot of document2.querySelectorAll("[data-tm-source-aligned], [data-tm-source-proxied]")) {
+        for (const name of ["transform", "transform-origin", "z-index"]) {
+          guard();
+          slot.style.removeProperty(name);
+        }
+        guard();
+        slot.removeAttribute("data-tm-source-aligned");
+        guard();
+        slot.removeAttribute("data-tm-source-proxied");
+      }
+      guard();
+      invalidateReads();
+    }
+    return Object.freeze({
+      present,
+      cleanupArtifacts,
+      dispose() {
+        for (const owner of [...owners.values()]) release(owner);
+      },
+      diagnostics: () => ({ owners: owners.size, restoreFailures })
+    });
+  }
+
   // src/netflix/carousel/carousel.js
   function createCarousel({
     pageDom: netflixDom,
@@ -5973,6 +6193,15 @@
     let preparationOwner = null;
     let mappingSequence = 0;
     const mountedWaits = /* @__PURE__ */ new Set();
+    const sourcePresentation = createSourcePresentation({
+      document: document2,
+      pageDom: netflixDom,
+      scope,
+      generation: () => bindingGeneration,
+      invalidateReads: invalidateNativeReadScope,
+      createError: initializationError,
+      warn
+    });
     let discoveryOwner = null, targetDocumentObserver = null, targetMutationFrame = null;
     let targetObservedBrowseHost = null, targetObservedMyListSection = null, targetObservedAncestors = [];
     let targetDocumentDiscoveryActive = false;
@@ -7098,13 +7327,19 @@
           ...readinessState,
           capabilities: Object.freeze({ ...readinessState.capabilities })
         }) : null;
+        const presentationFacts = () => ({
+          parked: Boolean(operation.binding.scroller?.classList?.contains(SOURCE_PARKED_CLASS)),
+          hidden: operation.binding.section?.getAttribute(ORIGINAL_VISIBILITY_ATTR) === "false"
+        });
+        const presentation = options.presentation ? Object.freeze(presentationFacts()) : null;
         return observationResult(operation, {
           mode: runtime.profile.pageMode,
           needsRemapping: Boolean(runtime.pageMappingStale),
           remapAttempts: attempts,
           ...countFacts ? { count: countFacts } : {},
           ...position ? { position } : {},
-          ...readiness ? { readiness } : {}
+          ...readiness ? { readiness } : {},
+          ...presentation ? { presentation } : {}
         }, () => {
           if (runtime.logicalRemapRetryCount !== attempts) throw initializationError(
             "NATIVE_SOURCE_REPLACED",
@@ -7124,6 +7359,12 @@
             const current = nativeCarouselReadiness(operation.binding.section, operation.binding.scroller, operation.binding.track);
             if (current.signature !== readiness.signature || current.connected !== readiness.connected || Object.keys(current.capabilities).length !== Object.keys(readiness.capabilities).length || Object.keys(readiness.capabilities).some((key) => current.capabilities[key] !== readiness.capabilities[key])) {
               throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native readiness observation changed");
+            }
+          }
+          if (presentation) {
+            const current = presentationFacts();
+            if (current.parked !== presentation.parked || current.hidden !== presentation.hidden) {
+              throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native presentation observation changed");
             }
           }
         });
@@ -7156,7 +7397,12 @@
     }
     function sourceDescription(source) {
       try {
-        const { section, scroller = null, track = null } = source || {};
+        let { section, scroller = null, track = null } = source || {};
+        if (source?.discover) {
+          section ||= findMyListSection();
+          scroller ||= section?.querySelector?.(NETFLIX_DOM_SELECTORS2.carouselScroller) || null;
+          track ||= scroller && netflixDom.findTrack(scroller) || null;
+        }
         if (!section) return null;
         const page = selectedPage(section), pages = pageCount(section);
         const profile = carouselDomProfileSummary(section);
@@ -7183,7 +7429,8 @@
         collectionOperations: collection.pending(),
         mountedSourceWaits: mountedWaits.size,
         discoveryActive: Boolean(targetDocumentObserver),
-        pendingMutationFrame: targetMutationFrame !== null
+        pendingMutationFrame: targetMutationFrame !== null,
+        presentation: sourcePresentation.diagnostics()
       };
       if (Object.hasOwn(options, "card")) {
         try {
@@ -8256,11 +8503,14 @@
       assertMapping,
       collect: (options) => options.mode === "mounted-single-page" ? collection.collectMounted(options) : collection.collect(options),
       resetSource() {
+        sourcePresentation.dispose();
         clearBinding();
         collection.resetDiagnostics();
         models = /* @__PURE__ */ new WeakMap();
         nativeReadScope = null;
       },
+      presentSource: sourcePresentation.present,
+      cleanupArtifacts: sourcePresentation.cleanupArtifacts,
       prepareSource,
       acceptCollection,
       isPreparationCurrent,
@@ -8295,7 +8545,7 @@
       location,
       readGraphqlIdentity: () => listData.myListDomIdentity()
     });
-    const { findMyListSection, nativeCardIdentity, videoIdFromHref, decodeTrackingContext } = netflixDom;
+    const { nativeCardIdentity, videoIdFromHref, decodeTrackingContext } = netflixDom;
     const cardMarkup = createCardMarkup({ location });
     const itemFromSlot = cardMarkup.capture;
     const {
@@ -8309,12 +8559,9 @@
       formatInitializationTime
     } = createI18n({ readLanguage: getNetflixLanguage });
     const TARGET_PATH = "/browse/my-list";
-    const PAGE_STABLE_TIMEOUT_MS = 2e3;
     const NATIVE_READY_TIMEOUT_MS = 3e3;
-    const NATIVE_SINGLE_PAGE_STABLE_MS = 700;
     const NATIVE_EMPTY_STABLE_MS = 1200;
     const NATIVE_READY_POLL_MS = 25;
-    const NATIVE_LOGICAL_STABLE_MS = 120;
     const DELTA_MUTATION_TIMEOUT_MS = 1800;
     const UNDO_ENTRY_TTL_MS = 3e4;
     const HOVER_ACTIVATION_DELAY_MS = 120;
@@ -8371,7 +8618,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.30";
+    const SCRIPT_VERSION = "1.4.31";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -8474,6 +8721,7 @@
       shouldCoalesce: () => Boolean(completedSection || waitingForNativeEmpty && sourceState?.empty),
       onRelevantMutation: handleRelevantTargetDocumentMutation
     });
+    let nativePresentationLease = null;
     function attachNativeBinding(state, section, scroller = null, track = null) {
       const binding = nativeCarousel.bind(section, scroller, track);
       for (const key of ["section", "scroller", "track"]) Object.defineProperty(
@@ -9215,25 +9463,14 @@
       restoreActiveCarouselStyles();
       clearSourceAlignment();
       invalidateGridReact();
-      const section = sourceState?.section;
-      const scroller = sourceState?.scroller;
-      const track = sourceState?.track;
       document.getElementById(GRID_ID)?.remove();
       document.getElementById(STATUS_ID)?.remove();
       document.getElementById(LEGACY_EMPTY_STATE_ID)?.remove();
       document.getElementById(ORDER_MISMATCH_DIALOG_ID)?.remove();
       orderMismatchDialogOpen = false;
       removeStyles(document);
-      if (section) {
-        section.classList.remove(FAST_MOVE_CLASS, ORIGINAL_HIDDEN_CLASS);
-        section.removeAttribute(SECTION_ATTR);
-        section.removeAttribute(ORIGINAL_VISIBILITY_ATTR);
-        for (const node of section.querySelectorAll(`.${ORIGINAL_HEADER_CLASS}`)) {
-          node.classList.remove(ORIGINAL_HEADER_CLASS);
-        }
-      }
-      if (scroller) scroller.classList.remove(SOURCE_SCAN_CLASS, SOURCE_PARKED_CLASS);
-      if (track) track.classList.remove("tm-netflix-mylist-v15-track");
+      nativePresentationLease?.release();
+      nativePresentationLease = null;
       const synthetic = document.getElementById(SYNTHETIC_SECTION_ID);
       if (synthetic) synthetic.remove();
     }
@@ -9415,15 +9652,13 @@
       };
     }
     function collectRuntimeSnapshot() {
-      const section = sourceState?.section || findMyListSection();
-      const scroller = sourceState?.scroller || section?.querySelector?.(NETFLIX_DOM_SELECTORS.carouselScroller);
-      const track = sourceState?.track || scroller && netflixDom.findTrack(scroller);
+      const section = sourceState?.section, scroller = sourceState?.scroller, track = sourceState?.track;
       const grid = document.getElementById(GRID_ID);
       const statusNode = document.getElementById(STATUS_ID);
       const statusLabel = statusNode?.querySelector?.(`.${STATUS_LABEL_CLASS}`)?.textContent || "";
       const statusMeta = statusNode?.querySelector?.(`.${STATUS_META_CLASS}`)?.textContent || "";
       const statusText = [statusLabel, statusMeta].filter(Boolean).join("  ") || statusNode?.textContent || "";
-      const native = nativeSourceDiagnostics(section, scroller, track);
+      const native = nativeSourceDiagnostics(section, scroller, track, true);
       return {
         url: location.href,
         browserLanguage: navigator.language || "",
@@ -9789,33 +10024,30 @@
         }
       );
     }
+    function nativeSourcePresentation(section = sourceState?.section, scroller, track, options = {}) {
+      const state = sourceState, sessionToken = sessionScope.token;
+      const ownerSection = state?.section, ownerScroller = state?.scroller, ownerTrack = state?.track;
+      if (state && state.section === section) {
+        if (scroller === void 0) scroller = state.scroller;
+        if (track === void 0) track = state.track;
+      }
+      const lease = nativeCarousel.presentSource({ section, scroller, track, ...options, sessionToken, assertCurrent() {
+        assertRouteSession(sessionToken);
+        if (sourceState !== state || state?.section !== ownerSection || state?.scroller !== ownerScroller || state?.track !== ownerTrack) {
+          throw initializationError("NATIVE_SOURCE_REPLACED", "native-presentation", "Native presentation caller changed");
+        }
+      } });
+      if (lease !== nativePresentationLease) nativePresentationLease?.release();
+      lease?.assertCurrent();
+      nativePresentationLease = lease;
+      return lease;
+    }
     function markOriginalHeader(section) {
-      if (!section) return null;
-      const emptyTitle = section.querySelector(':scope > [data-uia="empty-carousel-section+title"]');
-      if (emptyTitle) {
-        const emptyContent = section.querySelector(':scope > [data-uia="empty-carousel-section+content"]');
-        emptyTitle.classList.add(ORIGINAL_HEADER_CLASS);
-        emptyContent?.classList.add(ORIGINAL_HEADER_CLASS);
-        return emptyContent || emptyTitle;
-      }
-      const heading = section.querySelector("h2");
-      if (!heading) return null;
-      let container = heading;
-      while (container.parentElement && container.parentElement !== section) {
-        container = container.parentElement;
-      }
-      if (container.parentElement === section) {
-        container.classList.add(ORIGINAL_HEADER_CLASS);
-        return container;
-      }
-      return null;
+      return nativeSourcePresentation(section)?.anchor || null;
     }
     function applyOriginalMyListVisibility() {
-      const section = sourceState?.section || (isTargetPage() ? findMyListSection() : null);
-      if (!section) return;
-      markOriginalHeader(section);
-      section.classList.toggle(ORIGINAL_HIDDEN_CLASS, !viewOriginalMyList);
-      section.setAttribute(ORIGINAL_VISIBILITY_ATTR, viewOriginalMyList ? "true" : "false");
+      if (!sourceState?.section && !isTargetPage()) return;
+      if (!nativeSourcePresentation(void 0, void 0, void 0, { visible: viewOriginalMyList })) return;
       if (sourceState?.status) {
         sourceState.status.style.setProperty("--tm-row-gap", `${viewOriginalMyList ? sourceState.layout?.rowGap || 0 : 0}px`);
       }
@@ -9826,25 +10058,11 @@
     function cleanupOldArtifacts() {
       for (const id of OLD_IDS) document.getElementById(id)?.remove();
       for (const id of OLD_STYLE_IDS) document.getElementById(id)?.remove();
-      for (const section of document.querySelectorAll("[data-tm-mylist-v14], [data-tm-mylist-100-demo], [data-tm-mylist-clone-demo]")) {
-        section.removeAttribute("data-tm-mylist-v14");
-        section.removeAttribute("data-tm-mylist-100-demo");
-        section.removeAttribute("data-tm-mylist-clone-demo");
-        section.style.removeProperty("--tm-source-width");
-      }
-      for (const scroller of document.querySelectorAll(".tm-netflix-mylist-v14-source, .tm-netflix-mylist-100-demo-source, .tm-netflix-mylist-100-demo-source-parked")) {
-        scroller.classList.remove("tm-netflix-mylist-v14-source", "tm-netflix-mylist-100-demo-source", "tm-netflix-mylist-100-demo-source-parked");
-        scroller.style.removeProperty("--tm-source-width");
-        scroller.style.removeProperty("--slot-width");
-        scroller.style.removeProperty("--sp-slot-width");
-      }
-      for (const slot of document.querySelectorAll("[data-tm-source-aligned], [data-tm-source-proxied]")) {
-        slot.style.removeProperty("transform");
-        slot.style.removeProperty("transform-origin");
-        slot.style.removeProperty("z-index");
-        slot.removeAttribute("data-tm-source-aligned");
-        slot.removeAttribute("data-tm-source-proxied");
-      }
+      const state = sourceState, sessionToken = sessionScope.token;
+      nativeCarousel.cleanupArtifacts({ sessionToken, assertCurrent() {
+        assertRouteSession(sessionToken);
+        if (sourceState !== state) throw initializationError("NATIVE_SOURCE_REPLACED", "native-presentation", "Artifact cleanup caller changed");
+      } });
     }
     function measureNativeCarouselGap(section) {
       if (!section) return Math.max(20, Math.min(56, window.innerWidth * 0.02));
@@ -9897,7 +10115,6 @@
       } });
     }
     function placeLegacyFrame(section, scroller, layout, { elapsedMs = null, finalized = false, totalCount = null } = {}) {
-      section.setAttribute(SECTION_ATTR, "true");
       markOriginalHeader(section);
       let grid = document.getElementById(GRID_ID);
       if (!grid) {
@@ -9908,9 +10125,8 @@
       if (!grid.children.length) grid.setAttribute("data-tm-empty", "true");
       const geometry = applyGridGeometry(section, grid, layout);
       const status = updateStatus(formatHeaderParts(0, totalCount, elapsedMs, finalized));
-      const header = section.querySelector(`:scope > .${ORIGINAL_HEADER_CLASS}`) || markOriginalHeader(section);
-      const emptyContent = section.querySelector(':scope > [data-uia="empty-carousel-section+content"]');
-      const anchor = scroller?.isConnected ? scroller : emptyContent?.isConnected ? emptyContent : header;
+      const header = markOriginalHeader(section);
+      const anchor = scroller?.isConnected ? scroller : header;
       if (anchor) anchor.insertAdjacentElement("afterend", status);
       else section.prepend(status);
       syncStatusTypography(section, status);
@@ -10016,10 +10232,7 @@
       const frame = placeLegacyFrame(section, scroller, layout, { elapsedMs, finalized: true, totalCount: 0 });
       if (admission) nativeCarousel.assertObservation(admission);
       frame.grid.setAttribute("data-tm-empty", "true");
-      if (scroller && track) {
-        track.classList.add("tm-netflix-mylist-v15-track");
-        scroller.classList.add(SOURCE_PARKED_CLASS);
-      }
+      nativeSourcePresentation(section, scroller, track, { phase: "parked" });
       sourceState = attachNativeBinding({
         layout,
         items: [],
@@ -11545,11 +11758,10 @@
       nativeCarousel.assertObservation(observed);
       const oldSynthetic = document.getElementById(SYNTHETIC_SECTION_ID);
       clearLegacyEmptyState({ restoreGrid: false });
-      live.section.setAttribute(SECTION_ATTR, "true");
       markOriginalHeader(live.section);
       nativeCarousel.assertObservation(observed);
       nativeCarousel.assertObservation(live);
-      parkSource(live.scroller);
+      parkSource(live.section, live.scroller, live.track);
       live.scroller.insertAdjacentElement("afterend", status);
       status.insertAdjacentElement("afterend", grid);
       if (sourceState !== state) throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Incoming layout parent was replaced");
@@ -11598,12 +11810,10 @@
       invalidateGridReact();
       nativeCarousel.assertObservation(observed);
       const oldSynthetic = document.getElementById(SYNTHETIC_SECTION_ID);
-      live.section.setAttribute(SECTION_ATTR, "true");
       markOriginalHeader(live.section);
       nativeCarousel.assertObservation(observed);
       nativeCarousel.assertObservation(live);
-      const emptyContent = live.section.querySelector(':scope > [data-uia="empty-carousel-section+content"]');
-      const originalAnchor = emptyContent || markOriginalHeader(live.section);
+      const originalAnchor = markOriginalHeader(live.section);
       nativeCarousel.assertObservation(observed);
       nativeCarousel.assertObservation(live);
       if (originalAnchor) originalAnchor.insertAdjacentElement("afterend", status);
@@ -12309,10 +12519,10 @@
       }
       status.style.color = style.color || "rgb(255, 255, 255)";
     }
-    function nativeSourceDiagnostics(section = sourceState?.section, scroller = sourceState?.scroller, track = sourceState?.track) {
-      return nativeCarousel.diagnostics({ source: { section, scroller, track } }).source;
+    function nativeSourceDiagnostics(section = sourceState?.section, scroller = sourceState?.scroller, track = sourceState?.track, discover = false) {
+      return nativeCarousel.diagnostics({ source: { section, scroller, track, discover } }).source;
     }
-    function nativeSourceObservation(state = sourceState, { count, provisionalTotalCount, position } = {}) {
+    function nativeSourceObservation(state = sourceState, { count, provisionalTotalCount, position, presentation } = {}) {
       if (!state?.section) return null;
       const { section, scroller, track } = state;
       const sessionToken = sessionScope.token;
@@ -12324,6 +12534,7 @@
         count,
         provisionalTotalCount,
         position,
+        presentation,
         assertCurrent() {
           assertRouteSession(sessionToken);
           if (sourceState !== state) throw createRouteSessionCancelledError();
@@ -14466,11 +14677,11 @@
           const measured = sample.measured;
           const sig = sample.signature;
           if (sourceState !== state) return;
-          const sourceObservation = nativeSourceObservation(state);
+          const sourceObservation = nativeSourceObservation(state, { presentation: true });
           const logicalMappingStale = Boolean(sourceObservation?.needsRemapping);
           const applied = state.grid.__tmAppliedGeometry;
           const layoutUnchanged = responsiveLayoutMatches(state.layout, measured);
-          const parkedHeightOnlyChange = !layoutUnchanged && lastResponsiveReason === "ResizeObserver" && sig === lastResponsiveSignature && !logicalMappingStale && state.section.getAttribute(ORIGINAL_VISIBILITY_ATTR) === "false" && state.scroller.classList.contains(SOURCE_PARKED_CLASS) && state.resizeViewportSignature === responsiveViewportSignature() && Number.isFinite(state.layout?.scrollerHeight) && state.layout.scrollerHeight > 1.5 && Number.isFinite(measured.scrollerHeight) && measured.scrollerHeight >= 1 && measured.scrollerHeight <= 1.5 && responsiveLayoutMatches(state.layout, measured, true);
+          const parkedHeightOnlyChange = !layoutUnchanged && lastResponsiveReason === "ResizeObserver" && sig === lastResponsiveSignature && !logicalMappingStale && sourceObservation.presentation.hidden && sourceObservation.presentation.parked && state.resizeViewportSignature === responsiveViewportSignature() && Number.isFinite(state.layout?.scrollerHeight) && state.layout.scrollerHeight > 1.5 && Number.isFinite(measured.scrollerHeight) && measured.scrollerHeight >= 1 && measured.scrollerHeight <= 1.5 && responsiveLayoutMatches(state.layout, measured, true);
           const geometryUnchanged = (layoutUnchanged || parkedHeightOnlyChange) && applied && ["width", "left", "columns"].every((key) => Math.abs(applied[key] - sample.geometry[key]) <= 0.5);
           if (!nativeCarousel.isObservationCurrent(sourceObservation)) return;
           if (!nativeCarousel.isObservationCurrent(sample.observed)) return;
@@ -14539,13 +14750,10 @@
       }), delay);
     }
     function beginSourceScan(section, scroller, track) {
-      section.setAttribute(SECTION_ATTR, "true");
-      scroller.classList.add(SOURCE_SCAN_CLASS);
-      track.classList.add("tm-netflix-mylist-v15-track");
+      return nativeSourcePresentation(section, scroller, track, { phase: "scan" });
     }
-    function parkSource(scroller) {
-      scroller.classList.remove(SOURCE_SCAN_CLASS);
-      scroller.classList.add(SOURCE_PARKED_CLASS);
+    function parkSource(section, scroller, track) {
+      return nativeSourcePresentation(section, scroller, track, { phase: "parked" });
     }
     function realignActiveSource() {
       if (!activeGeometryProxy) return;
@@ -14756,15 +14964,16 @@
       if (completedSection === section && document.getElementById(GRID_ID) && !sourceState?.empty) return;
       try {
         nativeCarousel.assertObservation(discovered);
+        cleanupOldArtifacts();
+        nativeCarousel.assertObservation(discovered);
+        installStyles(document);
+        markOriginalHeader(section);
+        nativeCarousel.assertObservation(discovered);
       } catch (error) {
         if (error?.code !== "NATIVE_SOURCE_REPLACED" && !isRouteSessionCancelledError(error)) throw error;
         if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
         return;
       }
-      cleanupOldArtifacts();
-      installStyles(document);
-      section.setAttribute(SECTION_ATTR, "true");
-      markOriginalHeader(section);
       const initializationStarted = performance.now();
       let mountedSource, scroller, track;
       let provisionalLayout, provisionalFrame;
@@ -15186,7 +15395,7 @@
         status.style.width = `${initialStatusGeometry.width}px`;
         status.style.setProperty("--tm-row-gap", `${layout.rowGap}px`);
         nativeCarousel.assertObservation(layoutObservation);
-        track.classList.add("tm-netflix-mylist-v15-track");
+        nativeSourcePresentation(section, scroller, track, { phase: "mounted" });
         waitingForNativeEmpty = false;
         sourceState = attachNativeBinding({ layout, initializationStartedAt: initializationStarted, empty: false, collectedCount: 0, totalCount }, section, scroller, track);
         const collectionState = sourceState;
@@ -15274,7 +15483,7 @@
           items: items.map(itemSummary)
         });
         assertCollectionCurrent();
-        parkSource(scroller);
+        parkSource(section, scroller, track);
         const standbyNative = nativeSourceDiagnostics(section, scroller, track);
         log(tLog("nativeCarouselStandbyMode"), {
           selectedPage: standbyNative?.selectedPage ?? null,

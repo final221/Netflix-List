@@ -6,9 +6,9 @@ import { createReport } from './diagnostics/report.js';
 import { createPopupInspection } from './netflix/popup-inspection.js';
 import {
     GRID_ID, STATUS_ID, ORDER_MISMATCH_DIALOG_ID, SECTION_ATTR,
-    SOURCE_SCAN_CLASS, SOURCE_PARKED_CLASS, LOG_LINK_ID, STATUS_TEXT_CLASS,
-    STATUS_LABEL_CLASS, STATUS_META_CLASS, FAST_MOVE_CLASS, ORIGINAL_HIDDEN_CLASS,
-    ORIGINAL_VISIBILITY_ATTR, ORIGINAL_HEADER_CLASS, SYNTHETIC_SECTION_ID,
+    LOG_LINK_ID, STATUS_TEXT_CLASS,
+    STATUS_LABEL_CLASS, STATUS_META_CLASS,
+    ORIGINAL_HEADER_CLASS, SYNTHETIC_SECTION_ID,
     LEGACY_EMPTY_STATE_ID, OLD_IDS, OLD_STYLE_IDS
 } from './dom-names.js';
 import { createI18n } from './i18n/i18n.js';
@@ -28,19 +28,16 @@ export function startLegacy() {
         fetch: (...args) => fetch(...args), createCancelledError: createRouteSessionCancelledError });
     const netflixDom = createNetflixPageDom({ document, Element, location,
         readGraphqlIdentity: () => listData.myListDomIdentity() });
-    const { findMyListSection, nativeCardIdentity, videoIdFromHref, decodeTrackingContext } = netflixDom;
+    const { nativeCardIdentity, videoIdFromHref, decodeTrackingContext } = netflixDom;
     const cardMarkup = createCardMarkup({ location });
     const itemFromSlot = cardMarkup.capture;
     const { getUiLocale, getLogLocale, tUi, tUiPlural, tLog,
         formatUiNumber, formatItemCount, formatInitializationTime } = createI18n({ readLanguage: getNetflixLanguage });
 
     const TARGET_PATH = '/browse/my-list';
-    const PAGE_STABLE_TIMEOUT_MS = 2000;
     const NATIVE_READY_TIMEOUT_MS = 3000;
-    const NATIVE_SINGLE_PAGE_STABLE_MS = 700;
     const NATIVE_EMPTY_STABLE_MS = 1200;
     const NATIVE_READY_POLL_MS = 25;
-    const NATIVE_LOGICAL_STABLE_MS = 120;
     const DELTA_MUTATION_TIMEOUT_MS = 1800;
     const UNDO_ENTRY_TTL_MS = 30000;
     const HOVER_ACTIVATION_DELAY_MS = 120;
@@ -124,6 +121,8 @@ export function startLegacy() {
         isGridDetached: () => Boolean(completedSection && sourceState?.grid && !sourceState.grid.isConnected),
         shouldCoalesce: () => Boolean(completedSection || (waitingForNativeEmpty && sourceState?.empty)),
         onRelevantMutation: handleRelevantTargetDocumentMutation });
+
+    let nativePresentationLease = null;
 
     // Temporary publication bridge: sourceState may borrow native references,
     // but only the carousel can accept a binding or invalidate its generation.
@@ -702,10 +701,6 @@ export function startLegacy() {
         clearSourceAlignment();
         invalidateGridReact();
 
-        const section = sourceState?.section;
-        const scroller = sourceState?.scroller;
-        const track = sourceState?.track;
-
         document.getElementById(GRID_ID)?.remove();
         document.getElementById(STATUS_ID)?.remove();
         document.getElementById(LEGACY_EMPTY_STATE_ID)?.remove();
@@ -713,16 +708,8 @@ export function startLegacy() {
         orderMismatchDialogOpen = false;
         removeStyles(document);
 
-        if (section) {
-            section.classList.remove(FAST_MOVE_CLASS, ORIGINAL_HIDDEN_CLASS);
-            section.removeAttribute(SECTION_ATTR);
-            section.removeAttribute(ORIGINAL_VISIBILITY_ATTR);
-            for (const node of section.querySelectorAll(`.${ORIGINAL_HEADER_CLASS}`)) {
-                node.classList.remove(ORIGINAL_HEADER_CLASS);
-            }
-        }
-        if (scroller) scroller.classList.remove(SOURCE_SCAN_CLASS, SOURCE_PARKED_CLASS);
-        if (track) track.classList.remove('tm-netflix-mylist-v15-track');
+        nativePresentationLease?.release();
+        nativePresentationLease = null;
 
         const synthetic = document.getElementById(SYNTHETIC_SECTION_ID);
         if (synthetic) synthetic.remove();
@@ -929,15 +916,13 @@ export function startLegacy() {
     }
 
     function collectRuntimeSnapshot() {
-        const section = sourceState?.section || findMyListSection();
-        const scroller = sourceState?.scroller || section?.querySelector?.(NETFLIX_DOM_SELECTORS.carouselScroller);
-        const track = sourceState?.track || (scroller && netflixDom.findTrack(scroller));
+        const section = sourceState?.section, scroller = sourceState?.scroller, track = sourceState?.track;
         const grid = document.getElementById(GRID_ID);
         const statusNode = document.getElementById(STATUS_ID);
         const statusLabel = statusNode?.querySelector?.(`.${STATUS_LABEL_CLASS}`)?.textContent || '';
         const statusMeta = statusNode?.querySelector?.(`.${STATUS_META_CLASS}`)?.textContent || '';
         const statusText = [statusLabel, statusMeta].filter(Boolean).join('  ') || statusNode?.textContent || '';
-        const native = nativeSourceDiagnostics(section, scroller, track);
+        const native = nativeSourceDiagnostics(section, scroller, track, true);
 
         return {
             url: location.href,
@@ -1258,36 +1243,32 @@ export function startLegacy() {
         );
     }
 
+    function nativeSourcePresentation(section = sourceState?.section, scroller, track, options = {}) {
+        const state = sourceState, sessionToken = sessionScope.token;
+        const ownerSection = state?.section, ownerScroller = state?.scroller, ownerTrack = state?.track;
+        if (state && state.section === section) {
+            if (scroller === undefined) scroller = state.scroller;
+            if (track === undefined) track = state.track;
+        }
+        const lease = nativeCarousel.presentSource({ section, scroller, track, ...options, sessionToken, assertCurrent() {
+            assertRouteSession(sessionToken);
+            if (sourceState !== state || state?.section !== ownerSection || state?.scroller !== ownerScroller || state?.track !== ownerTrack) {
+                throw initializationError('NATIVE_SOURCE_REPLACED', 'native-presentation', 'Native presentation caller changed');
+            }
+        } });
+        if (lease !== nativePresentationLease) nativePresentationLease?.release();
+        lease?.assertCurrent();
+        nativePresentationLease = lease;
+        return lease;
+    }
+
     function markOriginalHeader(section) {
-        if (!section) return null;
-
-        const emptyTitle = section.querySelector(':scope > [data-uia="empty-carousel-section+title"]');
-        if (emptyTitle) {
-            const emptyContent = section.querySelector(':scope > [data-uia="empty-carousel-section+content"]');
-            emptyTitle.classList.add(ORIGINAL_HEADER_CLASS);
-            emptyContent?.classList.add(ORIGINAL_HEADER_CLASS);
-            return emptyContent || emptyTitle;
-        }
-
-        const heading = section.querySelector('h2');
-        if (!heading) return null;
-        let container = heading;
-        while (container.parentElement && container.parentElement !== section) {
-            container = container.parentElement;
-        }
-        if (container.parentElement === section) {
-            container.classList.add(ORIGINAL_HEADER_CLASS);
-            return container;
-        }
-        return null;
+        return nativeSourcePresentation(section)?.anchor || null;
     }
 
     function applyOriginalMyListVisibility() {
-        const section = sourceState?.section || (isTargetPage() ? findMyListSection() : null);
-        if (!section) return;
-        markOriginalHeader(section);
-        section.classList.toggle(ORIGINAL_HIDDEN_CLASS, !viewOriginalMyList);
-        section.setAttribute(ORIGINAL_VISIBILITY_ATTR, viewOriginalMyList ? 'true' : 'false');
+        if (!sourceState?.section && !isTargetPage()) return;
+        if (!nativeSourcePresentation(undefined, undefined, undefined, { visible: viewOriginalMyList })) return;
         if (sourceState?.status) {
             sourceState.status.style.setProperty('--tm-row-gap', `${viewOriginalMyList ? (sourceState.layout?.rowGap || 0) : 0}px`);
         }
@@ -1300,28 +1281,11 @@ export function startLegacy() {
     function cleanupOldArtifacts() {
         for (const id of OLD_IDS) document.getElementById(id)?.remove();
         for (const id of OLD_STYLE_IDS) document.getElementById(id)?.remove();
-
-        for (const section of document.querySelectorAll('[data-tm-mylist-v14], [data-tm-mylist-100-demo], [data-tm-mylist-clone-demo]')) {
-            section.removeAttribute('data-tm-mylist-v14');
-            section.removeAttribute('data-tm-mylist-100-demo');
-            section.removeAttribute('data-tm-mylist-clone-demo');
-            section.style.removeProperty('--tm-source-width');
-        }
-
-        for (const scroller of document.querySelectorAll('.tm-netflix-mylist-v14-source, .tm-netflix-mylist-100-demo-source, .tm-netflix-mylist-100-demo-source-parked')) {
-            scroller.classList.remove('tm-netflix-mylist-v14-source', 'tm-netflix-mylist-100-demo-source', 'tm-netflix-mylist-100-demo-source-parked');
-            scroller.style.removeProperty('--tm-source-width');
-            scroller.style.removeProperty('--slot-width');
-            scroller.style.removeProperty('--sp-slot-width');
-        }
-
-        for (const slot of document.querySelectorAll('[data-tm-source-aligned], [data-tm-source-proxied]')) {
-            slot.style.removeProperty('transform');
-            slot.style.removeProperty('transform-origin');
-            slot.style.removeProperty('z-index');
-            slot.removeAttribute('data-tm-source-aligned');
-            slot.removeAttribute('data-tm-source-proxied');
-        }
+        const state = sourceState, sessionToken = sessionScope.token;
+        nativeCarousel.cleanupArtifacts({ sessionToken, assertCurrent() {
+            assertRouteSession(sessionToken);
+            if (sourceState !== state) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-presentation', 'Artifact cleanup caller changed');
+        } });
     }
 
     function measureNativeCarouselGap(section) {
@@ -1383,7 +1347,6 @@ export function startLegacy() {
     }
 
     function placeLegacyFrame(section, scroller, layout, { elapsedMs = null, finalized = false, totalCount = null } = {}) {
-        section.setAttribute(SECTION_ATTR, 'true');
         markOriginalHeader(section);
 
         let grid = document.getElementById(GRID_ID);
@@ -1396,9 +1359,8 @@ export function startLegacy() {
 
         const geometry = applyGridGeometry(section, grid, layout);
         const status = updateStatus(formatHeaderParts(0, totalCount, elapsedMs, finalized));
-        const header = section.querySelector(`:scope > .${ORIGINAL_HEADER_CLASS}`) || markOriginalHeader(section);
-        const emptyContent = section.querySelector(':scope > [data-uia="empty-carousel-section+content"]');
-        const anchor = scroller?.isConnected ? scroller : (emptyContent?.isConnected ? emptyContent : header);
+        const header = markOriginalHeader(section);
+        const anchor = scroller?.isConnected ? scroller : header;
         if (anchor) anchor.insertAdjacentElement('afterend', status);
         else section.prepend(status);
         syncStatusTypography(section, status);
@@ -1521,10 +1483,7 @@ export function startLegacy() {
         const frame = placeLegacyFrame(section, scroller, layout, { elapsedMs, finalized: true, totalCount: 0 });
         if (admission) nativeCarousel.assertObservation(admission);
         frame.grid.setAttribute('data-tm-empty', 'true');
-        if (scroller && track) {
-            track.classList.add('tm-netflix-mylist-v15-track');
-            scroller.classList.add(SOURCE_PARKED_CLASS);
-        }
+        nativeSourcePresentation(section, scroller, track, { phase: 'parked' });
         sourceState = attachNativeBinding({
             layout,
             items: [],
@@ -3034,11 +2993,10 @@ export function startLegacy() {
         nativeCarousel.assertObservation(observed);
         const oldSynthetic = document.getElementById(SYNTHETIC_SECTION_ID);
         clearLegacyEmptyState({ restoreGrid: false });
-        live.section.setAttribute(SECTION_ATTR, 'true');
         markOriginalHeader(live.section);
         nativeCarousel.assertObservation(observed);
         nativeCarousel.assertObservation(live);
-        parkSource(live.scroller);
+        parkSource(live.section, live.scroller, live.track);
         live.scroller.insertAdjacentElement('afterend', status);
         status.insertAdjacentElement('afterend', grid);
         if (sourceState !== state) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-layout', 'Incoming layout parent was replaced');
@@ -3090,13 +3048,11 @@ export function startLegacy() {
         invalidateGridReact();
         nativeCarousel.assertObservation(observed);
         const oldSynthetic = document.getElementById(SYNTHETIC_SECTION_ID);
-        live.section.setAttribute(SECTION_ATTR, 'true');
         markOriginalHeader(live.section);
 
         nativeCarousel.assertObservation(observed);
         nativeCarousel.assertObservation(live);
-        const emptyContent = live.section.querySelector(':scope > [data-uia="empty-carousel-section+content"]');
-        const originalAnchor = emptyContent || markOriginalHeader(live.section);
+        const originalAnchor = markOriginalHeader(live.section);
         nativeCarousel.assertObservation(observed);
         nativeCarousel.assertObservation(live);
         if (originalAnchor) originalAnchor.insertAdjacentElement('afterend', status);
@@ -3901,15 +3857,15 @@ export function startLegacy() {
         status.style.color = style.color || 'rgb(255, 255, 255)';
     }
 
-    function nativeSourceDiagnostics(section = sourceState?.section, scroller = sourceState?.scroller, track = sourceState?.track) {
-        return nativeCarousel.diagnostics({ source: { section, scroller, track } }).source;
+    function nativeSourceDiagnostics(section = sourceState?.section, scroller = sourceState?.scroller, track = sourceState?.track, discover = false) {
+        return nativeCarousel.diagnostics({ source: { section, scroller, track, discover } }).source;
     }
 
-    function nativeSourceObservation(state = sourceState, { count, provisionalTotalCount, position } = {}) {
+    function nativeSourceObservation(state = sourceState, { count, provisionalTotalCount, position, presentation } = {}) {
         if (!state?.section) return null;
         const { section, scroller, track } = state;
         const sessionToken = sessionScope.token;
-        return nativeCarousel.observeSource({ section, scroller, track, sessionToken, count, provisionalTotalCount, position,
+        return nativeCarousel.observeSource({ section, scroller, track, sessionToken, count, provisionalTotalCount, position, presentation,
             assertCurrent() {
                 assertRouteSession(sessionToken);
                 if (sourceState !== state) throw createRouteSessionCancelledError();
@@ -6068,7 +6024,7 @@ export function startLegacy() {
                 const measured = sample.measured;
                 const sig = sample.signature;
                 if (sourceState !== state) return;
-                const sourceObservation = nativeSourceObservation(state);
+                const sourceObservation = nativeSourceObservation(state, { presentation: true });
                 const logicalMappingStale = Boolean(sourceObservation?.needsRemapping);
                 const applied = state.grid.__tmAppliedGeometry;
                 const layoutUnchanged = responsiveLayoutMatches(state.layout, measured);
@@ -6076,8 +6032,7 @@ export function startLegacy() {
                 // grid. Preserve the first hover only after all other checks agree.
                 const parkedHeightOnlyChange = !layoutUnchanged && lastResponsiveReason === 'ResizeObserver' &&
                     sig === lastResponsiveSignature && !logicalMappingStale &&
-                    state.section.getAttribute(ORIGINAL_VISIBILITY_ATTR) === 'false' &&
-                    state.scroller.classList.contains(SOURCE_PARKED_CLASS) &&
+                    sourceObservation.presentation.hidden && sourceObservation.presentation.parked &&
                     state.resizeViewportSignature === responsiveViewportSignature() &&
                     Number.isFinite(state.layout?.scrollerHeight) && state.layout.scrollerHeight > 1.5 &&
                     Number.isFinite(measured.scrollerHeight) && measured.scrollerHeight >= 1 && measured.scrollerHeight <= 1.5 &&
@@ -6157,15 +6112,11 @@ export function startLegacy() {
     }
 
     function beginSourceScan(section, scroller, track) {
-        section.setAttribute(SECTION_ATTR, 'true');
-        scroller.classList.add(SOURCE_SCAN_CLASS);
-        track.classList.add('tm-netflix-mylist-v15-track');
+        return nativeSourcePresentation(section, scroller, track, { phase: 'scan' });
     }
 
-    function parkSource(scroller) {
-        scroller.classList.remove(SOURCE_SCAN_CLASS);
-        scroller.classList.add(SOURCE_PARKED_CLASS);
-
+    function parkSource(section, scroller, track) {
+        return nativeSourcePresentation(section, scroller, track, { phase: 'parked' });
     }
 
     function realignActiveSource() {
@@ -6396,15 +6347,16 @@ export function startLegacy() {
 
         try {
             nativeCarousel.assertObservation(discovered);
+            cleanupOldArtifacts();
+            nativeCarousel.assertObservation(discovered);
+            installStyles(document);
+            markOriginalHeader(section);
+            nativeCarousel.assertObservation(discovered);
         } catch (error) {
             if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
             if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
             return;
         }
-        cleanupOldArtifacts();
-        installStyles(document);
-        section.setAttribute(SECTION_ATTR, 'true');
-        markOriginalHeader(section);
 
         const initializationStarted = performance.now();
         let mountedSource, scroller, track;
@@ -6859,7 +6811,7 @@ export function startLegacy() {
 
             // Fast collection skips beginSourceScan(), but hover-driven native
             // moves still need the track marker used by the animation suppression CSS.
-            track.classList.add('tm-netflix-mylist-v15-track');
+            nativeSourcePresentation(section, scroller, track, { phase: 'mounted' });
             waitingForNativeEmpty = false;
             sourceState = attachNativeBinding({ layout, initializationStartedAt: initializationStarted, empty: false, collectedCount: 0, totalCount }, section, scroller, track);
             const collectionState = sourceState;
@@ -6944,7 +6896,7 @@ export function startLegacy() {
             assertCollectionCurrent();
 
             // Keep the native carousel at its normal position and size for React resynchronization.
-            parkSource(scroller);
+            parkSource(section, scroller, track);
             const standbyNative = nativeSourceDiagnostics(section, scroller, track);
             log(tLog('nativeCarouselStandbyMode'), {
                 selectedPage: standbyNative?.selectedPage ?? null,

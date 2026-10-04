@@ -18,6 +18,7 @@ const { createCarousel } = require('../src/netflix/carousel/carousel.js');
 const { createPageModel, normalizeNetflixLogicalIndex, expectedLogicalIndicesForPage, logicalPageFromSlotPositions,
     wrappedTailLogicalPageInfo } = require('../src/netflix/carousel/page-model.js');
 const { createReactReadings, readCardSignature } = require('../src/netflix/carousel/react-readings.js');
+const { SOURCE_PARKED_CLASS: NATIVE_PARKED_CLASS, ORIGINAL_VISIBILITY_ATTR: NATIVE_VISIBILITY_ATTR } = require('../src/dom-names.js');
 const { createNavigation } = require('../src/netflix/carousel/navigation.js');
 const { createCollection } = require('../src/netflix/carousel/collection.js');
 const { carouselPayload, atom, reference, viewingVideo } = require('./helpers/fixtures.js');
@@ -276,6 +277,8 @@ function environment(names, overrides = {}) {
     c.nativeRect ||= node => c.nativeCarousel.measureLayout({ section: node, mode: 'bounds' }).bounds;
     c.moveOnePage ||= (...args) => c.nativeCarousel.movePage(...args);
     if (!c.initializationError) vm.runInContext(declaration('initializationError'), c);
+    c.nativePresentationLease = null;
+    vm.runInContext(declaration('nativeSourcePresentation'), c);
     vm.runInContext(declaration('nativeSourceObservation'), c);
     vm.runInContext(declaration('nativeSourceDiagnostics'), c);
     vm.runInContext(declaration('nativePageObservation'), c);
@@ -3631,7 +3634,7 @@ function initializationEnvironment(count = 150) {
         running: false, runningSessionToken: null, completedSection: null, initializationBlockedSessionToken: null,
         targetSessionEntryKind: 'initial', waitingForNativeEmpty: false, missingSectionSince: 0,
         TOTAL_COUNT_TIMEOUT_MS: 5000, NATIVE_READY_TIMEOUT_MS: 8000,
-        SOURCE_PARKED_CLASS: 'parked',
+        SOURCE_PARKED_CLASS: NATIVE_PARKED_CLASS,
         findMyListSection: () => e.section, cleanupOldArtifacts() {}, installStyles() {}, markOriginalHeader() {},
         measureNativeCarouselGap: () => 10,
         placeLegacyFrame: () => ({ grid: e.oldGrid, status: e.status }), applyOriginalMyListVisibility() {},
@@ -3988,6 +3991,107 @@ test('actual CopyLogs runtime snapshot consumes passive native facts and preserv
     assert.equal(unavailable.gridCards, 6);
     assert.equal(unavailable.totalCount, 6);
     assert.equal(unavailable.viewOriginalMyList, true);
+    e.c.sourceState = null;
+    e.c.findMyListSection = () => { throw new Error('fallback discovery unavailable'); };
+    assert.doesNotThrow(() => e.c.collectRuntimeSnapshot(), 'native fallback failure cannot abort CopyLogs');
+    assert.equal(e.c.collectRuntimeSnapshot().selectedPage, null);
+});
+
+function sourcePresentationBridgeEnvironment() {
+    const { Element: NativeElement, createDocument } = require('./helpers/dom.js');
+    const document = createDocument();
+    const section = document.body.appendChild(new NativeElement('section'));
+    const header = section.appendChild(new NativeElement('div'));
+    header.appendChild(new NativeElement('h2'));
+    const scroller = section.appendChild(new NativeElement('div'));
+    scroller.classList.add('scroller');
+    const track = scroller.appendChild(new NativeElement('div'));
+    const status = section.appendChild(new NativeElement('div')); status.id = 'status';
+    const grid = section.appendChild(new NativeElement('div')); grid.id = 'grid';
+    const state = { section, scroller, track, grid, status, layout: { rowGap: 12 }, items: [] };
+    const e = environment(['markOriginalHeader', 'applyOriginalMyListVisibility', 'beginSourceScan',
+        'parkSource', 'restoreActiveCarouselStyles', 'cleanupTargetSessionDom'], {
+        document, sourceState: state, GRID_ID: 'grid', STATUS_ID: 'status',
+        ORDER_MISMATCH_DIALOG_ID: 'dialog', SYNTHETIC_SECTION_ID: 'synthetic', LEGACY_EMPTY_STATE_ID: 'empty',
+        NETFLIX_DOM_SELECTORS: { carouselScroller: '.scroller', standardCard: 'a', virtualSlot: '.slot' },
+        findMyListSection: () => section, netflixDom: { findTrack: () => track },
+        isTargetPage: () => true, viewOriginalMyList: false,
+        clearSourceAlignment() {}, invalidateGridReact() {}, removeStyles
+    });
+    e.c.attachNativeBinding(state, section, scroller, track);
+    return { ...e, section, header, scroller, track, grid, status, state };
+}
+
+test('actual source presentation bridges retain visibility preference, scan parking and route cleanup', () => {
+    const e = sourcePresentationBridgeEnvironment();
+    assert.equal(e.c.markOriginalHeader(e.section), e.header);
+    e.c.applyOriginalMyListVisibility();
+    assert.equal(e.section.getAttribute(NATIVE_VISIBILITY_ATTR), 'false');
+    assert.equal(e.status.style.getPropertyValue('--tm-row-gap'), '0px');
+    e.c.beginSourceScan(e.section, e.scroller, e.track);
+    assert.equal(e.c.nativeCarousel.diagnostics({ source: e.state }).source.sourceScan, true);
+    e.c.parkSource(e.section, e.scroller, e.track);
+    assert.equal(e.scroller.classList.contains(NATIVE_PARKED_CLASS), true);
+    e.c.viewOriginalMyList = true;
+    e.c.applyOriginalMyListVisibility();
+    assert.equal(e.section.getAttribute(NATIVE_VISIBILITY_ATTR), 'true');
+    assert.equal(e.status.style.getPropertyValue('--tm-row-gap'), '12px');
+    e.c.sessionScope.dispose();
+    e.c.cleanupTargetSessionDom();
+    assert.equal(e.section.getAttribute(NATIVE_VISIBILITY_ATTR), null);
+    assert.equal(e.scroller.classList.contains(NATIVE_PARKED_CLASS), false);
+    assert.equal(e.track.classList.contains('tm-netflix-mylist-v15-track'), false);
+    assert.equal(e.status.isConnected, false);
+    assert.equal(e.grid.isConnected, false);
+    assert.equal(e.c.nativePresentationLease, null);
+    assert.equal(e.c.nativeCarousel.diagnostics().presentation.owners, 0);
+});
+
+test('actual visibility publication stops after marker admission loses its parent', () => {
+    const e = sourcePresentationBridgeEnvironment();
+    e.status.style.setProperty('--tm-row-gap', '7px');
+    const set = e.section.setAttribute.bind(e.section);
+    e.section.setAttribute = (name, value) => {
+        set(name, value);
+        if (name === 'data-tm-mylist-v15') e.c.sourceState = { ...e.state };
+    };
+    assert.throws(() => e.c.applyOriginalMyListVisibility(), { code: 'NATIVE_SOURCE_REPLACED' });
+    assert.equal(e.section.getAttribute(NATIVE_VISIBILITY_ATTR), null);
+    assert.equal(e.status.style.getPropertyValue('--tm-row-gap'), '7px');
+    assert.equal(e.c.nativeCarousel.diagnostics().presentation.owners, 0);
+});
+
+test('visibility preference can decorate a discovered source before initialization publishes parent state', () => {
+    const e = sourcePresentationBridgeEnvironment();
+    e.c.sourceState = null;
+    e.c.nativeCarousel.clearBinding();
+    e.c.applyOriginalMyListVisibility();
+    assert.equal(e.section.getAttribute(NATIVE_VISIBILITY_ATTR), 'false');
+    assert.equal(e.c.sourceState, null);
+    assert.equal(e.c.nativeCarousel.currentBinding(), null);
+    e.c.cleanupTargetSessionDom();
+    assert.equal(e.section.getAttribute(NATIVE_VISIBILITY_ATTR), null);
+});
+
+test('actual initialization rejects marker replacement before collection and preserves queued intent', async () => {
+    const e = initializationEnvironment(6);
+    const runs = [];
+    e.c.scheduleRun = (...args) => runs.push(args);
+    const queued = { videoId: 'queued', action: 'remove' };
+    e.c.pendingMyListMutations.set('queued', queued);
+    let replaced = false;
+    e.track.classList.add = name => {
+        if (name !== 'tm-netflix-mylist-v15-track' || replaced) return;
+        replaced = true; e.c.sourceState = { ...e.c.sourceState };
+    };
+    const completion = e.c.runScript(1);
+    await e.flush(); await e.drain(); await completion;
+    assert.equal(replaced, true);
+    assert.equal(e.c.completedSection, null);
+    assert.equal(e.c.pendingMyListMutations.get('queued'), queued);
+    assert.equal(e.logs.some(entry => entry.name === 'legacyGridBuilt'), false);
+    assert.equal(e.c.initializationBlockedSessionToken, null);
+    assert.deepEqual(runs, [[0, 1]]);
 });
 
 test('count-detection timeout keeps its primary error when native profile diagnostics fail', async () => {
@@ -4833,7 +4937,10 @@ test('SPA indicator and not-yet-mounted modes bootstrap one page without optiona
         mountNativeControls(e.c.sourceState.section, 'indicator');
         if (!mounted) {
             e.scroller.id = 'delayed-scroller';
-            e.c.waitForNativeSource = async () => ({ found: true, scroller: e.scroller, track: e.track });
+            e.c.waitForNativeSource = async () => {
+                e.scroller.id = 'scroller';
+                return { found: true, scroller: e.scroller, track: e.track };
+            };
         }
         let scans = 0, anchor = null;
         e.c.collectAllItems = async () => { scans++; return e.items(150); };
@@ -8408,7 +8515,7 @@ function resizeEnvironment() {
     const e = hoverEnvironment(['handleTargetWindowResize', 'handleTargetVisualViewportResize', 'scheduleResponsiveRefresh',
         'responsiveSignature', 'responsivePageShape', 'realignActiveSource'], {
         window: viewport, responsiveRefreshTimer: null, responsiveRefreshing: false,
-        SOURCE_PARKED_CLASS: 'parked', ORIGINAL_VISIBILITY_ATTR: 'original-visible',
+        SOURCE_PARKED_CLASS: NATIVE_PARKED_CLASS, ORIGINAL_VISIBILITY_ATTR: NATIVE_VISIBILITY_ATTR,
         log: (name, details) => logs.push({ name, details }),
         layoutSummary: value => value,
         measureNativeCarouselGap: () => 10, updateResponsiveStatus: () => calls.styles++,
@@ -8442,8 +8549,8 @@ function resizeEnvironment() {
 
 function parkedResizeEnvironment() {
     const e = resizeEnvironment();
-    e.section.setAttribute('original-visible', 'false');
-    const classes = new Set(['parked']);
+    e.section.setAttribute(NATIVE_VISIBILITY_ATTR, 'false');
+    const classes = new Set([NATIVE_PARKED_CLASS]);
     e.c.sourceState.scroller.classList = { contains: key => classes.has(key),
         add: key => classes.add(key), remove: key => classes.delete(key) };
     e.measured.scrollerHeight = 1;
@@ -8505,9 +8612,9 @@ test('owned hidden-source collapse preserves active, pending and preparing hover
 
 test('hidden height transitions cannot bypass source, viewport, signature, mapping or clipping guards', async () => {
     const changes = [
-        e => e.section.setAttribute('original-visible', 'true'),
-        e => e.section.removeAttribute('original-visible'),
-        e => e.c.sourceState.scroller.classList.remove('parked'),
+        e => e.section.setAttribute(NATIVE_VISIBILITY_ATTR, 'true'),
+        e => e.section.removeAttribute(NATIVE_VISIBILITY_ATTR),
+        e => e.c.sourceState.scroller.classList.remove(NATIVE_PARKED_CLASS),
         e => { delete e.c.sourceState.resizeViewportSignature; },
         e => e.viewport.innerWidth++, e => e.viewport.innerHeight++,
         e => e.viewport.visualViewport.scale++, e => e.viewport.devicePixelRatio++,
@@ -8608,7 +8715,7 @@ test('a first real native preparation survives the parked-height startup check a
     const measured = { columns: 6, gridLeft: 20, sidePadding: 20,
         scrollerWidth: 680, scrollerHeight: 60, gap: 8, rowGap: 10 };
     Object.assign(e.c, {
-        SOURCE_PARKED_CLASS: 'parked', ORIGINAL_VISIBILITY_ATTR: 'original-visible',
+        SOURCE_PARKED_CLASS: NATIVE_PARKED_CLASS, ORIGINAL_VISIBILITY_ATTR: NATIVE_VISIBILITY_ATTR,
         window: { innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1 },
         responsiveRefreshTimer: null, responsiveRefreshing: false, pageCount: () => 1,
         currentGridGeometry: () => ({ width: 640, left: 20, columns: 6 }),
@@ -8617,8 +8724,8 @@ test('a first real native preparation survives the parked-height startup check a
     });
     const layout = mountLayoutFixture(e, measured);
     measured.scrollerHeight = 1;
-    e.section.setAttribute('original-visible', 'false');
-    e.c.sourceState.scroller.classList = { contains: key => key === 'parked' };
+    e.section.setAttribute(NATIVE_VISIBILITY_ATTR, 'false');
+    e.c.sourceState.scroller.classList = { contains: key => key === NATIVE_PARKED_CLASS };
     Object.assign(e.c.sourceState, { layout, resizeViewportSignature: e.c.responsiveViewportSignature() });
     e.grid.__tmAppliedGeometry = { width: 640, left: 20, columns: 6 };
     e.c.lastResponsiveSignature = e.c.responsiveSignature(layout);
