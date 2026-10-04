@@ -43,7 +43,6 @@ export function startLegacy() {
     const NATIVE_LOGICAL_STABLE_MS = 120;
     const DELTA_MUTATION_TIMEOUT_MS = 1800;
     const UNDO_ENTRY_TTL_MS = 30000;
-    const HOVER_SOURCE_TIMEOUT_MS = 500;
     const HOVER_ACTIVATION_DELAY_MS = 120;
     const HOVER_SCROLL_QUIET_MS = 180;
     const HOVER_RETRY_DELAY_MS = 180;
@@ -560,14 +559,6 @@ export function startLegacy() {
 
     function invalidateNativeReadScope(...args) {
         return nativeCarousel.invalidateReads(...args);
-    }
-
-    function nativeFilledSlots(...args) {
-        return nativeCarousel.filledSlots(...args);
-    }
-
-    function nativeIndicatorItems(...args) {
-        return nativeCarousel.indicators(...args);
     }
 
     function isTargetPage() {
@@ -1374,10 +1365,6 @@ export function startLegacy() {
         // Current membership owns the action; Netflix's Undo UI can advertise remove on an add.
         const wasInLegacy = Boolean(sourceState?.itemMap?.has(`v:${decoded.videoId}`));
         return { ...decoded, action: wasInLegacy ? 'remove' : 'add', wasInLegacy };
-    }
-
-    function parseSlotLayoutFormula(...args) {
-        return nativeCarousel.slotLayoutFormula(...args);
     }
 
     function nativeLayoutObservation(section, scroller = null, track = null, mode = 'auto', state = sourceState) {
@@ -3940,30 +3927,6 @@ export function startLegacy() {
             } });
     }
 
-    function logicalVisibleSignature(...args) {
-        return nativeCarousel.visiblePageSignature(...args);
-    }
-
-    function registerLogicalPageSignature(...args) {
-        return nativeCarousel.registerPage(...args);
-    }
-
-    function normalizeLogicalPages(...args) {
-        return nativeCarousel.normalizePages(...args);
-    }
-
-    function carouselMoveButton(...args) {
-        return nativeCarousel.navigationControl(...args);
-    }
-
-    function carouselMoveButtonDisabled(...args) {
-        return nativeCarousel.controlDisabled(...args);
-    }
-
-    function moveOnePage(...args) {
-        return nativeCarousel.movePage(...args);
-    }
-
     function goToPage(...args) {
         return nativeCarousel.navigateTo(...args);
     }
@@ -4036,22 +3999,13 @@ export function startLegacy() {
         return videoId ? `v:${videoId}` : `h:${href}`;
     }
 
-    function pageItemKeys(...args) {
-        return nativeCarousel.pageKeys(...args);
-    }
-
-    function currentPageVideoIds(...args) {
-        return nativeCarousel.visibleVideoIds(...args);
+    function pageItemKeys(items, page) {
+        return new Set(items.filter(item => item.page === page).map(itemKey).filter(Boolean));
     }
 
     async function ensureFreshIndicatorPageZeroAnchor(section, scroller, track, firstVideoId, sessionToken = null) {
         return nativeCarousel.anchorPageZero({ section, scroller, track, firstVideoId, sessionToken,
             columns: sourceState?.layout?.columns });
-    }
-
-    // Reads the private React props needed to order and validate Netflix's logical carousel.
-    function logVirtualRawIndexDiagnostic(...args) {
-        return nativeCarousel.diagnoseIndices(...args);
     }
 
     function isResizeResponsiveReason(reason) {
@@ -4089,26 +4043,6 @@ export function startLegacy() {
             nativeCountReadings: nativeCountState?.readings || [],
             nativeCountUniqueReadings: nativeCountState?.uniqueReadings || []
         };
-    }
-
-    function expectedLogicalIndicesForPage(...args) {
-        return nativeCarousel.expectedPageIndices(...args);
-    }
-
-    function logicalPageFromSlotPositions(...args) {
-        return nativeCarousel.pageForPositions(...args);
-    }
-
-    function nativeLogicalPageState(...args) {
-        return nativeCarousel.logicalWindow(...args);
-    }
-
-    function forceLogicalPageSignature(...args) {
-        return nativeCarousel.forcePage(...args);
-    }
-
-    function requireNativeLogicalPageState(...args) {
-        return nativeCarousel.requireLogicalWindow(...args);
     }
 
     async function collectAllItems(section, scroller, track, totalCount, sessionToken = null) {
@@ -4274,19 +4208,6 @@ export function startLegacy() {
         ensureLiveNativeBinding('hover-source-direct');
         if (!sourceState?.track?.isConnected || !sourceState?.scroller?.isConnected) return null;
         return findMountedSourceSlot(sourceState.track, item, true);
-    }
-
-    async function waitForMountedSourceItem(item, timeout = HOVER_SOURCE_TIMEOUT_MS, activeOnly = true, sessionToken = null, token = null) {
-        assertRouteSession(sessionToken);
-        if (hoverPreparationCancelled(token)) return null;
-        ensureLiveNativeBinding('hover-source-wait');
-        const state = sourceState;
-        const result = await nativeCarousel.resolveCard({ mode: 'mounted', section: state?.section,
-            scroller: state?.scroller, track: state?.track, item: { href: item.href, videoId: item.videoId },
-            timeout, activeOnly, sessionToken, hoverToken: token });
-        assertRouteSession(sessionToken);
-        if (hoverPreparationCancelled(token) || sourceState !== state || result.status !== 'found') return null;
-        return result.source.slot;
     }
 
     async function resolveExpectedPageSourceItem(item, expectedPage = item.page, token = null, sessionToken = null) {

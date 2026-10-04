@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.29
+// @version      1.4.30
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -5828,6 +5828,85 @@
     });
   }
 
+  // src/netflix/carousel/react-readings.js
+  function createReactReadings({ cardSelector }) {
+    const NETFLIX_DOM_SELECTORS2 = { standardCard: cardSelector };
+    return Object.freeze({
+      fiberForNode(node) {
+        if (!node) return null;
+        for (const key of Object.getOwnPropertyNames(node)) {
+          if (!key.startsWith("__reactFiber$") && !key.startsWith("__reactInternalInstance$")) continue;
+          const fiber = node[key];
+          if (fiber && typeof fiber === "object") return fiber;
+        }
+        return null;
+      },
+      typeName(fiber) {
+        const type = fiber?.elementType || fiber?.type;
+        if (typeof type === "string") return type;
+        if (typeof type === "function") return type.displayName || type.name || "(anonymous)";
+        if (type && typeof type === "object") {
+          return String(type.displayName || type.name || type.$$typeof || "(object)");
+        }
+        return type == null ? "" : String(type);
+      },
+      readFiberProp(roots, property, isValid) {
+        for (const root of roots) {
+          let fiber = this.fiberForNode(root);
+          const visited = /* @__PURE__ */ new Set();
+          let depth = 0;
+          while (fiber && typeof fiber === "object" && depth < 16 && !visited.has(fiber)) {
+            visited.add(fiber);
+            const sources = [
+              ["memoizedProps", fiber.memoizedProps],
+              ["pendingProps", fiber.pendingProps],
+              ["alternate.memoizedProps", fiber.alternate?.memoizedProps],
+              ["alternate.pendingProps", fiber.alternate?.pendingProps]
+            ];
+            for (const [source, props] of sources) {
+              const value = props?.[property];
+              if (isValid(value)) {
+                return {
+                  value,
+                  depth,
+                  source,
+                  fiberKey: fiber.key ?? null,
+                  typeName: this.typeName(fiber)
+                };
+              }
+            }
+            fiber = fiber.return;
+            depth++;
+          }
+        }
+        return { value: null, depth: null, source: null, fiberKey: null, typeName: "" };
+      },
+      readItemIndex(slot) {
+        const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS2.standardCard) || null;
+        return this.readFiberProp(
+          [slot?.firstElementChild || null, card?.parentElement || null, card],
+          "itemIndex",
+          Number.isSafeInteger
+        );
+      },
+      readCarouselTotalCount(slot) {
+        const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS2.standardCard) || null;
+        const reading = this.readFiberProp(
+          [slot, slot?.firstElementChild || null, card?.parentElement || null, card],
+          "totalCount",
+          (value) => Number.isSafeInteger(value) && value >= 0
+        );
+        return reading.value;
+      }
+    });
+  }
+  function readCardSignature(slots, cardSelector) {
+    return slots.map((slot) => {
+      const card = slot.querySelector(cardSelector);
+      return card?.href || card?.getAttribute("href") || "";
+    }).filter(Boolean).join("|");
+  }
+
   // src/netflix/carousel/carousel.js
   function createCarousel({
     pageDom: netflixDom,
@@ -7193,9 +7272,6 @@
     function forceLogicalPageSignature(section, signature, page) {
       return getModel(section)?.force(signature, page) ?? null;
     }
-    function normalizeLogicalPages(section) {
-      return getModel(section)?.normalize() || 0;
-    }
     function logCarouselDomProfile(section, reason = "unknown") {
       const model = getModel(section);
       if (!model) return;
@@ -7246,74 +7322,7 @@
       const middle = Math.floor(sorted.length / 2);
       return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
     }
-    const netflixReactCarousel = Object.freeze({
-      fiberForNode(node) {
-        if (!node) return null;
-        for (const key of Object.getOwnPropertyNames(node)) {
-          if (!key.startsWith("__reactFiber$") && !key.startsWith("__reactInternalInstance$")) continue;
-          const fiber = node[key];
-          if (fiber && typeof fiber === "object") return fiber;
-        }
-        return null;
-      },
-      typeName(fiber) {
-        const type = fiber?.elementType || fiber?.type;
-        if (typeof type === "string") return type;
-        if (typeof type === "function") return type.displayName || type.name || "(anonymous)";
-        if (type && typeof type === "object") {
-          return String(type.displayName || type.name || type.$$typeof || "(object)");
-        }
-        return type == null ? "" : String(type);
-      },
-      readFiberProp(roots, property, isValid) {
-        for (const root of roots) {
-          let fiber = this.fiberForNode(root);
-          const visited = /* @__PURE__ */ new Set();
-          let depth = 0;
-          while (fiber && typeof fiber === "object" && depth < 16 && !visited.has(fiber)) {
-            visited.add(fiber);
-            const sources = [
-              ["memoizedProps", fiber.memoizedProps],
-              ["pendingProps", fiber.pendingProps],
-              ["alternate.memoizedProps", fiber.alternate?.memoizedProps],
-              ["alternate.pendingProps", fiber.alternate?.pendingProps]
-            ];
-            for (const [source, props] of sources) {
-              const value = props?.[property];
-              if (isValid(value)) {
-                return {
-                  value,
-                  depth,
-                  source,
-                  fiberKey: fiber.key ?? null,
-                  typeName: this.typeName(fiber)
-                };
-              }
-            }
-            fiber = fiber.return;
-            depth++;
-          }
-        }
-        return { value: null, depth: null, source: null, fiberKey: null, typeName: "" };
-      },
-      readItemIndex(slot) {
-        const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS2.standardCard) || null;
-        return this.readFiberProp(
-          [slot?.firstElementChild || null, card?.parentElement || null, card],
-          "itemIndex",
-          Number.isSafeInteger
-        );
-      },
-      readCarouselTotalCount(slot) {
-        const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS2.standardCard) || null;
-        const reading = this.readFiberProp(
-          [slot, slot?.firstElementChild || null, card?.parentElement || null, card],
-          "totalCount",
-          (value) => Number.isSafeInteger(value) && value >= 0
-        );
-        return reading.value;
-      }
-    });
+    const netflixReactCarousel = createReactReadings({ cardSelector: NETFLIX_DOM_SELECTORS2.standardCard });
     function createNativeReadScope() {
       return {
         profiles: /* @__PURE__ */ new WeakMap(),
@@ -7496,10 +7505,7 @@
       return current;
     }
     function visibleSignature(slots) {
-      return slots.map((slot) => {
-        const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
-        return card?.href || card?.getAttribute("href") || "";
-      }).filter(Boolean).join("|");
+      return readCardSignature(slots, NETFLIX_DOM_SELECTORS2.standardCard);
     }
     function nativeCarouselReadiness(section, scroller, track) {
       if (!nativeReadScope) return withNativeReadScope(() => nativeCarouselReadiness(section, scroller, track));
@@ -8227,7 +8233,6 @@
       movePage: navigation.move,
       navigateTo: navigation.navigate,
       stablePage: navigation.stable,
-      pageKeys: navigation.pageKeys,
       restorePage(section, scroller, track, items, slots, page, options = {}) {
         return options.mode === "strict" ? navigation.restoreStrict(section, scroller, track, items, slots, page, options.sessionToken ?? null) : navigation.restoreFast(
           section,
@@ -8242,7 +8247,6 @@
       },
       mountedBootstrap: collection.mountedBootstrap,
       anchorPageZero,
-      visibleVideoIds: currentPageVideoIds,
       resolveCard,
       mountedCard,
       isSourceCurrent,
@@ -8257,16 +8261,6 @@
         models = /* @__PURE__ */ new WeakMap();
         nativeReadScope = null;
       },
-      model: getCarouselDomRuntime,
-      resetModel: resetCarouselDomRuntime,
-      profile: detectCarouselDomProfile,
-      registerPage: registerLogicalPageSignature,
-      forcePage: forceLogicalPageSignature,
-      normalizePages: normalizeLogicalPages,
-      notePage: (section, page, cycle = null) => modelForWrite(section)?.notePage(page, cycle),
-      beginCollection: (section) => modelForWrite(section)?.beginCollection(),
-      markCycle: (section) => modelForWrite(section)?.markCycle(),
-      completeCollection: (section, pages) => modelForWrite(section)?.finishCollection(pages),
       prepareSource,
       acceptCollection,
       isPreparationCurrent,
@@ -8278,38 +8272,9 @@
       captureMountedItem,
       assertObservation,
       isObservationCurrent,
-      anchorAfterDelta: (section, facts) => modelForWrite(section)?.anchor(facts),
-      markMappingStale: (section) => modelForWrite(section)?.markStale(),
-      deferMapping: (section) => modelForWrite(section)?.deferMapping(),
-      commitMapping(section, facts) {
-        resetCarouselDomRuntime(section);
-        getModel(section)?.commit(facts);
-      },
       sample: withNativeReadScope,
       invalidateReads: invalidateNativeReadScope,
-      rect: nativeRect,
-      filledSlots: nativeFilledSlots,
-      indicators: nativeIndicatorItems,
-      currentSlots: currentPageSlots,
-      signatureOf: visibleSignature,
-      visiblePageSignature: logicalVisibleSignature,
-      selectedPage,
-      pageCount,
-      navigationControl: carouselMoveButton,
-      controlDisabled: carouselMoveButtonDisabled,
-      readiness: nativeCarouselReadiness,
-      ready: waitForNativeCarouselReady,
       waitForSource: waitForNativeSource,
-      slotLayoutFormula: parseSlotLayoutFormula,
-      itemIndex: netflixItemIndexFromSlot,
-      positions: logicalSlotPositions,
-      logicalWindow: nativeLogicalPageState,
-      requireLogicalWindow: requireNativeLogicalPageState,
-      expectedPageIndices: expectedLogicalIndicesForPage,
-      pageForPositions: logicalPageFromSlotPositions,
-      wrappedTail: wrappedTailLogicalPageInfo,
-      wrappedTailForRebuild: wrappedTailLogicalPageForRebuild,
-      diagnoseIndices: logVirtualRawIndexDiagnostic,
       diagnostics
     });
   }
@@ -8352,7 +8317,6 @@
     const NATIVE_LOGICAL_STABLE_MS = 120;
     const DELTA_MUTATION_TIMEOUT_MS = 1800;
     const UNDO_ENTRY_TTL_MS = 3e4;
-    const HOVER_SOURCE_TIMEOUT_MS = 500;
     const HOVER_ACTIVATION_DELAY_MS = 120;
     const HOVER_SCROLL_QUIET_MS = 180;
     const HOVER_RETRY_DELAY_MS = 180;
@@ -8407,7 +8371,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.29";
+    const SCRIPT_VERSION = "1.4.30";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -9110,12 +9074,6 @@
     }
     function invalidateNativeReadScope(...args) {
       return nativeCarousel.invalidateReads(...args);
-    }
-    function nativeFilledSlots(...args) {
-      return nativeCarousel.filledSlots(...args);
-    }
-    function nativeIndicatorItems(...args) {
-      return nativeCarousel.indicators(...args);
     }
     function isTargetPage() {
       return location.origin === "https://www.netflix.com" && location.pathname === TARGET_PATH;
@@ -9925,9 +9883,6 @@
       if (!decoded) return null;
       const wasInLegacy = Boolean(sourceState?.itemMap?.has(`v:${decoded.videoId}`));
       return { ...decoded, action: wasInLegacy ? "remove" : "add", wasInLegacy };
-    }
-    function parseSlotLayoutFormula(...args) {
-      return nativeCarousel.slotLayoutFormula(...args);
     }
     function nativeLayoutObservation(section, scroller = null, track = null, mode = "auto", state = sourceState) {
       const sessionToken = sessionScope.token;
@@ -12397,24 +12352,6 @@
         }
       });
     }
-    function logicalVisibleSignature(...args) {
-      return nativeCarousel.visiblePageSignature(...args);
-    }
-    function registerLogicalPageSignature(...args) {
-      return nativeCarousel.registerPage(...args);
-    }
-    function normalizeLogicalPages(...args) {
-      return nativeCarousel.normalizePages(...args);
-    }
-    function carouselMoveButton(...args) {
-      return nativeCarousel.navigationControl(...args);
-    }
-    function carouselMoveButtonDisabled(...args) {
-      return nativeCarousel.controlDisabled(...args);
-    }
-    function moveOnePage(...args) {
-      return nativeCarousel.movePage(...args);
-    }
     function goToPage(...args) {
       return nativeCarousel.navigateTo(...args);
     }
@@ -12489,11 +12426,8 @@
       const videoId = videoIdFromHref(href);
       return videoId ? `v:${videoId}` : `h:${href}`;
     }
-    function pageItemKeys(...args) {
-      return nativeCarousel.pageKeys(...args);
-    }
-    function currentPageVideoIds(...args) {
-      return nativeCarousel.visibleVideoIds(...args);
+    function pageItemKeys(items, page) {
+      return new Set(items.filter((item) => item.page === page).map(itemKey).filter(Boolean));
     }
     async function ensureFreshIndicatorPageZeroAnchor(section, scroller, track, firstVideoId, sessionToken = null) {
       return nativeCarousel.anchorPageZero({
@@ -12504,9 +12438,6 @@
         sessionToken,
         columns: sourceState?.layout?.columns
       });
-    }
-    function logVirtualRawIndexDiagnostic(...args) {
-      return nativeCarousel.diagnoseIndices(...args);
     }
     function isResizeResponsiveReason(reason) {
       return reason === "ResizeObserver" || reason === "responsive-resize-retry";
@@ -12534,21 +12465,6 @@
         nativeCountReadings: nativeCountState?.readings || [],
         nativeCountUniqueReadings: nativeCountState?.uniqueReadings || []
       };
-    }
-    function expectedLogicalIndicesForPage2(...args) {
-      return nativeCarousel.expectedPageIndices(...args);
-    }
-    function logicalPageFromSlotPositions2(...args) {
-      return nativeCarousel.pageForPositions(...args);
-    }
-    function nativeLogicalPageState(...args) {
-      return nativeCarousel.logicalWindow(...args);
-    }
-    function forceLogicalPageSignature(...args) {
-      return nativeCarousel.forcePage(...args);
-    }
-    function requireNativeLogicalPageState(...args) {
-      return nativeCarousel.requireLogicalWindow(...args);
     }
     async function collectAllItems(section, scroller, track, totalCount, sessionToken = null) {
       const state = sourceState;
@@ -12703,26 +12619,6 @@
       ensureLiveNativeBinding("hover-source-direct");
       if (!sourceState?.track?.isConnected || !sourceState?.scroller?.isConnected) return null;
       return findMountedSourceSlot(sourceState.track, item, true);
-    }
-    async function waitForMountedSourceItem(item, timeout = HOVER_SOURCE_TIMEOUT_MS, activeOnly = true, sessionToken = null, token = null) {
-      assertRouteSession(sessionToken);
-      if (hoverPreparationCancelled(token)) return null;
-      ensureLiveNativeBinding("hover-source-wait");
-      const state = sourceState;
-      const result = await nativeCarousel.resolveCard({
-        mode: "mounted",
-        section: state?.section,
-        scroller: state?.scroller,
-        track: state?.track,
-        item: { href: item.href, videoId: item.videoId },
-        timeout,
-        activeOnly,
-        sessionToken,
-        hoverToken: token
-      });
-      assertRouteSession(sessionToken);
-      if (hoverPreparationCancelled(token) || sourceState !== state || result.status !== "found") return null;
-      return result.source.slot;
     }
     async function resolveExpectedPageSourceItem(item, expectedPage = item.page, token = null, sessionToken = null) {
       assertRouteSession(sessionToken);

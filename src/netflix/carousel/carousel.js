@@ -3,6 +3,7 @@ import { createPageModel, normalizeNetflixLogicalIndex, expectedLogicalIndicesFo
 import { NETFLIX_DOM_SELECTORS as DEFAULT_SELECTORS } from '../page-dom.js';
 import { createNavigation } from './navigation.js';
 import { createCollection } from './collection.js';
+import { createReactReadings, readCardSignature } from './react-readings.js';
 import { GRID_ID as DEFAULT_GRID_ID, STATUS_ID as DEFAULT_STATUS_ID, LEGACY_EMPTY_STATE_ID as DEFAULT_EMPTY_ID,
     ORDER_MISMATCH_DIALOG_ID as DEFAULT_DIALOG_ID, SYNTHETIC_SECTION_ID, ORIGINAL_HIDDEN_CLASS, ORIGINAL_VISIBILITY_ATTR,
     FAST_MOVE_CLASS, SOURCE_SCAN_CLASS, SOURCE_PARKED_CLASS } from '../../dom-names.js';
@@ -1042,7 +1043,6 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     }
     function registerLogicalPageSignature(section, signature, page = null) { return getModel(section)?.register(signature, page) ?? null; }
     function forceLogicalPageSignature(section, signature, page) { return getModel(section)?.force(signature, page) ?? null; }
-    function normalizeLogicalPages(section) { return getModel(section)?.normalize() || 0; }
     function logCarouselDomProfile(section, reason = 'unknown') {
         const model = getModel(section); if (!model) return;
         const summary = carouselDomProfileSummary(section);
@@ -1083,78 +1083,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
     }
 
-    const netflixReactCarousel = Object.freeze({
-        fiberForNode(node) {
-            if (!node) return null;
-            for (const key of Object.getOwnPropertyNames(node)) {
-                if (!key.startsWith('__reactFiber$') && !key.startsWith('__reactInternalInstance$')) continue;
-                const fiber = node[key];
-                if (fiber && typeof fiber === 'object') return fiber;
-            }
-            return null;
-        },
-
-        typeName(fiber) {
-            const type = fiber?.elementType || fiber?.type;
-            if (typeof type === 'string') return type;
-            if (typeof type === 'function') return type.displayName || type.name || '(anonymous)';
-            if (type && typeof type === 'object') {
-                return String(type.displayName || type.name || type.$$typeof || '(object)');
-            }
-            return type == null ? '' : String(type);
-        },
-
-        readFiberProp(roots, property, isValid) {
-            for (const root of roots) {
-                let fiber = this.fiberForNode(root);
-                const visited = new Set();
-                let depth = 0;
-                while (fiber && typeof fiber === 'object' && depth < 16 && !visited.has(fiber)) {
-                    visited.add(fiber);
-                    const sources = [
-                        ['memoizedProps', fiber.memoizedProps],
-                        ['pendingProps', fiber.pendingProps],
-                        ['alternate.memoizedProps', fiber.alternate?.memoizedProps],
-                        ['alternate.pendingProps', fiber.alternate?.pendingProps]
-                    ];
-                    for (const [source, props] of sources) {
-                        const value = props?.[property];
-                        if (isValid(value)) {
-                            return {
-                                value,
-                                depth,
-                                source,
-                                fiberKey: fiber.key ?? null,
-                                typeName: this.typeName(fiber)
-                            };
-                        }
-                    }
-                    fiber = fiber.return;
-                    depth++;
-                }
-            }
-            return { value: null, depth: null, source: null, fiberKey: null, typeName: '' };
-        },
-
-        readItemIndex(slot) {
-            const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard) || null;
-            return this.readFiberProp(
-                [slot?.firstElementChild || null, card?.parentElement || null, card],
-                'itemIndex',
-                Number.isSafeInteger
-            );
-        },
-
-        readCarouselTotalCount(slot) {
-            const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard) || null;
-            const reading = this.readFiberProp(
-                [slot, slot?.firstElementChild || null, card?.parentElement || null, card],
-                'totalCount',
-                value => Number.isSafeInteger(value) && value >= 0
-            );
-            return reading.value;
-        }
-    });
+    const netflixReactCarousel = createReactReadings({ cardSelector: NETFLIX_DOM_SELECTORS.standardCard });
 
     function createNativeReadScope() {
         return { profiles: new WeakMap(), indicators: new WeakMap(), filled: new WeakMap(),
@@ -1362,12 +1291,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         return current;
     }
 
-    function visibleSignature(slots) {
-        return slots.map(slot => {
-            const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-            return card?.href || card?.getAttribute('href') || '';
-        }).filter(Boolean).join('|');
-    }
+    function visibleSignature(slots) { return readCardSignature(slots, NETFLIX_DOM_SELECTORS.standardCard); }
 
     function nativeCarouselReadiness(section, scroller, track) {
         if (!nativeReadScope) return withNativeReadScope(() => nativeCarouselReadiness(section, scroller, track));
@@ -2209,43 +2133,20 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         whenNavigationIdle: navigation.whenIdle,
         suppressMotion: navigation.suppress, restoreMotion: navigation.restoreMotion,
         movePage: navigation.move, navigateTo: navigation.navigate, stablePage: navigation.stable,
-        pageKeys: navigation.pageKeys,
         restorePage(section, scroller, track, items, slots, page, options = {}) {
             return options.mode === 'strict'
                 ? navigation.restoreStrict(section, scroller, track, items, slots, page, options.sessionToken ?? null)
                 : navigation.restoreFast(section, scroller, track, items, slots, page,
                     options.canonicalTransform || '', options.sessionToken ?? null);
         },
-        mountedBootstrap: collection.mountedBootstrap, anchorPageZero, visibleVideoIds: currentPageVideoIds,
+        mountedBootstrap: collection.mountedBootstrap, anchorPageZero,
         resolveCard, mountedCard, isSourceCurrent, assertSource,
         refreshMapping, isMappingCurrent, assertMapping,
         collect: options => options.mode === 'mounted-single-page' ? collection.collectMounted(options) : collection.collect(options),
         resetSource() { clearBinding(); collection.resetDiagnostics(); models = new WeakMap(); nativeReadScope = null; },
-        model: getCarouselDomRuntime, resetModel: resetCarouselDomRuntime,
-        profile: detectCarouselDomProfile,
-        registerPage: registerLogicalPageSignature, forcePage: forceLogicalPageSignature, normalizePages: normalizeLogicalPages,
-        notePage: (section, page, cycle = null) => modelForWrite(section)?.notePage(page, cycle),
-        beginCollection: section => modelForWrite(section)?.beginCollection(),
-        markCycle: section => modelForWrite(section)?.markCycle(),
-        completeCollection: (section, pages) => modelForWrite(section)?.finishCollection(pages),
         prepareSource, acceptCollection, isPreparationCurrent, assertPreparation,
         observeSource, pageCards, measureLayout, discoverSource, captureMountedItem, assertObservation, isObservationCurrent,
-        anchorAfterDelta: (section, facts) => modelForWrite(section)?.anchor(facts),
-        markMappingStale: section => modelForWrite(section)?.markStale(),
-        deferMapping: section => modelForWrite(section)?.deferMapping(),
-        commitMapping(section, facts) { resetCarouselDomRuntime(section); getModel(section)?.commit(facts); },
-        sample: withNativeReadScope, invalidateReads: invalidateNativeReadScope, rect: nativeRect,
-        filledSlots: nativeFilledSlots, indicators: nativeIndicatorItems, currentSlots: currentPageSlots,
-        signatureOf: visibleSignature, visiblePageSignature: logicalVisibleSignature,
-        selectedPage, pageCount, navigationControl: carouselMoveButton, controlDisabled: carouselMoveButtonDisabled,
-        readiness: nativeCarouselReadiness, ready: waitForNativeCarouselReady, waitForSource: waitForNativeSource,
-        slotLayoutFormula: parseSlotLayoutFormula,
-        itemIndex: netflixItemIndexFromSlot,
-        positions: logicalSlotPositions, logicalWindow: nativeLogicalPageState, requireLogicalWindow: requireNativeLogicalPageState,
-        expectedPageIndices: expectedLogicalIndicesForPage,
-        pageForPositions: logicalPageFromSlotPositions, wrappedTail: wrappedTailLogicalPageInfo,
-        wrappedTailForRebuild: wrappedTailLogicalPageForRebuild,
-        diagnoseIndices: logVirtualRawIndexDiagnostic,
+        sample: withNativeReadScope, invalidateReads: invalidateNativeReadScope, waitForSource: waitForNativeSource,
         diagnostics
     });
 }

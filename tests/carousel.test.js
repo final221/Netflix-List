@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCarousel } from '../src/netflix/carousel/carousel.js';
+import { createPageModel, expectedLogicalIndicesForPage, logicalPageFromSlotPositions } from '../src/netflix/carousel/page-model.js';
 import { createNetflixPageDom } from '../src/netflix/page-dom.js';
 import { createCardMarkup } from '../src/netflix/card-markup.js';
 import { createSessionScope } from '../src/app/session-scope.js';
@@ -44,6 +45,25 @@ function environment(overrides = {}) {
     return { document, scheduler, scope, carousel, host, section, scroller, track, control, pageDom, observers, window };
 }
 
+const sourceOptions = e => ({ section: e.section, scroller: e.scroller, track: e.track });
+const modelFacts = e => e.carousel.diagnostics({ source: sourceOptions(e) }).source.carouselDom;
+const position = e => e.carousel.observeSource({ ...sourceOptions(e), position: true }).position;
+const anchorMapping = (e, pages = 3) => e.carousel.refreshMapping({ ...sourceOptions(e), mode: 'delta',
+    totalCount: pages * (e.shape?.columns || 1), columns: e.shape?.columns || 1 });
+
+async function admitCollection(e, pages, page) {
+    const columns = e.slots.length, totalCount = pages * columns;
+    const prepared = await e.settle(e.carousel.prepareSource({ ...e.options, fastSinglePageTotalCount: columns }));
+    e.carousel.acceptCollection({ preparation: prepared, totalCount, columns, collectedCount: totalCount });
+    const indices = e.slots.map(slot => slot.__reactFiber$mounted.memoizedProps.itemIndex);
+    const shape = { ...e.shape };
+    Object.assign(e.shape, { totalCount, columns });
+    e.slots.forEach((slot, index) => { slot.__reactFiber$mounted.memoizedProps.itemIndex = page * columns + index; });
+    assert.equal(position(e).page, page);
+    Object.assign(e.shape, shape);
+    e.slots.forEach((slot, index) => { slot.__reactFiber$mounted.memoizedProps.itemIndex = indices[index]; });
+}
+
 test('binding replacement invalidates old handles even for connected sources with matching title identity', () => {
     const e = environment();
     const old = e.carousel.bind(e.section, e.scroller, e.track);
@@ -61,13 +81,25 @@ test('binding replacement invalidates old handles even for connected sources wit
     assert.equal(Object.isFrozen(current), true);
 });
 
-test('page mapping has one private writer and publishes read-only signature and profile observations', () => {
+test('carousel exposes admitted operations without raw native readers or model writers', () => {
     const e = environment();
-    e.carousel.bind(e.section, e.scroller, e.track);
-    e.carousel.registerPage(e.section, 'first', 0);
-    e.carousel.registerPage(e.section, 'last', 4);
-    e.carousel.completeCollection(e.section, 5);
-    const view = e.carousel.model(e.section);
+    for (const name of ['model', 'resetModel', 'profile', 'registerPage', 'forcePage', 'normalizePages',
+        'notePage', 'beginCollection', 'markCycle', 'completeCollection', 'anchorAfterDelta', 'markMappingStale',
+        'deferMapping', 'commitMapping', 'rect', 'filledSlots', 'indicators', 'currentSlots', 'signatureOf',
+        'visiblePageSignature', 'selectedPage', 'pageCount', 'navigationControl', 'controlDisabled', 'readiness',
+        'ready', 'slotLayoutFormula', 'itemIndex', 'positions', 'logicalWindow', 'requireLogicalWindow',
+        'expectedPageIndices', 'pageForPositions', 'wrappedTail', 'wrappedTailForRebuild', 'diagnoseIndices', 'visibleVideoIds', 'pageKeys']) {
+        assert.equal(e.carousel[name], undefined, name);
+    }
+});
+
+test('private page mapping keeps read-only views and retires replacement model ownership', () => {
+    const profile = Object.freeze({ pageMode: 'logical' });
+    const model = createPageModel(profile);
+    model.register('first', 0);
+    model.register('last', 4);
+    model.finishCollection(5);
+    const view = model.view;
     assert.equal(view.currentPage, 4);
     assert.equal(view.knownPageCount, 5);
     assert.equal(view.signatureToPage.get('last'), 4);
@@ -76,15 +108,16 @@ test('page mapping has one private writer and publishes read-only signature and 
     assert.equal(view.signatureToPage.set, undefined);
     assert.equal(view.signatureToPage.clear, undefined);
     assert.throws(() => { view.profile.pageMode = 'indicator'; }, TypeError);
-    e.carousel.forcePage(e.section, 'last', 3);
+    model.force('last', 3);
     assert.equal(view.pageToSignature.has(4), false);
     assert.equal(view.signatureToPage.get('last'), 3);
-    e.carousel.anchorAfterDelta(e.section, { pageCount: 4, currentPage: 2, signature: 'new' });
+    model.anchor({ pageCount: 4, currentPage: 2, signature: 'new' });
     assert.equal(view.signatureToPage.has('first'), false);
     assert.equal(view.currentPage, 2);
     assert.equal(view.pageMappingStale, true);
-    e.carousel.commitMapping(e.section, { pageCount: 4, currentPage: 1, signature: 'confirmed' });
-    assert.equal(e.carousel.model(e.section).pageMappingStale, false);
+    const replacement = createPageModel(profile);
+    replacement.commit({ pageCount: 4, currentPage: 1, signature: 'confirmed' });
+    assert.equal(replacement.view.pageMappingStale, false);
     assert.equal(view.currentPage, 2, 'an old model view cannot become the replacement model');
 });
 
@@ -94,11 +127,11 @@ test('synchronous read scopes discard caches before async continuation and inval
     e.track.getBoundingClientRect = () => { reads++; return { left }; };
     e.carousel.bind(e.section, e.scroller, e.track);
     e.carousel.sample(() => {
-        assert.equal(e.carousel.rect(e.track).left, 0);
+        assert.equal(e.carousel.measureLayout({ section: e.track, mode: 'bounds' }).bounds.left, 0);
         left = 20;
-        assert.equal(e.carousel.rect(e.track).left, 0);
+        assert.equal(e.carousel.measureLayout({ section: e.track, mode: 'bounds' }).bounds.left, 0);
         e.carousel.invalidateReads();
-        assert.equal(e.carousel.rect(e.track).left, 20);
+        assert.equal(e.carousel.measureLayout({ section: e.track, mode: 'bounds' }).bounds.left, 20);
     });
     assert.equal(reads, 2);
     assert.throws(() => e.carousel.sample(() => { throw new Error('read'); }), /read/);
@@ -107,20 +140,19 @@ test('synchronous read scopes discard caches before async continuation and inval
         await Promise.resolve();
         assert.equal(e.carousel.diagnostics().readScopeActive, false);
         left = 30;
-        assert.equal(e.carousel.rect(e.track).left, 30);
+        assert.equal(e.carousel.measureLayout({ section: e.track, mode: 'bounds' }).bounds.left, 30);
     });
 });
 
 test('an obsolete readiness poll cannot publish success from still-connected old binding elements', async () => {
     const e = environment();
     e.carousel.bind(e.section, e.scroller, e.track);
-    const pending = e.carousel.ready(e.section, e.scroller, e.track, 1);
+    const pending = e.carousel.prepareSource({ ...sourceOptions(e), sessionToken: e.scope.token });
+    const rejected = assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' });
     const replacement = e.scroller.appendChild(new Element('div'));
     e.carousel.bind(e.section, e.scroller, replacement);
     await e.scheduler.advance(1200);
-    const result = await pending;
-    assert.equal(result.ready, false);
-    assert.equal(result.reason, 'detached');
+    await rejected;
     assert.equal(e.track.isConnected, true);
 });
 
@@ -153,7 +185,7 @@ test('a missing positive-count source times out while a connected empty carousel
     const empty = environment({ readListShape: () => ({ totalCount: 0, columns: 4 }), readGraphqlCount: () => 0 });
     empty.carousel.bind(empty.section, empty.scroller, empty.track);
     let completed = false;
-    const waiting = empty.carousel.ready(empty.section, empty.scroller, empty.track, empty.scope.token);
+    const waiting = empty.carousel.prepareSource({ ...sourceOptions(empty), sessionToken: empty.scope.token });
     waiting.then(() => { completed = true; });
     await empty.scheduler.advance(1199);
     assert.equal(completed, false);
@@ -258,15 +290,15 @@ test('one native-state sample shares profile, filled-slot, rectangle, and React-
 
 test('indicator selection and carousel generation refresh on the next sample', () => {
     const e = nativeReadEnvironment('indicator');
-    assert.equal(e.carousel.selectedPage(e.section), 0);
+    assert.equal(position(e).page, 0);
     assert.equal(e.counts.indicators, 1);
     assert.equal(e.counts.profile, 6);
     e.setMode('indicator', 2);
-    assert.equal(e.carousel.selectedPage(e.section), 2);
+    assert.equal(position(e).page, 2);
     e.setMode('logical');
     e.mount([6, 7, 8, 9, 10, 11]);
-    assert.equal(e.carousel.selectedPage(e.section), 1);
-    assert.equal(e.carousel.model(e.section).profile.generation, 'generation2');
+    assert.equal(position(e).page, 1);
+    assert.equal(modelFacts(e).generation, 'generation2');
 });
 
 test('identity-only discovery admits connected references without native model, card, count or geometry work', () => {
@@ -381,19 +413,19 @@ test('readiness shares discovery and measures each active slot once even during 
     const e = nativeReadEnvironment();
     const slots = e.mount([5, 4, 3, 2, 1, 0]);
     slots.forEach((slot, index) => { slot.left = (5 - index) * 100; });
-    const state = e.carousel.readiness(e.section, e.scroller, e.track);
+    const state = e.carousel.observeSource({ ...sourceOptions(e), readiness: true }).readiness;
     assert.equal(state.currentCards, 6);
     assert.equal(e.counts.filled, 1);
     assert.equal(e.counts.rects, 7);
     assert.equal(e.counts.indicators, 1);
-    assert.equal(e.counts.profile, 8);
-    assert.deepEqual(e.carousel.currentSlots(e.scroller, e.track).map(slot => slot.index), [0, 1, 2, 3, 4, 5]);
+    assert.equal(e.counts.profile, 10, 'readiness admission validates the native interpretation');
+    assert.deepEqual(e.carousel.pageCards({ ...sourceOptions(e), totalCount: e.shape.totalCount, columns: e.shape.columns }).cards.map(entry => entry.source.slot.index), [0, 1, 2, 3, 4, 5]);
 });
 
 test('track replacement, membership changes, and resized columns use fresh state', () => {
     const e = nativeReadEnvironment();
     e.mount([12, 13, 14, 15, 16, 17]);
-    assert.equal(e.carousel.selectedPage(e.section), 2);
+    assert.equal(position(e).page, 2);
     const replacement = e.replaceTrack();
     e.shape.totalCount = 19; e.shape.columns = 4;
     e.mount([15, 16, 17, 18]);
@@ -404,32 +436,31 @@ test('track replacement, membership changes, and resized columns use fresh state
     assert.equal(state.pageSignature, '15|16|17|18');
     const slots = e.slots();
     slots.slice(1).forEach(slot => slot.querySelector('a').setAttribute('tabindex', '-1'));
-    assert.equal(e.carousel.currentSlots(e.scroller, replacement).length, 4);
+    assert.equal(e.carousel.pageCards({ ...sourceOptions(e), totalCount: e.shape.totalCount, columns: e.shape.columns }).cards.length, 4);
     slots[0].left = -200;
     slots[0].querySelector('a').setAttribute('tabindex', '-1');
-    assert.equal(e.carousel.currentSlots(e.scroller, replacement).length, 3);
+    assert.equal(e.carousel.pageCards({ ...sourceOptions(e), totalCount: e.shape.totalCount, columns: e.shape.columns }).cards.length, 3);
 });
 
 test('logical page windows preserve exact membership and overlapping tails across list sizes', () => {
-    const e = environment();
     let reads = 0;
     const positions = indices => indices.map(index => ({ get logicalIndex() { reads++; return index; } }));
     for (let count = 1; count <= 120; count++) {
         for (let columns = 1; columns <= 12; columns++) {
             for (let page = 0; page < Math.ceil(count / columns); page++) {
-                const indices = e.carousel.expectedPageIndices(count, columns, page).reverse();
+                const indices = expectedLogicalIndicesForPage(count, columns, page).reverse();
                 reads = 0;
-                assert.equal(e.carousel.pageForPositions(positions(indices), count, columns), page);
+                assert.equal(logicalPageFromSlotPositions(positions(indices), count, columns), page);
                 assert.ok(reads <= indices.length * 2);
             }
         }
     }
     for (const count of [30, 150, 600]) {
-        const tail = e.carousel.expectedPageIndices(count, 6, Math.ceil(count / 6) - 1);
-        assert.equal(e.carousel.pageForPositions(positions(tail), count, 6), count / 6 - 1);
+        const tail = expectedLogicalIndicesForPage(count, 6, Math.ceil(count / 6) - 1);
+        assert.equal(logicalPageFromSlotPositions(positions(tail), count, 6), count / 6 - 1);
     }
     for (const indices of [[], [0, 1, 2], [0, 0, 1, 2, 3, 4], [1, 2, 3, 4, 5, 6], [-1, 0, 1, 2, 3, 4], [12, 13, 14, 15, 16, 17], [null, 1, 2, 3, 4, 5]]) {
-        assert.equal(e.carousel.pageForPositions(positions(indices), 12, 6), null);
+        assert.equal(logicalPageFromSlotPositions(positions(indices), 12, 6), null);
     }
 });
 
@@ -512,14 +543,17 @@ test('motion release attempts every restoration and releases ownership when one 
 
 function navigationEnvironment({ mode = 'logical', count = 3, onClick = null, overrides = {} } = {}) {
     let hoverToken = 1;
-    const e = environment({ ...overrides, readListShape: overrides.readListShape || (() => null), readHoverToken: () => hoverToken,
+    const shape = { totalCount: count, columns: 1 };
+    const e = environment({ ...overrides, readListShape: overrides.readListShape || (() => shape), readHoverToken: () => hoverToken,
         isHoverCancelled: token => token !== null && token !== hoverToken });
     const pages = Array.from({ length: count }, (_, page) => {
         const slot = new Element('div');
         slot.classList.add('slot');
         const card = slot.appendChild(new Element('a'));
         card.href = 'https://www.netflix.com/title/' + (page + 1);
+        card.setAttribute('data-uia', 'standard-card');
         card.setAttribute('tabindex', '0');
+        slot.__reactFiber$navigation = { memoizedProps: { itemIndex: page, totalCount: count } };
         return [slot];
     });
     pages.forEach(slots => slots.forEach(slot => e.track.appendChild(slot)));
@@ -548,10 +582,9 @@ function navigationEnvironment({ mode = 'logical', count = 3, onClick = null, ov
     e.control.click = () => click(1); left.click = () => click(-1);
     setPage(0);
     e.carousel.bind(e.section, e.scroller, e.track);
-    pages.forEach((slots, index) => e.carousel.forcePage(e.section, slots[0].querySelector('a').href, index));
-    e.carousel.completeCollection(e.section, count);
-    e.carousel.notePage(e.section, 0);
-    return { ...e, pages, indicators, directions, setPage, page: () => page,
+    for (let index = 0; index < count; index++) { setPage(index); position(e); }
+    setPage(0); position(e);
+    return { ...e, shape, pages, indicators, directions, setPage, page: () => page,
         cancelHover: () => { hoverToken++; },
         async settle(promise, limit = 80) {
             let done = false;
@@ -585,6 +618,7 @@ function mountedEnvironment(overrides = {}) {
         return slot;
     });
     e.pageDom.directSlots = e.pageDom.filledSlots = () => e.track.children;
+    Object.assign(e.shape, { totalCount: 3, columns: 3 });
     e.pageDom.nativeCardIdentity = slot => e.pageDom.videoIdFromHref(slot.querySelector('a')?.href || '');
     const options = { section: e.section, scroller: e.scroller, track: e.track, sessionToken: e.scope.token };
     return { ...e, slots, options,
@@ -596,10 +630,10 @@ test('source preparation owns reset/readiness and accepts complete collection fa
     for (const mode of ['logical', 'indicator']) {
         const e = mode === 'logical' ? mountedEnvironment() : navigationEnvironment({ mode });
         const options = { section: e.section, scroller: e.scroller, track: e.track, sessionToken: e.scope.token };
-        const before = e.carousel.model(e.section);
+        const before = e.carousel.observeSource(sourceOptions(e));
         const prepared = await e.settle(e.carousel.prepareSource(options));
         assert.equal(prepared.ready, true);
-        assert.notEqual(e.carousel.model(e.section), before);
+        assert.equal(e.carousel.isObservationCurrent(before), false);
         assert.equal(prepared.state.pageMode, mode);
         assert.ok(Object.isFrozen(prepared) && Object.isFrozen(prepared.state) && Object.isFrozen(prepared.state.capabilities));
         assert.equal(e.carousel.isPreparationCurrent(prepared), true);
@@ -620,7 +654,7 @@ test('source preparation owns reset/readiness and accepts complete collection fa
 test('collection acceptance rejects incomplete or invalid facts before changing native mapping', async () => {
     const e = mountedEnvironment();
     const prepared = await e.settle(e.carousel.prepareSource(e.options));
-    const model = e.carousel.model(e.section);
+    const mapping = () => modelFacts(e);
     for (const facts of [
         { totalCount: 7, columns: 3, collectedCount: 6 },
         { totalCount: null, columns: 3, collectedCount: 0 },
@@ -628,32 +662,32 @@ test('collection acceptance rejects incomplete or invalid facts before changing 
         { totalCount: 7, columns: 1.5, collectedCount: 7 }
     ]) {
         assert.throws(() => e.carousel.acceptCollection({ preparation: prepared, ...facts }), { code: 'NATIVE_COLLECTION_COUNT_MISMATCH' });
-        assert.equal(model.pageCountFinalized, false);
+        assert.equal(mapping().pageCountFinalized, false);
     }
     assert.throws(() => e.carousel.acceptCollection({ preparation: { ...prepared }, totalCount: 3, columns: 3, collectedCount: 3 }),
         { code: 'NATIVE_SOURCE_REPLACED' });
-    assert.equal(model.pageCountFinalized, false);
+    assert.equal(mapping().pageCountFinalized, false);
     const accepted = e.carousel.acceptCollection({ preparation: prepared, totalCount: 3, columns: 3, collectedCount: 3 });
     assert.equal(accepted.knownPageCount, 1);
     assert.throws(() => e.carousel.acceptCollection({ preparation: prepared, totalCount: 6, columns: 3, collectedCount: 6 }),
         { code: 'NATIVE_COLLECTION_ALREADY_ACCEPTED' });
-    assert.equal(model.knownPageCount, 1);
+    assert.equal(mapping().knownPageCount, 1);
 });
 
 test('prepared observations reject source, route, mapping and preparation replacement before finalization', async () => {
     for (const change of ['binding', 'route', 'mapping', 'preparation']) {
         const e = mountedEnvironment();
         const prepared = await e.settle(e.carousel.prepareSource(e.options));
-        let current = e.carousel.model(e.section);
-        if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); current = e.carousel.model(e.section); }
+        const current = () => modelFacts(e);
+        if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
         if (change === 'route') e.scope.begin();
         if (change === 'mapping') e.carousel.refreshMapping({ ...e.options, mode: 'delta', totalCount: 6, columns: 3 });
-        if (change === 'preparation') { await e.settle(e.carousel.prepareSource(e.options)); current = e.carousel.model(e.section); }
-        const pages = current.knownPageCount;
+        if (change === 'preparation') { await e.settle(e.carousel.prepareSource(e.options)); }
+        const pages = current().knownPageCount;
         assert.equal(e.carousel.isPreparationCurrent(prepared), false);
         assert.throws(() => e.carousel.acceptCollection({ preparation: prepared, totalCount: 3, columns: 3, collectedCount: 3 }),
             { code: change === 'route' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'NATIVE_SOURCE_REPLACED' });
-        assert.equal(current.knownPageCount, pages);
+        assert.equal(current().knownPageCount, pages);
         assert.equal(e.scheduler.timers.size, 0);
     }
 });
@@ -669,7 +703,7 @@ test('preparation checks its admission after profile and readiness diagnostic ca
         const rejected = assert.rejects(e.carousel.prepareSource(e.options), { code: 'NATIVE_SOURCE_REPLACED' });
         await e.settle(rejected);
         assert.equal(replaced, true);
-        assert.equal(e.carousel.model(e.section).pageCountFinalized, false);
+        assert.equal(modelFacts(e).pageCountFinalized, false);
         assert.equal(e.scheduler.timers.size, 0);
         assert.equal(e.scheduler.frames.size, 0);
     }
@@ -718,7 +752,7 @@ test('source preparation and acceptance check the captured caller before publish
             assert.throws(() => e.carousel.acceptCollection({ preparation: prepared, totalCount: 3, columns: 3, collectedCount: 3 }),
                 { code: 'CALLER_REPLACED' });
         }
-        assert.equal(e.carousel.model(e.section).pageCountFinalized, false);
+        assert.equal(modelFacts(e).pageCountFinalized, false);
         assert.equal(e.scheduler.timers.size, 0);
         assert.equal(e.scheduler.frames.size, 0);
     }
@@ -1217,8 +1251,7 @@ test('responsive mapping commits unchanged and changed layouts with validated ob
 
 test('responsive mapping defers inconsistent native counts while preserving finalized pages and releasing its motion lease', async () => {
     const e = mountedEnvironment();
-    e.carousel.completeCollection(e.section, 4);
-    e.carousel.notePage(e.section, 3);
+    await admitCollection(e, 4, 3);
     e.track.style.setProperty('transition-duration', '75ms');
     for (const [index, slot] of e.slots.entries()) slot.__reactFiber$mounted.memoizedProps.totalCount = index === 1 ? 7 : 8;
     for (let retry = 1; retry <= 2; retry++) {
@@ -1239,8 +1272,7 @@ test('responsive mapping defers inconsistent native counts while preserving fina
 test('responsive mapping validates compatible wrapped tails and retains count convergence on non-canonical deferral', async () => {
     for (const compatible of [true, false]) {
         const e = mountedEnvironment();
-        e.carousel.completeCollection(e.section, 4);
-        e.carousel.notePage(e.section, compatible ? 3 : 0);
+        await admitCollection(e, 4, compatible ? 3 : 0);
         for (const [index, slot] of e.slots.entries()) Object.assign(slot.__reactFiber$mounted.memoizedProps,
             { itemIndex: [6, 7, 0][index], totalCount: 8 });
         const result = await e.carousel.refreshMapping({ ...e.options, mode: 'responsive', totalCount: 8, columns: 3 });
@@ -1267,7 +1299,7 @@ test('remapping admission rejects replaced owners and supersedes already-stale w
         const before = scans;
         let latest = null;
         if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
-        if (change === 'model') e.carousel.resetModel(e.section);
+        if (change === 'model') { e.carousel.resetSource(); e.carousel.bind(e.section, e.scroller, e.track); }
         if (change === 'route') e.scope.begin();
         if (change === 'caller') current = false;
         if (change === 'delta') e.carousel.refreshMapping({ ...options, mode: 'delta' });
@@ -1297,8 +1329,8 @@ test('remapping queued behind real navigation cannot commit after a membership d
     e.observers.forEach(observer => observer.callback([]));
     await e.settle(outcome);
     await e.settle(rejected);
-    assert.equal(e.carousel.model(e.section).knownPageCount, 4);
-    assert.equal(e.carousel.model(e.section).pageMappingStale, true);
+    assert.equal(modelFacts(e).knownPageCount, 4);
+    assert.equal(modelFacts(e).pageMappingStale, true);
     assert.equal(e.carousel.isMappingCurrent(delta), false, 'navigation has changed the observed page');
     assert.deepEqual(e.directions, [1]);
     assert.equal(e.scheduler.timers.size, 0);
@@ -1312,14 +1344,13 @@ test('native remapping diagnostics cannot commit or publish after replacing thei
             replacementLease = e.carousel.suppressMotion(e.section, e.track);
         }
     } });
-    e.carousel.completeCollection(e.section, 4);
-    e.carousel.notePage(e.section, 3);
+    await admitCollection(e, 4, 3);
     e.track.style.setProperty('transition', '125ms');
     for (const [index, slot] of e.slots.entries()) Object.assign(slot.__reactFiber$mounted.memoizedProps,
         { itemIndex: [6, 7, 0][index], totalCount: 8 });
     await assert.rejects(e.carousel.refreshMapping({ ...e.options, mode: 'responsive', totalCount: 8, columns: 3 }),
         { code: 'NATIVE_SOURCE_REPLACED' });
-    assert.equal(e.carousel.model(e.section).knownPageCount, null);
+    assert.equal(modelFacts(e).knownPageCount, null);
     assert.equal(e.carousel.diagnostics().navigation.motionLeases, 1);
     assert.equal(e.track.style.getPropertyValue('transition'), 'none', 'old finally cannot restore over a replacement lease');
     replacementLease.release();
@@ -1400,6 +1431,8 @@ test('mounted resolution owns bounded polling and copies identity before waiting
 test('mounted polling rejects obsolete binding, mapping, page and route before another card scan', async () => {
     for (const change of ['binding', 'mapping', 'page', 'route', 'disconnected', 'hover']) {
         const e = navigationEnvironment({ mode: 'indicator' });
+        const preparation = change === 'mapping'
+            ? await e.settle(e.carousel.prepareSource({ ...sourceOptions(e), sessionToken: e.scope.token })) : null;
         let reads = 0;
         e.pageDom.filledSlots = () => { reads++; return e.pages[e.page()]; };
         const options = { section: e.section, scroller: e.scroller, track: e.track,
@@ -1408,7 +1441,7 @@ test('mounted polling rejects obsolete binding, mapping, page and route before a
         const outcome = pending.then(value => ({ value }), error => ({ error }));
         const before = reads;
         if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
-        if (change === 'mapping') e.carousel.anchorAfterDelta(e.section, { pageCount: 3, currentPage: 0, signature: 'new' });
+        if (change === 'mapping') e.carousel.acceptCollection({ preparation, totalCount: 3, columns: 1, collectedCount: 3 });
         if (change === 'page') e.setPage(1);
         if (change === 'route') e.scope.begin();
         if (change === 'disconnected') e.track.remove();
@@ -1541,7 +1574,7 @@ test('native source search preserves ordered radius bounds and returns observati
         const e = navigationEnvironment({ mode, count: 5, overrides: { log(name, detail) {
             if (name === 'hoverSourceSearchPage') attempts.push(detail.page);
         } } });
-        e.setPage(2); e.carousel.notePage(e.section, 2);
+        e.setPage(2); position(e);
         const target = scenario === 'nearby' ? '2' : scenario === 'full' ? '1' : '99';
         const item = Object.freeze({ videoId: target, href: 'https://www.netflix.com/title/' + target, page: 77, ariaLabel: 'Title' });
         const result = await e.settle(e.carousel.resolveCard({ section: e.section, scroller: e.scroller, track: e.track,
@@ -1575,7 +1608,7 @@ test('queued recovery cannot click after mapping or route replacement', async ()
             mode, item: { videoId: '3' }, preferredPage: 2, maxRadius: 0, hoverToken: 1, sessionToken: e.scope.token });
         const rejected = assert.rejects(pending, { code: change === 'route' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'NATIVE_SOURCE_REPLACED' });
         await e.scheduler.flush();
-        if (change === 'mapping') e.carousel.anchorAfterDelta(e.section, { pageCount: 3, currentPage: 0, signature: 'new' });
+        if (change === 'mapping') anchorMapping(e);
         else e.scope.begin();
         e.setPage(1);
         e.observers.forEach(observer => observer.callback([]));
@@ -1610,8 +1643,8 @@ test('search hydration fallback finds a late title but rejects mapping replaceme
         e.scheduler.setTimeout(() => {
             if (change === 'hydrate') e.pages[0][0].querySelector('a').href = 'https://www.netflix.com/title/99';
             else {
+                anchorMapping(e);
                 replaced = true;
-                e.carousel.anchorAfterDelta(e.section, { pageCount: 1, currentPage: 0, signature: 'replacement' });
             }
         }, 600);
         const pending = e.carousel.resolveCard({ section: e.section, scroller: e.scroller, track: e.track,
@@ -1635,15 +1668,15 @@ test('source handles reject native recycling and mapping replacement without inv
         const result = await e.settle(e.carousel.resolveCard({ ...e.options, item: { videoId: '1' },
             expectedPage: 0, totalCount: 3, columns: 3, pageItemCount: 3 }));
         const source = result.source;
-        e.carousel.forcePage(e.section, e.carousel.signatureOf(e.slots), 0);
+        position(e);
         // The first forced observation can establish mapping; borrow after it.
         const current = (await e.settle(e.carousel.resolveCard({ ...e.options, item: { videoId: '1' },
             expectedPage: 0, totalCount: 3, columns: 3, pageItemCount: 3 }))).source;
-        e.carousel.forcePage(e.section, e.carousel.signatureOf(e.slots), 0);
+        position(e);
         assert.equal(current.isCurrent(), true, 'an identical observation retains ownership');
         if (change === 'identity') e.slots[0].querySelector('a').href = 'https://www.netflix.com/title/99';
         if (change === 'index') e.slots[0].__reactFiber$mounted.memoizedProps.itemIndex = 2;
-        if (change === 'mapping') e.carousel.anchorAfterDelta(e.section, { pageCount: 1, currentPage: 0, signature: e.carousel.signatureOf(e.slots) });
+        if (change === 'mapping') anchorMapping(e);
         if (change === 'binding') { e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track); }
         if (change === 'route') e.scope.dispose();
         assert.equal(current.isCurrent(), false, change);
@@ -1681,8 +1714,8 @@ test('source resolution accepts late hydration but rejects a remapped source dur
         const expected = change === 'hydrate' ? pending : assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' });
         await e.scheduler.flush();
         if (change === 'hydrate') e.pages[0][0].querySelector('a').href = 'https://www.netflix.com/title/99';
-        if (change === 'anchor') e.carousel.anchorAfterDelta(e.section, { pageCount: 3, currentPage: 0, signature: e.pages[0][0].querySelector('a').href });
-        if (change === 'model') e.carousel.resetModel(e.section);
+        if (change === 'anchor') anchorMapping(e);
+        if (change === 'model') { e.carousel.resetSource(); e.carousel.bind(e.section, e.scroller, e.track); }
         let reads = 0;
         const filled = e.pageDom.filledSlots;
         e.pageDom.filledSlots = () => { reads++; return filled(); };
@@ -1700,13 +1733,14 @@ test('a queued source-resolution move rejects a changed mapping before issuing a
     const e = navigationEnvironment({ mode: 'indicator', onClick({ page, direction, setPage }) {
         if (++clicks > 1) setPage((page + direction + 3) % 3);
     } });
+    const preparation = await e.settle(e.carousel.prepareSource({ ...sourceOptions(e), sessionToken: e.scope.token }));
     const first = e.carousel.movePage(e.section, e.scroller, 1, null, e.scope.token);
     await e.scheduler.flush();
     const pending = e.carousel.resolveCard({ section: e.section, scroller: e.scroller, track: e.track,
         item: { videoId: '3' }, expectedPage: 2, totalCount: 3, columns: 1,
         pageItemCount: 1, sessionToken: e.scope.token });
     const rejected = assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' });
-    e.carousel.anchorAfterDelta(e.section, { pageCount: 3, currentPage: 0, signature: 'new-mapping' });
+    e.carousel.acceptCollection({ preparation, totalCount: 3, columns: 1, collectedCount: 3 });
     e.setPage(1);
     e.observers.forEach(observer => observer.callback([]));
     await e.settle(first);
@@ -1950,7 +1984,7 @@ test('route cancellation stops pending and queued native work and releases owned
 
 test('fast restoration preserves the single right-cycle shortcut and verified target content', async () => {
     const e = navigationEnvironment({ count: 4 });
-    e.setPage(3); e.carousel.notePage(e.section, 3);
+    e.setPage(3); position(e);
     const items = e.pages.map((slots, page) => ({ videoId: String(page + 1), page }));
     const pending = e.carousel.restorePage(e.section, e.scroller, e.track, items, 1, 0,
         { canonicalTransform: 'page-0', sessionToken: e.scope.token });

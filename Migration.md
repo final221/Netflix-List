@@ -76,6 +76,7 @@ Netflix List/
 |   |   `-- carousel/
 |   |       |-- carousel.js          Public native-source capability and binding ownership
 |   |       |-- page-model.js        Logical indices, page mapping and wrapped-tail rules
+|   |       |-- react-readings.js    Private bounded React index/count and signature reads
 |   |       |-- navigation.js        Serialized movement, acknowledgement and restoration
 |   |       `-- collection.js        Native traversal collection and validation
 |   |
@@ -133,7 +134,9 @@ Netflix List/
 
 `styles.js` preserves the existing selector interpolation through imports from `dom-names.js`, producing one injected stylesheet. It is not a CSS framework or another generated distribution file.
 
-Each feature's main file is its public capability, not a barrel exporting every helper. Neighboring files are private implementation. For example, other features use `netflix/carousel/carousel.js`; they do not manipulate `page-model.js` or `navigation.js` directly.
+Each feature's main file is its public capability, not a barrel exporting every helper. Neighboring files are private implementation. For example, other features use `netflix/carousel/carousel.js`; they do not manipulate `page-model.js`, `react-readings.js` or `navigation.js` directly.
+
+Carousel's facade retires raw profile/model/card-window/rectangle readers and caller-directed page-model commands after their operational consumers transfer. Controlled navigation operations can remain while native interaction composition uses them; they retain the complete binding, cancellation and cleanup contract. Tests characterize private page-model and bounded React-reading policies through those actual private implementations, supplementing public collection, preparation, resolution, remapping and navigation scenarios. react-readings.js deepens the existing native owner: it contains the unchanged bounded React index/count and card-signature interpretation, while carousel retains its shared read cache, binding/model ownership and admission. This private extraction prevents supplementary characterization from keeping raw production exports alive; it introduces no public capability, cache, resource, scheduler or caller access to native state.
 
 Internal files are justified by substantial coherent jobs: interpreting a wire protocol, serializing native movement, validating collection, deciding completion, or maintaining card ownership. A file does not need to be split merely to achieve a line-count target.
 
@@ -382,7 +385,8 @@ Mappings refer to named baseline functions rather than permanent line numbers. T
 | GraphQL/page bootstrap, carousel queries, response field interpretation | `netflix/context.js`, `list-data.js` |
 | `netflixDom`, section discovery and native membership-action decoding | `netflix/page-dom.js` |
 | Falcor atoms/references, endpoint construction and `fetchViewingGraph` | `netflix/viewing-data.js`, `context.js` |
-| `netflixReactCarousel`, readiness/binding reads and source resolution | `netflix/carousel/carousel.js` |
+| Readiness/binding reads and source resolution | `netflix/carousel/carousel.js` |
+| Bounded React index/count and card-signature interpretation | `netflix/carousel/react-readings.js` |
 | Logical index normalization, expected page indices and wrapped tails | `netflix/carousel/page-model.js` |
 | `moveOnePage`, page waits, fast restoration/repair | `netflix/carousel/navigation.js` |
 | `collectAllItemsLogical`, `collectAllItems` and traversal validation | `netflix/carousel/collection.js` |
