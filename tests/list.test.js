@@ -248,3 +248,83 @@ test('initial count timeout reports the last availability once through the exist
         read:()=>({available:time>=10,count:null}),onTimeout(facts){reports++;assert.equal(facts.available,true);return error;}}),value=>value===error);
     assert.equal(time,20);assert.equal(reports,1);
 });
+
+
+test('publication collection uses complete preferred material and otherwise performs one native fallback', async () => {
+    const e=fixture(),preferred=[{videoId:'1'},{videoId:'2'}];let scans=0,preferredUses=0;
+    const first=await e.list.collectForPublication({preferred,totalCount:2,onPreferred(){preferredUses++;},
+        beforeNative(){throw new Error('unexpected scan');},collectNative(){throw new Error('unexpected native');}});
+    assert.equal(first.items,preferred);assert.equal(first.status,'complete');assert.equal(preferredUses,1);
+    const fallback=await e.list.collectForPublication({preferred:preferred.slice(0,1),totalCount:2,
+        beforeNative(){scans++;},collectNative:async()=>preferred});
+    assert.equal(fallback.items,preferred);assert.equal(scans,1);
+});
+
+test('publication collection confirms native empty truthfully and rejects unproven empty or mismatched counts', async () => {
+    const e=fixture();const empty=await e.list.collectForPublication({totalCount:2,collectNative:async()=>[],
+        readEmpty:()=>({pages:1,cards:0})});
+    assert.equal(empty.status,'empty');assert.equal(empty.items.length,0);
+    await assert.rejects(e.list.collectForPublication({totalCount:2,collectNative:async()=>[],
+        readEmpty:()=>({pages:2,cards:0})}),{code:'NO_NATIVE_CARDS'});
+    await assert.rejects(e.list.collectForPublication({totalCount:2,collectNative:async()=>[{videoId:'1'}]}),
+        {code:'COLLECTION_COUNT_MISMATCH',stage:'validate-count'});
+});
+
+test('publication collection rejects retired preferred callbacks and completed native reads before acceptance', async () => {
+    const e=fixture();let active=true,scans=0;
+    const guard=()=>{if(!active)throw new Error('retired');};
+    await assert.rejects(e.list.collectForPublication({preferred:[{videoId:'1'}],totalCount:1,assertCurrent:guard,
+        onPreferred(){active=false;},collectNative:async()=>{scans++;return [];}}),/retired/);
+    assert.equal(scans,0);active=true;
+    await assert.rejects(e.list.collectForPublication({totalCount:1,assertCurrent:guard,
+        collectNative:async()=>{active=false;return [{videoId:'1'}];}}),/retired/);
+});
+
+test('publication collection preserves diagnostic error adapters and revalidates after failure presentation', async () => {
+    const e=fixture();let active=true,calls=0;const failure=new Error('custom count');
+    await assert.rejects(e.list.collectForPublication({totalCount:2,collectNative:async()=>[{videoId:'1'}],
+        createFailure(facts){calls++;assert.equal(facts.collected,1);assert.equal(facts.totalCount,2);return failure;}}),error=>error===failure);
+    assert.equal(calls,1);
+    await assert.rejects(e.list.collectForPublication({totalCount:2,collectNative:async()=>[{videoId:'1'}],
+        assertCurrent(){if(!active)throw new Error('retired');},createFailure(){active=false;return failure;}}),/retired/);
+});
+
+
+test('preferred collection strategy skips indicator work and prepares complete logical material', async () => {
+    const e=fixture();const bootstrap={};
+    const skipped=await e.list.preparePreferred({mode:'indicator',bootstrap,
+        readInput(){throw new Error('unexpected logical reads');}});
+    assert.equal(skipped.items,null);assert.equal(skipped.bootstrap,bootstrap);
+    let prepared=0;
+    const result=await e.list.preparePreferred({mode:'logical',bootstrap,
+        readInput:()=>({totalCount:1,columns:6,templateSource:{}}),onPrepared(){prepared++;}});
+    assert.equal(result.items.length,1);assert.equal(prepared,1);
+});
+
+test('preferred collection strategy reports ordinary failure for native fallback and rejects obsolete acceptance', async () => {
+    const error=new Error('optional pagination');let failures=0;
+    const e=fixture({collectRecords:async()=>{throw error;}});
+    const result=await e.list.preparePreferred({mode:'logical',bootstrap:{},readInput:()=>({totalCount:1,columns:6,templateSource:{}}),
+        onFailure(value){failures++;assert.equal(value,error);}});
+    assert.equal(result.items,null);assert.equal(failures,1);
+    const replaced=Object.assign(new Error('native replaced'),{code:'NATIVE_SOURCE_REPLACED'});
+    const stale=fixture({collectRecords:async()=>{throw replaced;}});
+    await assert.rejects(stale.list.preparePreferred({mode:'logical',bootstrap:{},
+        readInput:()=>({totalCount:1,columns:6,templateSource:{}}),onFailure(){throw new Error('unexpected fallback');}}),error=>error===replaced);
+    let active=true;const current=fixture();
+    await assert.rejects(current.list.preparePreferred({mode:'logical',bootstrap:{},readInput:()=>({totalCount:1,columns:6,templateSource:{}}),
+        assertCurrent(){if(!active)throw new Error('retired');},onPrepared(){active=false;}}),/retired/);
+});
+
+
+test('entry strategy anchors only fresh SPA indicator sources and revalidates after movement', async () => {
+    const e=fixture({waitInitialCount:async()=>2,readInitialFirstId:()=> '1',fetchBootstrap:async()=>({totalCount:2,firstVideoId:'2'})});
+    const initial=await e.list.prepareEntry({entryKind:'initial'});
+    assert.equal(await initial.prepareAnchor({mode:'indicator',normalize(){throw new Error('unexpected initial movement');}}),false);
+    const spa=await e.list.prepareEntry({entryKind:'spa'});let anchors=0;
+    assert.equal(await spa.prepareAnchor({mode:'logical',normalize(){throw new Error('unexpected logical movement');}}),false);
+    assert.equal(await spa.prepareAnchor({mode:'indicator',normalize:async id=>{assert.equal(id,'2');anchors++;}}),true);
+    assert.equal(anchors,1);
+    let active=true;const current=await e.list.prepareEntry({entryKind:'spa',assertCurrent(){if(!active)throw new Error('retired');}});
+    await assert.rejects(current.prepareAnchor({mode:'indicator',normalize:async()=>{active=false;}}),/retired/);
+});

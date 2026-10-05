@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.43
+// @version      1.4.44
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -2725,6 +2725,16 @@
         bootstrap,
         totalCount,
         mountedSinglePage,
+        async prepareAnchor({ mode, normalize }) {
+          guard();
+          if (entryKind === "initial" || mode !== "indicator") return false;
+          const firstVideoId = bootstrap.firstVideoId;
+          guard();
+          if (!firstVideoId) return false;
+          await normalize(firstVideoId);
+          guard();
+          return true;
+        },
         confirmCount({ mode, readNativeCount, assertNativeCurrent = () => {
         } }) {
           guard();
@@ -2754,6 +2764,107 @@
           return result.value;
         }
       });
+    }
+    async function preparePreferred({
+      mode,
+      bootstrap,
+      sessionToken = null,
+      assertCurrent = () => {
+      },
+      readInput,
+      onPrepared = () => {
+      },
+      onIncomplete = () => {
+      },
+      onFailure = () => {
+      }
+    }) {
+      const guard = () => {
+        assertSession(sessionToken);
+        assertCurrent();
+      };
+      guard();
+      if (mode !== "logical") return { bootstrap, items: null, collectionSource: "graphql" };
+      let current = bootstrap;
+      try {
+        const input = readInput();
+        guard();
+        const result = await collectLogical({
+          ...input,
+          bootstrap,
+          sessionToken,
+          assertCurrent() {
+            guard();
+            input.assertCurrent?.();
+            guard();
+          }
+        });
+        guard();
+        current = result.bootstrap;
+        if (result.error) throw result.error;
+        if (result.items) onPrepared(result);
+        else onIncomplete(result);
+        guard();
+        return result;
+      } catch (error) {
+        guard();
+        if (isCancelled(error) || error?.code === "NATIVE_SOURCE_REPLACED") throw error;
+        onFailure(error);
+        guard();
+        return { bootstrap: current, items: null, collectionSource: "graphql" };
+      }
+    }
+    async function collectForPublication({
+      preferred = null,
+      totalCount,
+      sessionToken = null,
+      assertCurrent = () => {
+      },
+      onPreferred = () => {
+      },
+      beforeNative = () => {
+      },
+      collectNative,
+      readEmpty,
+      createFailure = (facts) => Object.assign(new Error(facts.code === "NO_NATIVE_CARDS" ? "No native cards could be collected" : `Collected ${facts.collected} of ${facts.totalCount} My List items`), facts, { stage: "validate-count" })
+    }) {
+      const guard = () => {
+        assertSession(sessionToken);
+        assertCurrent();
+      };
+      guard();
+      assertCount(totalCount);
+      let items;
+      if (preferred?.length === totalCount) {
+        items = preferred;
+        onPreferred(items);
+        guard();
+      } else {
+        beforeNative();
+        guard();
+        try {
+          items = await collectNative();
+        } catch (error) {
+          guard();
+          throw error;
+        }
+        guard();
+      }
+      if (!items.length) {
+        const empty = readEmpty(), pages = empty.pages, cards = empty.cards;
+        guard();
+        if (pages === 1 && cards === 0) return Object.freeze({ status: "empty", items });
+        const error = createFailure({ code: "NO_NATIVE_CARDS", collected: 0, totalCount });
+        guard();
+        throw error;
+      }
+      if (items.length !== totalCount) {
+        const error = createFailure({ code: "COLLECTION_COUNT_MISMATCH", collected: items.length, totalCount });
+        guard();
+        throw error;
+      }
+      guard();
+      return Object.freeze({ status: "complete", items });
     }
     async function buildItems(records, totalCount, columns, template, sessionToken = null, assertCurrent = () => {
     }) {
@@ -2867,6 +2978,8 @@
       });
     }
     return {
+      preparePreferred,
+      collectForPublication,
       waitForInitialCount,
       prepareEntry,
       buildItems,
@@ -3076,6 +3189,8 @@
       prepareEntry: collection.prepareEntry,
       prepareRecords: collection.prepareRecords,
       waitForInitialCount: collection.waitForInitialCount,
+      collectForPublication: collection.collectForPublication,
+      preparePreferred: collection.preparePreferred,
       collectLogical: collection.collectLogical,
       buildItems: collection.buildItems,
       diagnostics: collection.diagnostics,
@@ -10836,7 +10951,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.43";
+    const SCRIPT_VERSION = "1.4.44";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -13294,12 +13409,6 @@
       }
       assertActive();
       return true;
-    }
-    function buildGraphqlMyListItems(...args) {
-      return listView.buildItems(...args);
-    }
-    function collectLogicalListItems(...args) {
-      return listView.collectLogical(...args);
     }
     async function waitForMyListTotalCount(timeout = TOTAL_COUNT_TIMEOUT_MS, sessionToken = null) {
       return listView.waitForInitialCount({
@@ -16933,15 +17042,9 @@
         return;
       }
       const mountedMode = nativeSourceObservation()?.mode || "unknown";
-      if (targetSessionEntryKind !== "initial" && mountedMode === "indicator" && freshMyListBootstrap?.firstVideoId) {
+      {
         try {
-          await ensureFreshIndicatorPageZeroAnchor(
-            section,
-            scroller,
-            track,
-            freshMyListBootstrap.firstVideoId,
-            sessionToken
-          );
+          await entryCollection.prepareAnchor({ mode: mountedMode, normalize: (firstVideoId) => ensureFreshIndicatorPageZeroAnchor(section, scroller, track, firstVideoId, sessionToken) });
         } catch (error) {
           if (!isRouteSessionCancelledError(error)) {
             initializationBlockedSessionToken = sessionToken;
@@ -17010,64 +17113,72 @@
           return;
         }
       }
-      if (mountedMode === "logical") {
+      {
         const retryReplacedSource = () => {
           log("Fast My List collection discarded after native source replacement", { sessionToken });
           clearRunningSession(sessionToken, false);
           scheduleRun(0, sessionToken);
         };
+        let graphqlGeometry, graphqlLayout, templateView;
         try {
-          nativeCarousel.assertPreparation(readiness);
-          const graphqlGeometry = nativeLayoutObservation(section, scroller, track);
-          const graphqlLayout = graphqlGeometry.layout;
-          const templateView = nativePageObservation(sourceState, { template: true });
-          nativeCarousel.assertObservation(templateView);
-          nativeCarousel.assertObservation(graphqlGeometry);
-          const graphqlCollection = await collectLogicalListItems({
+          const preferred = await listView.preparePreferred({
+            mode: mountedMode,
             bootstrap: freshMyListBootstrap,
-            totalCount: earlyTotalCount,
-            columns: graphqlLayout.columns,
-            templateSource: templateView.template,
             sessionToken,
-            assertCurrent: () => nativeCarousel.assertObservation(templateView)
+            assertCurrent: () => nativeCarousel.assertPreparation(readiness),
+            readInput() {
+              graphqlGeometry = nativeLayoutObservation(section, scroller, track);
+              graphqlLayout = graphqlGeometry.layout;
+              templateView = nativePageObservation(sourceState, { template: true });
+              nativeCarousel.assertObservation(templateView);
+              nativeCarousel.assertObservation(graphqlGeometry);
+              return {
+                totalCount: earlyTotalCount,
+                columns: graphqlLayout.columns,
+                templateSource: templateView.template,
+                assertCurrent: () => nativeCarousel.assertObservation(templateView)
+              };
+            },
+            onPrepared(result) {
+              const source = result.collectionSource || "graphql";
+              nativeCarousel.assertObservation(graphqlGeometry);
+              const accepted = nativeCarousel.acceptCollection({
+                preparation: readiness,
+                totalCount: earlyTotalCount,
+                columns: graphqlLayout.columns,
+                collectedCount: result.items.length
+              });
+              log(source === "mounted-single-page" ? "Mounted single-page My List fast collection prepared" : "GraphQL My List fast collection prepared", {
+                collectionSource: source,
+                avoidedMembershipRequests: source === "mounted-single-page" ? 1 : 0,
+                totalCount: earlyTotalCount,
+                collected: result.items.length,
+                graphqlPageCount: result.bootstrap.pageCount || null,
+                columns: graphqlLayout.columns,
+                knownPageCount: accepted.knownPageCount
+              });
+              nativeCarousel.assertMapping(accepted);
+            },
+            onIncomplete(result) {
+              warn("GraphQL My List fast collection was incomplete; falling back to native scan", {
+                totalCount: earlyTotalCount,
+                bootstrapTotalCount: result.bootstrap?.totalCount,
+                graphqlEdgeCount: result.bootstrap?.edgeCount || 0,
+                graphqlPageCount: result.bootstrap?.pageCount || null,
+                columns: graphqlLayout.columns
+              });
+            },
+            onFailure(error) {
+              warn("GraphQL My List fast collection failed; falling back to native scan", {
+                code: error?.code || null,
+                stage: error?.stage || "graphql-fast-collection",
+                error
+              });
+            }
           });
-          assertRouteSession(sessionToken);
-          if (!nativeCarousel.isPreparationCurrent(readiness)) {
-            retryReplacedSource();
-            return;
-          }
-          freshMyListBootstrap = graphqlCollection.bootstrap;
-          fastItems = graphqlCollection.items;
-          fastCollectionSource = graphqlCollection.collectionSource || "graphql";
-          if (graphqlCollection.error) throw graphqlCollection.error;
-          if (fastItems) {
-            nativeCarousel.assertObservation(graphqlGeometry);
-            const accepted = nativeCarousel.acceptCollection({
-              preparation: readiness,
-              totalCount: earlyTotalCount,
-              columns: graphqlLayout.columns,
-              collectedCount: fastItems.length
-            });
-            log(fastCollectionSource === "mounted-single-page" ? "Mounted single-page My List fast collection prepared" : "GraphQL My List fast collection prepared", {
-              collectionSource: fastCollectionSource,
-              avoidedMembershipRequests: fastCollectionSource === "mounted-single-page" ? 1 : 0,
-              totalCount: earlyTotalCount,
-              collected: fastItems.length,
-              graphqlPageCount: freshMyListBootstrap.pageCount || null,
-              columns: graphqlLayout.columns,
-              knownPageCount: accepted.knownPageCount
-            });
-            nativeCarousel.assertMapping(accepted);
-            nativeCarousel.assertPreparation(readiness);
-          } else {
-            warn("GraphQL My List fast collection was incomplete; falling back to native scan", {
-              totalCount: earlyTotalCount,
-              bootstrapTotalCount: freshMyListBootstrap?.totalCount,
-              graphqlEdgeCount: freshMyListBootstrap?.edgeCount || 0,
-              graphqlPageCount: freshMyListBootstrap?.pageCount || null,
-              columns: graphqlLayout.columns
-            });
-          }
+          freshMyListBootstrap = preferred.bootstrap;
+          fastItems = preferred.items;
+          fastCollectionSource = preferred.collectionSource || "graphql";
         } catch (error) {
           if (isRouteSessionCancelledError(error)) {
             clearRunningSession(sessionToken);
@@ -17141,73 +17252,80 @@
             "Collection parent was replaced"
           );
         };
-        let items;
-        if (fastItems?.length === totalCount) {
-          items = fastItems;
-          const fastNative = nativeSourceDiagnostics(section, scroller, track);
-          log(fastCollectionSource === "mounted-single-page" ? "Mounted single-page My List fast collection used" : "GraphQL My List fast collection used", {
-            collectionSource: fastCollectionSource,
-            collected: items.length,
-            totalCount,
-            pages: fastNative?.pageCount ?? null,
-            sourceCards: fastNative?.sourceCards ?? 0,
-            carouselDom: fastNative?.carouselDom ?? null
-          });
-        } else {
-          beginSourceScan(section, scroller, track);
-          const scanNative = nativeSourceDiagnostics(section, scroller, track);
-          log(tLog("nativeCarouselScanModeStarted"), {
-            selectedPage: scanNative?.selectedPage ?? null,
-            pages: scanNative?.pageCount ?? null,
-            sourceSlots: scanNative?.sourceSlots ?? 0,
-            sourceCards: scanNative?.sourceCards ?? 0,
-            carouselDom: scanNative?.carouselDom ?? null
-          });
-          assertCollectionCurrent();
-          try {
-            items = await collectAllItems(section, scroller, track, totalCount, sessionToken);
-          } catch (error) {
-            assertCollectionCurrent();
-            throw error;
+        let emptyObservation;
+        const collected = await listView.collectForPublication({
+          preferred: fastItems,
+          totalCount,
+          sessionToken,
+          assertCurrent: assertCollectionCurrent,
+          onPreferred(items2) {
+            const fastNative = nativeSourceDiagnostics(section, scroller, track);
+            log(fastCollectionSource === "mounted-single-page" ? "Mounted single-page My List fast collection used" : "GraphQL My List fast collection used", {
+              collectionSource: fastCollectionSource,
+              collected: items2.length,
+              totalCount,
+              pages: fastNative?.pageCount ?? null,
+              sourceCards: fastNative?.sourceCards ?? 0,
+              carouselDom: fastNative?.carouselDom ?? null
+            });
+          },
+          beforeNative() {
+            beginSourceScan(section, scroller, track);
+            const scanNative = nativeSourceDiagnostics(section, scroller, track);
+            log(tLog("nativeCarouselScanModeStarted"), {
+              selectedPage: scanNative?.selectedPage ?? null,
+              pages: scanNative?.pageCount ?? null,
+              sourceSlots: scanNative?.sourceSlots ?? 0,
+              sourceCards: scanNative?.sourceCards ?? 0,
+              carouselDom: scanNative?.carouselDom ?? null
+            });
+          },
+          collectNative: () => collectAllItems(section, scroller, track, totalCount, sessionToken),
+          readEmpty() {
+            emptyObservation = nativeCarousel.observeSource({
+              section,
+              scroller,
+              track,
+              binding: collectionBinding,
+              sessionToken,
+              readiness: true,
+              assertCurrent: assertCollectionCurrent
+            });
+            const facts = emptyObservation.readiness;
+            nativeCarousel.assertObservation(emptyObservation);
+            return facts;
+          },
+          createFailure(facts) {
+            if (facts.code === "NO_NATIVE_CARDS") return Object.assign(
+              new Error(tLog("noNativeNetflixCardsCouldBeCollected")),
+              { code: facts.code }
+            );
+            const error = initializationError(
+              facts.code,
+              "validate-count",
+              `Collected ${facts.collected} of ${facts.totalCount} My List items`,
+              {
+                collected: facts.collected,
+                totalCount: facts.totalCount,
+                endingPage: nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null
+              }
+            );
+            warn(tLog("collectedCountDoesNotMatchTotalCount"), {
+              collected: facts.collected,
+              totalCount: facts.totalCount,
+              stage: error.stage,
+              code: error.code
+            });
+            return error;
           }
-        }
+        });
         assertCollectionCurrent();
-        if (!items.length) {
-          const observed = nativeCarousel.observeSource({
-            section,
-            scroller,
-            track,
-            binding: collectionBinding,
-            sessionToken,
-            readiness: true,
-            assertCurrent: assertCollectionCurrent
-          });
-          const nowState = observed.readiness;
-          nativeCarousel.assertObservation(observed);
-          if (nowState.pages === 1 && nowState.cards === 0) {
-            finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, "collection-confirmed-empty", observed);
-            return;
-          }
-          const noCardsError = new Error(tLog("noNativeNetflixCardsCouldBeCollected"));
-          noCardsError.code = "NO_NATIVE_CARDS";
-          throw noCardsError;
+        if (collected.status === "empty") {
+          nativeCarousel.assertObservation(emptyObservation);
+          finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, "collection-confirmed-empty", emptyObservation);
+          return;
         }
-        if (Number.isFinite(totalCount) && items.length !== totalCount) {
-          const countError = initializationError(
-            "COLLECTION_COUNT_MISMATCH",
-            "validate-count",
-            `Collected ${items.length} of ${totalCount} My List items`,
-            { collected: items.length, totalCount, endingPage: nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null }
-          );
-          warn(tLog("collectedCountDoesNotMatchTotalCount"), {
-            collected: items.length,
-            totalCount,
-            stage: countError.stage,
-            code: countError.code
-          });
-          assertCollectionCurrent();
-          throw countError;
-        }
+        const items = collected.items;
         log(tLog("fullCollectionResultFinalized"), {
           collected: items.length,
           totalCount,

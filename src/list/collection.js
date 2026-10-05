@@ -47,6 +47,12 @@ export function createCollection({ runChunks, assertSession, isCancelled, collec
         }
         const totalCount = bootstrap.totalCount; guard(); assertCount(totalCount);
         return Object.freeze({ bootstrap, totalCount, mountedSinglePage,
+            async prepareAnchor({ mode, normalize }) {
+                guard(); if (entryKind === 'initial' || mode !== 'indicator') return false;
+                const firstVideoId = bootstrap.firstVideoId; guard();
+                if (!firstVideoId) return false;
+                await normalize(firstVideoId); guard(); return true;
+            },
             confirmCount({ mode, readNativeCount, assertNativeCurrent = () => {} }) {
                 guard(); if (mode !== 'logical') return null;
                 const assertConfirmation = () => { guard(); assertNativeCurrent(); guard(); };
@@ -64,6 +70,53 @@ export function createCollection({ runChunks, assertSession, isCancelled, collec
                 if (Object.hasOwn(result, 'error')) throw result.error;
                 return result.value;
             } });
+    }
+    async function preparePreferred({ mode, bootstrap, sessionToken = null, assertCurrent = () => {}, readInput,
+        onPrepared = () => {}, onIncomplete = () => {}, onFailure = () => {} }) {
+        const guard = () => { assertSession(sessionToken); assertCurrent(); };
+        guard();
+        if (mode !== 'logical') return { bootstrap, items: null, collectionSource: 'graphql' };
+        let current = bootstrap;
+        try {
+            const input = readInput(); guard();
+            const result = await collectLogical({ ...input, bootstrap, sessionToken,
+                assertCurrent() { guard(); input.assertCurrent?.(); guard(); } });
+            guard(); current = result.bootstrap;
+            if (result.error) throw result.error;
+            if (result.items) onPrepared(result);
+            else onIncomplete(result);
+            guard(); return result;
+        } catch (error) {
+            guard();
+            if (isCancelled(error) || error?.code === 'NATIVE_SOURCE_REPLACED') throw error;
+            onFailure(error); guard();
+            return { bootstrap: current, items: null, collectionSource: 'graphql' };
+        }
+    }
+    async function collectForPublication({ preferred = null, totalCount, sessionToken = null, assertCurrent = () => {},
+        onPreferred = () => {}, beforeNative = () => {}, collectNative, readEmpty,
+        createFailure = facts => Object.assign(new Error(facts.code === 'NO_NATIVE_CARDS' ? 'No native cards could be collected' :
+            `Collected ${facts.collected} of ${facts.totalCount} My List items`), facts, { stage: 'validate-count' }) }) {
+        const guard = () => { assertSession(sessionToken); assertCurrent(); };
+        guard(); assertCount(totalCount);
+        let items;
+        if (preferred?.length === totalCount) {
+            items = preferred; onPreferred(items); guard();
+        } else {
+            beforeNative(); guard();
+            try { items = await collectNative(); }
+            catch (error) { guard(); throw error; }
+            guard();
+        }
+        if (!items.length) {
+            const empty = readEmpty(), pages = empty.pages, cards = empty.cards; guard();
+            if (pages === 1 && cards === 0) return Object.freeze({ status: 'empty', items });
+            const error = createFailure({ code: 'NO_NATIVE_CARDS', collected: 0, totalCount }); guard(); throw error;
+        }
+        if (items.length !== totalCount) {
+            const error = createFailure({ code: 'COLLECTION_COUNT_MISMATCH', collected: items.length, totalCount }); guard(); throw error;
+        }
+        guard(); return Object.freeze({ status: 'complete', items });
     }
     async function buildItems(records, totalCount, columns, template, sessionToken = null, assertCurrent = () => {}) {
         const guard = () => { assertSession(sessionToken); assertCurrent(); };
@@ -139,6 +192,7 @@ export function createCollection({ runChunks, assertSession, isCancelled, collec
                 if (failure) throw failure;
             }, discard() { released = true; materials.clear(); inputs.length = 0; } });
     }
-    return { waitForInitialCount, prepareEntry, buildItems, collectLogical, prepareRecords, resetDiagnostics: () => { for (const key of Object.keys(reuse)) reuse[key] = 0; },
+    return { preparePreferred, collectForPublication, waitForInitialCount, prepareEntry, buildItems, collectLogical, prepareRecords,
+        resetDiagnostics: () => { for (const key of Object.keys(reuse)) reuse[key] = 0; },
         diagnostics: () => Object.freeze({ membershipReuse: Object.freeze({ ...reuse }) }) };
 }

@@ -16,6 +16,8 @@ export function createList(options) {
     const collection = createCollection({ ...options, toRecord });
     return Object.freeze({ createMembership, toRecord, prepareEntry: collection.prepareEntry, prepareRecords: collection.prepareRecords,
         waitForInitialCount: collection.waitForInitialCount,
+        collectForPublication: collection.collectForPublication,
+        preparePreferred: collection.preparePreferred,
         collectLogical: collection.collectLogical, buildItems: collection.buildItems,
         diagnostics: collection.diagnostics, resetDiagnostics: collection.resetDiagnostics });
 }

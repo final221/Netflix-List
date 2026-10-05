@@ -3478,7 +3478,7 @@ function constructionEnvironment() {
     image.setAttribute('srcset', 'native-srcset');
     const layout = { columns: 6, rowGap: 10 };
     const e = environment([
-        'sleep', 'runConstructionChunks', 'buildGraphqlMyListItems', 'collectFreshMyListCarouselItems', 'assertRouteSession',
+        'sleep', 'runConstructionChunks', 'collectFreshMyListCarouselItems', 'assertRouteSession',
         'createRouteSessionCancelledError', 'isRouteSessionCancelledError', 'initializationError',
         'buildGrid', 'normalizeClone', 'copyItemAttributes', 'associateGridHoverItem', 'ensureGridHoverBehavior',
         'itemKey', 'clearRunningSession', 'retryPendingMyListMutations', 'tryApplyMyListMutation',
@@ -3592,7 +3592,7 @@ test('compact GraphQL items preserve exact order, labels, artwork, pages, and fr
     const e = constructionEnvironment();
     const input = e.records(150);
     input.splice(10, 0, {}, input[0]);
-    const completion = e.c.buildGraphqlMyListItems(input, 150, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
+    const completion = e.c.listView.buildItems(input, 150, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
     e.template.markup = 'recycled-live-template';
     await e.drain();
     const items = await completion;
@@ -3615,9 +3615,9 @@ test('compact GraphQL items preserve exact order, labels, artwork, pages, and fr
 
 test('invalid or incomplete snapshot inputs retain the native-scan fallback contract', async () => {
     const e = constructionEnvironment();
-    assert.equal(await e.c.buildGraphqlMyListItems([], 1, 6, e.c.cardMarkup.captureTemplate(e.template), 1), null);
-    assert.equal(await e.c.buildGraphqlMyListItems(null, 1, 6, e.c.cardMarkup.captureTemplate(e.template), 1), null);
-    assert.equal(await e.c.buildGraphqlMyListItems(e.records(2), 2, 6, e.c.cardMarkup.captureTemplate(new ConstructionNode('no-card')), 1), null);
+    assert.equal(await e.c.listView.buildItems([], 1, 6, e.c.cardMarkup.captureTemplate(e.template), 1), null);
+    assert.equal(await e.c.listView.buildItems(null, 1, 6, e.c.cardMarkup.captureTemplate(e.template), 1), null);
+    assert.equal(await e.c.listView.buildItems(e.records(2), 2, 6, e.c.cardMarkup.captureTemplate(new ConstructionNode('no-card')), 1), null);
     assert.equal(e.timers.size, 0);
 });
 
@@ -3628,7 +3628,7 @@ test('snapshot construction cancels after a yield without reading more normalize
         if (/^\d+$/.test(String(key))) reads++;
         return Reflect.get(target, key);
     } });
-    const completion = e.c.buildGraphqlMyListItems(records, 600, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
+    const completion = e.c.listView.buildItems(records, 600, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
     const rejection = assert.rejects(completion, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
     assert.equal(reads, 24);
     e.c.isRouteSessionActive = () => false;
@@ -3753,7 +3753,6 @@ function initializationEnvironment(count = 150) {
         pendingPreparation++;
         return prepare(...args).finally(() => { pendingPreparation--; });
     };
-    vm.runInContext(declaration('collectLogicalListItems'), e.c);
     e.c.listData = { ...e.c.listData, firstMyListVideoId: () => '', fetchBootstrap: async () => bootstrap,
         collectRecords: async () => ({ bootstrap, records: e.records(count) }) };
     Object.assign(e.c, {
@@ -3849,7 +3848,7 @@ test('post-collection empty admission rejects a replaced parent or binding and p
         const e = initializationEnvironment(6), gate = deferred(), runs = [];
         const mutation = { videoId: '2', action: 'remove' };
         e.c.pendingMyListMutations.set('2', mutation);
-        e.c.collectLogicalListItems = async () => ({ bootstrap: { totalCount: 6 }, items: null });
+        e.c.listData.collectRecords = async () => ({ bootstrap: { totalCount: 6 }, records: null });
         e.c.beginSourceScan = () => {};
         let collections = 0, empties = 0;
         e.c.collectAllItems = () => { collections++; return gate.promise; };
@@ -3875,7 +3874,7 @@ test('post-collection empty admission rejects a replaced parent or binding and p
 
 test('late native collection failure cannot block or publish status into a replacement parent', async () => {
     const e = initializationEnvironment(6), gate = deferred(), runs = [];
-    e.c.collectLogicalListItems = async () => ({ bootstrap: { totalCount: 6 }, items: null });
+    e.c.listData.collectRecords = async () => ({ bootstrap: { totalCount: 6 }, records: null });
     e.c.beginSourceScan = () => {};
     e.c.collectAllItems = async () => { await gate.promise; throw new Error('old collection failed'); };
     e.c.scheduleRun = (...args) => runs.push(args);
@@ -3896,7 +3895,7 @@ test('late native collection failure cannot block or publish status into a repla
 test('post-collection readiness preserves owned empty admission and missing-card failure distinctions', async () => {
     for (const empty of [true, false]) {
         const e = initializationEnvironment(6);
-        e.c.collectLogicalListItems = async () => ({ bootstrap: { totalCount: 6 }, items: null });
+        e.c.listData.collectRecords = async () => ({ bootstrap: { totalCount: 6 }, records: null });
         e.c.beginSourceScan = () => {};
         e.c.collectAllItems = async () => {
             if (empty) e.c.netflixDom.filledSlots = e.c.netflixDom.directSlots = () => [];
@@ -3914,7 +3913,7 @@ test('post-collection readiness preserves owned empty admission and missing-card
 
 test('native collection revalidates after diagnostics before parking or publishing into a replacement parent', async () => {
     const e = initializationEnvironment(6), runs = [];
-    e.c.collectLogicalListItems = async () => ({ bootstrap: { totalCount: 6 }, items: null });
+    e.c.listData.collectRecords = async () => ({ bootstrap: { totalCount: 6 }, records: null });
     e.c.beginSourceScan = () => {};
     e.c.collectAllItems = async () => e.items(6);
     const log = e.c.log;
@@ -3939,7 +3938,7 @@ test('late fast-collection completion cannot finalize the model or republish a r
     const e = initializationEnvironment(6);
     const gate = deferred(), runs = [];
     let started = 0;
-    e.c.collectLogicalListItems = () => { started++; return gate.promise; };
+    e.c.listData.collectRecords = () => { started++; return gate.promise; };
     e.c.scheduleRun = (...args) => runs.push(args);
     const completion = e.c.runScript(1);
     await e.flush();
@@ -3948,7 +3947,7 @@ test('late fast-collection completion cannot finalize the model or republish a r
     replacement.setConnected(true);
     e.c.attachNativeBinding(e.c.sourceState, e.section, e.scroller, replacement);
     const current = () => nativeModelFacts(e);
-    gate.resolve({ bootstrap: { totalCount: 6 }, items: e.items(6), collectionSource: 'graphql' });
+    gate.resolve({ bootstrap: { totalCount: 6 }, records: e.records(6) });
     await e.flush();
     await completion;
     assert.equal(e.c.nativeCarousel.currentBinding().track, replacement);
@@ -3965,7 +3964,7 @@ test('late fast collection rejects remapping, repeated preparation and parent re
         let collections = 0, acceptances = 0;
         const carousel = e.c.nativeCarousel;
         e.c.nativeCarousel = Object.freeze({ ...carousel, acceptCollection(options) { acceptances++; return carousel.acceptCollection(options); } });
-        e.c.collectLogicalListItems = () => { collections++; return gate.promise; };
+        e.c.listData.collectRecords = () => { collections++; return gate.promise; };
         e.c.scheduleRun = (...args) => runs.push(args);
         const completion = e.c.runScript(1);
         await e.flush();
@@ -3977,7 +3976,7 @@ test('late fast collection rejects remapping, repeated preparation and parent re
         if (change === 'parent') e.c.sourceState = e.c.attachNativeBinding({ ...owner }, e.section, e.scroller, e.track);
         const current = () => nativeModelFacts(e);
         const before = { pages: current().knownPageCount, finalized: current().pageCountFinalized, stale: current().pageMappingStale };
-        gate.resolve({ bootstrap: { totalCount: 6 }, items: e.items(6), collectionSource: 'graphql' });
+        gate.resolve({ bootstrap: { totalCount: 6 }, records: e.records(6) });
         await e.flush(); await completion;
         assert.equal(acceptances, 0, 'obsolete collection must stop before acceptance');
         assert.deepEqual({ pages: current().knownPageCount, finalized: current().pageCountFinalized, stale: current().pageMappingStale }, before);
@@ -4018,8 +4017,8 @@ test('initialization rejects obsolete native count after logging and preserves q
         const e = initializationEnvironment(6);
         const log = e.c.log, runs = [];
         let collections = 0, publishedOwner = null, previousCount;
-        const collect = e.c.collectLogicalListItems;
-        e.c.collectLogicalListItems = (...args) => { collections++; return collect(...args); };
+        const collect = e.c.listData.collectRecords;
+        e.c.listData.collectRecords = (...args) => { collections++; return collect(...args); };
         e.c.scheduleRun = (...args) => runs.push(args);
         e.c.pendingMyListMutations.set('2', { videoId: '2', action: 'remove' });
         e.c.log = (name, details) => {
@@ -4051,7 +4050,7 @@ test('initialization never substitutes a provisional count for absent or contrad
     for (const scenario of ['missing', 'conflicting']) {
         const e = initializationEnvironment(6);
         let collections = 0;
-        e.c.collectLogicalListItems = () => collections++;
+        e.c.listData.collectRecords = () => collections++;
         if (scenario === 'missing') Object.defineProperty(e.template.__reactFiber$count.memoizedProps, 'totalCount', { value: null });
         else {
             const other = e.template.cloneNode(true);
@@ -4515,7 +4514,7 @@ test('small builds revalidate cancellation before their awaited result can be pu
     for (const kind of ['snapshot', 'grid']) {
         const e = constructionEnvironment();
         const completion = kind === 'snapshot'
-            ? e.c.buildGraphqlMyListItems(e.records(6), 6, 6, e.c.cardMarkup.captureTemplate(e.template), 1)
+            ? e.c.listView.buildItems(e.records(6), 6, 6, e.c.cardMarkup.captureTemplate(e.template), 1)
             : e.c.buildGrid(e.section, e.scroller, e.items(6), e.layout, 6, 1);
         e.c.isRouteSessionActive = () => false;
         await assert.rejects(completion, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
@@ -4539,7 +4538,7 @@ function retainedCardTrees(state, undoEntries = new Map()) {
 test('GraphQL construction allocates one shared template and one displayed tree per title', async () => {
     for (const count of [30, 150, 600]) {
         const e = constructionEnvironment();
-        const collection = e.c.buildGraphqlMyListItems(e.records(count), count, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
+        const collection = e.c.listView.buildItems(e.records(count), count, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
         await e.drain();
         const items = await collection;
         assert.equal(new Set(items.map(item => item.cardTemplate)).size, 1);
@@ -4599,7 +4598,7 @@ test('GraphQL template materialization preserves missing-artwork and missing-ima
         if (missing === 'image') e.template.querySelector('img').remove();
         const edges = e.records(1);
         if (missing === 'artwork') edges[0].imageUrl = '';
-        const items = await e.c.buildGraphqlMyListItems(edges, 1, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
+        const items = await e.c.listView.buildItems(edges, 1, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
         const grid = await e.c.buildGrid(e.section, e.scroller, items, e.layout, 1, 1);
         const image = grid.children[0].querySelector('img');
         if (missing === 'image') assert.equal(image, null);
@@ -4616,7 +4615,7 @@ test('a cancelled initial grid retains its native snapshots or shared template f
         const e = constructionEnvironment();
         let items = e.items(30);
         if (mode === 'graphql') {
-            const collection = e.c.buildGraphqlMyListItems(e.records(30), 30, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
+            const collection = e.c.listView.buildItems(e.records(30), 30, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
             await e.drain();
             items = await collection;
         }
@@ -4666,7 +4665,7 @@ test('remove and Undo retain only the removed tree then restore membership, orde
     for (const mode of ['native', 'graphql']) {
         const e = constructionEnvironment();
         let items = e.items(6);
-        if (mode === 'graphql') items = await e.c.buildGraphqlMyListItems(e.records(6), 6, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
+        if (mode === 'graphql') items = await e.c.listView.buildItems(e.records(6), 6, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
         const grid = await e.c.buildGrid(e.section, e.scroller, items, e.layout, 6, 1);
         const item = e.c.sourceState.itemMap.get('v:3'), removed = grid.children[2];
         removed.appendChild(new ConstructionNode('button')).setAttribute('aria-label', 'Preserved action');
@@ -5188,7 +5187,7 @@ function fetchEnvironment(count = 150) {
     function collect(bootstrap, totalCount = count) {
         const templateSource = e.c.nativeCarousel.pageCards({ section: e.section, scroller: e.scroller, track: e.track,
             totalCount, columns: 6, template: true, sessionToken: e.c.routeSessionToken }).template;
-        return e.c.collectLogicalListItems({ bootstrap, totalCount, columns: 6, templateSource, sessionToken: e.c.routeSessionToken });
+        return e.c.listView.collectLogical({ bootstrap, totalCount, columns: 6, templateSource, sessionToken: e.c.routeSessionToken });
     }
     function routeLifecycle() {
         Object.assign(e.c, {
@@ -5450,7 +5449,7 @@ test('manual and initial entry cannot qualify mounted reuse and a stale route ca
     const bootstrap = await e.qualify();
     const before = e.template.cloneCounter.count;
     e.c.sessionScope.begin();
-    await assert.rejects(e.c.collectLogicalListItems({ bootstrap, totalCount: 6, columns: 6,
+    await assert.rejects(e.c.listView.collectLogical({ bootstrap, totalCount: 6, columns: 6,
         sessionToken: 1 }), error => e.c.isRouteSessionCancelledError(error));
     assert.equal(e.requests.length, 0);
     assert.equal(e.template.cloneCounter.count, before);
