@@ -170,13 +170,16 @@ export function createCollection({ runChunks, assertSession, isCancelled, collec
             const material = source ? Object.freeze({ source, template: !input.snapshot && source === input.cardTemplate }) : null;
             assertCurrent(); records.push(record);
             inputs.push({ input, snapshot: input.snapshot, cardTemplate: input.cardTemplate, imageUrl: input.imageUrl });
-            materials.set(record, material);
+            materials.set(record, { material, page: input.page });
             assertCurrent();
         }
         let released = false;
         return Object.freeze({ records: Object.freeze(records), readMaterial(record) {
             if (released) return null;
-            assertCurrent(); const material = materials.get(record) || null; assertCurrent(); return material;
+            assertCurrent(); const material = materials.get(record)?.material || null; assertCurrent(); return material;
+        }, readPage(record) {
+            if (released) return undefined;
+            assertCurrent(); const page = materials.get(record)?.page; assertCurrent(); return page;
         },
             release() {
                 if (released) return;

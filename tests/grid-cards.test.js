@@ -279,3 +279,32 @@ test('material release which retires the accepted grid cannot return an admitted
     assert.throws(()=>e.grid.insertCard(record,{material:{source:raw.snapshot,template:false},releaseMaterial(){e.grid.dispose();}}),{code:'GRID_CARD_RETIRED'});
     assert.equal(e.grid.cards.size,0);
 });
+
+
+test('grid reads scalar native hints without placing page state on immutable records', async () => {
+    let page = 3;
+    const e = await fixture({ readPage: () => page });
+    const input = e.item();
+    const record = Object.freeze({ videoId: input.videoId, href: input.href, ariaLabel: input.ariaLabel });
+    await e.grid.publish({ items: [record], section: e.section, anchor: e.anchor, status: e.status,
+        geometry: { left: 10, width: 600, columns: 6 }, layout: { gap: 8, rowGap: 10 },
+        readMaterial: () => ({ source: input.snapshot }), readPage: () => 2, assertCurrent() {} });
+    const handle = e.grid.getCard(record);
+    assert.equal(handle.node.getAttribute('data-tm-item-page'), '2');
+    e.grid.updateCard(handle, record, 0);
+    assert.equal(handle.node.getAttribute('data-tm-item-page'), '3');
+    page = 5; e.grid.updateCard(handle, record, 0);
+    assert.equal(handle.node.getAttribute('data-tm-item-page'), '5');
+    assert.equal(Object.hasOwn(record, 'page'), false);
+});
+
+test('grid rejects a page read that retires its exact card before attribute publication', async () => {
+    let retire = false;
+    const e = await fixture({ readPage() { if (retire) e.grid.dispose(); return 7; } });
+    const record = e.item(); await e.publish([record]);
+    const handle = e.grid.getCard(record), oldPage = handle.node.getAttribute('data-tm-item-page');
+    retire = true;
+    assert.throws(() => e.grid.updateCard(handle, record, 9), { code: 'GRID_CARD_RETIRED' });
+    assert.equal(handle.node.getAttribute('data-tm-item-page'), oldPage);
+    assert.equal(handle.node.getAttribute('data-tm-item-order'), '0');
+});

@@ -47,7 +47,7 @@ export function startLegacy() {
         requestTimeoutMs: FRESH_MY_LIST_FETCH_TIMEOUT_MS });
     const gridView = createGrid({ document, location, runChunks: runConstructionChunks,
         createError: (code, message) => initializationError(code, 'grid-cards', message),
-        installHover: ensureGridHoverBehavior,
+        installHover: ensureGridHoverBehavior, readPage: pageForItem,
         onRetire: retireGridCard, onReplace: onGridCardReplaced,
         tLog, tUi, formatUiNumber, formatItemCount, copyLogs: copyDiagnosticLogs, setTimeout, clearTimeout,
         readEmptyContent: section => netflixDom.readEmptyContent(section), readEmptyShell: () => netflixDom.readEmptyShell(),
@@ -142,8 +142,30 @@ export function startLegacy() {
     function publishSourceState(next) {
         const previous = sourceState;
         sourceState = next;
-        if (previous !== next) previous?.listMembership?.dispose();
+        if (previous !== next) { previous?.listMembership?.dispose(); previous?.nativePageHints?.dispose(); }
         return next;
+    }
+
+    function ensurePageHints(state) {
+        if (state.nativePageHints) return state.nativePageHints;
+        const hints = nativeCarousel.createPageHints({ assertCurrent() {
+            if (sourceState !== state) throw createRouteSessionCancelledError();
+        } });
+        Object.defineProperty(state, 'nativePageHints', { value: hints, configurable: true });
+        return hints;
+    }
+
+    function pageForItem(item) {
+        if (!item) return 0;
+        const hinted = sourceState ? ensurePageHints(sourceState).get(item) : undefined;
+        if (Number.isFinite(hinted)) return hinted;
+        if (Number.isFinite(item.page)) return item.page; // Transient collector input, never an admitted record.
+        const index = sourceState?.items?.indexOf(item) ?? -1;
+        return index >= 0 ? Math.floor(index / Math.max(1, sourceState.layout?.columns || 1)) : 0;
+    }
+
+    function setPageForItem(item, page, state = sourceState, admission = {}) {
+        ensurePageHints(state).set(item, page, admission);
     }
 
     function ensureListMembership(state) {
@@ -685,7 +707,9 @@ export function startLegacy() {
 
     function resetDetachedTargetState() {
         if (completedSection?.isConnected && document.getElementById(GRID_ID)) return;
-        if (sourceState?.section && !sourceState.section.isConnected) sourceState.listMembership?.dispose();
+        if (sourceState?.section && !sourceState.section.isConnected) {
+            sourceState.listMembership?.dispose(); sourceState.nativePageHints?.dispose();
+        }
 
         clearSourceAlignment();
         restoreActiveCarouselStyles();
@@ -723,7 +747,7 @@ export function startLegacy() {
     }
 
     function cleanupTargetSessionDom() {
-        sourceState?.listMembership?.dispose();
+        sourceState?.listMembership?.dispose(); sourceState?.nativePageHints?.dispose();
         restoreActiveCarouselStyles();
         clearSourceAlignment();
         invalidateGridReact();
@@ -738,7 +762,7 @@ export function startLegacy() {
     function suspendTargetSession(reason = 'route-leave') {
         const hadSession = targetSessionActive || running || sourceState || completedSection || scheduled;
         const previousToken = sessionScope.token;
-        sourceState?.listMembership?.dispose();
+        sourceState?.listMembership?.dispose(); sourceState?.nativePageHints?.dispose();
         sessionScope.dispose();
         targetSessionActive = false;
         stopImageResourceDiagnostics();
@@ -908,7 +932,7 @@ export function startLegacy() {
         if (!item) return null;
         return {
             videoId: item.videoId || '',
-            page: item.page,
+            page: pageForItem(item),
             href: item.href || '',
             ariaLabel: item.ariaLabel || ''
         };
@@ -2682,8 +2706,8 @@ export function startLegacy() {
             // order alignment. An add/remove changes every later page boundary,
             // so mutation reindexing must reset all logical pages from the new
             // item order before the native carousel converges.
-            if (!logicalMode || resetLogicalPages || !Number.isFinite(item.page)) {
-                item.page = Math.floor(index / columns);
+            if (!logicalMode || resetLogicalPages || !Number.isFinite(pageForItem(item))) {
+                setPageForItem(item, Math.floor(index / columns), state, { assertCurrent });
             }
             const key = itemKey(item);
             const clone = state.cloneMap?.get(key);
@@ -2773,7 +2797,7 @@ export function startLegacy() {
         const index = Math.max(0, Math.min(items.length, Number.isFinite(preferredIndex) ? Math.floor(preferredIndex) : 0));
         const transfer = listView.prepareRecords([item], { assertCurrent });
         item = transfer.records[0];
-        item.page = Math.floor(index / Math.max(1, sourceState.layout?.columns || 1));
+        setPageForItem(item, Math.floor(index / Math.max(1, state.layout?.columns || 1)), state, { assertCurrent });
         const before = sourceState.watchStatus ? null : (grid.children[index] || null);
         try {
             gridView.insertCard(item, { index, before, material: transfer.readMaterial(item), releaseMaterial: transfer.release,
@@ -3419,7 +3443,7 @@ export function startLegacy() {
     }
 
     function pageItemKeys(items, page) {
-        return new Set(items.filter(item => item.page === page).map(itemKey).filter(Boolean));
+        return new Set(items.filter(item => pageForItem(item) === page).map(itemKey).filter(Boolean));
     }
 
     async function ensureFreshIndicatorPageZeroAnchor(section, scroller, track, firstVideoId, sessionToken = null) {
@@ -3610,7 +3634,7 @@ export function startLegacy() {
         return findMountedSourceSlot(sourceState.track, item, true);
     }
 
-    async function resolveExpectedPageSourceItem(item, expectedPage = item.page, token = null, sessionToken = null) {
+    async function resolveExpectedPageSourceItem(item, expectedPage = pageForItem(item), token = null, sessionToken = null) {
         assertRouteSession(sessionToken);
         if (hoverPreparationCancelled(token)) return { status: 'unknown', reason: 'hover-cancelled' };
         ensureLiveNativeBinding('hover-expected-page-start');
@@ -3697,7 +3721,7 @@ export function startLegacy() {
         return true;
     }
 
-    async function refreshStaleSourceOnPreferredPage(item, preferredPage = item.page, token = null, sessionToken = null) {
+    async function refreshStaleSourceOnPreferredPage(item, preferredPage = pageForItem(item), token = null, sessionToken = null) {
         assertRouteSession(sessionToken);
         if (hoverPreparationCancelled(token)) return null;
         ensureLiveNativeBinding('hover-stale-refresh-start');
@@ -3710,7 +3734,7 @@ export function startLegacy() {
         return { ...result, get slot() { return result.source.slot; } };
     }
 
-    async function locateActiveSourceItem(item, preferredPage = item.page, token = null, sessionToken = null, repairLogicalMapping = true, maxRadius = null) {
+    async function locateActiveSourceItem(item, preferredPage = pageForItem(item), token = null, sessionToken = null, repairLogicalMapping = true, maxRadius = null) {
         assertRouteSession(sessionToken);
         if (hoverPreparationCancelled(token)) return null;
         ensureLiveNativeBinding('hover-locate-start');
@@ -3728,9 +3752,9 @@ export function startLegacy() {
                     nativeCarousel.assertSource(result.source);
                     nativeCarousel.assertSource(result.sources[index]);
                     const visibleItem = state.itemMap?.get(itemKey(result.visibleCards[index]));
-                    if (!visibleItem || visibleItem.page === result.page) continue;
-                    const oldPage = visibleItem.page;
-                    visibleItem.page = result.page;
+                    if (!visibleItem || pageForItem(visibleItem) === result.page) continue;
+                    const oldPage = pageForItem(visibleItem);
+                    setPageForItem(visibleItem, result.page, state);
                     const visibleClone = findGridClone(visibleItem);
                     if (visibleClone) copyItemAttributes(visibleClone, visibleItem);
                     log(tLog('itemPageMappingCorrected'), { item: itemSummary(visibleItem), oldPage,
@@ -4573,8 +4597,8 @@ export function startLegacy() {
                 const pageItem = findItemForSourceSlot(sourceSlot);
                 if (!pageItem) continue;
 
-                if (!staleSourceRecovery && pageItem.page !== actualPage) {
-                    pageItem.page = actualPage;
+                if (!staleSourceRecovery && pageForItem(pageItem) !== actualPage) {
+                    setPageForItem(pageItem, actualPage, state);
                     const mappedClone = findGridClone(pageItem);
                     if (mappedClone?.isConnected) copyItemAttributes(mappedClone, pageItem);
                     nativeCarousel.assertObservation(pageView);
@@ -4780,10 +4804,10 @@ export function startLegacy() {
                             seq,
                             group,
                             intent: intentDiagnostic,
-                            directPageDistance: Math.abs(selected - item.page),
+                            directPageDistance: Math.abs(selected - pageForItem(item)),
                             item: itemSummary(item),
                             selectedPage: selected,
-                            targetPage: item.page,
+                            targetPage: pageForItem(item),
                             backedPage: Number.isFinite(backedPage) ? backedPage : null,
                             hoverReady: current.getAttribute('data-tm-hover-ready') === 'true',
                             token,
@@ -4799,7 +4823,7 @@ export function startLegacy() {
                     );
                     fresh = replayed ? current : null;
                 } else {
-                    fresh = await prepareMountedPage(item.page, item, triggerEvent, token, sessionToken);
+                    fresh = await prepareMountedPage(pageForItem(item), item, triggerEvent, token, sessionToken);
                 }
                 if (fresh || hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) ||
                     orderMismatchDialogOpen || orderMismatchReinitializing) break;
@@ -5039,7 +5063,8 @@ export function startLegacy() {
         };
         const transfer = listView.prepareRecords(items, { assertCurrent: assertBuildParent });
         const publication = ensureListMembership(buildState).preparePublication(transfer.records, totalCount, { assertCurrent: assertBuildParent });
-        const assertBuildActive = () => { assertBuildParent(); publication.assertCurrent(); };
+        const pageHints = ensurePageHints(buildState).stage(transfer.records, transfer.readPage, { assertCurrent: assertBuildParent });
+        const assertBuildActive = () => { assertBuildParent(); publication.assertCurrent(); pageHints.assertCurrent(); };
         assertBuildActive();
         const geometry = currentGridGeometry(section, layout);
         const status = updateStatus(formatHeaderParts(items.length, totalCount, null));
@@ -5047,12 +5072,13 @@ export function startLegacy() {
         let grid;
         try {
             grid = await gridView.publish({ items: transfer.records, readMaterial: transfer.readMaterial, releaseMaterial: transfer.release,
+                readPage: (record, index) => pageHints.get(record) ?? Math.floor(index / Math.max(1, layout.columns)),
                 section, anchor: scroller, status, geometry, layout, visible: viewOriginalMyList, assertCurrent: assertBuildActive,
                 onAccepted(root) {
-                    publication.commit(); attachGridRegistry(buildState);
+                    publication.commit(); pageHints.commit(); attachGridRegistry(buildState);
                     buildState.grid = root; buildState.status = status; buildState.layout = layout;
                 } });
-        } finally { transfer.discard(); }
+        } finally { pageHints.discard(); transfer.discard(); }
         clearLegacyEmptyState({ restoreGrid: false });
         if (sourceState.watchStatus) syncWatchGroups(sourceState);
 
@@ -5215,8 +5241,8 @@ export function startLegacy() {
             items.forEach((item, index) => {
                 assertPublication();
                 const page = Math.min(result.knownPageCount - 1, Math.floor(index / columns));
-                if (item.page !== page) changed++;
-                item.page = page;
+                if (pageForItem(item) !== page) changed++;
+                setPageForItem(item, page, state, { assertCurrent: assertPublication });
                 const clone = cloneMap?.get(itemKey(item));
                 if (clone?.isConnected) copyItemAttributes(clone, item);
                 assertPublication();
@@ -5251,8 +5277,8 @@ export function startLegacy() {
             nativeCarousel.sample(() => items.forEach((item, index) => {
                 nativeCarousel.assertObservation(runtime);
                 const page = Math.min(pages - 1, Math.floor(index / columns));
-                if (item.page !== page) changed++;
-                item.page = page;
+                if (pageForItem(item) !== page) changed++;
+                setPageForItem(item, page, state, { assertCurrent: () => nativeCarousel.assertObservation(runtime) });
                 const clone = cloneMap?.get(itemKey(item));
                 if (clone) copyItemAttributes(clone, item);
                 nativeCarousel.assertObservation(runtime);

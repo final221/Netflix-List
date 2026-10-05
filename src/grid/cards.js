@@ -1,5 +1,5 @@
 // Private card ownership. Membership and Undo expiry are supplied by the list owner.
-export function createCards({ markup, keyFor, createError, prepareCard, onRetire, onReplace, readRoot, onMaterialReleaseFailure }) {
+export function createCards({ markup, keyFor, createError, prepareCard, onRetire, onReplace, readRoot, readPage, onMaterialReleaseFailure }) {
     let entries = new Map(), view = readOnlyView(entries), generation = 0, revision = 0, retirementFailures = 0;
     const handles = new WeakMap(), retained = new Map();
 
@@ -46,10 +46,10 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
         if (!source) throw createError('GRID_CARD_MATERIAL_MISSING', 'No card markup available for ' + keyFor(item));
         return markup.createClone(source, item, material ? material.template : source === item.cardTemplate);
     }
-    function prepare(node, item, index, detail = {}) {
+    function prepare(node, item, index, detail = {}, page = readPage(item, index)) {
         markup.normalize(node);
         if (index !== null && index !== undefined) node.setAttribute('data-tm-item-order', String(index));
-        node.setAttribute('data-tm-item-page', String(item.page));
+        node.setAttribute('data-tm-item-page', String(page));
         node.setAttribute('data-tm-item-video-id', item.videoId || '');
         node.__tmMyListItem = item;
         prepareCard(node, item, detail);
@@ -60,9 +60,9 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
         if (item.cardTemplate) item.cardTemplate = null;
         if (hadMaterial && item.imageUrl) item.imageUrl = '';
     }
-    function stage(items, root, index, map, material = null) {
+    function stage(items, root, index, map, material = null, page = undefined) {
         const item = items[index], node = createClone(item, null, material);
-        prepare(node, item, index);
+        prepare(node, item, index, {}, page);
         root.appendChild(node);
         register(map, item, node);
     }
@@ -169,9 +169,11 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
     function updateCard(expected, item, index = null) {
         assertCard(expected);
         if (handles.get(expected).item !== item) throw createError('GRID_CARD_RETIRED', 'Grid card record changed');
+        const page = readPage(item, index);
+        assertCard(expected);
         const node = expected.node;
         if (index !== null) node.setAttribute('data-tm-item-order', String(index));
-        node.setAttribute('data-tm-item-page', String(item.page));
+        node.setAttribute('data-tm-item-page', String(page));
         node.setAttribute('data-tm-item-video-id', item.videoId || '');
     }
     function dispose() {

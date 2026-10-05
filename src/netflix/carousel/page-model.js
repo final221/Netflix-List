@@ -196,3 +196,39 @@ export function wrappedTailLogicalPageForRebuild(positions, totalCount, columns,
     );
     return wasAtCompatibleTail ? info : null;
 }
+
+
+// Preferred-page facts have list-parent lifetime, separate from signature mapping.
+export function createPageHints({ assertCurrent = () => {}, createError }) {
+    let hints = new WeakMap(), revision = 0, disposed = false;
+    const error = code => createError(code, 'native-page-hints', 'Native page hints are no longer admitted');
+    function guardFor(admission = () => {}) {
+        const owner = revision;
+        return () => {
+            if (disposed) throw error('NATIVE_PAGE_HINT_RETIRED');
+            assertCurrent(); admission();
+            if (disposed) throw error('NATIVE_PAGE_HINT_RETIRED');
+            if (owner !== revision) throw error('NATIVE_PAGE_HINT_REPLACED');
+        };
+    }
+    const valid = page => Number.isFinite(page) && page >= 0;
+    function set(record, page, { assertCurrent: admission = () => {} } = {}) {
+        const guard = guardFor(admission); guard();
+        if (!valid(page)) throw error('NATIVE_PAGE_HINT_INVALID');
+        hints.set(record, page); revision++;
+    }
+    function stage(records, readPage, { assertCurrent: admission = () => {} } = {}) {
+        let guard = guardFor(admission), staged = new WeakMap(), closed = false, committed = false;
+        guard();
+        for (const record of records) { const page = readPage(record); guard(); if (valid(page)) staged.set(record, page); }
+        records = null; readPage = null;
+        const assertStage = () => { if (closed) throw error('NATIVE_PAGE_HINT_RETIRED'); guard(); };
+        return Object.freeze({ get(record) { assertStage(); return staged.get(record); }, assertCurrent: assertStage,
+            commit() {
+                assertStage(); if (committed) return;
+                hints = staged; revision++; committed = true; guard = guardFor(admission);
+            }, discard() { if (committed) return; closed = true; staged = new WeakMap(); } });
+    }
+    return Object.freeze({ set, stage, get(record) { return disposed ? undefined : hints.get(record); },
+        dispose() { if (disposed) return; disposed = true; revision++; hints = new WeakMap(); } });
+}

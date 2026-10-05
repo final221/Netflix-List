@@ -5,7 +5,7 @@ import { createGroups } from './groups.js';
 
 export function createGrid({ document, location, runChunks,
     createError = (code, message) => Object.assign(new Error(message), { code }),
-    prepareCard = () => {}, onRetire = () => {}, onReplace = () => {}, installHover = () => {},
+    readPage = item => item.page, prepareCard = () => {}, onRetire = () => {}, onReplace = () => {}, installHover = () => {},
     tLog = key => key, tUi = key => key, copyLogs = async () => {}, isActive = () => true,
     formatUiNumber = String, formatItemCount = String,
     readEmptyContent = () => null, readEmptyShell = () => null,
@@ -19,12 +19,12 @@ export function createGrid({ document, location, runChunks,
         getCard: item => cards.getCard(item), assertCard: handle => cards.assertCard(handle), formatUiNumber, formatItemCount,
         moveCard: (handle, parent, before) => { cards.assertCard(handle); frame.assertParent(parent); frame.moveCard(handle.node, parent, before); },
         orderChildren: (parent, nodes, guard) => { frame.assertParent(parent); frame.orderChildren(parent, nodes, guard); }, updateStatus: frame.updateStatus });
-    cards = createCards({ markup, createError, prepareCard: (...args) => { groups.prepareCard(...args); prepareCard(...args); }, onRetire,
+    cards = createCards({ markup, createError, readPage, prepareCard: (...args) => { groups.prepareCard(...args); prepareCard(...args); }, onRetire,
         onMaterialReleaseFailure: () => { materialReleaseFailures++; },
         onReplace: (...args) => { groups.replacePresentation(...args); onReplace(...args); },
         readRoot: () => frame.root, keyFor: item => item.videoId ? `v:${item.videoId}` : `h:${item.href}` });
 
-    async function publish({ items, assertCurrent, readMaterial = null, releaseMaterial = () => {}, onAccepted = () => {}, ...mount }) {
+    async function publish({ items, assertCurrent, readMaterial = null, readPage: readBuildPage = null, releaseMaterial = () => {}, onAccepted = () => {}, ...mount }) {
         const owner = ++buildGeneration;
         const revision = cards.revision;
         const guard = () => {
@@ -37,8 +37,8 @@ export function createGrid({ document, location, runChunks,
         guard();
         try {
             await runChunks(items.length, index => {
-                guard(); const material = readMaterial?.(items[index], index); guard();
-                cards.stage(items, root, index, staged, material);
+                guard(); const material = readMaterial?.(items[index], index), page = readBuildPage?.(items[index], index); guard();
+                cards.stage(items, root, index, staged, material, page);
             }, guard);
             guard();
             cards.retireForPublication(guard);

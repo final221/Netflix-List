@@ -2507,3 +2507,24 @@ test('collection diagnostics belong to the current route scope and retain copied
     assert.equal(e.carousel.diagnostics().collection.metadataReads, 6);
     assert.equal(previous.metadataReads, 6);
 });
+
+
+test('native page hints stage scalar facts by exact record identity and retire before old callbacks', () => {
+    const e=environment();let callbacks=0;const hints=e.carousel.createPageHints({assertCurrent(){callbacks++;}});
+    const one=Object.freeze({videoId:'1'}),two=Object.freeze({videoId:'2'});
+    const staged=hints.stage([one,two],record=>record===one?3:4);
+    assert.equal(hints.get(one),undefined);assert.equal(staged.get(one),3);staged.commit();
+    assert.equal(hints.get(one),3);assert.equal(hints.get({videoId:'1'}),undefined);
+    hints.set(one,5);assert.throws(()=>staged.assertCurrent(),{code:'NATIVE_PAGE_HINT_REPLACED'});
+    const old=hints.stage([one],()=>7);hints.dispose();hints.dispose();const before=callbacks;
+    assert.throws(()=>old.commit(),{code:'NATIVE_PAGE_HINT_RETIRED'});
+    assert.throws(()=>hints.set(two,8),{code:'NATIVE_PAGE_HINT_RETIRED'});assert.equal(callbacks,before);
+});
+
+test('native page hints reject reentrant replacement and discarded staging cannot alter current hints', () => {
+    const e=environment(),hints=e.carousel.createPageHints();const record=Object.freeze({videoId:'1'});
+    hints.set(record,2);const staged=hints.stage([record],()=>4);staged.discard();assert.equal(hints.get(record),2);
+    assert.throws(()=>staged.commit(),{code:'NATIVE_PAGE_HINT_RETIRED'});
+    assert.throws(()=>hints.set(record,5,{assertCurrent(){hints.set(record,6);}}),{code:'NATIVE_PAGE_HINT_REPLACED'});
+    assert.equal(hints.get(record),6);assert.throws(()=>hints.set(record,NaN),{code:'NATIVE_PAGE_HINT_INVALID'});
+});

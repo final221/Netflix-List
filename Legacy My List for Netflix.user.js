@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.44
+// @version      1.4.45
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -506,7 +506,7 @@
   }
 
   // src/grid/cards.js
-  function createCards({ markup, keyFor, createError, prepareCard, onRetire, onReplace, readRoot, onMaterialReleaseFailure }) {
+  function createCards({ markup, keyFor, createError, prepareCard, onRetire, onReplace, readRoot, readPage, onMaterialReleaseFailure }) {
     let entries = /* @__PURE__ */ new Map(), view = readOnlyView(entries), generation = 0, revision = 0, retirementFailures = 0;
     const handles = /* @__PURE__ */ new WeakMap(), retained = /* @__PURE__ */ new Map();
     function readOnlyView(map) {
@@ -563,10 +563,10 @@
       if (!source) throw createError("GRID_CARD_MATERIAL_MISSING", "No card markup available for " + keyFor(item));
       return markup.createClone(source, item, material ? material.template : source === item.cardTemplate);
     }
-    function prepare(node, item, index, detail = {}) {
+    function prepare(node, item, index, detail = {}, page = readPage(item, index)) {
       markup.normalize(node);
       if (index !== null && index !== void 0) node.setAttribute("data-tm-item-order", String(index));
-      node.setAttribute("data-tm-item-page", String(item.page));
+      node.setAttribute("data-tm-item-page", String(page));
       node.setAttribute("data-tm-item-video-id", item.videoId || "");
       node.__tmMyListItem = item;
       prepareCard(node, item, detail);
@@ -577,9 +577,9 @@
       if (item.cardTemplate) item.cardTemplate = null;
       if (hadMaterial && item.imageUrl) item.imageUrl = "";
     }
-    function stage(items, root, index, map, material = null) {
+    function stage(items, root, index, map, material = null, page = void 0) {
       const item = items[index], node = createClone(item, null, material);
-      prepare(node, item, index);
+      prepare(node, item, index, {}, page);
       root.appendChild(node);
       register(map, item, node);
     }
@@ -714,9 +714,11 @@
     function updateCard(expected, item, index = null) {
       assertCard(expected);
       if (handles.get(expected).item !== item) throw createError("GRID_CARD_RETIRED", "Grid card record changed");
+      const page = readPage(item, index);
+      assertCard(expected);
       const node = expected.node;
       if (index !== null) node.setAttribute("data-tm-item-order", String(index));
-      node.setAttribute("data-tm-item-page", String(item.page));
+      node.setAttribute("data-tm-item-page", String(page));
       node.setAttribute("data-tm-item-video-id", item.videoId || "");
     }
     function dispose() {
@@ -2383,6 +2385,7 @@
     location: location2,
     runChunks,
     createError = (code, message) => Object.assign(new Error(message), { code }),
+    readPage = (item) => item.page,
     prepareCard = () => {
     },
     onRetire = () => {
@@ -2442,6 +2445,7 @@
     cards = createCards({
       markup,
       createError,
+      readPage,
       prepareCard: (...args) => {
         groups.prepareCard(...args);
         prepareCard(...args);
@@ -2457,7 +2461,7 @@
       readRoot: () => frame.root,
       keyFor: (item) => item.videoId ? `v:${item.videoId}` : `h:${item.href}`
     });
-    async function publish({ items, assertCurrent, readMaterial = null, releaseMaterial = () => {
+    async function publish({ items, assertCurrent, readMaterial = null, readPage: readBuildPage = null, releaseMaterial = () => {
     }, onAccepted = () => {
     }, ...mount }) {
       const owner = ++buildGeneration;
@@ -2473,9 +2477,9 @@
       try {
         await runChunks(items.length, (index) => {
           guard();
-          const material = readMaterial?.(items[index], index);
+          const material = readMaterial?.(items[index], index), page = readBuildPage?.(items[index], index);
           guard();
-          cards.stage(items, root, index, staged, material);
+          cards.stage(items, root, index, staged, material, page);
         }, guard);
         guard();
         cards.retireForPublication(guard);
@@ -2940,7 +2944,7 @@
         assertCurrent();
         records.push(record);
         inputs.push({ input, snapshot: input.snapshot, cardTemplate: input.cardTemplate, imageUrl: input.imageUrl });
-        materials.set(record, material);
+        materials.set(record, { material, page: input.page });
         assertCurrent();
       }
       let released = false;
@@ -2949,9 +2953,16 @@
         readMaterial(record) {
           if (released) return null;
           assertCurrent();
-          const material = materials.get(record) || null;
+          const material = materials.get(record)?.material || null;
           assertCurrent();
           return material;
+        },
+        readPage(record) {
+          if (released) return void 0;
+          assertCurrent();
+          const page = materials.get(record)?.page;
+          assertCurrent();
+          return page;
         },
         release() {
           if (released) return;
@@ -2999,7 +3010,7 @@
     const keyFor = (record) => record.videoId ? "v:" + record.videoId : "h:" + record.href;
     const error = (code, message) => Object.assign(new Error(message), { code });
     function assertRecord(record) {
-      if (!record || typeof record !== "object" || "snapshot" in record || "cardTemplate" in record || "undoId" in record || "logicalIndex" in record || Object.values(record).some((value) => value !== null && (typeof value === "object" || typeof value === "function"))) {
+      if (!record || typeof record !== "object" || "snapshot" in record || "cardTemplate" in record || "undoId" in record || "logicalIndex" in record || "page" in record || Object.values(record).some((value) => value !== null && (typeof value === "object" || typeof value === "function"))) {
         throw error("LIST_RECORD_INVALID", "Membership requires scalar records and separate material");
       }
     }
@@ -3175,7 +3186,6 @@
         href: text(input.href),
         ariaLabel: text(input.ariaLabel),
         imageUrl: text(input.imageUrl),
-        page: Number.isFinite(input.page) ? input.page : 0,
         graphql: Boolean(input.graphql)
       });
       normalized.set(input, record);
@@ -5787,6 +5797,80 @@
     const previousKnownPageCount = previousRuntime?.pageCountFinalized && Number.isFinite(previousRuntime?.knownPageCount) ? Math.max(1, Math.floor(previousRuntime.knownPageCount)) : null;
     const wasAtCompatibleTail = previousCurrentPage === info.page || previousKnownPageCount !== null && previousCurrentPage === previousKnownPageCount - 1 && (previousKnownPageCount === pages || previousKnownPageCount === pages + 1);
     return wasAtCompatibleTail ? info : null;
+  }
+  function createPageHints({ assertCurrent = () => {
+  }, createError }) {
+    let hints = /* @__PURE__ */ new WeakMap(), revision = 0, disposed = false;
+    const error = (code) => createError(code, "native-page-hints", "Native page hints are no longer admitted");
+    function guardFor(admission = () => {
+    }) {
+      const owner = revision;
+      return () => {
+        if (disposed) throw error("NATIVE_PAGE_HINT_RETIRED");
+        assertCurrent();
+        admission();
+        if (disposed) throw error("NATIVE_PAGE_HINT_RETIRED");
+        if (owner !== revision) throw error("NATIVE_PAGE_HINT_REPLACED");
+      };
+    }
+    const valid = (page) => Number.isFinite(page) && page >= 0;
+    function set(record, page, { assertCurrent: admission = () => {
+    } } = {}) {
+      const guard = guardFor(admission);
+      guard();
+      if (!valid(page)) throw error("NATIVE_PAGE_HINT_INVALID");
+      hints.set(record, page);
+      revision++;
+    }
+    function stage(records, readPage, { assertCurrent: admission = () => {
+    } } = {}) {
+      let guard = guardFor(admission), staged = /* @__PURE__ */ new WeakMap(), closed = false, committed = false;
+      guard();
+      for (const record of records) {
+        const page = readPage(record);
+        guard();
+        if (valid(page)) staged.set(record, page);
+      }
+      records = null;
+      readPage = null;
+      const assertStage = () => {
+        if (closed) throw error("NATIVE_PAGE_HINT_RETIRED");
+        guard();
+      };
+      return Object.freeze({
+        get(record) {
+          assertStage();
+          return staged.get(record);
+        },
+        assertCurrent: assertStage,
+        commit() {
+          assertStage();
+          if (committed) return;
+          hints = staged;
+          revision++;
+          committed = true;
+          guard = guardFor(admission);
+        },
+        discard() {
+          if (committed) return;
+          closed = true;
+          staged = /* @__PURE__ */ new WeakMap();
+        }
+      });
+    }
+    return Object.freeze({
+      set,
+      stage,
+      get(record) {
+        return disposed ? void 0 : hints.get(record);
+      },
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        revision++;
+        hints = /* @__PURE__ */ new WeakMap();
+      }
+    });
   }
 
   // src/netflix/carousel/navigation.js
@@ -10774,6 +10858,13 @@
       isBindingCurrent,
       assertBinding,
       currentBinding: () => acceptedBinding,
+      createPageHints(options = {}) {
+        const token = scope.token;
+        return createPageHints({ createError: initializationError, assertCurrent() {
+          scope.assertCurrent(token);
+          options.assertCurrent?.();
+        } });
+      },
       whenNavigationIdle: navigation.whenIdle,
       suppressMotion: navigation.suppress,
       restoreMotion: navigation.restoreMotion,
@@ -10884,6 +10975,7 @@
       runChunks: runConstructionChunks,
       createError: (code, message) => initializationError(code, "grid-cards", message),
       installHover: ensureGridHoverBehavior,
+      readPage: pageForItem,
       onRetire: retireGridCard,
       onReplace: onGridCardReplaced,
       tLog,
@@ -10951,7 +11043,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.44";
+    const SCRIPT_VERSION = "1.4.45";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -11058,8 +11150,30 @@
     function publishSourceState(next) {
       const previous = sourceState;
       sourceState = next;
-      if (previous !== next) previous?.listMembership?.dispose();
+      if (previous !== next) {
+        previous?.listMembership?.dispose();
+        previous?.nativePageHints?.dispose();
+      }
       return next;
+    }
+    function ensurePageHints(state) {
+      if (state.nativePageHints) return state.nativePageHints;
+      const hints = nativeCarousel.createPageHints({ assertCurrent() {
+        if (sourceState !== state) throw createRouteSessionCancelledError();
+      } });
+      Object.defineProperty(state, "nativePageHints", { value: hints, configurable: true });
+      return hints;
+    }
+    function pageForItem(item) {
+      if (!item) return 0;
+      const hinted = sourceState ? ensurePageHints(sourceState).get(item) : void 0;
+      if (Number.isFinite(hinted)) return hinted;
+      if (Number.isFinite(item.page)) return item.page;
+      const index = sourceState?.items?.indexOf(item) ?? -1;
+      return index >= 0 ? Math.floor(index / Math.max(1, sourceState.layout?.columns || 1)) : 0;
+    }
+    function setPageForItem(item, page, state = sourceState, admission = {}) {
+      ensurePageHints(state).set(item, page, admission);
     }
     function ensureListMembership(state) {
       if (state.listMembership) return state.listMembership;
@@ -11764,7 +11878,10 @@
     }
     function resetDetachedTargetState() {
       if (completedSection?.isConnected && document.getElementById(GRID_ID)) return;
-      if (sourceState?.section && !sourceState.section.isConnected) sourceState.listMembership?.dispose();
+      if (sourceState?.section && !sourceState.section.isConnected) {
+        sourceState.listMembership?.dispose();
+        sourceState.nativePageHints?.dispose();
+      }
       clearSourceAlignment();
       restoreActiveCarouselStyles();
       advanceHoverToken("source");
@@ -11801,6 +11918,7 @@
     }
     function cleanupTargetSessionDom() {
       sourceState?.listMembership?.dispose();
+      sourceState?.nativePageHints?.dispose();
       restoreActiveCarouselStyles();
       clearSourceAlignment();
       invalidateGridReact();
@@ -11813,6 +11931,7 @@
       const hadSession = targetSessionActive || running || sourceState || completedSection || scheduled;
       const previousToken = sessionScope.token;
       sourceState?.listMembership?.dispose();
+      sourceState?.nativePageHints?.dispose();
       sessionScope.dispose();
       targetSessionActive = false;
       stopImageResourceDiagnostics();
@@ -11963,7 +12082,7 @@
       if (!item) return null;
       return {
         videoId: item.videoId || "",
-        page: item.page,
+        page: pageForItem(item),
         href: item.href || "",
         ariaLabel: item.ariaLabel || ""
       };
@@ -13803,8 +13922,8 @@
       };
       nativeCarousel.sample(() => items.forEach((item, index) => {
         assertCurrent();
-        if (!logicalMode || resetLogicalPages || !Number.isFinite(item.page)) {
-          item.page = Math.floor(index / columns);
+        if (!logicalMode || resetLogicalPages || !Number.isFinite(pageForItem(item))) {
+          setPageForItem(item, Math.floor(index / columns), state, { assertCurrent });
         }
         const key = itemKey(item);
         const clone = state.cloneMap?.get(key);
@@ -13887,7 +14006,7 @@
       const index = Math.max(0, Math.min(items.length, Number.isFinite(preferredIndex) ? Math.floor(preferredIndex) : 0));
       const transfer = listView.prepareRecords([item], { assertCurrent });
       item = transfer.records[0];
-      item.page = Math.floor(index / Math.max(1, sourceState.layout?.columns || 1));
+      setPageForItem(item, Math.floor(index / Math.max(1, state.layout?.columns || 1)), state, { assertCurrent });
       const before = sourceState.watchStatus ? null : grid.children[index] || null;
       try {
         gridView.insertCard(item, {
@@ -14507,7 +14626,7 @@
       return videoId ? `v:${videoId}` : `h:${href}`;
     }
     function pageItemKeys(items, page) {
-      return new Set(items.filter((item) => item.page === page).map(itemKey).filter(Boolean));
+      return new Set(items.filter((item) => pageForItem(item) === page).map(itemKey).filter(Boolean));
     }
     async function ensureFreshIndicatorPageZeroAnchor(section, scroller, track, firstVideoId, sessionToken = null) {
       return nativeCarousel.anchorPageZero({
@@ -14685,7 +14804,7 @@
       if (!sourceState?.track?.isConnected || !sourceState?.scroller?.isConnected) return null;
       return findMountedSourceSlot(sourceState.track, item, true);
     }
-    async function resolveExpectedPageSourceItem(item, expectedPage = item.page, token = null, sessionToken = null) {
+    async function resolveExpectedPageSourceItem(item, expectedPage = pageForItem(item), token = null, sessionToken = null) {
       assertRouteSession(sessionToken);
       if (hoverPreparationCancelled(token)) return { status: "unknown", reason: "hover-cancelled" };
       ensureLiveNativeBinding("hover-expected-page-start");
@@ -14786,7 +14905,7 @@
       );
       return true;
     }
-    async function refreshStaleSourceOnPreferredPage(item, preferredPage = item.page, token = null, sessionToken = null) {
+    async function refreshStaleSourceOnPreferredPage(item, preferredPage = pageForItem(item), token = null, sessionToken = null) {
       assertRouteSession(sessionToken);
       if (hoverPreparationCancelled(token)) return null;
       ensureLiveNativeBinding("hover-stale-refresh-start");
@@ -14807,7 +14926,7 @@
         return result.source.slot;
       } };
     }
-    async function locateActiveSourceItem(item, preferredPage = item.page, token = null, sessionToken = null, repairLogicalMapping = true, maxRadius = null) {
+    async function locateActiveSourceItem(item, preferredPage = pageForItem(item), token = null, sessionToken = null, repairLogicalMapping = true, maxRadius = null) {
       assertRouteSession(sessionToken);
       if (hoverPreparationCancelled(token)) return null;
       ensureLiveNativeBinding("hover-locate-start");
@@ -14835,9 +14954,9 @@
             nativeCarousel.assertSource(result.source);
             nativeCarousel.assertSource(result.sources[index]);
             const visibleItem = state.itemMap?.get(itemKey(result.visibleCards[index]));
-            if (!visibleItem || visibleItem.page === result.page) continue;
-            const oldPage = visibleItem.page;
-            visibleItem.page = result.page;
+            if (!visibleItem || pageForItem(visibleItem) === result.page) continue;
+            const oldPage = pageForItem(visibleItem);
+            setPageForItem(visibleItem, result.page, state);
             const visibleClone = findGridClone(visibleItem);
             if (visibleClone) copyItemAttributes(visibleClone, visibleItem);
             log(tLog("itemPageMappingCorrected"), {
@@ -15669,8 +15788,8 @@
           const sourceSlot = entry.source.slot;
           const pageItem = findItemForSourceSlot(sourceSlot);
           if (!pageItem) continue;
-          if (!staleSourceRecovery && pageItem.page !== actualPage) {
-            pageItem.page = actualPage;
+          if (!staleSourceRecovery && pageForItem(pageItem) !== actualPage) {
+            setPageForItem(pageItem, actualPage, state);
             const mappedClone = findGridClone(pageItem);
             if (mappedClone?.isConnected) copyItemAttributes(mappedClone, pageItem);
             nativeCarousel.assertObservation(pageView);
@@ -15868,10 +15987,10 @@
                 seq,
                 group,
                 intent: intentDiagnostic,
-                directPageDistance: Math.abs(selected2 - item.page),
+                directPageDistance: Math.abs(selected2 - pageForItem(item)),
                 item: itemSummary(item),
                 selectedPage: selected2,
-                targetPage: item.page,
+                targetPage: pageForItem(item),
                 backedPage: Number.isFinite(backedPage) ? backedPage : null,
                 hoverReady: current.getAttribute("data-tm-hover-ready") === "true",
                 token,
@@ -15894,7 +16013,7 @@
             );
             fresh = replayed ? current : null;
           } else {
-            fresh = await prepareMountedPage(item.page, item, triggerEvent, token, sessionToken);
+            fresh = await prepareMountedPage(pageForItem(item), item, triggerEvent, token, sessionToken);
           }
           if (fresh || hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) || orderMismatchDialogOpen || orderMismatchReinitializing) break;
         }
@@ -16116,9 +16235,11 @@
       };
       const transfer = listView.prepareRecords(items, { assertCurrent: assertBuildParent });
       const publication = ensureListMembership(buildState).preparePublication(transfer.records, totalCount, { assertCurrent: assertBuildParent });
+      const pageHints = ensurePageHints(buildState).stage(transfer.records, transfer.readPage, { assertCurrent: assertBuildParent });
       const assertBuildActive = () => {
         assertBuildParent();
         publication.assertCurrent();
+        pageHints.assertCurrent();
       };
       assertBuildActive();
       const geometry = currentGridGeometry(section, layout);
@@ -16130,6 +16251,7 @@
           items: transfer.records,
           readMaterial: transfer.readMaterial,
           releaseMaterial: transfer.release,
+          readPage: (record, index) => pageHints.get(record) ?? Math.floor(index / Math.max(1, layout.columns)),
           section,
           anchor: scroller,
           status,
@@ -16139,6 +16261,7 @@
           assertCurrent: assertBuildActive,
           onAccepted(root) {
             publication.commit();
+            pageHints.commit();
             attachGridRegistry(buildState);
             buildState.grid = root;
             buildState.status = status;
@@ -16146,6 +16269,7 @@
           }
         });
       } finally {
+        pageHints.discard();
         transfer.discard();
       }
       clearLegacyEmptyState({ restoreGrid: false });
@@ -16320,8 +16444,8 @@
         items.forEach((item, index) => {
           assertPublication();
           const page = Math.min(result.knownPageCount - 1, Math.floor(index / columns));
-          if (item.page !== page) changed++;
-          item.page = page;
+          if (pageForItem(item) !== page) changed++;
+          setPageForItem(item, page, state, { assertCurrent: assertPublication });
           const clone = cloneMap?.get(itemKey(item));
           if (clone?.isConnected) copyItemAttributes(clone, item);
           assertPublication();
@@ -16360,8 +16484,8 @@
         nativeCarousel.sample(() => items.forEach((item, index) => {
           nativeCarousel.assertObservation(runtime);
           const page = Math.min(pages - 1, Math.floor(index / columns));
-          if (item.page !== page) changed++;
-          item.page = page;
+          if (pageForItem(item) !== page) changed++;
+          setPageForItem(item, page, state, { assertCurrent: () => nativeCarousel.assertObservation(runtime) });
           const clone = cloneMap?.get(itemKey(item));
           if (clone) copyItemAttributes(clone, item);
           nativeCarousel.assertObservation(runtime);

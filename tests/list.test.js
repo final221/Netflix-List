@@ -111,8 +111,9 @@ test('collection transfer separates DOM material from stable scalar records and 
     assert.equal(record.snapshot,undefined);assert.equal(record.cardTemplate,undefined);assert.equal(record.fiber,undefined);
     assert.equal(Object.hasOwn(record,'undoId'),false);
     assert.equal(Object.hasOwn(record,'logicalIndex'),false);
+    assert.equal(Object.hasOwn(record,'page'),false);assert.equal(transfer.readPage(record),0);
     assert.equal(record.imageUrl,'art');assert.equal(transfer.readMaterial(record).source,source.snapshot);
-    transfer.discard();assert.equal(source.snapshot.clone,true);assert.equal(transfer.readMaterial(record),null);
+    transfer.discard();assert.equal(transfer.readPage(record),undefined);assert.equal(source.snapshot.clone,true);assert.equal(transfer.readMaterial(record),null);
     const next=e.list.prepareRecords([source]);assert.equal(next.records[0],record);next.release();
     assert.equal(source.snapshot,null);assert.equal(record.imageUrl,'art');
 });
@@ -122,6 +123,7 @@ test('membership rejects DOM-bearing source objects while accepting their separa
     assert.throws(()=>m.publish([source],1),{code:'LIST_RECORD_INVALID'});
     assert.throws(()=>m.publish([{videoId:'1',undoId:'removal'}],1),{code:'LIST_RECORD_INVALID'});
     assert.throws(()=>m.publish([{videoId:'1',logicalIndex:0}],1),{code:'LIST_RECORD_INVALID'});
+    assert.throws(()=>m.publish([{videoId:'1',page:0}],1),{code:'LIST_RECORD_INVALID'});
     const transfer=e.list.prepareRecords([source]);m.publish(transfer.records,1);
     assert.equal(m.records[0],transfer.records[0]);assert.equal(Object.hasOwn(m.records[0],'snapshot'),false);
     transfer.discard();

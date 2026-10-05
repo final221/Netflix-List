@@ -118,9 +118,12 @@ function mountNativeControls(section, mode = 'logical') {
         ? (mode === 'indicator' ? [indicator] : []) : queryAll(selector);
 }
 
-function publishMembershipForTest(state, items, totalCount = state.totalCount) {
-    if (state.listMembership) state.listMembership.publish(items, totalCount);
-    else { state.items = items; state.itemMap = new Map(items.map(item => [item.videoId ? 'v:' + item.videoId : 'h:' + item.href, item])); }
+function publishMembershipForTest(c, items, totalCount = c.sourceState.totalCount) {
+    const state=c.sourceState, owner=c.ensurePageHints(state);
+    const pages=new Map(items.map(item=>[item,Number.isFinite(item.page) ? item.page : owner.get(item)]));
+    for (const item of items) if (Object.hasOwn(item,'page')) delete item.page;
+    const hints=c.ensurePageHints(state).stage(items,record=>pages.get(record));
+    c.ensureListMembership(state).publish(items,totalCount);hints.commit();
 }
 
 function environment(names, overrides = {}) {
@@ -166,7 +169,7 @@ function environment(names, overrides = {}) {
     vm.runInContext(source.match(/^    const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_INTERRUPTION_LOG_LIMIT = \d+;/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_CANCELLATION_REASONS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
-    for (const name of ['publishSourceState', 'ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
+    for (const name of ['publishSourceState', 'ensurePageHints', 'pageForItem', 'setPageForItem', 'ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
         'hoverScrollElapsed', 'recordHoverCancellation', 'advanceHoverToken', 'hoverIntentDiagnosticSnapshot', 'hoverScrollStateSnapshot',
@@ -214,7 +217,7 @@ function environment(names, overrides = {}) {
         },
         updateCard(handle, item, index = null) {
             if (index !== null) handle.node.setAttribute('data-tm-item-order', String(index));
-            handle.node.setAttribute('data-tm-item-page', String(item.page));
+            handle.node.setAttribute('data-tm-item-page', String(c.pageForItem(item)));
             handle.node.setAttribute('data-tm-item-video-id', item.videoId || '');
         },
         removeCard(handle) { c.releaseGridReact?.(handle.node); handle.node.remove(); c.sourceState?.cloneMap?.delete(handle.key); },
@@ -501,7 +504,7 @@ function preparedHoverEnvironment(options = {}) {
     const nativeScroller = new Element('scroller');
     e.c.attachNativeBinding(e.c.sourceState, e.c.sourceState.section, nativeScroller, new Element('track', nativeScroller));
     e.c.sourceState.layout = { columns: 6 };
-    publishMembershipForTest(e.c.sourceState, [e.clone.__tmMyListItem]);
+    publishMembershipForTest(e.c, [e.clone.__tmMyListItem]);
     sourceSlot.parentElement = e.c.sourceState.track;
     mountNativeControls(e.c.sourceState.section, 'indicator');
     e.c.netflixDom = { ...e.c.netflixDom, filledSlots: () => [sourceSlot], directSlots: () => [sourceSlot],
@@ -2166,7 +2169,7 @@ test('differential reindexing rejects an obsolete source observation before copy
         e.c.updateStatus = () => null;
         const state = e.c.sourceState;
         const items = [e.clone.__tmMyListItem, { videoId: '456', page: 9 }];
-        publishMembershipForTest(state, items);
+        publishMembershipForTest(e.c, items);
         state.cloneMap = new Map(items.map(item => [item.videoId, new Element('clone-' + item.videoId)]));
         let copies = 0;
         e.c.copyItemAttributes = () => {
@@ -2180,7 +2183,7 @@ test('differential reindexing rejects an obsolete source observation before copy
         assert.throws(() => e.c.reindexLegacyItemsAfterDelta(),
             { code: replacement === 'parent' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'NATIVE_SOURCE_REPLACED' });
         assert.equal(copies, 1, replacement);
-        assert.equal(items[1].page, 9, replacement);
+        assert.equal(e.c.ensurePageHints(state).get(items[1]), 9, replacement);
         assert.equal(state.itemMap.has('456'), false, replacement);
         assert.equal(e.c.sourceState.itemMap.has('456'), false, replacement);
     }
@@ -2341,7 +2344,8 @@ test('recovery bridges consume native observations and own only transitional lis
     const slots = e.mount([6, 7, 8, 9, 10, 11]);
     const items = slots.map(slot => ({ videoId: String(slot.index), href: '/watch/' + slot.index, page: 77 }));
     const clones = items.map(() => new Element('clone'));
-    publishMembershipForTest(e.c.sourceState, items);
+    publishMembershipForTest(e.c, items);
+    let hints = e.c.ensurePageHints(e.c.sourceState);
 
     e.c.findGridClone = item => clones[items.indexOf(item)];
     let bindings = 0;
@@ -2351,15 +2355,15 @@ test('recovery bridges consume native observations and own only transitional lis
         scroller: e.c.sourceState.scroller, track: e.c.sourceState.track, item: e.c.itemSummary(items[0]),
         columns: 6, preferredPage: 1, maxRadius: 0, repairLogicalMapping: true, sessionToken: 1 });
     assert.equal(native.source.slot, slots[0]);
-    assert.deepEqual(items.map(item => item.page), [77, 77, 77, 77, 77, 77]);
+    assert.deepEqual(items.map(item => hints.get(item)), [77, 77, 77, 77, 77, 77]);
     assert.ok(clones.every(clone => clone.getAttribute('data-tm-item-page') === null));
 
     const located = await e.c.locateActiveSourceItem(items[0], 1, 1, 1, true, 0);
     assert.equal(located.slot, slots[0]);
     assert.equal(bindings, 1, 'one composition admission for the complete search');
-    assert.deepEqual(items.map(item => item.page), [1, 1, 1, 1, 1, 1]);
+    assert.deepEqual(items.map(item => hints.get(item)), [1, 1, 1, 1, 1, 1]);
     assert.ok(clones.every(clone => clone.getAttribute('data-tm-item-page') === '1'));
-    for (const item of items) item.page = 77;
+    for (const item of items) e.c.setPageForItem(item, 77);
     bindings = 0;
     const direct = await e.c.refreshStaleSourceOnPreferredPage(items[0], 1, 1, 1);
     assert.equal(direct.slot, slots[0]);
@@ -2367,15 +2371,17 @@ test('recovery bridges consume native observations and own only transitional lis
     assert.equal(bindings, 1);
     const noRepair = await e.c.locateActiveSourceItem(items[0], 1, 1, 1, false, 0);
     assert.equal(noRepair.slot, slots[0]);
-    assert.deepEqual(items.map(item => item.page), [77, 77, 77, 77, 77, 77]);
+    assert.deepEqual(items.map(item => hints.get(item)), [77, 77, 77, 77, 77, 77]);
 
     const old = e.c.locateActiveSourceItem(items[0], 1, 1, 1, true, 0);
     e.c.sourceState = { ...e.c.sourceState };
     assert.equal(await old, null);
-    assert.deepEqual(items.map(item => item.page), [77, 77, 77, 77, 77, 77]);
+    assert.deepEqual(items.map(item => hints.get(item)), [77, 77, 77, 77, 77, 77]);
+    hints = e.c.ensurePageHints(e.c.sourceState);
+    for (const item of items) e.c.setPageForItem(item, 77);
     e.c.log = name => { if (name === 'itemPageMappingCorrected') e.c.sourceState = { ...e.c.sourceState }; };
     assert.equal(await e.c.locateActiveSourceItem(items[0], 1, 1, 1, true, 0), null);
-    assert.deepEqual(items.map(item => item.page), [1, 77, 77, 77, 77, 77], 'old publication stops after parent replacement');
+    assert.deepEqual(items.map(item => hints.get(item)), [1, 77, 77, 77, 77, 77], 'old publication stops after parent replacement');
     assert.equal(e.timers.size, 0);
 });
 
@@ -2394,25 +2400,25 @@ function remappingBridgeEnvironment() {
     }
     const items = Array.from({ length: 8 }, (_, index) => ({ videoId: String(index), href: '/watch/' + index, page: 77 }));
     const clones = items.map(() => new Element('clone'));
-    publishMembershipForTest(e.c.sourceState, items, 8);
+    publishMembershipForTest(e.c, items, 8);
     e.c.sourceState.cloneMap = new Map(items.map((item, index) => ['v:' + item.videoId, clones[index]]));
     e.c.ensureLiveNativeBinding = () => e.c.sourceState;
     e.c.myListCountConvergencePending = false;
-    return { ...e, slots, items, clones };
+    return { ...e, slots, items, clones, hints: e.c.ensurePageHints(e.c.sourceState) };
 }
 
 test('mapping bridges keep membership/card publication and convergence outside native reconstruction', async () => {
     const e = remappingBridgeEnvironment();
     assert.equal(e.c.syncLogicalPageModelAfterDelta('test-delta'), true);
     assert.equal(e.c.myListCountConvergencePending, true);
-    assert.deepEqual(e.items.map(item => item.page), Array(8).fill(77));
+    assert.deepEqual(e.items.map(item => e.hints.get(item)), Array(8).fill(77));
     const direct = await e.c.nativeCarousel.refreshMapping({ mode: 'responsive', section: e.section,
         scroller: e.scroller, track: e.c.sourceState.track, totalCount: 8, columns: 6, sessionToken: 1 });
     assert.equal(direct.status, 'committed');
-    assert.deepEqual(e.items.map(item => item.page), Array(8).fill(77));
+    assert.deepEqual(e.items.map(item => e.hints.get(item)), Array(8).fill(77));
     assert.ok(e.clones.every(clone => clone.getAttribute('data-tm-item-page') === null));
     assert.equal(await e.c.rebuildLogicalPageModelFromNativePosition({ columns: 6 }, 'test-remap', 1), 8);
-    assert.deepEqual(e.items.map(item => item.page), [0, 0, 0, 0, 0, 0, 1, 1]);
+    assert.deepEqual(e.items.map(item => e.hints.get(item)), [0, 0, 0, 0, 0, 0, 1, 1]);
     assert.ok(e.items.every(item => !Object.hasOwn(item, 'logicalIndex')));
     assert.deepEqual(Array.from(e.c.sourceState.items), e.items, 'native reconstruction preserves authoritative membership order');
     assert.equal(e.c.sourceState.initialPage, 0);
@@ -2421,7 +2427,7 @@ test('mapping bridges keep membership/card publication and convergence outside n
     for (const slot of e.slots) slot.index = null;
     assert.equal(await e.c.rebuildLogicalPageModelFromNativePosition({ columns: 6 }, 'bad-window', 1), null);
     assert.equal(e.c.myListCountConvergencePending, false, 'count convergence is external even when the native window is deferred');
-    assert.deepEqual(e.items.map(item => item.page), [0, 0, 0, 0, 0, 0, 1, 1]);
+    assert.deepEqual(e.items.map(item => e.hints.get(item)), [0, 0, 0, 0, 0, 0, 1, 1]);
     assert.equal(e.timers.size, 0);
 });
 
@@ -2432,12 +2438,12 @@ test('mapping bridge rejects replaced parent records and card owners before nati
         const pending = e.c.rebuildLogicalPageModelFromNativePosition({ columns: 6 }, 'obsolete', 1);
         const rejected = assert.rejects(pending, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
         if (change === 'state') e.c.sourceState = { ...e.c.sourceState };
-        if (change === 'membership-map') publishMembershipForTest(e.c.sourceState, e.c.sourceState.items);
-        if (change === 'items') publishMembershipForTest(e.c.sourceState, [...e.items]);
-        if (change === 'count') publishMembershipForTest(e.c.sourceState, [...e.c.sourceState.items, { videoId: '8', page: 77 }]);
+        if (change === 'membership-map') publishMembershipForTest(e.c, e.c.sourceState.items);
+        if (change === 'items') publishMembershipForTest(e.c, [...e.items]);
+        if (change === 'count') publishMembershipForTest(e.c, [...e.c.sourceState.items, { videoId: '8', page: 77 }]);
         if (change === 'cards') e.c.sourceState.cloneMap = new Map(e.c.sourceState.cloneMap);
         await rejected;
-        assert.ok(e.items.every(item => item.page === 77));
+        assert.ok(e.items.every(item => e.hints.get(item) === 77));
         assert.ok(e.clones.every(clone => clone.getAttribute('data-tm-item-page') === null));
         assert.equal(nativeModelFacts(e).pageMappingStale, true);
         assert.equal(e.c.myListCountConvergencePending, true);
@@ -2450,7 +2456,7 @@ test('mapping bridge stops remaining card publication when a callback replaces t
     e.clones[0].setAttribute = (...args) => { set(...args); e.c.sourceState = { ...e.c.sourceState, initialPage: 99 }; };
     await assert.rejects(e.c.rebuildLogicalPageModelFromNativePosition({ columns: 6 }, 'replaced-during-publication', 1),
         { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
-    assert.deepEqual(e.items.map(item => item.page), [0, 77, 77, 77, 77, 77, 77, 77]);
+    assert.deepEqual(e.items.map(item => e.hints.get(item)), [0, 77, 77, 77, 77, 77, 77, 77]);
     assert.equal(e.c.sourceState.initialPage, 99);
     assert.ok(e.clones.slice(1).every(clone => clone.getAttribute('data-tm-item-page') === null));
 });
@@ -3019,7 +3025,7 @@ test('native empty transitions bypass the identity-only shortcut', async () => {
     const e = observerEnvironment();
     e.c.waitingForNativeEmpty = true;
     e.c.sourceState.empty = true;
-    publishMembershipForTest(e.c.sourceState, []);
+    publishMembershipForTest(e.c, []);
     e.section.querySelector = () => null;
     let adoptedEmpty = 0;
     e.c.adoptLiveEmptyMyListSection = () => adoptedEmpty++;
@@ -3157,7 +3163,7 @@ test('expected-source bridge consumes real native handles and keeps position mis
     e.c.videoIdFromHref = href => href?.split('/').at(-1) || '';
     e.c.ORDER_MISMATCH_POSITION_THRESHOLD = 10;
     e.c.sourceState.listMembership.observeCount({ totalCount: 6 });
-    publishMembershipForTest(e.c.sourceState, slots.map(slot => ({ videoId: String(slot.index), href: '/watch/' + slot.index, page: 0 })));
+    publishMembershipForTest(e.c, slots.map(slot => ({ videoId: String(slot.index), href: '/watch/' + slot.index, page: 0 })));
     e.c.ensureLiveNativeBinding = () => {};
     e.c.clearSourceAlignment = () => {};
     for (const name of ['hoverPreparationCancelled', 'itemKey', 'pageItemKeys', 'firstVisibleNativePositionMismatch', 'resolveExpectedPageSourceItem']) {
@@ -3263,7 +3269,7 @@ test('binding adoption clears old grafts and does not retain reads collected bef
     e.c.netflixReactHover = { clearClone: () => cleared++ };
     e.c.sourceState.grid = grid;
     e.c.sourceState.status = status;
-    publishMembershipForTest(e.c.sourceState, [{ videoId: '0' }]);
+    publishMembershipForTest(e.c, [{ videoId: '0' }]);
     const replacement = e.replaceTrack();
     e.c.attachNativeBinding(e.c.sourceState, e.c.sourceState.section, e.c.sourceState.scroller, slots[0].parentElement);
     const nextScroller = new Element('next-scroller');
@@ -3371,7 +3377,7 @@ test('removal and route cleanup release tracked metadata even if the grid is det
     });
     const removed = e.add('123');
     removed.remove = () => { removed.isConnected = false; };
-    publishMembershipForTest(e.c.sourceState, [{ videoId: '123' }, { videoId: '456' }]);
+    publishMembershipForTest(e.c, [{ videoId: '123' }, { videoId: '456' }]);
     assert.equal(e.c.applyLegacyRemoval('123'), true);
     assert.equal(removed.__reactProps$test, undefined);
     e.add('456').isConnected = false;
@@ -3522,7 +3528,7 @@ function constructionEnvironment() {
         createError: (code, message) => e.c.initializationError(code, 'grid-cards', message),
         tUi: (...args) => e.c.tUi?.(...args) || args[0],
         formatUiNumber: value => e.c.formatUiNumber?.(value) || String(value), formatItemCount: (...args) => e.c.formatItemCount?.(...args) || String(args[0]),
-        installHover: root => e.c.ensureGridHoverBehavior(root),
+        installHover: root => e.c.ensureGridHoverBehavior(root), readPage: item => e.c.pageForItem(item),
         onRetire: (handle, detail) => e.c.retireGridCard(handle, detail),
         onReplace: (old, next) => e.c.onGridCardReplaced(old, next) });
     e.c.gridView.mount({ section, anchor: scroller, status, layout, geometry: { left: 10, width: 600, columns: 6 }, assertCurrent() {} });
@@ -8783,7 +8789,7 @@ test('six mounted cards rebuild only the hover target, and another card prepares
     const clones = new Map(items.map((item, i) => [item.videoId, i ? new Element('clone-' + i, e.grid) : e.clone]));
     const originals = new Map(clones);
     for (const item of items) clones.get(item.videoId).__tmMyListItem = item;
-    publishMembershipForTest(e.c.sourceState, items);
+    publishMembershipForTest(e.c, items);
     e.c.currentPageSlots = () => slots;
     e.c.netflixDom = { ...e.c.netflixDom, filledSlots: () => slots, directSlots: () => slots };
     e.c.resolveExpectedPageSourceItem = async item => ({ status: 'found', slot: slots[items.indexOf(item)], slots, page: 0 });
@@ -9163,7 +9169,7 @@ test('target-only hover preparation still rejects a target in the wrapped tail b
         }
     });
     e.c.netflixDom.filledSlots = e.c.netflixDom.directSlots = () => slots;
-    publishMembershipForTest(e.c.sourceState, [e.clone.__tmMyListItem, ...Array.from({ length: 36 }, (_, i) => ({ videoId: String(i + 200) }))]);
+    publishMembershipForTest(e.c, [e.clone.__tmMyListItem, ...Array.from({ length: 36 }, (_, i) => ({ videoId: String(i + 200) }))]);
     e.c.nativeCarousel.refreshMapping({ mode: 'delta', section: e.c.sourceState.section,
         scroller: e.c.sourceState.scroller, track: e.c.sourceState.track, totalCount: 37, columns: 6,
         sessionToken: 1, pageHintForVideoId: () => 6 });

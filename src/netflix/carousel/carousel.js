@@ -1,4 +1,4 @@
-import { createPageModel, normalizeNetflixLogicalIndex, expectedLogicalIndicesForPage,
+import { createPageModel, createPageHints, normalizeNetflixLogicalIndex, expectedLogicalIndicesForPage,
     logicalPageFromSlotPositions, wrappedTailLogicalPageInfo, wrappedTailLogicalPageForRebuild } from './page-model.js';
 import { NETFLIX_DOM_SELECTORS as DEFAULT_SELECTORS } from '../page-dom.js';
 import { createNavigation } from './navigation.js';
@@ -2150,6 +2150,12 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
 
     return Object.freeze({ startDiscovery, stopDiscovery, refreshDiscovery, bind, clearBinding, borrowBinding, isBindingCurrent, assertBinding,
         currentBinding: () => acceptedBinding,
+        createPageHints(options = {}) {
+            const token = scope.token;
+            return createPageHints({ createError: initializationError, assertCurrent() {
+                scope.assertCurrent(token); options.assertCurrent?.();
+            } });
+        },
         whenNavigationIdle: navigation.whenIdle,
         suppressMotion: navigation.suppress, restoreMotion: navigation.restoreMotion,
         movePage: navigation.move, navigateTo: navigation.navigate, stablePage: navigation.stable,
