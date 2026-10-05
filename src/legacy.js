@@ -64,7 +64,31 @@ export function startLegacy() {
     const listMutations = listView.createMutations({ now: () => performance.now(),
         readSession: () => sessionScope.token, isSessionActive: isRouteSessionActive, setTimeout, clearTimeout,
         ttl: UNDO_ENTRY_TTL_MS, hasRetained: (id, item) => gridView.hasRetained(id, item),
-        releaseRetained: id => gridView.releaseRetained(id), readPending: id => pendingMyListMutations.get(id),
+        releaseRetained: id => gridView.releaseRetained(id), mutationTimeout: DELTA_MUTATION_TIMEOUT_MS,
+        isDeferred: () => running || responsiveRefreshing,
+        isBlocked: () => nativeInitializationFailure?.sessionToken === sessionScope.token && initializationBlockedSessionToken === sessionScope.token,
+        readParent: () => sourceState, canApply: () => Boolean(sourceState && isTargetPage()),
+        assertSession: assertRouteSession, isCancelled: isRouteSessionCancelledError,
+        createError: (code, message) => initializationError(code, 'native-discovery', message),
+        hasMember: id => sourceState.itemMap?.has('v:' + id),
+        refreshNative: refreshNativeSectionAfterDelta, observeNative: nativeDiscoveryObservation,
+        removeMember: applyLegacyRemoval, addMember: applyLegacyAddition, alignVisible: alignLegacyVisiblePageOrder,
+        captureNative: findNativeMyListItemByVideoId, hasMaterial: cardSourceForItem,
+        preferredIndexForNative: preferredIndexForNativeItem, assertNative: observation => nativeCarousel.assertObservation(observation),
+        findFallback: findAnyStandardCardItemByVideoId,
+        queueMicrotask, observeChanges(callback) {
+            const root = document.body || document.documentElement;
+            if (!root) return null;
+            const observer = new MutationObserver(callback);
+            try { observer.observe(root, { childList: true, subtree: true, attributes: true,
+                attributeFilter: ['data-uia', 'class', 'aria-label', 'href'] }); }
+            catch (error) { observer.disconnect(); throw error; }
+            return observer;
+        },
+        onTimeout: detail => warn(tLog('differentialUpdateTimedOutWaitingForAUsableCardSnapshot'), detail),
+        onQueued: intent => log(tLog('myListMutationQueued'), { seq: intent.seq, videoId: intent.videoId, action: intent.action,
+            uiaAction: intent.uiaAction, uia: intent.uia, syncMode: 'event-driven', undo: intent.undo,
+            preferredIndex: intent.preferredIndex, hasFallbackSnapshot: Boolean(cardSourceForItem(intent.fallbackItem)) }),
         normalizeTitle: normalizeNetflixUiText,
         onCounter: (name, amount) => { performanceDiagnostics.undoRetention[name] += amount; },
         onExpired: detail => log(tLog('undoEntriesExpired'), detail) });
@@ -280,8 +304,6 @@ export function startLegacy() {
     let viewOriginalMyList = true;
     let viewOriginalMenuId = null;
     let missingSectionSince = 0;
-    let pendingMyListMutations = new Map();
-    let myListMutationSequence = 0;
     let waitingForNativeEmpty = false;
     let initializationBlockedSessionToken = null;
     let nativeInitializationFailure = null;
@@ -1017,13 +1039,7 @@ export function startLegacy() {
             nativePreviewOwned: Boolean(activeNativeHover?.previewRoot),
             viewOriginalMyList,
             myListSyncMode: 'event-driven',
-            pendingMyListMutations: [...pendingMyListMutations.values()].map(entry => ({
-                videoId: entry.videoId,
-                action: entry.action,
-                ageMs: Math.round(performance.now() - entry.detectedAt),
-                source: entry.source || '',
-                observerActive: Boolean(entry.observer)
-            })),
+            pendingMyListMutations: listMutations.pendingDiagnostics(),
             layout: layoutSummary(sourceState?.layout),
             activeVideoId,
             activePage,
@@ -2685,7 +2701,7 @@ export function startLegacy() {
             activePage = null;
         }
         const handle = gridView.getCard(removed);
-        const correlationId = handle ? 'undo:' + sessionScope.token + ':' + (++myListMutationSequence) : null;
+        const correlationId = handle ? listMutations.nextCorrelation() : null;
         if (handle) {
             gridView.removeCard(handle, { correlationId, assertCurrent });
         }
@@ -2805,61 +2821,9 @@ export function startLegacy() {
         return true;
     }
 
-    function disposeMyListMutation(videoId, expected = null) {
-        const key = String(videoId || '');
-        const mutation = pendingMyListMutations.get(key);
-        if (!mutation || (expected && mutation !== expected)) return;
-        try { mutation.observer?.disconnect(); } catch (_) {}
-        if (mutation.timeoutId !== null && mutation.timeoutId !== undefined) clearTimeout(mutation.timeoutId);
-        pendingMyListMutations.delete(key);
-        if (mutation.correlationId && !listMutations.ownsUndoCorrelation(key, mutation.correlationId)) {
-            gridView.releaseRetained(mutation.correlationId);
-        }
-    }
+    function retryPendingMyListMutations(reason) { listMutations.retryMutations(reason); }
 
-    function scheduleMyListMutationTimeout(mutation) {
-        if (!mutation || pendingMyListMutations.get(mutation.videoId) !== mutation) return;
-        if (mutation.timeoutId !== null && mutation.timeoutId !== undefined) clearTimeout(mutation.timeoutId);
-        mutation.timeoutId = setTimeout(() => {
-            if (pendingMyListMutations.get(mutation.videoId) !== mutation) return;
-            mutation.timeoutId = null;
-
-            const applied = tryApplyMyListMutation(mutation, 'observer-timeout');
-            if (applied || pendingMyListMutations.get(mutation.videoId) !== mutation) return;
-            if (running || responsiveRefreshing) {
-                mutation.deferredWhileBusy = true;
-                return;
-            }
-
-            warn(tLog('differentialUpdateTimedOutWaitingForAUsableCardSnapshot'), {
-                seq: mutation.seq,
-                videoId: mutation.videoId,
-                action: mutation.action,
-                timeoutMs: DELTA_MUTATION_TIMEOUT_MS
-            });
-            disposeMyListMutation(mutation.videoId, mutation);
-        }, DELTA_MUTATION_TIMEOUT_MS);
-    }
-
-    function retryPendingMyListMutations(reason) {
-        if (running || responsiveRefreshing || !isTargetPage()) return;
-
-        for (const mutation of [...pendingMyListMutations.values()]) {
-            if (!mutation.deferredWhileBusy) continue;
-            mutation.deferredWhileBusy = false;
-            const applied = tryApplyMyListMutation(mutation, reason);
-            if (!applied && pendingMyListMutations.get(mutation.videoId) === mutation) {
-                scheduleMyListMutationTimeout(mutation);
-            }
-        }
-    }
-
-    function clearPendingMyListMutations() {
-        for (const [videoId, mutation] of [...pendingMyListMutations.entries()]) {
-            disposeMyListMutation(videoId, mutation);
-        }
-        pendingMyListMutations = new Map();
-    }
+    function clearPendingMyListMutations() { listMutations.clearPending(); }
 
     function restartInitializationForPopulatedNativeMyList(live, reason = 'late-populated-source') {
         if (!sourceState?.empty || !live?.section || !live?.scroller || !live?.track) return false;
@@ -2998,149 +2962,11 @@ export function startLegacy() {
         return ensureLiveNativeBinding('delta-refresh');
     }
 
-    function tryApplyMyListMutation(mutation, reason = 'event') {
-        if (!mutation || pendingMyListMutations.get(mutation.videoId) !== mutation) return false;
-        if (!sourceState || !isTargetPage()) return false;
-        if (running || responsiveRefreshing || (nativeInitializationFailure?.sessionToken === sessionScope.token &&
-            initializationBlockedSessionToken === sessionScope.token)) {
-            mutation.deferredWhileBusy = true;
-            return false;
-        }
-        mutation.deferredWhileBusy = false;
-        const owner = sourceState;
-        const sessionToken = sessionScope.token;
-        const assertMutationCurrent = () => {
-            assertRouteSession(sessionToken);
-            if (sourceState !== owner || pendingMyListMutations.get(mutation.videoId) !== mutation || !isTargetPage()) {
-                throw initializationError('NATIVE_SOURCE_REPLACED', 'native-discovery', 'Mutation admission was replaced');
-            }
-        };
-        try {
-            const videoId = mutation.videoId;
-            let live = refreshNativeSectionAfterDelta() || nativeDiscoveryObservation();
-            assertMutationCurrent();
-
-            if (mutation.action === 'remove') {
-                const changed = applyLegacyRemoval(videoId, reason);
-                assertMutationCurrent();
-                if (!changed && !sourceState.itemMap?.has(`v:${videoId}`)) {
-                    disposeMyListMutation(videoId, mutation);
-                    return true;
-                }
-                if (changed) {
-                    live = refreshNativeSectionAfterDelta() || live;
-                    assertMutationCurrent();
-                    if (live?.track) alignLegacyVisiblePageOrder(live);
-                    assertMutationCurrent();
-                    disposeMyListMutation(videoId, mutation);
-                    return true;
-                }
-                return false;
-            }
-
-            if (sourceState.itemMap?.has(`v:${videoId}`)) {
-                disposeMyListMutation(videoId, mutation);
-                return true;
-            }
-
-            const nativeItem = findNativeMyListItemByVideoId(videoId, live);
-            assertMutationCurrent();
-            const candidate = nativeItem || mutation.fallbackItem || findAnyStandardCardItemByVideoId(videoId);
-            if (!cardSourceForItem(candidate, candidate === mutation.fallbackItem ? mutation.correlationId : null)) return false;
-
-            const preferredIndex = nativeItem
-                ? preferredIndexForNativeItem(videoId, live)
-                : (Number.isFinite(mutation.preferredIndex) ? mutation.preferredIndex : 0);
-            assertMutationCurrent();
-            nativeCarousel.assertObservation(live);
-            const changed = applyLegacyAddition(candidate, preferredIndex, nativeItem ? `${reason}-native` : `${reason}-captured`,
-                candidate === mutation.fallbackItem ? mutation.correlationId : null);
-            assertMutationCurrent();
-            if (changed || sourceState.itemMap?.has(`v:${videoId}`)) {
-                live = refreshNativeSectionAfterDelta() || live;
-                assertMutationCurrent();
-                if (live?.track) alignLegacyVisiblePageOrder(live);
-                assertMutationCurrent();
-                disposeMyListMutation(videoId, mutation);
-                return true;
-            }
-            return false;
-        } catch (error) {
-            if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
-            return false;
-        }
-    }
-
-    function queueMyListMutation(descriptor) {
-        if (!descriptor?.videoId || !sourceState) return;
-        const videoId = String(descriptor.videoId);
-        disposeMyListMutation(videoId);
-
-        const fallbackItem = descriptor.action === 'add'
-            ? (descriptor.fallbackItem || findAnyStandardCardItemByVideoId(videoId))
-            : null;
-        const seq = ++myListMutationSequence;
-        const mutation = {
-            seq,
-            videoId,
-            action: descriptor.action,
-            uia: descriptor.uia || '',
-            uiaAction: descriptor.uiaAction || 'unknown',
-            source: 'user-click',
-            detectedAt: performance.now(),
-            fallbackItem,
-            correlationId: descriptor.correlationId || undoCorrelationForItem(fallbackItem),
-            preferredIndex: Number.isFinite(descriptor.preferredIndex) ? Math.max(0, Math.floor(descriptor.preferredIndex)) : null,
-            undo: Boolean(descriptor.undo),
-            observer: null,
-            timeoutId: null,
-            deferredWhileBusy: false
-        };
-        pendingMyListMutations.set(videoId, mutation);
-
-        // Register before Netflix handles the click. This catches synchronous React
-        // mutations from every carousel and MiniModal without a periodic poll.
-        const root = document.body || document.documentElement;
-        if (root) {
-            mutation.observer = new MutationObserver(() => {
-                tryApplyMyListMutation(mutation, 'mutation-observer');
-            });
-            mutation.observer.observe(root, {
-                childList: true,
-                subtree: true,
-                attributes: true,
-                attributeFilter: ['data-uia', 'class', 'aria-label', 'href']
-            });
-        }
-
-        // A one-shot timeout bounds ordinary waiting. If the script is busy,
-        // defer disposal until the busy operation ends and retry then.
-        scheduleMyListMutationTimeout(mutation);
-
-        log(tLog('myListMutationQueued'), {
-            seq,
-            videoId,
-            action: descriptor.action,
-            uiaAction: descriptor.uiaAction || 'unknown',
-            uia: descriptor.uia || '',
-            syncMode: 'event-driven',
-            undo: Boolean(mutation.undo),
-            preferredIndex: mutation.preferredIndex,
-            hasFallbackSnapshot: Boolean(cardSourceForItem(fallbackItem))
-        });
-
-        // Capture runs before Netflix's handler; a microtask runs after the click
-        // dispatch completes. Most removals and visible-card additions finish here.
-        queueMicrotask(() => {
-            tryApplyMyListMutation(mutation, 'post-click');
-        });
-    }
-
     function handleObservedMyListToggleClick(event) {
         if (!isTargetPage() || !sourceState) return;
         const descriptor = describeMyListToggleClick(event) || describeMyListUndoClick(event);
         if (!descriptor) return;
-        queueMyListMutation(descriptor);
+        listMutations.queueMutation(descriptor);
     }
 
     function updateStatus(content) {
@@ -5646,7 +5472,7 @@ export function startLegacy() {
         }
 
         performanceDiagnostics.nativeRecovery.attempts++;
-        for (const mutation of pendingMyListMutations.values()) mutation.deferredWhileBusy = true;
+        listMutations.deferPending();
         cleanupTargetSessionDom();
         resizeObserver?.disconnect();
         resizeObserver = null;
@@ -5666,7 +5492,7 @@ export function startLegacy() {
         targetSessionEntryKind = 'spa';
         log(tLog('nativeInitializationRecovered'), {
             sessionToken, reason, attempt: performanceDiagnostics.nativeRecovery.attempts,
-            pendingMutations: pendingMyListMutations.size
+            pendingMutations: listMutations.pendingIntents().length
         });
         scheduleRun(40, sessionToken);
         return true;

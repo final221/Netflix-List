@@ -1,8 +1,158 @@
 // Private membership-action lifetimes. Grid alone retains removal markup.
 export function createMutations({ now, readSession, isSessionActive, setTimeout, clearTimeout, ttl,
-    hasRetained, releaseRetained, readPending = () => null, normalizeTitle = String,
+    hasRetained, releaseRetained, normalizeTitle = String,
+    isDeferred = () => false, isBlocked = () => false, applyMutation = null,
+    readParent = () => null, canApply = () => false, assertSession = () => {}, isCancelled = () => false,
+    createError = (code, message) => Object.assign(new Error(message), { code }),
+    hasMember, refreshNative, observeNative, removeMember, addMember, alignVisible,
+    captureNative, hasMaterial, preferredIndexForNative, assertNative,
+    findFallback = () => null, observeChanges = () => null, queueMicrotask = () => {},
+    mutationTimeout = 1800, onQueued = () => {}, onTimeout = () => {},
     onCounter = () => {}, onExpired = () => {} }) {
     let entries = new Map(), timer = null, generation = 0;
+    let pending = new Map(), sequence = 0;
+    const phases = new WeakMap();
+    const readPending = videoId => pending.get(String(videoId)) || null;
+    const isMutationCurrent = intent => Boolean(intent && readPending(intent.videoId) === intent &&
+        isSessionActive(phases.get(intent)?.token));
+    function releaseIntent(intent) {
+        const phase = phases.get(intent), oldTimer = phase.timer, observer = phase.observer;
+        phase.timer = null; phase.observer = null;
+        if (oldTimer) clearTimeout(oldTimer.id);
+        try { observer?.disconnect(); } catch (_) {}
+        const next = readPending(intent.videoId);
+        const transferred = next?.fallbackItem === intent.fallbackItem && next?.correlationId === intent.correlationId;
+        if (intent.correlationId && entries.get(intent.videoId)?.correlationId !== intent.correlationId && !transferred) {
+            releaseRetained(intent.correlationId);
+        }
+    }
+    function disposeMutation(videoId, expected = null) {
+        const key = String(videoId || ''), intent = readPending(key);
+        if (!intent || (expected && expected !== intent)) return;
+        pending.delete(key); releaseIntent(intent);
+    }
+    function clearPending() {
+        const old = pending; pending = new Map(); sequence++;
+        for (const intent of old.values()) releaseIntent(intent);
+    }
+    function observeMembership(descriptor) {
+        if (!descriptor?.videoId) return null;
+        const token = readSession(), seq = ++sequence, videoId = String(descriptor.videoId);
+        if (!isSessionActive(token)) return null;
+        const previous = readPending(videoId);
+        const phase = { token, timer: null, observer: null, deferred: Boolean(descriptor.deferredWhileBusy) };
+        const intent = Object.freeze({ seq, videoId, action: descriptor.action,
+            uia: descriptor.uia || '', uiaAction: descriptor.uiaAction || 'unknown', source: descriptor.source || 'user-click',
+            detectedAt: Number.isFinite(descriptor.detectedAt) ? descriptor.detectedAt : now(),
+            fallbackItem: descriptor.fallbackItem || null, correlationId: descriptor.correlationId || null,
+            preferredIndex: Number.isFinite(descriptor.preferredIndex) ? Math.max(0, Math.floor(descriptor.preferredIndex)) : null,
+            undo: Boolean(descriptor.undo), get deferredWhileBusy() { return phase.deferred; } });
+        if (sequence !== seq || !isSessionActive(token)) return null;
+        phases.set(intent, phase); pending.set(videoId, intent);
+        if (previous) releaseIntent(previous);
+        if (sequence !== seq || !isMutationCurrent(intent)) return null;
+        return intent;
+    }
+    function applyObservedMutation(intent, reason) {
+        if (!canApply()) return false;
+        const parent = readParent(), token = readSession();
+        const guard = () => {
+            assertSession(token);
+            if (readParent() !== parent || !isMutationCurrent(intent) || !canApply()) {
+                throw createError('NATIVE_SOURCE_REPLACED', 'Mutation admission was replaced');
+            }
+        };
+        const call = (operation, ...args) => { const result = operation(...args); guard(); return result; };
+        try {
+            guard();
+            const videoId = intent.videoId;
+            let live = call(refreshNative) || call(observeNative);
+            if (intent.action === 'remove') {
+                const changed = call(removeMember, videoId, reason);
+                if (!changed && !call(hasMember, videoId)) { disposeMutation(videoId, intent); return true; }
+                if (!changed) return false;
+                live = call(refreshNative) || live;
+                if (live?.track) call(alignVisible, live);
+                disposeMutation(videoId, intent); return true;
+            }
+            if (call(hasMember, videoId)) { disposeMutation(videoId, intent); return true; }
+            const nativeItem = call(captureNative, videoId, live);
+            const candidate = nativeItem || intent.fallbackItem || call(findFallback, videoId);
+            const correlationId = candidate === intent.fallbackItem ? intent.correlationId : null;
+            if (!call(hasMaterial, candidate, correlationId)) return false;
+            const index = nativeItem ? call(preferredIndexForNative, videoId, live)
+                : (Number.isFinite(intent.preferredIndex) ? intent.preferredIndex : 0);
+            call(assertNative, live);
+            const changed = call(addMember, candidate, index, nativeItem ? reason + '-native' : reason + '-captured', correlationId);
+            if (changed || call(hasMember, videoId)) {
+                live = call(refreshNative) || live;
+                if (live?.track) call(alignVisible, live);
+                disposeMutation(videoId, intent); return true;
+            }
+            return false;
+        } catch (error) {
+            if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isCancelled(error)) throw error;
+            return false;
+        }
+    }
+    function reconcileMutation(intent, reason = 'event') {
+        if (!isMutationCurrent(intent)) return false;
+        const phase = phases.get(intent);
+        if (isDeferred() || isBlocked()) { phase.deferred = true; return false; }
+        if (!isMutationCurrent(intent)) return false;
+        phase.deferred = false;
+        return (applyMutation || applyObservedMutation)(intent, reason);
+    }
+    function scheduleMutationTimeout(intent) {
+        if (!isMutationCurrent(intent)) return;
+        const phase = phases.get(intent), old = phase.timer;
+        const owner = { id: null }; phase.timer = owner;
+        if (old) clearTimeout(old.id);
+        if (!isMutationCurrent(intent) || phase.timer !== owner) return;
+        owner.id = setTimeout(() => {
+            if (!isMutationCurrent(intent) || phase.timer !== owner) return;
+            phase.timer = null;
+            const applied = reconcileMutation(intent, 'observer-timeout');
+            if (applied || !isMutationCurrent(intent)) return;
+            if (isDeferred()) { phase.deferred = true; return; }
+            onTimeout({ seq: intent.seq, videoId: intent.videoId, action: intent.action, timeoutMs: mutationTimeout });
+            disposeMutation(intent.videoId, intent);
+        }, mutationTimeout);
+        if (!isMutationCurrent(intent) || phase.timer !== owner) clearTimeout(owner.id);
+    }
+    function retryMutations(reason) {
+        if (isDeferred() || !isSessionActive(readSession())) return;
+        for (const intent of [...pending.values()]) {
+            if (!phases.get(intent).deferred) continue;
+            const applied = reconcileMutation(intent, reason);
+            if (!applied && isMutationCurrent(intent)) scheduleMutationTimeout(intent);
+        }
+    }
+    function deferPending() { for (const intent of pending.values()) phases.get(intent).deferred = true; }
+    function queueMutation(descriptor) {
+        if (!descriptor?.videoId) return null;
+        const token = readSession(), owner = sequence;
+        const fallbackItem = descriptor.action === 'add' ? (descriptor.fallbackItem || findFallback(String(descriptor.videoId))) : null;
+        if (sequence !== owner || !isSessionActive(token)) return null;
+        const intent = observeMembership({ ...descriptor, fallbackItem,
+            correlationId: descriptor.correlationId || correlationFor(fallbackItem) });
+        if (!intent) return null;
+        const phase = phases.get(intent);
+        try {
+            const observer = observeChanges(() => reconcileMutation(intent, 'mutation-observer'));
+            if (!isMutationCurrent(intent)) { try { observer?.disconnect(); } catch (_) {} return null; }
+            phase.observer = observer; scheduleMutationTimeout(intent);
+        } catch (error) { disposeMutation(intent.videoId, intent); throw error; }
+        if (!isMutationCurrent(intent)) return null;
+        onQueued(intent);
+        queueMicrotask(() => reconcileMutation(intent, 'post-click'));
+        return intent;
+    }
+    function pendingDiagnostics() {
+        return [...pending.values()].map(intent => ({ videoId: intent.videoId, action: intent.action,
+            ageMs: Math.round(now() - intent.detectedAt), source: intent.source,
+            observerActive: Boolean(phases.get(intent).observer) }));
+    }
     function cancelExpiry() {
         const old = timer; timer = null;
         if (old) clearTimeout(old.id);
@@ -81,7 +231,10 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         for (const entry of entries.values()) if (!latest || entry.removedAt > latest.removedAt) latest = entry;
         return latest;
     }
-    return Object.freeze({ rememberUndo, forgetUndo, pruneUndo, clearUndo, latestUndo, correlationFor,
+    return Object.freeze({ observeMembership, queueMutation, reconcileMutation, disposeMutation, clearPending,
+        scheduleMutationTimeout, retryMutations, deferPending, isMutationCurrent, pendingMutation: readPending,
+        pendingIntents: () => Object.freeze([...pending.values()]), pendingDiagnostics,
+        nextCorrelation: () => `undo:${readSession()}:${++sequence}`, rememberUndo, forgetUndo, pruneUndo, clearUndo, latestUndo, correlationFor,
         ownsUndoCorrelation: (videoId, id) => entries.get(String(videoId))?.correlationId === id,
         undoEntries: () => Object.freeze([...entries.values()]),
         undoDiagnostics: () => ({ entries: entries.size, expiryScheduled: Boolean(timer),

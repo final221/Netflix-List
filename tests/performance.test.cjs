@@ -149,7 +149,6 @@ function environment(names, overrides = {}) {
         activeNativeHover: null,
         orderMismatchDialogOpen: false, orderMismatchReinitializing: false, responsiveRefreshPromise: null,
         routeSessionToken: 1, targetSessionActive: true,
-        myListMutationSequence: 0,
         sourceState: null,
         nativeInitializationFailure: null,
         imageResourceObserver: null, IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES: 4000,
@@ -377,7 +376,30 @@ function environment(names, overrides = {}) {
         isSessionActive: token => c.isRouteSessionActive(token), setTimeout: (...args) => c.setTimeout(...args),
         clearTimeout: id => c.clearTimeout(id), ttl: c.UNDO_ENTRY_TTL_MS || 30000,
         hasRetained: (id, item) => c.gridView.hasRetained(id, item), releaseRetained: id => c.gridView.releaseRetained(id),
-        readPending: id => c.pendingMyListMutations?.get(id), normalizeTitle: text => c.normalizeNetflixUiText?.(text) || text,
+        mutationTimeout: c.DELTA_MUTATION_TIMEOUT_MS || 1800,
+        isDeferred: () => c.running || c.responsiveRefreshing,
+        isBlocked: () => c.nativeInitializationFailure?.sessionToken === c.sessionScope.token && c.initializationBlockedSessionToken === c.sessionScope.token,
+        readParent: () => c.sourceState, canApply: () => Boolean(c.sourceState && c.isTargetPage()),
+        assertSession: token => c.assertRouteSession(token), isCancelled: error => c.isRouteSessionCancelledError(error),
+        createError: (code, message) => c.initializationError(code, 'native-discovery', message),
+        hasMember: id => c.sourceState.itemMap?.has('v:' + id),
+        refreshNative: (...args) => c.refreshNativeSectionAfterDelta(...args), observeNative: (...args) => c.nativeDiscoveryObservation(...args),
+        removeMember: (...args) => c.applyLegacyRemoval(...args), addMember: (...args) => c.applyLegacyAddition(...args),
+        alignVisible: (...args) => c.alignLegacyVisiblePageOrder(...args), captureNative: (...args) => c.findNativeMyListItemByVideoId(...args),
+        hasMaterial: (...args) => c.cardSourceForItem(...args), preferredIndexForNative: (...args) => c.preferredIndexForNativeItem(...args),
+        assertNative: observation => c.nativeCarousel.assertObservation(observation), findFallback: id => c.findAnyStandardCardItemByVideoId?.(id),
+        queueMicrotask: fn => c.queueMicrotask(fn), observeChanges(callback) {
+            const root = c.document?.body || c.document?.documentElement;
+            if (!root) return null;const observer = new c.MutationObserver(callback);
+            try { observer.observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:['data-uia','class','aria-label','href']}); }
+            catch (error) { observer.disconnect(); throw error; }
+            return observer;
+        },
+        onTimeout: detail => c.warn(c.tLog('differentialUpdateTimedOutWaitingForAUsableCardSnapshot'),detail),
+        onQueued: intent => c.log(c.tLog('myListMutationQueued'),{seq:intent.seq,videoId:intent.videoId,action:intent.action,
+            uiaAction:intent.uiaAction,uia:intent.uia,syncMode:'event-driven',undo:intent.undo,
+            preferredIndex:intent.preferredIndex,hasFallbackSnapshot:Boolean(c.cardSourceForItem(intent.fallbackItem))}),
+        normalizeTitle: text => c.normalizeNetflixUiText?.(text) || text,
         onCounter: (name, amount) => { if (c.performanceDiagnostics?.undoRetention) c.performanceDiagnostics.undoRetention[name] += amount; },
         onExpired: detail => c.log(c.tLog('undoEntriesExpired'), detail) });
     Object.defineProperty(c, 'recentRemovedMyListItems', { configurable: true,
@@ -3496,8 +3518,8 @@ function constructionEnvironment() {
         'sleep', 'runConstructionChunks', 'collectFreshMyListCarouselItems', 'assertRouteSession',
         'createRouteSessionCancelledError', 'isRouteSessionCancelledError', 'initializationError',
         'buildGrid', 'normalizeClone', 'copyItemAttributes', 'associateGridHoverItem', 'ensureGridHoverBehavior',
-        'itemKey', 'clearRunningSession', 'retryPendingMyListMutations', 'tryApplyMyListMutation',
-        'applyLegacyRemoval', 'applyLegacyAddition', 'disposeMyListMutation',
+        'itemKey', 'clearRunningSession', 'retryPendingMyListMutations',
+        'applyLegacyRemoval', 'applyLegacyAddition',
         'cardSourceForItem', 'undoCorrelationForItem',
         'alignLegacyVisiblePageOrder',
         'rememberUndoEntry', 'pruneUndoEntries', 'normalizeNetflixUiText', 'videoIdFromHref',
@@ -3515,7 +3537,6 @@ function constructionEnvironment() {
         },
         sourceState: { section, scroller, track, grid: oldGrid, status, layout, items: [], cloneMap: new Map(), itemMap: new Map() },
         findMyListSection: () => null,
-        pendingMyListMutations: new Map(),
         UNDO_ENTRY_TTL_MS: 30000,
         running: true, runningSessionToken: 1, responsiveRefreshing: false,
         clearLegacyEmptyState() {}, invalidateGridReact() {}, releaseGridReact() {}, clearSourceAlignment() {},
@@ -3728,13 +3749,14 @@ test('queued add/remove deltas apply after complete publication and stay deferre
         { videoId: '2', action: 'remove' },
         { videoId: '999', action: 'add', preferredIndex: 0, fallbackItem: added }
     ];
-    for (const mutation of mutations) {
-        e.c.pendingMyListMutations.set(mutation.videoId, mutation);
-        assert.equal(e.c.tryApplyMyListMutation(mutation), false);
+    for (let [index, mutation] of mutations.entries()) {
+        mutation = e.c.listMutations.observeMembership(mutation);
+        mutations[index] = mutation;
+        assert.equal(e.c.listMutations.reconcileMutation(mutation), false);
         assert.equal(mutation.deferredWhileBusy, true);
     }
     e.c.clearRunningSession(1, false);
-    assert.equal(e.c.pendingMyListMutations.size, 2);
+    assert.equal(e.c.listMutations.pendingIntents().length, 2);
     assert.equal(mutations.every(mutation => mutation.deferredWhileBusy), true);
     e.c.running = true;
     e.c.runningSessionToken = 1;
@@ -3742,7 +3764,7 @@ test('queued add/remove deltas apply after complete publication and stay deferre
     await e.drain();
     const grid = await completion;
     e.c.clearRunningSession(1);
-    assert.equal(e.c.pendingMyListMutations.size, 0);
+    assert.equal(e.c.listMutations.pendingIntents().length, 0);
     assert.equal(e.c.sourceState.items.length, 150);
     assert.equal(e.c.sourceState.itemMap.has('v:2'), false);
     assert.equal(e.c.sourceState.itemMap.has('v:999'), true);
@@ -3815,14 +3837,14 @@ test('initial mounted-window admission rejects replacement before parallel readi
     let dataReads = 0, preparations = 0;
     e.c.listData.fetchBootstrap = async () => { dataReads++; return { totalCount: 6 }; };
     e.c.waitForNativeCarouselReady = () => { preparations++; throw new Error('obsolete work must not prepare'); };
-    const mutation = { videoId: '2', action: 'remove' };
-    e.c.pendingMyListMutations.set('2', mutation);
+    let mutation = { videoId: '2', action: 'remove' };
+    mutation = e.c.listMutations.observeMembership(mutation);
     e.c.scheduleRun = (...args) => runs.push(args);
     await e.c.runScript(1);
     assert.equal(dataReads, 0);
     assert.equal(preparations, 0);
     assert.equal(e.c.initializationBlockedSessionToken, null);
-    assert.equal(e.c.pendingMyListMutations.get('2'), mutation);
+    assert.equal(e.c.listMutations.pendingMutation('2'), mutation);
     assert.deepEqual(runs, [[0, 1]]);
 });
 
@@ -3861,8 +3883,8 @@ test('GraphQL template capture rejects replaced native admission before starting
 test('post-collection empty admission rejects a replaced parent or binding and preserves pending mutations', async () => {
     for (const change of ['parent', 'binding']) {
         const e = initializationEnvironment(6), gate = deferred(), runs = [];
-        const mutation = { videoId: '2', action: 'remove' };
-        e.c.pendingMyListMutations.set('2', mutation);
+        let mutation = { videoId: '2', action: 'remove' };
+        mutation = e.c.listMutations.observeMembership(mutation);
         e.c.listData.collectRecords = async () => ({ bootstrap: { totalCount: 6 }, records: null });
         e.c.beginSourceScan = () => {};
         let collections = 0, empties = 0;
@@ -3881,7 +3903,7 @@ test('post-collection empty admission rejects a replaced parent or binding and p
         await e.flush(); await completion;
         assert.equal(empties, 0, change);
         assert.equal(e.c.sourceState, replacement);
-        assert.equal(e.c.pendingMyListMutations.get('2'), mutation);
+        assert.equal(e.c.listMutations.pendingMutation('2'), mutation);
         assert.equal(e.c.initializationBlockedSessionToken, null);
         assert.deepEqual(runs, [[0, 1]]);
     }
@@ -3893,8 +3915,8 @@ test('late native collection failure cannot block or publish status into a repla
     e.c.beginSourceScan = () => {};
     e.c.collectAllItems = async () => { await gate.promise; throw new Error('old collection failed'); };
     e.c.scheduleRun = (...args) => runs.push(args);
-    const mutation = { videoId: '2', action: 'remove' };
-    e.c.pendingMyListMutations.set('2', mutation);
+    let mutation = { videoId: '2', action: 'remove' };
+    mutation = e.c.listMutations.observeMembership(mutation);
     const completion = e.c.runScript(1);
     await e.flush();
     const replacement = e.c.sourceState = e.c.attachNativeBinding({ ...e.c.sourceState }, e.section, e.scroller, e.track);
@@ -3902,7 +3924,7 @@ test('late native collection failure cannot block or publish status into a repla
     await e.flush(); await completion;
     assert.equal(e.c.sourceState, replacement);
     assert.equal(e.c.initializationBlockedSessionToken, null);
-    assert.equal(e.c.pendingMyListMutations.get('2'), mutation);
+    assert.equal(e.c.listMutations.pendingMutation('2'), mutation);
     assert.equal(e.warnings.some(entry => entry.name === 'initializationFailed'), false);
     assert.deepEqual(runs, [[0, 1]]);
 });
@@ -4006,8 +4028,8 @@ test('fast collection revalidates its accepted native observation after logging 
     const e = initializationEnvironment(6);
     const runs = [];
     const log = e.c.log;
-    const mutation = { videoId: '2', action: 'remove' };
-    e.c.pendingMyListMutations.set('2', mutation);
+    let mutation = { videoId: '2', action: 'remove' };
+    mutation = e.c.listMutations.observeMembership(mutation);
     e.c.scheduleRun = (...args) => runs.push(args);
     let replacement = false;
     e.c.log = (name, details) => {
@@ -4022,7 +4044,7 @@ test('fast collection revalidates its accepted native observation after logging 
     assert.equal(replacement, true);
     assert.equal(nativeModelFacts(e).pageCountFinalized, false);
     assert.equal(e.logs.filter(entry => entry.name === 'legacyGridBuilt').length, 0);
-    assert.equal(e.c.pendingMyListMutations.size, 1);
+    assert.equal(e.c.listMutations.pendingIntents().length, 1);
     assert.equal(e.c.completedSection, null);
     assert.deepEqual(runs, [[0, 1]]);
 });
@@ -4035,7 +4057,7 @@ test('initialization rejects obsolete native count after logging and preserves q
         const collect = e.c.listData.collectRecords;
         e.c.listData.collectRecords = (...args) => { collections++; return collect(...args); };
         e.c.scheduleRun = (...args) => runs.push(args);
-        e.c.pendingMyListMutations.set('2', { videoId: '2', action: 'remove' });
+        e.c.listMutations.observeMembership({ videoId: '2', action: 'remove' });
         e.c.log = (name, details) => {
             log(name, details);
             if (name !== 'Netflix My List mounted totalCount confirmed') return;
@@ -4053,7 +4075,7 @@ test('initialization rejects obsolete native count after logging and preserves q
         assert.ok(publishedOwner, replacement);
         assert.equal(collections, 0, replacement);
         assert.equal(e.c.sourceState.totalCount, replacement === 'parent' ? 99 : previousCount);
-        assert.equal(e.c.pendingMyListMutations.size, 1);
+        assert.equal(e.c.listMutations.pendingIntents().length, 1);
         assert.equal(e.c.completedSection, null);
         assert.deepEqual(runs, [[0, 1]]);
         assert.equal(e.logs.filter(row => row.name === 'legacyGridBuilt').length, 0);
@@ -4353,8 +4375,8 @@ test('actual initialization rejects marker replacement before collection and pre
     const e = initializationEnvironment(6);
     const runs = [];
     e.c.scheduleRun = (...args) => runs.push(args);
-    const queued = { videoId: 'queued', action: 'remove' };
-    e.c.pendingMyListMutations.set('queued', queued);
+    let queued = { videoId: 'queued', action: 'remove' };
+    queued = e.c.listMutations.observeMembership(queued);
     let replaced = false;
     e.track.classList.add = name => {
         if (name !== 'tm-netflix-mylist-v15-track' || replaced) return;
@@ -4364,7 +4386,7 @@ test('actual initialization rejects marker replacement before collection and pre
     await e.flush(); await e.drain(); await completion;
     assert.equal(replaced, true);
     assert.equal(e.c.completedSection, null);
-    assert.equal(e.c.pendingMyListMutations.get('queued'), queued);
+    assert.equal(e.c.listMutations.pendingMutation('queued'), queued);
     assert.equal(e.logs.some(entry => entry.name === 'legacyGridBuilt'), false);
     assert.equal(e.c.initializationBlockedSessionToken, null);
     assert.deepEqual(runs, [[0, 1]]);
@@ -4461,9 +4483,9 @@ test('GraphQL adapter awaits snapshot chunks and initialization awaits grid publ
     assert.equal(e.c.running, true, e.warnings.map(entry => entry.details.error?.message).join(', '));
     assert.equal(e.timers.size, 1);
     assert.equal(e.created.length, 0, 'snapshot chunks finish before grid construction starts');
-    const mutation = { videoId: '2', action: 'remove' };
-    e.c.pendingMyListMutations.set('2', mutation);
-    assert.equal(e.c.tryApplyMyListMutation(mutation), false);
+    let mutation = { videoId: '2', action: 'remove' };
+    mutation = e.c.listMutations.observeMembership(mutation);
+    assert.equal(e.c.listMutations.reconcileMutation(mutation), false);
     await e.drain();
     await completion;
     assert.equal(e.c.running, false);
@@ -4471,7 +4493,7 @@ test('GraphQL adapter awaits snapshot chunks and initialization awaits grid publ
     assert.equal(e.c.sourceState.grid.isConnected, true);
     assert.equal(e.c.sourceState.items.length, 149, 'queued removal runs only after publication');
     assert.equal(e.c.sourceState.itemMap.size, 149);
-    assert.equal(e.c.pendingMyListMutations.size, 0);
+    assert.equal(e.c.listMutations.pendingIntents().length, 0);
     assert.equal(e.logs.filter(entry => entry.name === 'initializationCompleted').length, 1);
     assert.equal(e.warnings.length, 0);
     assert.equal(e.timers.size, 1, 'the queued removal leaves only its future Undo expiry timer');
@@ -4504,14 +4526,14 @@ test('native-source replacement during grid construction restarts initialization
     for (let attempts = 0; attempts < 20 && e.created.length === 0 && e.timers.size; attempts++) await e.advance(0);
     assert.equal(e.created.filter(node => node.id === OWNED_GRID_ID).length, 1, e.warnings.map(entry => entry.details.error?.message).join(', '));
     assert.equal(e.created[0].children.length, 24);
-    const mutation = { videoId: '2', action: 'remove' };
-    e.c.pendingMyListMutations.set('2', mutation);
-    assert.equal(e.c.tryApplyMyListMutation(mutation), false);
+    let mutation = { videoId: '2', action: 'remove' };
+    mutation = e.c.listMutations.observeMembership(mutation);
+    assert.equal(e.c.listMutations.reconcileMutation(mutation), false);
     e.track.setConnected(false);
     let restarts = 0;
     e.c.runScript = token => {
         assert.equal(token, 1);
-        assert.equal(e.c.pendingMyListMutations.size, 1);
+        assert.equal(e.c.listMutations.pendingIntents().length, 1);
         assert.equal(mutation.deferredWhileBusy, true);
         assert.equal(e.c.running, false);
         restarts++;
@@ -4824,9 +4846,9 @@ test('Undo expiry preserves a queued mutation fallback after removing the Undo c
     e.c.applyLegacyRemoval('1');
     const entry = e.c.recentRemovedMyListItems.get('1');
     const snapshot = e.c.gridView.materialFor(entry.item, entry.correlationId);
-    const mutation = { videoId: '1', action: 'add', fallbackItem: entry.item, correlationId: entry.correlationId, preferredIndex: entry.index,
+    let mutation = { videoId: '1', action: 'add', fallbackItem: entry.item, correlationId: entry.correlationId, preferredIndex: entry.index,
         timeoutId: null, observer: null };
-    e.c.pendingMyListMutations.set('1', mutation);
+    mutation = e.c.listMutations.observeMembership(mutation);
     await e.advance(30000);
     assert.equal(e.c.recentRemovedMyListItems.size, 0);
     assert.equal(mutation.fallbackItem.snapshot ?? null, null, 'removed records carry no retained tree');
@@ -4835,9 +4857,9 @@ test('Undo expiry preserves a queued mutation fallback after removing the Undo c
     const expiry = e.logs.find(row => row.name === 'undoEntriesExpired');
     assert.equal(expiry.details.pendingFallbacksPreserved, 1);
     e.c.running = false;
-    assert.equal(e.c.tryApplyMyListMutation(mutation, 'after-expiry'), true);
+    assert.equal(e.c.listMutations.reconcileMutation(mutation, 'after-expiry'), true);
     assert.equal(e.c.sourceState.items.length, 6);
-    assert.equal(e.c.pendingMyListMutations.size, 0);
+    assert.equal(e.c.listMutations.pendingIntents().length, 0);
     assert.equal(Object.hasOwn(mutation.fallbackItem, 'snapshot'), false);
     assert.equal(e.timers.size, 0);
 });
@@ -4913,17 +4935,17 @@ test('a native mutation capture replaced during cloning preserves its intent and
     e.track.appendChild(item.snapshot);
     e.c.findMyListSection = () => e.section;
     e.c.netflixDom.findTrack = () => e.track;
-    const mutation = { videoId: '1', action: 'add' };
-    e.c.pendingMyListMutations.set('1', mutation);
+    let mutation = { videoId: '1', action: 'add' };
+    mutation = e.c.listMutations.observeMembership(mutation);
     e.c.running = false;
     const clone = item.snapshot.cloneNode.bind(item.snapshot);
     let replacement, publications = 0;
     item.snapshot.cloneNode = (...args) => { replacement = e.c.sourceState = { ...e.c.sourceState }; return clone(...args); };
     e.c.applyLegacyAddition = () => { publications++; return true; };
-    assert.equal(e.c.tryApplyMyListMutation(mutation), false);
+    assert.equal(e.c.listMutations.reconcileMutation(mutation), false);
     assert.equal(e.c.sourceState, replacement);
     assert.equal(publications, 0);
-    assert.equal(e.c.pendingMyListMutations.get('1'), mutation);
+    assert.equal(e.c.listMutations.pendingMutation('1'), mutation);
     assert.equal(e.c.sourceState.items.length, 0);
 });
 
@@ -4931,21 +4953,21 @@ test('mutation candidate callbacks reject changed parent, route or intent before
     for (const change of ['parent', 'route', 'intent']) {
         const e = constructionEnvironment();
         const candidate = e.items(1)[0];
-        const mutation = { videoId: '1', action: 'add', fallbackItem: candidate };
-        const replacementIntent = { ...mutation };
-        e.c.pendingMyListMutations.set('1', mutation);
+        let mutation = { videoId: '1', action: 'add', fallbackItem: candidate };
+        let replacementIntent = { ...mutation };
+        mutation = e.c.listMutations.observeMembership(mutation);
         e.c.running = false;
         let publications = 0;
         e.c.cardSourceForItem = () => {
             if (change === 'parent') e.c.sourceState = { ...e.c.sourceState };
             if (change === 'route') e.c.sessionScope.begin();
-            if (change === 'intent') e.c.pendingMyListMutations.set('1', replacementIntent);
+            if (change === 'intent') replacementIntent = e.c.listMutations.observeMembership(replacementIntent);
             return candidate.snapshot;
         };
         e.c.applyLegacyAddition = () => { publications++; return true; };
-        assert.equal(e.c.tryApplyMyListMutation(mutation), false, change);
+        assert.equal(e.c.listMutations.reconcileMutation(mutation), false, change);
         assert.equal(publications, 0, change);
-        assert.equal(e.c.pendingMyListMutations.get('1'), change === 'intent' ? replacementIntent : mutation);
+        assert.equal(e.c.listMutations.pendingMutation('1'), change === 'intent' ? replacementIntent : mutation);
         assert.equal(e.c.sourceState.items.length, 0);
     }
 });
@@ -4953,8 +4975,8 @@ test('mutation candidate callbacks reject changed parent, route or intent before
 test('post-mutation discovery replacement preserves queued intent and never aligns the new parent', () => {
     for (const action of ['add', 'remove']) {
         const e = constructionEnvironment();
-        const mutation = { videoId: '1', action, fallbackItem: e.items(1)[0] };
-        e.c.pendingMyListMutations.set('1', mutation);
+        let mutation = { videoId: '1', action, fallbackItem: e.items(1)[0] };
+        mutation = e.c.listMutations.observeMembership(mutation);
         e.c.running = false;
         e.c.applyLegacyAddition = e.c.applyLegacyRemoval = () => true;
         let reads = 0, alignments = 0, replacement;
@@ -4963,10 +4985,10 @@ test('post-mutation discovery replacement preserves queued intent and never alig
             return e.c.nativeDiscoveryObservation({ bindingOnly: true });
         };
         e.c.alignLegacyVisiblePageOrder = () => { alignments++; };
-        assert.equal(e.c.tryApplyMyListMutation(mutation), false, action);
+        assert.equal(e.c.listMutations.reconcileMutation(mutation), false, action);
         assert.equal(e.c.sourceState, replacement);
         assert.equal(alignments, 0);
-        assert.equal(e.c.pendingMyListMutations.get('1'), mutation);
+        assert.equal(e.c.listMutations.pendingMutation('1'), mutation);
     }
 });
 
@@ -5208,7 +5230,7 @@ function fetchEnvironment(count = 150) {
         Object.assign(e.c, {
             scheduled: false, scheduledRunTimer: null, resizeObserver: null, responsiveRefreshTimer: null,
             cleanupTargetSessionDom() {}, stopTargetEventListeners() {}, startTargetEventListeners() {},
-            resetDetachedTargetState() {}, clearPendingMyListMutations() { e.c.pendingMyListMutations.clear(); }
+            resetDetachedTargetState() {}, clearPendingMyListMutations() { e.c.listMutations.clearPending(); }
         });
         for (const name of ['suspendTargetSession', 'startTargetSession']) vm.runInContext(declaration(name), e.c);
     }
@@ -8638,13 +8660,13 @@ test('readiness detachment retries one verified replacement and preserves queued
         e.c.netflixDom.findTrack = () => replacement;
         return { ready: false, reason: 'detached' };
     };
-    const mutation = { videoId: '2', action: 'remove' };
-    e.c.pendingMyListMutations.set('2', mutation);
+    let mutation = { videoId: '2', action: 'remove' };
+    mutation = e.c.listMutations.observeMembership(mutation);
     await e.c.runScript(1);
     assert.deepEqual(scheduled, [[40, 1]]);
     assert.equal(e.c.initializationBlockedSessionToken, null);
     assert.equal(e.c.sourceState, null);
-    assert.equal(e.c.pendingMyListMutations.size, 1);
+    assert.equal(e.c.listMutations.pendingIntents().length, 1);
     const retry = e.c.runScript(1);
     await e.drain();
     await retry;
@@ -8652,7 +8674,7 @@ test('readiness detachment retries one verified replacement and preserves queued
     assert.equal(e.c.sourceState.track, replacement);
     assert.equal(e.c.completedSection, e.section);
     assert.equal(e.c.sourceState.items.length, 5);
-    assert.equal(e.c.pendingMyListMutations.size, 0);
+    assert.equal(e.c.listMutations.pendingIntents().length, 0);
     assert.equal(e.c.performanceDiagnostics.nativeRecovery.attempts, 1);
     assert.equal(e.c.performanceDiagnostics.nativeRecovery.completed, 1);
     const recovery = e.logs.find(entry => entry.name === 'nativeInitializationRecovered');
@@ -8668,11 +8690,11 @@ test('a replacement mounted after a readiness timeout can unblock through the na
     assert.equal(e.c.initializationBlockedSessionToken, 1);
     assert.equal(scheduled.length, 0);
     assert.equal(e.c.recoverNativeInitialization(1, 'same-source'), false);
-    const queued = { videoId: '2', action: 'remove' };
-    e.c.pendingMyListMutations.set('2', queued);
-    assert.equal(e.c.tryApplyMyListMutation(queued), false);
+    let queued = { videoId: '2', action: 'remove' };
+    queued = e.c.listMutations.observeMembership(queued);
+    assert.equal(e.c.listMutations.reconcileMutation(queued), false);
     assert.equal(queued.deferredWhileBusy, true);
-    assert.equal(e.c.pendingMyListMutations.size, 1);
+    assert.equal(e.c.listMutations.pendingIntents().length, 1);
     const replacement = e.scroller.appendChild(new ConstructionNode('replacement'));
     e.c.netflixDom.findTrack = () => replacement;
     e.c.targetDocumentObserver = {};
@@ -9561,8 +9583,8 @@ test('expired correlation cannot retain or borrow a later removal of the same ca
     e.c.applyLegacyRemoval('1');const latest=e.c.recentRemovedMyListItems.get('1');
     assert.equal(first.item,latest.item);assert.notEqual(first.correlationId,latest.correlationId);
     assert.equal(Object.hasOwn(latest.item,'undoId'),false);
-    const mutation={videoId:'1',action:'add',fallbackItem:first.item,correlationId:first.correlationId,timeoutId:null};
-    e.c.pendingMyListMutations.set('1',mutation);
+    let mutation={videoId:'1',action:'add',fallbackItem:first.item,correlationId:first.correlationId,timeoutId:null};
+    mutation = e.c.listMutations.observeMembership(mutation);
     assert.equal(e.c.gridView.materialFor(first.item,first.correlationId),null);
     assert.equal(e.c.applyLegacyAddition(first.item,first.index,'obsolete',first.correlationId),false);
     await e.advance(30000);
@@ -9576,8 +9598,8 @@ test('disposing an old queued correlation preserves a newer removal entry and it
     e.c.applyLegacyRemoval('1');const first=e.c.recentRemovedMyListItems.get('1');
     e.c.applyLegacyAddition(first.item,first.index,'undo');e.c.applyLegacyRemoval('1');
     const latest=e.c.recentRemovedMyListItems.get('1');
-    const mutation={videoId:'1',action:'add',fallbackItem:first.item,correlationId:first.correlationId,timeoutId:null};
-    e.c.pendingMyListMutations.set('1',mutation);e.c.disposeMyListMutation('1',mutation);
+    let mutation={videoId:'1',action:'add',fallbackItem:first.item,correlationId:first.correlationId,timeoutId:null};
+    mutation = e.c.listMutations.observeMembership(mutation);e.c.listMutations.disposeMutation('1',mutation);
     assert.equal(e.c.gridView.hasRetained(latest.correlationId,latest.item),true);
     assert.equal(e.c.undoCorrelationForItem({videoId:'1'}),null);
 });
@@ -9587,18 +9609,17 @@ test('actual click queue carries explicit Undo correlation beyond entry expiry w
     const e=constructionEnvironment();
     await e.c.buildGrid(e.section,e.scroller,e.items(2),e.layout,2,1);
     e.c.applyLegacyRemoval('1');const entry=e.c.recentRemovedMyListItems.get('1');
-    vm.runInContext(declaration('queueMyListMutation')+'\n'+declaration('scheduleMyListMutationTimeout'),e.c);
     e.c.DELTA_MUTATION_TIMEOUT_MS=4000;e.c.queueMicrotask=callback=>callback();e.c.running=true;
-    e.c.queueMyListMutation({videoId:'1',action:'add',fallbackItem:entry.item,correlationId:entry.correlationId,
+    e.c.listMutations.queueMutation({videoId:'1',action:'add',fallbackItem:entry.item,correlationId:entry.correlationId,
         preferredIndex:entry.index,undo:true});
-    const mutation=e.c.pendingMyListMutations.get('1');
+    let mutation=e.c.listMutations.pendingMutation('1');
     assert.equal(mutation.correlationId,entry.correlationId);
     await e.advance(30000);assert.equal(e.c.recentRemovedMyListItems.size,0);
     assert.equal(e.c.gridView.hasRetained(mutation.correlationId,mutation.fallbackItem),true);
     e.c.running=false;e.c.retryPendingMyListMutations('after-expiry');
     assert.equal(e.c.sourceState.itemMap.get('v:1'),entry.item);
     assert.equal(Object.hasOwn(entry.item,'undoId'),false);
-    assert.equal(e.c.pendingMyListMutations.size,0);assert.equal(e.timers.size,0);
+    assert.equal(e.c.listMutations.pendingIntents().length,0);assert.equal(e.timers.size,0);
 });
 
 

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.46
+// @version      1.4.47
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -2617,14 +2617,238 @@
     ttl,
     hasRetained,
     releaseRetained,
-    readPending = () => null,
     normalizeTitle = String,
+    isDeferred = () => false,
+    isBlocked = () => false,
+    applyMutation = null,
+    readParent = () => null,
+    canApply = () => false,
+    assertSession = () => {
+    },
+    isCancelled = () => false,
+    createError = (code, message) => Object.assign(new Error(message), { code }),
+    hasMember,
+    refreshNative,
+    observeNative,
+    removeMember,
+    addMember,
+    alignVisible,
+    captureNative,
+    hasMaterial,
+    preferredIndexForNative,
+    assertNative,
+    findFallback = () => null,
+    observeChanges = () => null,
+    queueMicrotask: queueMicrotask2 = () => {
+    },
+    mutationTimeout = 1800,
+    onQueued = () => {
+    },
+    onTimeout = () => {
+    },
     onCounter = () => {
     },
     onExpired = () => {
     }
   }) {
     let entries = /* @__PURE__ */ new Map(), timer = null, generation = 0;
+    let pending = /* @__PURE__ */ new Map(), sequence = 0;
+    const phases = /* @__PURE__ */ new WeakMap();
+    const readPending = (videoId) => pending.get(String(videoId)) || null;
+    const isMutationCurrent = (intent) => Boolean(intent && readPending(intent.videoId) === intent && isSessionActive(phases.get(intent)?.token));
+    function releaseIntent(intent) {
+      const phase = phases.get(intent), oldTimer = phase.timer, observer = phase.observer;
+      phase.timer = null;
+      phase.observer = null;
+      if (oldTimer) clearTimeout2(oldTimer.id);
+      try {
+        observer?.disconnect();
+      } catch (_) {
+      }
+      const next = readPending(intent.videoId);
+      const transferred = next?.fallbackItem === intent.fallbackItem && next?.correlationId === intent.correlationId;
+      if (intent.correlationId && entries.get(intent.videoId)?.correlationId !== intent.correlationId && !transferred) {
+        releaseRetained(intent.correlationId);
+      }
+    }
+    function disposeMutation(videoId, expected = null) {
+      const key = String(videoId || ""), intent = readPending(key);
+      if (!intent || expected && expected !== intent) return;
+      pending.delete(key);
+      releaseIntent(intent);
+    }
+    function clearPending() {
+      const old = pending;
+      pending = /* @__PURE__ */ new Map();
+      sequence++;
+      for (const intent of old.values()) releaseIntent(intent);
+    }
+    function observeMembership(descriptor) {
+      if (!descriptor?.videoId) return null;
+      const token = readSession(), seq = ++sequence, videoId = String(descriptor.videoId);
+      if (!isSessionActive(token)) return null;
+      const previous = readPending(videoId);
+      const phase = { token, timer: null, observer: null, deferred: Boolean(descriptor.deferredWhileBusy) };
+      const intent = Object.freeze({
+        seq,
+        videoId,
+        action: descriptor.action,
+        uia: descriptor.uia || "",
+        uiaAction: descriptor.uiaAction || "unknown",
+        source: descriptor.source || "user-click",
+        detectedAt: Number.isFinite(descriptor.detectedAt) ? descriptor.detectedAt : now(),
+        fallbackItem: descriptor.fallbackItem || null,
+        correlationId: descriptor.correlationId || null,
+        preferredIndex: Number.isFinite(descriptor.preferredIndex) ? Math.max(0, Math.floor(descriptor.preferredIndex)) : null,
+        undo: Boolean(descriptor.undo),
+        get deferredWhileBusy() {
+          return phase.deferred;
+        }
+      });
+      if (sequence !== seq || !isSessionActive(token)) return null;
+      phases.set(intent, phase);
+      pending.set(videoId, intent);
+      if (previous) releaseIntent(previous);
+      if (sequence !== seq || !isMutationCurrent(intent)) return null;
+      return intent;
+    }
+    function applyObservedMutation(intent, reason) {
+      if (!canApply()) return false;
+      const parent = readParent(), token = readSession();
+      const guard = () => {
+        assertSession(token);
+        if (readParent() !== parent || !isMutationCurrent(intent) || !canApply()) {
+          throw createError("NATIVE_SOURCE_REPLACED", "Mutation admission was replaced");
+        }
+      };
+      const call = (operation, ...args) => {
+        const result = operation(...args);
+        guard();
+        return result;
+      };
+      try {
+        guard();
+        const videoId = intent.videoId;
+        let live = call(refreshNative) || call(observeNative);
+        if (intent.action === "remove") {
+          const changed2 = call(removeMember, videoId, reason);
+          if (!changed2 && !call(hasMember, videoId)) {
+            disposeMutation(videoId, intent);
+            return true;
+          }
+          if (!changed2) return false;
+          live = call(refreshNative) || live;
+          if (live?.track) call(alignVisible, live);
+          disposeMutation(videoId, intent);
+          return true;
+        }
+        if (call(hasMember, videoId)) {
+          disposeMutation(videoId, intent);
+          return true;
+        }
+        const nativeItem = call(captureNative, videoId, live);
+        const candidate = nativeItem || intent.fallbackItem || call(findFallback, videoId);
+        const correlationId = candidate === intent.fallbackItem ? intent.correlationId : null;
+        if (!call(hasMaterial, candidate, correlationId)) return false;
+        const index = nativeItem ? call(preferredIndexForNative, videoId, live) : Number.isFinite(intent.preferredIndex) ? intent.preferredIndex : 0;
+        call(assertNative, live);
+        const changed = call(addMember, candidate, index, nativeItem ? reason + "-native" : reason + "-captured", correlationId);
+        if (changed || call(hasMember, videoId)) {
+          live = call(refreshNative) || live;
+          if (live?.track) call(alignVisible, live);
+          disposeMutation(videoId, intent);
+          return true;
+        }
+        return false;
+      } catch (error) {
+        if (error?.code !== "NATIVE_SOURCE_REPLACED" && !isCancelled(error)) throw error;
+        return false;
+      }
+    }
+    function reconcileMutation(intent, reason = "event") {
+      if (!isMutationCurrent(intent)) return false;
+      const phase = phases.get(intent);
+      if (isDeferred() || isBlocked()) {
+        phase.deferred = true;
+        return false;
+      }
+      if (!isMutationCurrent(intent)) return false;
+      phase.deferred = false;
+      return (applyMutation || applyObservedMutation)(intent, reason);
+    }
+    function scheduleMutationTimeout(intent) {
+      if (!isMutationCurrent(intent)) return;
+      const phase = phases.get(intent), old = phase.timer;
+      const owner = { id: null };
+      phase.timer = owner;
+      if (old) clearTimeout2(old.id);
+      if (!isMutationCurrent(intent) || phase.timer !== owner) return;
+      owner.id = setTimeout2(() => {
+        if (!isMutationCurrent(intent) || phase.timer !== owner) return;
+        phase.timer = null;
+        const applied = reconcileMutation(intent, "observer-timeout");
+        if (applied || !isMutationCurrent(intent)) return;
+        if (isDeferred()) {
+          phase.deferred = true;
+          return;
+        }
+        onTimeout({ seq: intent.seq, videoId: intent.videoId, action: intent.action, timeoutMs: mutationTimeout });
+        disposeMutation(intent.videoId, intent);
+      }, mutationTimeout);
+      if (!isMutationCurrent(intent) || phase.timer !== owner) clearTimeout2(owner.id);
+    }
+    function retryMutations(reason) {
+      if (isDeferred() || !isSessionActive(readSession())) return;
+      for (const intent of [...pending.values()]) {
+        if (!phases.get(intent).deferred) continue;
+        const applied = reconcileMutation(intent, reason);
+        if (!applied && isMutationCurrent(intent)) scheduleMutationTimeout(intent);
+      }
+    }
+    function deferPending() {
+      for (const intent of pending.values()) phases.get(intent).deferred = true;
+    }
+    function queueMutation(descriptor) {
+      if (!descriptor?.videoId) return null;
+      const token = readSession(), owner = sequence;
+      const fallbackItem = descriptor.action === "add" ? descriptor.fallbackItem || findFallback(String(descriptor.videoId)) : null;
+      if (sequence !== owner || !isSessionActive(token)) return null;
+      const intent = observeMembership({
+        ...descriptor,
+        fallbackItem,
+        correlationId: descriptor.correlationId || correlationFor(fallbackItem)
+      });
+      if (!intent) return null;
+      const phase = phases.get(intent);
+      try {
+        const observer = observeChanges(() => reconcileMutation(intent, "mutation-observer"));
+        if (!isMutationCurrent(intent)) {
+          try {
+            observer?.disconnect();
+          } catch (_) {
+          }
+          return null;
+        }
+        phase.observer = observer;
+        scheduleMutationTimeout(intent);
+      } catch (error) {
+        disposeMutation(intent.videoId, intent);
+        throw error;
+      }
+      if (!isMutationCurrent(intent)) return null;
+      onQueued(intent);
+      queueMicrotask2(() => reconcileMutation(intent, "post-click"));
+      return intent;
+    }
+    function pendingDiagnostics() {
+      return [...pending.values()].map((intent) => ({
+        videoId: intent.videoId,
+        action: intent.action,
+        ageMs: Math.round(now() - intent.detectedAt),
+        source: intent.source,
+        observerActive: Boolean(phases.get(intent).observer)
+      }));
+    }
     function cancelExpiry() {
       const old = timer;
       timer = null;
@@ -2674,9 +2898,9 @@
       for (const [videoId, entry] of [...entries]) {
         if (entries.get(videoId) !== entry) continue;
         if (!Number.isFinite(entry.removedAt) || at - entry.removedAt >= ttl) {
-          const admitted2 = generation, pending = readPending(videoId);
+          const admitted2 = generation, pending2 = readPending(videoId);
           if (generation !== admitted2 || entries.get(videoId) !== entry) return false;
-          const keep = pending?.fallbackItem === entry.item && pending?.correlationId === entry.correlationId;
+          const keep = pending2?.fallbackItem === entry.item && pending2?.correlationId === entry.correlationId;
           entries.delete(videoId);
           generation++;
           expired++;
@@ -2718,8 +2942,8 @@
       if (!item?.videoId) return null;
       const key = String(item.videoId), entry = entries.get(key);
       if (entry?.item === item) return entry.correlationId;
-      const pending = readPending(key);
-      return pending?.fallbackItem === item ? pending.correlationId || null : null;
+      const pending2 = readPending(key);
+      return pending2?.fallbackItem === item ? pending2.correlationId || null : null;
     }
     function latestUndo() {
       pruneUndo();
@@ -2728,6 +2952,19 @@
       return latest;
     }
     return Object.freeze({
+      observeMembership,
+      queueMutation,
+      reconcileMutation,
+      disposeMutation,
+      clearPending,
+      scheduleMutationTimeout,
+      retryMutations,
+      deferPending,
+      isMutationCurrent,
+      pendingMutation: readPending,
+      pendingIntents: () => Object.freeze([...pending.values()]),
+      pendingDiagnostics,
+      nextCorrelation: () => `undo:${readSession()}:${++sequence}`,
       rememberUndo,
       forgetUndo,
       pruneUndo,
@@ -11149,7 +11386,55 @@
       ttl: UNDO_ENTRY_TTL_MS,
       hasRetained: (id, item) => gridView.hasRetained(id, item),
       releaseRetained: (id) => gridView.releaseRetained(id),
-      readPending: (id) => pendingMyListMutations.get(id),
+      mutationTimeout: DELTA_MUTATION_TIMEOUT_MS,
+      isDeferred: () => running || responsiveRefreshing,
+      isBlocked: () => nativeInitializationFailure?.sessionToken === sessionScope.token && initializationBlockedSessionToken === sessionScope.token,
+      readParent: () => sourceState,
+      canApply: () => Boolean(sourceState && isTargetPage()),
+      assertSession: assertRouteSession,
+      isCancelled: isRouteSessionCancelledError,
+      createError: (code, message) => initializationError(code, "native-discovery", message),
+      hasMember: (id) => sourceState.itemMap?.has("v:" + id),
+      refreshNative: refreshNativeSectionAfterDelta,
+      observeNative: nativeDiscoveryObservation,
+      removeMember: applyLegacyRemoval,
+      addMember: applyLegacyAddition,
+      alignVisible: alignLegacyVisiblePageOrder,
+      captureNative: findNativeMyListItemByVideoId,
+      hasMaterial: cardSourceForItem,
+      preferredIndexForNative: preferredIndexForNativeItem,
+      assertNative: (observation) => nativeCarousel.assertObservation(observation),
+      findFallback: findAnyStandardCardItemByVideoId,
+      queueMicrotask,
+      observeChanges(callback) {
+        const root = document.body || document.documentElement;
+        if (!root) return null;
+        const observer = new MutationObserver(callback);
+        try {
+          observer.observe(root, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["data-uia", "class", "aria-label", "href"]
+          });
+        } catch (error) {
+          observer.disconnect();
+          throw error;
+        }
+        return observer;
+      },
+      onTimeout: (detail) => warn(tLog("differentialUpdateTimedOutWaitingForAUsableCardSnapshot"), detail),
+      onQueued: (intent) => log(tLog("myListMutationQueued"), {
+        seq: intent.seq,
+        videoId: intent.videoId,
+        action: intent.action,
+        uiaAction: intent.uiaAction,
+        uia: intent.uia,
+        syncMode: "event-driven",
+        undo: intent.undo,
+        preferredIndex: intent.preferredIndex,
+        hasFallbackSnapshot: Boolean(cardSourceForItem(intent.fallbackItem))
+      }),
       normalizeTitle: normalizeNetflixUiText,
       onCounter: (name, amount) => {
         performanceDiagnostics.undoRetention[name] += amount;
@@ -11197,7 +11482,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.46";
+    const SCRIPT_VERSION = "1.4.47";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -11426,8 +11711,6 @@
     let viewOriginalMyList = true;
     let viewOriginalMenuId = null;
     let missingSectionSince = 0;
-    let pendingMyListMutations = /* @__PURE__ */ new Map();
-    let myListMutationSequence = 0;
     let waitingForNativeEmpty = false;
     let initializationBlockedSessionToken = null;
     let nativeInitializationFailure = null;
@@ -12308,13 +12591,7 @@
         nativePreviewOwned: Boolean(activeNativeHover?.previewRoot),
         viewOriginalMyList,
         myListSyncMode: "event-driven",
-        pendingMyListMutations: [...pendingMyListMutations.values()].map((entry) => ({
-          videoId: entry.videoId,
-          action: entry.action,
-          ageMs: Math.round(performance.now() - entry.detectedAt),
-          source: entry.source || "",
-          observerActive: Boolean(entry.observer)
-        })),
+        pendingMyListMutations: listMutations.pendingDiagnostics(),
         layout: layoutSummary(sourceState?.layout),
         activeVideoId,
         activePage,
@@ -14059,7 +14336,7 @@
         activePage = null;
       }
       const handle = gridView.getCard(removed);
-      const correlationId = handle ? "undo:" + sessionScope.token + ":" + ++myListMutationSequence : null;
+      const correlationId = handle ? listMutations.nextCorrelation() : null;
       if (handle) {
         gridView.removeCard(handle, { correlationId, assertCurrent });
       }
@@ -14183,57 +14460,11 @@
       log(tLog("legacyVisibleOrderAligned"), { page: live.selectedPage, ids: nativeIds });
       return true;
     }
-    function disposeMyListMutation(videoId, expected = null) {
-      const key = String(videoId || "");
-      const mutation = pendingMyListMutations.get(key);
-      if (!mutation || expected && mutation !== expected) return;
-      try {
-        mutation.observer?.disconnect();
-      } catch (_) {
-      }
-      if (mutation.timeoutId !== null && mutation.timeoutId !== void 0) clearTimeout(mutation.timeoutId);
-      pendingMyListMutations.delete(key);
-      if (mutation.correlationId && !listMutations.ownsUndoCorrelation(key, mutation.correlationId)) {
-        gridView.releaseRetained(mutation.correlationId);
-      }
-    }
-    function scheduleMyListMutationTimeout(mutation) {
-      if (!mutation || pendingMyListMutations.get(mutation.videoId) !== mutation) return;
-      if (mutation.timeoutId !== null && mutation.timeoutId !== void 0) clearTimeout(mutation.timeoutId);
-      mutation.timeoutId = setTimeout(() => {
-        if (pendingMyListMutations.get(mutation.videoId) !== mutation) return;
-        mutation.timeoutId = null;
-        const applied = tryApplyMyListMutation(mutation, "observer-timeout");
-        if (applied || pendingMyListMutations.get(mutation.videoId) !== mutation) return;
-        if (running || responsiveRefreshing) {
-          mutation.deferredWhileBusy = true;
-          return;
-        }
-        warn(tLog("differentialUpdateTimedOutWaitingForAUsableCardSnapshot"), {
-          seq: mutation.seq,
-          videoId: mutation.videoId,
-          action: mutation.action,
-          timeoutMs: DELTA_MUTATION_TIMEOUT_MS
-        });
-        disposeMyListMutation(mutation.videoId, mutation);
-      }, DELTA_MUTATION_TIMEOUT_MS);
-    }
     function retryPendingMyListMutations(reason) {
-      if (running || responsiveRefreshing || !isTargetPage()) return;
-      for (const mutation of [...pendingMyListMutations.values()]) {
-        if (!mutation.deferredWhileBusy) continue;
-        mutation.deferredWhileBusy = false;
-        const applied = tryApplyMyListMutation(mutation, reason);
-        if (!applied && pendingMyListMutations.get(mutation.videoId) === mutation) {
-          scheduleMyListMutationTimeout(mutation);
-        }
-      }
+      listMutations.retryMutations(reason);
     }
     function clearPendingMyListMutations() {
-      for (const [videoId, mutation] of [...pendingMyListMutations.entries()]) {
-        disposeMyListMutation(videoId, mutation);
-      }
-      pendingMyListMutations = /* @__PURE__ */ new Map();
+      listMutations.clearPending();
     }
     function restartInitializationForPopulatedNativeMyList(live, reason = "late-populated-source") {
       if (!sourceState?.empty || !live?.section || !live?.scroller || !live?.track) return false;
@@ -14345,131 +14576,11 @@
     function refreshNativeSectionAfterDelta() {
       return ensureLiveNativeBinding("delta-refresh");
     }
-    function tryApplyMyListMutation(mutation, reason = "event") {
-      if (!mutation || pendingMyListMutations.get(mutation.videoId) !== mutation) return false;
-      if (!sourceState || !isTargetPage()) return false;
-      if (running || responsiveRefreshing || nativeInitializationFailure?.sessionToken === sessionScope.token && initializationBlockedSessionToken === sessionScope.token) {
-        mutation.deferredWhileBusy = true;
-        return false;
-      }
-      mutation.deferredWhileBusy = false;
-      const owner = sourceState;
-      const sessionToken = sessionScope.token;
-      const assertMutationCurrent = () => {
-        assertRouteSession(sessionToken);
-        if (sourceState !== owner || pendingMyListMutations.get(mutation.videoId) !== mutation || !isTargetPage()) {
-          throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Mutation admission was replaced");
-        }
-      };
-      try {
-        const videoId = mutation.videoId;
-        let live = refreshNativeSectionAfterDelta() || nativeDiscoveryObservation();
-        assertMutationCurrent();
-        if (mutation.action === "remove") {
-          const changed2 = applyLegacyRemoval(videoId, reason);
-          assertMutationCurrent();
-          if (!changed2 && !sourceState.itemMap?.has(`v:${videoId}`)) {
-            disposeMyListMutation(videoId, mutation);
-            return true;
-          }
-          if (changed2) {
-            live = refreshNativeSectionAfterDelta() || live;
-            assertMutationCurrent();
-            if (live?.track) alignLegacyVisiblePageOrder(live);
-            assertMutationCurrent();
-            disposeMyListMutation(videoId, mutation);
-            return true;
-          }
-          return false;
-        }
-        if (sourceState.itemMap?.has(`v:${videoId}`)) {
-          disposeMyListMutation(videoId, mutation);
-          return true;
-        }
-        const nativeItem = findNativeMyListItemByVideoId(videoId, live);
-        assertMutationCurrent();
-        const candidate = nativeItem || mutation.fallbackItem || findAnyStandardCardItemByVideoId(videoId);
-        if (!cardSourceForItem(candidate, candidate === mutation.fallbackItem ? mutation.correlationId : null)) return false;
-        const preferredIndex = nativeItem ? preferredIndexForNativeItem(videoId, live) : Number.isFinite(mutation.preferredIndex) ? mutation.preferredIndex : 0;
-        assertMutationCurrent();
-        nativeCarousel.assertObservation(live);
-        const changed = applyLegacyAddition(
-          candidate,
-          preferredIndex,
-          nativeItem ? `${reason}-native` : `${reason}-captured`,
-          candidate === mutation.fallbackItem ? mutation.correlationId : null
-        );
-        assertMutationCurrent();
-        if (changed || sourceState.itemMap?.has(`v:${videoId}`)) {
-          live = refreshNativeSectionAfterDelta() || live;
-          assertMutationCurrent();
-          if (live?.track) alignLegacyVisiblePageOrder(live);
-          assertMutationCurrent();
-          disposeMyListMutation(videoId, mutation);
-          return true;
-        }
-        return false;
-      } catch (error) {
-        if (error?.code !== "NATIVE_SOURCE_REPLACED" && !isRouteSessionCancelledError(error)) throw error;
-        return false;
-      }
-    }
-    function queueMyListMutation(descriptor) {
-      if (!descriptor?.videoId || !sourceState) return;
-      const videoId = String(descriptor.videoId);
-      disposeMyListMutation(videoId);
-      const fallbackItem = descriptor.action === "add" ? descriptor.fallbackItem || findAnyStandardCardItemByVideoId(videoId) : null;
-      const seq = ++myListMutationSequence;
-      const mutation = {
-        seq,
-        videoId,
-        action: descriptor.action,
-        uia: descriptor.uia || "",
-        uiaAction: descriptor.uiaAction || "unknown",
-        source: "user-click",
-        detectedAt: performance.now(),
-        fallbackItem,
-        correlationId: descriptor.correlationId || undoCorrelationForItem(fallbackItem),
-        preferredIndex: Number.isFinite(descriptor.preferredIndex) ? Math.max(0, Math.floor(descriptor.preferredIndex)) : null,
-        undo: Boolean(descriptor.undo),
-        observer: null,
-        timeoutId: null,
-        deferredWhileBusy: false
-      };
-      pendingMyListMutations.set(videoId, mutation);
-      const root = document.body || document.documentElement;
-      if (root) {
-        mutation.observer = new MutationObserver(() => {
-          tryApplyMyListMutation(mutation, "mutation-observer");
-        });
-        mutation.observer.observe(root, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ["data-uia", "class", "aria-label", "href"]
-        });
-      }
-      scheduleMyListMutationTimeout(mutation);
-      log(tLog("myListMutationQueued"), {
-        seq,
-        videoId,
-        action: descriptor.action,
-        uiaAction: descriptor.uiaAction || "unknown",
-        uia: descriptor.uia || "",
-        syncMode: "event-driven",
-        undo: Boolean(mutation.undo),
-        preferredIndex: mutation.preferredIndex,
-        hasFallbackSnapshot: Boolean(cardSourceForItem(fallbackItem))
-      });
-      queueMicrotask(() => {
-        tryApplyMyListMutation(mutation, "post-click");
-      });
-    }
     function handleObservedMyListToggleClick(event) {
       if (!isTargetPage() || !sourceState) return;
       const descriptor = describeMyListToggleClick(event) || describeMyListUndoClick(event);
       if (!descriptor) return;
-      queueMyListMutation(descriptor);
+      listMutations.queueMutation(descriptor);
     }
     function updateStatus(content) {
       return gridView.updateStatus(content);
@@ -16965,7 +17076,7 @@
         return false;
       }
       performanceDiagnostics.nativeRecovery.attempts++;
-      for (const mutation of pendingMyListMutations.values()) mutation.deferredWhileBusy = true;
+      listMutations.deferPending();
       cleanupTargetSessionDom();
       resizeObserver?.disconnect();
       resizeObserver = null;
@@ -16985,7 +17096,7 @@
         sessionToken,
         reason,
         attempt: performanceDiagnostics.nativeRecovery.attempts,
-        pendingMutations: pendingMyListMutations.size
+        pendingMutations: listMutations.pendingIntents().length
       });
       scheduleRun(40, sessionToken);
       return true;
