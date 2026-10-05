@@ -218,6 +218,10 @@ function environment(names, overrides = {}) {
         normalizeCard: node => c.cardMarkup.normalize(node),
         diagnostics: () => ({ activeCards: c.sourceState?.cloneMap?.size || 0, retainedCards: 0, retirementFailures: 0 }),
         setEmpty() {},
+        presentation: () => ({ initialized: false, completedCount: 0, unknownCount: 0, visibleCount: 0 }),
+        groupDiagnostics: () => ({ syncs: 0, fullSyncs: 0, cardsConsidered: 0, controlsUpdated: 0, categoryMoves: 0, hoverPreserved: 0, hoverCancelled: 0, lastReason: '' }),
+        isCardVisible(node, root) { return Boolean(node && root && node.getAttribute('data-tm-type-hidden') !== 'true' && (node.parentElement === root ||
+            (node.parentElement?.getAttribute('data-tm-watch-grid') === 'true' && node.parentElement.parentElement?.parentElement === root && node.parentElement.parentElement.open === true))); },
         geometry: createGrid({ document, location, runChunks: async () => {} }).geometry,
         clearEmpty() {}, resetEmpty() {}, removeSynthetic() {}, presentEmpty: () => false,
         emptyPresentation() {
@@ -3502,6 +3506,7 @@ function constructionEnvironment() {
         runChunks: (...args) => e.c.runConstructionChunks(...args),
         createError: (code, message) => e.c.initializationError(code, 'grid-cards', message),
         tUi: (...args) => e.c.tUi?.(...args) || args[0],
+        formatUiNumber: value => e.c.formatUiNumber?.(value) || String(value), formatItemCount: (...args) => e.c.formatItemCount?.(...args) || String(args[0]),
         installHover: root => e.c.ensureGridHoverBehavior(root),
         onRetire: (handle, detail) => e.c.retireGridCard(handle, detail),
         onReplace: (old, next) => e.c.onGridCardReplaced(old, next) });
@@ -5595,9 +5600,9 @@ const viewingFunctions = [
     'saveViewingSeriesDetails', 'collectViewingSeriesDiagnostics',
     'viewingLatestEpisode', 'viewingProgressSummary', 'viewingSeriesResult',
     'validViewingCoverage', 'readManualViewingChoices', 'syncManualViewingProfile', 'saveManualViewingChoices', 'changedManualViewingIds', 'reconcileManualViewingCoverage',
-    'effectiveViewingStatus', 'syncManualViewingCard', 'ensureManualViewingBehavior', 'applyManualViewingChoice',
+    'effectiveViewingStatus', 'applyManualViewingChoice',
     'handleGridClonePointerOver', 'handleGridClonePointerLeave',
-    'gridOwnsClone', 'createWatchTypeFilter', 'syncWatchTypeFilter', 'ensureWatchGroupUi', 'syncWatchChildOrder', 'syncWatchGroups',
+    'gridOwnsClone', 'cancelGroupHover', 'syncWatchGroups',
     'initializeWatchGroups', 'refreshViewingStatus', 'createRouteFetch', 'finishRouteFetch',
     'gridCloneFromPointerEvent', 'gridHoverTargetActive', 'gridHoverSuppressed', 'cancelPendingGridHover',
     'formatHeaderParts'
@@ -5691,21 +5696,45 @@ async function viewingRecords(e, graph, ids) {
     return e.c.viewingData.readTitles(ids, e.c.viewingData.beginRead(),
         { signal: new AbortController().signal, assertCurrent() {} });
 }
+const viewingUiForTests = new WeakMap();
+function viewingUi(e) {
+    const grid = e.state.grid, details = grid.querySelector('[data-tm-watch-section]');
+    if (!details) return null;
+    if (viewingUiForTests.has(details)) return viewingUiForTests.get(details);
+    const filter = group => {
+        const root = grid.querySelector('[data-tm-type-filter="' + group + '"]');
+        return { root, buttons: new Map(root.children.map(button => [button.getAttribute('data-tm-filter-value'),
+            { button, count: button.querySelector('[data-tm-type-count]') }])) };
+    };
+    const controls = grid.querySelector('[data-tm-watch-controls]');
+    const value = { grid, details, summary: details.querySelector('summary'), watchedGrid: details.querySelector('[data-tm-watch-grid]'),
+        mainFilter: filter('main'), watchedFilter: filter('watched'), watchedEmpty: details.querySelector('p'),
+        empty: grid.children.find(node => node.getAttribute('data-tm-watch-empty') === 'true'),
+        controls, refresh: controls.querySelector('button'), note: controls.querySelector('span') };
+    viewingUiForTests.set(details, value); return value;
+}
+function observeControlLabels(e, changed) {
+    for (const clone of e.state.cloneMap.values()) {
+        const toggle = viewingControls(clone).toggle; let value = toggle.textContent;
+        Object.defineProperty(toggle, 'textContent', { configurable: true, get: () => value, set(next) { value = next; changed(); } });
+    }
+}
+
 function mainViewingIds(e) {
     return e.state.grid.children.filter(node => node.__tmMyListItem).map(node => node.__tmMyListItem.videoId);
 }
 function completedViewingIds(e) {
-    return e.state.watchStatus.ui.watchedGrid.children.map(node => node.__tmMyListItem.videoId);
+    return viewingUi(e).watchedGrid.children.map(node => node.__tmMyListItem.videoId);
 }
 
 function filteredViewingIds(e, group = 'main') {
-    const parent = group === 'main' ? e.state.grid : e.state.watchStatus.ui.watchedGrid;
+    const parent = group === 'main' ? e.state.grid : viewingUi(e).watchedGrid;
     return parent.children.filter(node => node.__tmMyListItem && node.getAttribute('data-tm-type-hidden') !== 'true')
         .map(node => node.__tmMyListItem.videoId);
 }
 
 function clickViewingFilter(e, group, type) {
-    const control = group === 'main' ? e.state.watchStatus.ui.mainFilter : e.state.watchStatus.ui.watchedFilter;
+    const control = group === 'main' ? viewingUi(e).mainFilter : viewingUi(e).watchedFilter;
     control.buttons.get(type).button.listeners.get('click')();
 }
 
@@ -6016,10 +6045,10 @@ test('background viewing collection groups finished movies and complete series w
     await e.start();
     assert.deepEqual(mainViewingIds(e), ['2', '3', '5', '6', '7']);
     assert.deepEqual(completedViewingIds(e), ['1', '4']);
-    assert.equal(e.state.watchStatus.ui.details.open, false);
-    assert.equal(e.state.watchStatus.completedCount, 2);
-    assert.equal(e.state.watchStatus.unknownCount, 2);
-    assert.match(e.state.watchStatus.ui.note.textContent, /2 titles/);
+    assert.equal(viewingUi(e).details.open, false);
+    assert.equal(e.c.gridView.presentation().completedCount, 2);
+    assert.equal(e.c.gridView.presentation().unknownCount, 2);
+    assert.match(viewingUi(e).note.textContent, /2 titles/);
     assert.equal(e.c.formatHeaderParts(7, 7, 10, true).meta, '2 items  time');
     assert.equal(e.state.totalCount, 7);
     assert.equal(e.state.cloneMap.size, 7);
@@ -6058,7 +6087,7 @@ test('expanded watched cards use delegated hover and closed groups reject hover 
     const event = { target: clone.querySelector('card') };
     assert.equal(e.c.gridCloneFromPointerEvent(event, e.state.grid), null);
     assert.equal(e.c.gridHoverTargetActive(clone, 1), false);
-    const details = e.state.watchStatus.ui.details;
+    const details = viewingUi(e).details;
     details.open = true;
     details.listeners.get('toggle')();
     assert.equal(e.c.gridCloneFromPointerEvent(event, e.state.grid), clone);
@@ -6072,9 +6101,9 @@ test('expanded watched cards use delegated hover and closed groups reject hover 
 test('group synchronization is idempotent and rebuild preserves expansion, membership, and original card metadata', async () => {
     const e = await viewingEnvironment();
     await e.start();
-    e.state.watchStatus.ui.details.open = true;
-    e.state.watchStatus.ui.details.listeners.get('toggle')();
-    const oldUi = e.state.watchStatus.ui;
+    viewingUi(e).details.open = true;
+    viewingUi(e).details.listeners.get('toggle')();
+    const oldUi = viewingUi(e);
     const originalIndices = e.items.map(item => e.state.cloneMap.get('v:' + item.videoId).getAttribute('data-tm-item-order'));
     let moves = 0;
     const insert = e.state.grid.insertBefore.bind(e.state.grid);
@@ -6082,8 +6111,8 @@ test('group synchronization is idempotent and rebuild preserves expansion, membe
     e.c.syncWatchGroups(e.state);
     assert.equal(moves, 0);
     await e.c.buildGrid(e.section, e.scroller, e.items, e.layout, 7, 1);
-    assert.notEqual(e.state.watchStatus.ui, oldUi);
-    assert.equal(e.state.watchStatus.ui.details.open, true);
+    assert.notEqual(viewingUi(e), oldUi);
+    assert.equal(viewingUi(e).details.open, true);
     assert.deepEqual(completedViewingIds(e), ['1', '4']);
     assert.deepEqual(e.items.map(item => e.state.cloneMap.get('v:' + item.videoId).getAttribute('data-tm-item-order')), originalIndices);
 });
@@ -6104,7 +6133,7 @@ test('remove and Undo work inside watched groups and new titles stay visible unt
     assert.equal(e.c.applyLegacyAddition(item, 0), true);
     assert.equal(mainViewingIds(e)[0], '99');
     assert.equal(e.state.items.length, 8);
-    assert.equal(e.state.watchStatus.unknownCount, 3);
+    assert.equal(e.c.gridView.presentation().unknownCount, 3);
     assert.equal(e.requests.length, 3, 'list deltas do not trigger a full viewing scan');
 });
 
@@ -6133,7 +6162,7 @@ test('missing active-profile identity or unsafe endpoint leaves all titles visib
         assert.equal(mainViewingIds(e).length, 7);
         assert.equal(completedViewingIds(e).length, 0);
         assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_CONTEXT');
-        assert.match(e.state.watchStatus.ui.note.textContent, /7 titles/);
+        assert.match(viewingUi(e).note.textContent, /7 titles/);
     }
 });
 
@@ -6175,7 +6204,7 @@ test('viewing title requests batch large lists and grouping never schedules peri
     assert.ok(e.requests.every(request => request.paths[0][1].length === 50));
     assert.equal(completedViewingIds(e).length, 150);
     assert.equal(mainViewingIds(e).length, 0);
-    assert.equal(e.state.watchStatus.ui.empty.hidden, false);
+    assert.equal(viewingUi(e).empty.hidden, false);
     assert.equal(e.timers.size, 0);
     e.c.syncWatchGroups(e.state);
     await e.advance(60000);
@@ -6233,7 +6262,7 @@ test('a large short-series list is fully covered within the original single-pass
     assert.equal(e.state.watchStatus.failure, null);
     assert.deepEqual(completedViewingIds(e), Array.from({ length: 500 }, (_, index) => String(index + 1)));
     assert.equal(mainViewingIds(e).length, 0);
-    assert.equal(e.state.watchStatus.unknownCount, 0);
+    assert.equal(e.c.gridView.presentation().unknownCount, 0);
     const diagnostic = e.logs.find(entry => entry.details?.series)?.details.series;
     assert.deepEqual({ ...diagnostic }, { found: 500, eligible: 500, planned: 500, checked: 500, complete: 500,
         unknown: 0, incomplete: 0, unplanned: 0, episodesChecked: 500, episodesIncomplete: 0, episodesUnknown: 0,
@@ -6255,7 +6284,7 @@ test('completed series results survive a budget limit inside the current episode
     assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_BUDGET');
     assert.deepEqual(completedViewingIds(e), ['1']);
     assert.deepEqual(mainViewingIds(e), ['2']);
-    assert.equal(e.state.watchStatus.unknownCount, 1);
+    assert.equal(e.c.gridView.presentation().unknownCount, 1);
     assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
@@ -6277,7 +6306,7 @@ test('a later series-group HTTP failure preserves fully verified series results'
     assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
     assert.deepEqual(completedViewingIds(e), Array.from({ length: 50 }, (_, index) => String(index + 1)));
     assert.deepEqual(mainViewingIds(e), ['51']);
-    assert.equal(e.state.watchStatus.unknownCount, 1);
+    assert.equal(e.c.gridView.presentation().unknownCount, 1);
     assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
@@ -6340,7 +6369,7 @@ test('simultaneous manual refreshes share the current viewing scan', async () =>
     release({ jsonGraph: {} });
     await Promise.all([e.state.watchStatus.promise, second]);
     assert.equal(calls, 1);
-    assert.equal(e.state.watchStatus.ui.refresh.disabled, false);
+    assert.equal(viewingUi(e).refresh.disabled, false);
 });
 
 test('full Netflix initialization publishes the ordinary grid before optional viewing collection finishes', async () => {
@@ -6387,7 +6416,7 @@ test('failed refresh reveals old completion results instead of hiding titles usi
     await e.c.refreshViewingStatus(e.state);
     assert.equal(completedViewingIds(e).length, 0);
     assert.equal(mainViewingIds(e).length, 7);
-    assert.equal(e.state.watchStatus.unknownCount, 7);
+    assert.equal(e.c.gridView.presentation().unknownCount, 7);
     assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
 });
 
@@ -6514,7 +6543,7 @@ test('rejected viewing batches are attempted once and stop subsequent requests w
     assert.equal(new Set(batches).size, 2, 'neither failed batch is retried');
     assert.equal(e.state.watchStatus.requests, 2);
     assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_400');
-    assert.equal(e.state.watchStatus.unknownCount, 500);
+    assert.equal(e.c.gridView.presentation().unknownCount, 500);
     assert.equal(mainViewingIds(e).length, 500);
     assert.equal(completedViewingIds(e).length, 0);
     const start = e.logs.find(entry => entry.details?.endpointType === 'descriptor');
@@ -6538,7 +6567,7 @@ test('credit-tolerant completion moves movies and fully caught-up series out of 
     await e.start();
     assert.deepEqual(completedViewingIds(e), ['1', '4']);
     assert.deepEqual(mainViewingIds(e), ['2', '3', '5', '6', '7']);
-    assert.equal(e.state.watchStatus.ui.details.open, false);
+    assert.equal(viewingUi(e).details.open, false);
     assert.equal(e.c.formatHeaderParts(7, 7, 10, true).meta, '2 items  time');
     assert.equal(e.requests.length, 3, 'completion threshold adds no requests');
     assert.equal(e.timers.size, 0);
@@ -6560,9 +6589,9 @@ test('an unfinished latest episode cannot qualify by averaging its progress with
 test('film filters default independently below the heading and inside watched details with accurate counts', async () => {
     const e = await viewingEnvironment();
     await e.start();
-    const watch = e.state.watchStatus, ui = watch.ui;
-    assert.equal(watch.filters.main, 'movie');
-    assert.equal(watch.filters.watched, 'movie');
+    const ui = viewingUi(e);
+    assert.equal(e.c.gridView.presentation().filters.main, 'movie');
+    assert.equal(e.c.gridView.presentation().filters.watched, 'movie');
     assert.equal(e.state.grid.firstElementChild, ui.mainFilter.root);
     assert.equal(ui.watchedFilter.root.parentElement, ui.details);
     assert.equal(ui.details.open, false);
@@ -6595,11 +6624,11 @@ test('All includes unknown title types without assigning them to films or series
     const e = await viewingEnvironment();
     await e.start();
     assert.ok(!e.state.watchStatus.types.has('7'));
-    assert.match(e.state.watchStatus.ui.note.textContent, /Choose All/);
+    assert.match(viewingUi(e).note.textContent, /Choose All/);
     clickViewingFilter(e, 'main', 'all');
     assert.deepEqual(filteredViewingIds(e), ['2', '3', '5', '6', '7']);
     assert.equal(e.c.formatHeaderParts(7, 7, 10, true).meta, '5 items  time');
-    assert.ok(!e.state.watchStatus.ui.note.textContent.includes('Choose All'));
+    assert.ok(!viewingUi(e).note.textContent.includes('Choose All'));
     clickViewingFilter(e, 'main', 'movie');
     assert.deepEqual(filteredViewingIds(e), ['2', '3']);
     assert.equal(e.requests.length, 3);
@@ -6611,12 +6640,12 @@ test('unavailable metadata keeps every title reachable through All and displays 
     e.c.fetch = async () => { attempts++; return { ok: false, status: 400 }; };
     await e.start();
     assert.deepEqual(filteredViewingIds(e), []);
-    assert.equal(e.state.watchStatus.ui.empty.hidden, false);
-    assert.equal(e.state.watchStatus.ui.empty.textContent, 'No titles match this filter.');
-    assert.equal(e.state.watchStatus.ui.mainFilter.buttons.get('all').count.textContent, '7');
+    assert.equal(viewingUi(e).empty.hidden, false);
+    assert.equal(viewingUi(e).empty.textContent, 'No titles match this filter.');
+    assert.equal(viewingUi(e).mainFilter.buttons.get('all').count.textContent, '7');
     clickViewingFilter(e, 'main', 'all');
     assert.deepEqual(filteredViewingIds(e), ['1', '2', '3', '4', '5', '6', '7']);
-    assert.equal(e.state.watchStatus.ui.empty.hidden, true);
+    assert.equal(viewingUi(e).empty.hidden, true);
     assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_400');
     assert.equal(attempts, 1);
     assert.equal(e.timers.size, 0);
@@ -6626,7 +6655,7 @@ test('filter selections survive collapse and rebuild while stale controls cannot
     const e = await viewingEnvironment();
     await e.start();
     clickViewingFilter(e, 'main', 'series');
-    const details = e.state.watchStatus.ui.details;
+    const details = viewingUi(e).details;
     details.open = true;
     details.listeners.get('toggle')();
     clickViewingFilter(e, 'watched', 'series');
@@ -6634,16 +6663,18 @@ test('filter selections survive collapse and rebuild while stale controls cannot
     details.listeners.get('toggle')();
     details.open = true;
     details.listeners.get('toggle')();
-    const oldUi = e.state.watchStatus.ui;
+    const oldUi = viewingUi(e);
+    const staleFilter = oldUi.mainFilter.buttons.get('movie').button.listeners.get('click');
     const order = e.items.map(item => e.state.cloneMap.get('v:' + item.videoId).getAttribute('data-tm-item-order'));
     await e.c.buildGrid(e.section, e.scroller, e.items, e.layout, 7, 1);
-    assert.equal(e.state.watchStatus.filters.main, 'series');
-    assert.equal(e.state.watchStatus.filters.watched, 'series');
-    assert.equal(e.state.watchStatus.ui.details.open, true);
+    assert.equal(e.c.gridView.presentation().filters.main, 'series');
+    assert.equal(e.c.gridView.presentation().filters.watched, 'series');
+    assert.equal(viewingUi(e).details.open, true);
     assert.deepEqual(filteredViewingIds(e), ['5', '6']);
     assert.deepEqual(filteredViewingIds(e, 'watched'), ['4']);
-    oldUi.mainFilter.buttons.get('movie').button.listeners.get('click')();
-    assert.equal(e.state.watchStatus.filters.main, 'series');
+    assert.equal(oldUi.mainFilter.buttons.get('movie').button.listeners.get('click'), undefined);
+    staleFilter();
+    assert.equal(e.c.gridView.presentation().filters.main, 'series');
     assert.deepEqual(e.items.map(item => e.state.cloneMap.get('v:' + item.videoId).getAttribute('data-tm-item-order')), order);
     assert.equal(e.requests.length, 3);
 });
@@ -6693,7 +6724,7 @@ test('type filtering is available while series episode requests are still loadin
     release();
     await e.state.watchStatus.promise;
     assert.deepEqual(filteredViewingIds(e), ['5', '6']);
-    assert.equal(e.state.watchStatus.filters.main, 'series');
+    assert.equal(e.c.gridView.presentation().filters.main, 'series');
     assert.equal(e.requests.length, 3);
 });
 
@@ -6704,14 +6735,14 @@ test('filtered counts and card order stay correct through removal, Undo and unkn
     vm.runInContext(declaration('reindexLegacyItemsAfterDelta'), e.c);
     assert.equal(e.c.applyLegacyRemoval('2'), true);
     assert.deepEqual(filteredViewingIds(e), ['3']);
-    assert.equal(e.state.watchStatus.ui.mainFilter.buttons.get('movie').count.textContent, '1');
+    assert.equal(viewingUi(e).mainFilter.buttons.get('movie').count.textContent, '1');
     const entry = e.c.recentRemovedMyListItems.get('2');
     assert.equal(e.c.applyLegacyAddition(entry.item, entry.index, 'undo'), true);
     assert.deepEqual(filteredViewingIds(e), ['2', '3']);
     const snapshot = e.state.cloneMap.get('v:1').cloneNode(true);
     assert.equal(e.c.applyLegacyAddition({ videoId: '99', page: 0, href: '/browse?jbv=99', snapshot }, 0), true);
     assert.deepEqual(filteredViewingIds(e), ['2', '3']);
-    assert.equal(e.state.watchStatus.ui.mainFilter.buttons.get('all').count.textContent, '6');
+    assert.equal(viewingUi(e).mainFilter.buttons.get('all').count.textContent, '6');
     clickViewingFilter(e, 'main', 'all');
     assert.deepEqual(filteredViewingIds(e), ['99', '2', '3', '5', '6', '7']);
     assert.equal(e.requests.length, 3);
@@ -6739,19 +6770,19 @@ test('viewing refresh preserves type selections and updates counts when a series
     const e = await viewingEnvironment();
     await e.start();
     clickViewingFilter(e, 'main', 'series');
-    e.state.watchStatus.ui.details.open = true;
-    e.state.watchStatus.ui.details.listeners.get('toggle')();
+    viewingUi(e).details.open = true;
+    viewingUi(e).details.listeners.get('toggle')();
     clickViewingFilter(e, 'watched', 'series');
     e.setFixtures(viewingFixtures(true));
     await e.c.refreshViewingStatus(e.state);
-    assert.equal(e.state.watchStatus.filters.main, 'series');
-    assert.equal(e.state.watchStatus.filters.watched, 'series');
+    assert.equal(e.c.gridView.presentation().filters.main, 'series');
+    assert.equal(e.c.gridView.presentation().filters.watched, 'series');
     assert.deepEqual(filteredViewingIds(e), ['4', '5', '6']);
     assert.deepEqual(filteredViewingIds(e, 'watched'), []);
-    assert.equal(e.state.watchStatus.ui.mainFilter.buttons.get('series').count.textContent, '3');
-    assert.equal(e.state.watchStatus.ui.watchedFilter.buttons.get('movie').count.textContent, '1');
-    assert.equal(e.state.watchStatus.ui.watchedEmpty.hidden, false);
-    assert.equal(e.state.watchStatus.ui.watchedEmpty.textContent, 'No titles match this filter.');
+    assert.equal(viewingUi(e).mainFilter.buttons.get('series').count.textContent, '3');
+    assert.equal(viewingUi(e).watchedFilter.buttons.get('movie').count.textContent, '1');
+    assert.equal(viewingUi(e).watchedEmpty.hidden, false);
+    assert.equal(viewingUi(e).watchedEmpty.textContent, 'No titles match this filter.');
     assert.equal(e.c.formatHeaderParts(7, 7, 10, true).meta, '3 items  time');
 });
 
@@ -6953,15 +6984,15 @@ test('verified groups appear before a later request completes while filters rema
     assert.equal(completedViewingIds(e).length, 50);
     clickViewingFilter(e, 'main', 'series');
     assert.deepEqual(filteredViewingIds(e), ['51']);
-    e.state.watchStatus.ui.details.open = true;
-    e.state.watchStatus.ui.details.listeners.get('toggle')();
+    viewingUi(e).details.open = true;
+    viewingUi(e).details.listeners.get('toggle')();
     clickViewingFilter(e, 'watched', 'series');
     assert.equal(filteredViewingIds(e, 'watched').length, 50);
     release();
     await e.state.watchStatus.promise;
     assert.equal(filteredViewingIds(e, 'watched').length, 51);
-    assert.equal(e.state.watchStatus.filters.watched, 'series');
-    assert.equal(e.state.watchStatus.filters.main, 'series');
+    assert.equal(e.c.gridView.presentation().filters.watched, 'series');
+    assert.equal(e.c.gridView.presentation().filters.main, 'series');
 });
 
 test('route and profile cancellation stop an additional pass without changing a newer grid or leaking prior results', async () => {
@@ -7224,8 +7255,14 @@ function thumbnailEnvironment() {
     e.c.getComputedStyle = node => { reads.styles++; return computedStyle(node); };
     function addImage(options = {}) {
         const parent = options.parent || e.oldGrid;
-        const clone = parent.appendChild(new ConstructionNode('slot'));
-        const image = clone.appendChild(new ConstructionNode('img'));
+        const id = String(e.c.sourceState.cloneMap.size + 1), snapshot = new ConstructionNode('slot');
+        const card = snapshot.appendChild(new ConstructionNode('card')); card.tagName = 'A';
+        card.setAttribute('data-uia', 'standard-card'); card.href = `https://www.netflix.com/browse?jbv=${id}`;
+        snapshot.appendChild(new ConstructionNode('img'));
+        const item = { videoId: id, href: card.href, page: 0, snapshot };
+        const handle = e.c.gridView.insertCard(item), clone = handle.node;
+        if (parent !== e.oldGrid) parent.appendChild(clone);
+        const image = clone.querySelector('img');
         const query = clone.querySelector.bind(clone);
         clone.querySelector = selector => { reads.queries++; return query(selector); };
         const url = options.url || `https://images.test/private-${e.c.sourceState.cloneMap.size}.jpg?signature=secret`;
@@ -7654,13 +7691,13 @@ test('manual choices move cards immediately, update filters and counts, and perf
     await e.start();
     const requests = e.requests.length;
     const itemOrder = e.state.items.map(item => item.videoId);
-    const mainBefore = e.state.watchStatus.visibleCount;
+    const mainBefore = e.c.gridView.presentation().visibleCount;
     assert.deepEqual(clickManualViewing(e, '2'), ['prevent', 'stop', 'immediate']);
     assert.deepEqual(completedViewingIds(e), ['1', '2', '4']);
-    assert.equal(e.state.watchStatus.completedCount, 3);
-    assert.equal(e.state.watchStatus.visibleCount, mainBefore - 1);
+    assert.equal(e.c.gridView.presentation().completedCount, 3);
+    assert.equal(e.c.gridView.presentation().visibleCount, mainBefore - 1);
     assert.deepEqual(filteredViewingIds(e, 'watched'), ['1', '2']);
-    assert.equal(e.state.watchStatus.filters.main, 'movie');
+    assert.equal(e.c.gridView.presentation().filters.main, 'movie');
     assert.equal(e.requests.length, requests);
     assert.deepEqual(e.state.items.map(item => item.videoId), itemOrder);
     assert.equal(e.state.totalCount, 7);
@@ -7677,7 +7714,7 @@ test('manual choices survive reloads and refresh and the move button restores au
     assert.ok(completedViewingIds(next).includes('2'));
     await next.c.refreshViewingStatus(next.state);
     assert.ok(completedViewingIds(next).includes('2'));
-    next.state.watchStatus.ui.details.open = true;
+    viewingUi(next).details.open = true;
     clickManualViewing(next, '2');
     assert.ok(mainViewingIds(next).includes('2'));
     assert.equal(next.state.watchStatus.manualChoices.has('2'), false, 'returning to the automatic main group clears the correction');
@@ -7709,14 +7746,14 @@ test('cards show one move button and a passive manual marker that survives reloa
     assert.equal(controls.marker.getAttribute('role'), 'img');
     assert.equal(controls.marker.getAttribute('aria-label'), 'Placed here by you');
     assert.equal(controls.marker.getAttribute('data-tm-viewing-action'), null);
-    e.state.watchStatus.ui.details.open = true;
+    viewingUi(e).details.open = true;
     assert.equal(e.c.gridCloneFromPointerEvent({ target: controls.marker }, e.state.grid), null);
-    const before = { writes: e.storageCalls.writes, requests: e.requests.length, completed: e.state.watchStatus.completedCount };
+    const before = { writes: e.storageCalls.writes, requests: e.requests.length, completed: e.c.gridView.presentation().completedCount };
     const events = [];
     e.state.grid.listeners.get('click')({ target: controls.marker, preventDefault: () => events.push('prevent'),
         stopPropagation: () => events.push('stop'), stopImmediatePropagation: () => events.push('immediate') });
     assert.deepEqual(events, []);
-    assert.deepEqual({ writes: e.storageCalls.writes, requests: e.requests.length, completed: e.state.watchStatus.completedCount }, before);
+    assert.deepEqual({ writes: e.storageCalls.writes, requests: e.requests.length, completed: e.c.gridView.presentation().completedCount }, before);
     const next = await viewingEnvironment(7, null, e.storage);
     await next.start();
     assert.equal(viewingControls(next.state.cloneMap.get('v:2')).marker.hidden, false);
@@ -7730,7 +7767,7 @@ test('moving back with unknown automatic progress retains the explicit main choi
     assert.equal(e.state.watchStatus.results.get('7'), 'unknown');
     const requests = e.requests.length;
     clickManualViewing(e, '7');
-    e.state.watchStatus.ui.details.open = true;
+    viewingUi(e).details.open = true;
     clickViewingFilter(e, 'watched', 'all');
     clickManualViewing(e, '7');
     assert.equal(e.state.watchStatus.manualChoices.get('7').status, 'main');
@@ -7753,7 +7790,7 @@ test('the move button can restore an agreed cached classification without a live
     e.state.watchStatus.results = new Map();
     e.state.watchStatus.cachedResults = new Map([['1', 'complete'], ['2', 'in-progress']]);
     e.c.syncWatchGroups(e.state);
-    e.state.watchStatus.ui.details.open = true;
+    viewingUi(e).details.open = true;
     const requests = e.requests.length;
     clickManualViewing(e, '1');
     assert.equal(e.state.watchStatus.manualChoices.get('1').status, 'main');
@@ -7773,7 +7810,7 @@ test('failed automatic restoration keeps the saved placement and marker and the 
     const e = await viewingEnvironment();
     await e.start();
     clickManualViewing(e, '2');
-    e.state.watchStatus.ui.details.open = true;
+    viewingUi(e).details.open = true;
     e.c.GM_setValue = () => { throw new Error('storage denied'); };
     clickManualViewing(e, '2');
     assert.ok(completedViewingIds(e).includes('2'));
@@ -7902,7 +7939,7 @@ test('storage read/write failures surface without pretending a correction was re
         assert.ok(mainViewingIds(e).includes('2'));
         assert.equal(e.state.watchStatus.manualChoices.has('2'), false);
         assert.equal([...e.storage.keys()].filter(key => key.startsWith('test.viewingChoices.')).length, 0);
-        assert.match(e.state.watchStatus.ui.note.textContent, /Could not save viewing choices/);
+        assert.match(viewingUi(e).note.textContent, /Could not save viewing choices/);
         assert.equal(viewingControls(e.state.cloneMap.get('v:2')).toggle.disabled, true);
     }
 });
@@ -8072,7 +8109,7 @@ test('late automatic baseline capture preserves an override cleared by the move 
     clickManualViewing(e, '5');
     const next = await viewingEnvironment(7, null, e.storage);
     await next.start();
-    next.state.watchStatus.ui.details.open = true;
+    viewingUi(next).details.open = true;
     clickViewingFilter(next, 'watched', 'series');
     clickManualViewing(next, '5');
     await release();
@@ -8087,7 +8124,7 @@ test('marking titles into the collapsed watched section preserves the viewport w
     await e.start();
     let viewport = { x: 40, y: 2400 };
     let focused = 0;
-    e.state.watchStatus.ui.summary.focus = options => {
+    viewingUi(e).summary.focus = options => {
         focused++;
         if (!options?.preventScroll) viewport = { x: 0, y: 7600 };
     };
@@ -8097,7 +8134,7 @@ test('marking titles into the collapsed watched section preserves the viewport w
         clickManualViewing(e, id);
         assert.ok(completedViewingIds(e).includes(id));
         assert.deepEqual(viewport, before, 'a completed card must not pull the viewport down to the watched heading');
-        assert.equal(e.state.watchStatus.ui.details.open, false);
+        assert.equal(viewingUi(e).details.open, false);
     }
     assert.equal(focused, 2, 'keyboard focus still leaves controls that became hidden');
     assert.equal(e.storageCalls.writes, 2);
@@ -8108,10 +8145,10 @@ test('reversing and resetting a correction preserve the viewport when the destin
     const e = await viewingEnvironment();
     await e.start();
     clickManualViewing(e, '2');
-    e.state.watchStatus.ui.details.open = true;
+    viewingUi(e).details.open = true;
     clickViewingFilter(e, 'main', 'series');
     let viewport = { x: 0, y: 6500 };
-    e.state.watchStatus.ui.summary.focus = options => {
+    viewingUi(e).summary.focus = options => {
         if (!options?.preventScroll) viewport = { x: 0, y: 7900 };
     };
     clickManualViewing(e, '2');
@@ -8200,7 +8237,7 @@ test('a recent same-profile cache groups titles before the first response and re
     next.c.initializeWatchGroups(next.state, 1);
     assert.deepEqual(completedViewingIds(next), ['1', '4']);
     assert.deepEqual(filteredViewingIds(next), ['2', '3']);
-    assert.equal(next.state.watchStatus.ui.details.open, false);
+    assert.equal(viewingUi(next).details.open, false);
     assert.equal(next.state.watchStatus.cachedTitles, 6);
     const row = next.c.collectViewingSeriesDiagnostics(next.state)[0];
     assert.equal(row.automaticStatus, 'complete');
@@ -8247,7 +8284,7 @@ test('fresh movies replace cache immediately and a newly unfinished finale retur
 test('manual main-list choices outweigh initial cached completion and never enter the automatic cache', async () => {
     const first = await viewingEnvironment();
     await first.start();
-    first.state.watchStatus.ui.details.open = true;
+    viewingUi(first).details.open = true;
     clickManualViewing(first, '1');
     const next = await viewingEnvironment(7, null, first.storage);
     const gate = holdViewingResponse(next);
@@ -8418,8 +8455,7 @@ test('a warm 500-series scan initializes card controls once and performs no furt
             return getAttribute(key);
         };
     }
-    const syncCard = e.c.syncManualViewingCard;
-    e.c.syncManualViewingCard = (...args) => { controls++; return syncCard(...args); };
+    observeControlLabels(e, () => { controls++; });
     await e.start();
     assert.equal(controls, 500, 'the previous warm scan revisited controls 11,500 times');
     assert.equal(visibilityReads, 500, 'unchanged batches avoid card attribute reads after initial grouping');
@@ -8457,8 +8493,7 @@ test('one manual movie move touches one of 500 controls and preserves an unrelat
     e.c.activeSourceSlot = new Element('source');
     e.c.pendingGridHoverClone = first;
     let controls = 0, invalidations = 0;
-    const syncCard = e.c.syncManualViewingCard;
-    e.c.syncManualViewingCard = (...args) => { controls++; return syncCard(...args); };
+    observeControlLabels(e, () => { controls++; });
     e.c.invalidateGridReact = () => invalidations++;
     const token = e.c.hoverToken;
     const before = e.c.collectPerformanceDiagnostics().viewingGroups.cardsConsidered;
@@ -8472,7 +8507,7 @@ test('one manual movie move touches one of 500 controls and preserves an unrelat
     assert.equal(invalidations, 0);
     assert.equal(e.requests.length, requests);
     assert.deepEqual(completedViewingIds(e), ['500']);
-    assert.equal(e.state.watchStatus.completedCount, 1);
+    assert.equal(e.c.gridView.presentation().completedCount, 1);
     const action = e.logs.find(entry => entry.name === 'viewingChoiceApplied');
     assert.equal(action.details.saved, true);
     assert.equal(action.details.work.controlsUpdated, 1);
@@ -8491,7 +8526,7 @@ test('moving a preceding card cancels hover when the protected card actually cha
     assert.equal(e.c.activeClone, null);
     assert.equal(e.c.pendingGridHoverClone, null);
     assert.equal(e.c.hoverToken, token + 1);
-    assert.equal(e.c.performanceDiagnostics.viewingGroups.hoverCancelled, 1);
+    assert.equal(e.c.gridView.groupDiagnostics().hoverCancelled, 1);
 });
 
 test('unchanged publication avoids card and layout reads, and filters reuse stored classifications', async () => {
@@ -8502,15 +8537,15 @@ test('unchanged publication avoids card and layout reads, and filters reuse stor
     clone.getBoundingClientRect = () => { throw new Error('Unchanged synchronization must not measure layout'); };
     const before = e.c.collectPerformanceDiagnostics().viewingGroups;
     e.c.syncWatchGroups(e.state, [], 'unchanged-batch');
-    assert.equal(e.c.performanceDiagnostics.viewingGroups.cardsConsidered, before.cardsConsidered);
+    assert.equal(e.c.gridView.groupDiagnostics().cardsConsidered, before.cardsConsidered);
     assert.equal(e.c.activeClone, clone);
     e.c.activeClone = null;
-    const controls = e.c.performanceDiagnostics.viewingGroups.controlsUpdated;
+    const controls = e.c.gridView.groupDiagnostics().controlsUpdated;
     e.c.effectiveViewingStatus = () => { throw new Error('A filter must reuse established status'); };
     e.c.viewingTitleType = () => { throw new Error('A filter must reuse established type'); };
     clickViewingFilter(e, 'main', 'series');
     assert.deepEqual(filteredViewingIds(e), ['5', '6']);
-    assert.equal(e.c.performanceDiagnostics.viewingGroups.controlsUpdated, controls);
+    assert.equal(e.c.gridView.groupDiagnostics().controlsUpdated, controls);
 });
 
 test('incremental groups follow hover replacement ownership without retaining or revisiting the old card', async () => {
@@ -8523,11 +8558,11 @@ test('incremental groups follow hover replacement ownership without retaining or
     fresh.__tmMyListItem = item;
     e.c.gridView.replaceCard(e.c.gridView.getCard(item), { node: fresh });
 
-    assert.equal(e.state.watchStatus.groupIndex.entries.get('10').clone, fresh);
+    assert.equal(e.c.gridView.getCard(item).node, fresh);
     clickManualViewing(e, '10');
-    assert.equal(fresh.parentElement, e.state.watchStatus.ui.watchedGrid);
+    assert.equal(fresh.parentElement, viewingUi(e).watchedGrid);
     assert.equal(old.isConnected, false);
-    assert.equal(e.state.watchStatus.groupIndex.entries.get('10').clone, fresh);
+    assert.equal(e.c.gridView.getCard(item).node, fresh);
 });
 
 function configureInitializationRecovery(e) {
@@ -9071,7 +9106,7 @@ test('copied performance counters are independent snapshots without title, profi
     const e = environment([]);
     const copy = e.c.collectPerformanceDiagnostics();
     copy.viewingGroups.controlsUpdated = 100;
-    assert.equal(e.c.performanceDiagnostics.viewingGroups.controlsUpdated, 0);
+    assert.equal(e.c.gridView.groupDiagnostics().controlsUpdated, 0);
     assert.ok(Object.values(copy).every(group => Object.values(group).every(value => value === null ||
         ['number', 'string', 'boolean'].includes(typeof value))));
     assert.doesNotMatch(JSON.stringify(copy), /videoId|profileGuid|authURL|sourceSlot|cloneMap/);

@@ -365,10 +365,12 @@ export function createFrame({ document, tLog, tUi, copyLogs, setTimeout, clearTi
         else root?.removeAttribute('data-tm-empty');
     }
     function moveCard(node, parent, before = null) { if (before !== node) parent.insertBefore(node, before); }
-    function orderChildren(parent, desired) {
+    function orderChildren(parent, desired, assertCurrent = () => {}) {
         let reference = parent.children[0] || null;
         for (const child of desired) {
+            assertCurrent();
             if (child !== reference) parent.insertBefore(child, reference);
+            assertCurrent();
             reference = child.nextElementSibling;
         }
     }

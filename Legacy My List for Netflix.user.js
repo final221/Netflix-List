@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.35
+// @version      1.4.36
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -1676,10 +1676,13 @@
     function moveCard(node, parent, before = null) {
       if (before !== node) parent.insertBefore(node, before);
     }
-    function orderChildren(parent, desired) {
+    function orderChildren(parent, desired, assertCurrent = () => {
+    }) {
       let reference = parent.children[0] || null;
       for (const child of desired) {
+        assertCurrent();
         if (child !== reference) parent.insertBefore(child, reference);
+        assertCurrent();
         reference = child.nextElementSibling;
       }
     }
@@ -1754,8 +1757,169 @@
   }
 
   // src/grid/groups.js
-  function createGroups({ document: document2, tUi, readRoot, getCard, assertCard, createError }) {
+  function createGroups({
+    document: document2,
+    tUi,
+    readRoot,
+    getCard,
+    assertCard,
+    createError,
+    moveCard,
+    orderChildren,
+    updateStatus,
+    formatUiNumber = String,
+    formatItemCount = String
+  }) {
     let controlsByNode = /* @__PURE__ */ new WeakMap(), actions = null, revision = 0, releaseFailures = 0;
+    let ui = null, index = null, command = null, filters = { main: "movie", watched: "movie" }, expanded = false;
+    let viewRevision = 0, syncDepth = 0, work = freshWork();
+    function freshWork() {
+      return {
+        syncs: 0,
+        fullSyncs: 0,
+        cardsConsidered: 0,
+        controlsUpdated: 0,
+        categoryMoves: 0,
+        hoverPreserved: 0,
+        hoverCancelled: 0,
+        lastReason: ""
+      };
+    }
+    function attemptRelease(action) {
+      try {
+        action();
+      } catch (_) {
+        releaseFailures++;
+      }
+    }
+    function releaseUi(resource) {
+      if (!resource) return;
+      for (const [node, type, listener] of resource.listeners) attemptRelease(() => node.removeEventListener(type, listener));
+      for (const node of [resource.mainFilter?.root, resource.empty, resource.controls, resource.details]) if (node) attemptRelease(() => node.remove());
+    }
+    function writeProperty(node, property, value, guard) {
+      guard();
+      if (node[property] !== value) node[property] = value;
+      guard();
+    }
+    function writeAttribute(node, property, value, guard) {
+      guard();
+      if (node.getAttribute(property) !== value) node.setAttribute(property, value);
+      guard();
+    }
+    function presentationFor(value = index) {
+      const counts = value?.counts || { main: { movie: 0, series: 0, all: 0 }, watched: { movie: 0, series: 0, all: 0 } };
+      return Object.freeze({
+        initialized: Boolean(value),
+        filters: Object.freeze({ ...filters }),
+        expanded,
+        counts: Object.freeze({ main: Object.freeze({ ...counts.main }), watched: Object.freeze({ ...counts.watched }) }),
+        completedCount: counts.watched.all,
+        unknownCount: value?.unknown || 0,
+        visibleCount: counts.main[filters.main]
+      });
+    }
+    function currentUi(resource) {
+      if (ui !== resource || !command || command.root !== readRoot() || !command.root?.isConnected) return false;
+      try {
+        command.assertCurrent();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    function request(reason) {
+      if (command.onRequest) command.onRequest(reason);
+      else applyViewingChange({ ...command, changedIds: [], reason });
+    }
+    function ensureUi(root, guard) {
+      if (ui?.grid === root) return ui;
+      const previous = ui;
+      ui = null;
+      releaseUi(previous);
+      guard();
+      const resource = { grid: root, listeners: [] };
+      const listen = (node, type, listener) => {
+        resource.listeners.push([node, type, listener]);
+        node.addEventListener(type, listener);
+      };
+      const filter = (group) => {
+        const node = document2.createElement("div");
+        node.setAttribute("data-tm-type-filter", group);
+        node.setAttribute("role", "group");
+        node.setAttribute("aria-label", tUi(group === "main" ? "legacyMyList" : "watchedCaughtUp") + ": " + tUi("titleTypeFilter"));
+        const buttons = /* @__PURE__ */ new Map();
+        for (const [type, key] of [["movie", "filterFilms"], ["series", "filterSeries"], ["all", "filterAll"]]) {
+          const button = document2.createElement("button");
+          button.type = "button";
+          button.setAttribute("data-tm-filter-value", type);
+          const label = document2.createElement("span");
+          label.textContent = tUi(key);
+          const count = document2.createElement("span");
+          count.setAttribute("data-tm-type-count", "true");
+          button.appendChild(label);
+          button.appendChild(count);
+          listen(button, "click", () => {
+            if (!currentUi(resource) || filters[group] === type) return;
+            filters[group] = type;
+            request("type-filter");
+          });
+          node.appendChild(button);
+          buttons.set(type, { button, count, key });
+        }
+        return { root: node, buttons };
+      };
+      try {
+        resource.details = document2.createElement("details");
+        resource.details.setAttribute("data-tm-watch-section", "true");
+        resource.details.open = expanded;
+        resource.summary = document2.createElement("summary");
+        resource.details.appendChild(resource.summary);
+        resource.watchedGrid = document2.createElement("div");
+        resource.watchedGrid.setAttribute("data-tm-watch-grid", "true");
+        resource.mainFilter = filter("main");
+        resource.watchedFilter = filter("watched");
+        resource.watchedEmpty = document2.createElement("p");
+        resource.watchedEmpty.setAttribute("data-tm-watch-empty", "true");
+        resource.watchedEmpty.textContent = tUi("noMatchingTitles");
+        resource.details.appendChild(resource.watchedFilter.root);
+        resource.details.appendChild(resource.watchedEmpty);
+        resource.details.appendChild(resource.watchedGrid);
+        resource.empty = document2.createElement("p");
+        resource.empty.setAttribute("data-tm-watch-empty", "true");
+        resource.empty.textContent = tUi("caughtUpMessage");
+        resource.controls = document2.createElement("div");
+        resource.controls.setAttribute("data-tm-watch-controls", "true");
+        resource.note = document2.createElement("span");
+        resource.note.setAttribute("role", "status");
+        resource.refresh = document2.createElement("button");
+        resource.refresh.type = "button";
+        resource.refresh.textContent = tUi("refreshViewingStatus");
+        listen(resource.refresh, "click", () => {
+          if (currentUi(resource) && !resource.refresh.disabled) command.onRefresh?.();
+        });
+        resource.controls.appendChild(resource.note);
+        resource.controls.appendChild(resource.refresh);
+        listen(resource.details, "toggle", () => {
+          if (!currentUi(resource)) return;
+          expanded = resource.details.open;
+          command.onHoverChanged?.();
+        });
+        guard();
+      } catch (error) {
+        releaseUi(resource);
+        throw error;
+      }
+      ui = resource;
+      return resource;
+    }
+    function paintFilter(control, selected, counts, guard) {
+      for (const [type, { button, count, key }] of control.buttons) {
+        writeAttribute(button, "aria-pressed", String(type === selected), guard);
+        writeProperty(count, "textContent", formatUiNumber(counts[type]), guard);
+        writeAttribute(button, "aria-label", tUi(key) + ": " + formatItemCount(counts[type]), guard);
+      }
+    }
     function release(resource) {
       if (!resource) return;
       try {
@@ -1893,12 +2057,275 @@
         throw error;
       }
     }
-    function dispose() {
+    function applyViewingChange(input) {
+      const { items, changedIds = null, readPlacement, assertCurrent, reason = "reconcile" } = input;
+      assertCurrent();
+      const root = readRoot();
+      if (!root?.isConnected) throw createError("GRID_FRAME_RETIRED", "Grouped publication changed");
+      const owner = ++viewRevision, metadata = Object.freeze({ ...input.metadata });
+      const guard = () => {
+        assertCurrent();
+        if (viewRevision !== owner || root !== readRoot() || !root?.isConnected) throw createError("GRID_FRAME_RETIRED", "Grouped publication changed");
+      };
+      guard();
+      syncDepth++;
+      try {
+        const resource = ensureUi(root, guard), previous = index?.grid === root ? index : null;
+        const full = changedIds === null || !previous || syncDepth > 1;
+        const ids = full ? null : new Set([...changedIds].map(String));
+        const next = full ? {
+          grid: root,
+          entries: /* @__PURE__ */ new Map(),
+          order: [],
+          unknown: 0,
+          counts: { main: { movie: 0, series: 0, all: 0 }, watched: { movie: 0, series: 0, all: 0 } }
+        } : { ...previous, counts: { main: { ...previous.counts.main }, watched: { ...previous.counts.watched } } };
+        const disabled = Boolean(metadata.disabled), locale = metadata.locale;
+        let candidates = items;
+        if (!full) {
+          const selected = /* @__PURE__ */ new Map();
+          for (const id of ids) {
+            const entry = previous.entries.get(id);
+            if (entry) selected.set(id, entry.item);
+          }
+          if (previous.disabled !== disabled || previous.locale !== locale || previous.filters.main !== filters.main || previous.filters.watched !== filters.watched) {
+            for (const entry of previous.entries.values()) {
+              if (previous.disabled !== disabled || previous.locale !== locale || previous.filters[entry.group] !== filters[entry.group]) selected.set(entry.id, entry.item);
+            }
+          }
+          candidates = [...selected.values()];
+        }
+        const updates = [], staged = /* @__PURE__ */ new Map(), counters = work;
+        counters.syncs++;
+        counters.lastReason = reason;
+        if (full) counters.fullSyncs++;
+        const countEntry = (entry, delta) => {
+          next.counts[entry.group].all += delta;
+          if (entry.type === "movie" || entry.type === "series") next.counts[entry.group][entry.type] += delta;
+          if (entry.status === "unknown") next.unknown += delta;
+        };
+        for (const item of candidates) {
+          guard();
+          const id = String(item.videoId), prior = previous?.entries.get(id), classify = full || ids.has(id);
+          const facts = readPlacement(item, classify);
+          guard();
+          const status = classify ? facts.status : prior.status, type = classify ? facts.type : prior.type;
+          const handle = getCard(item), clone = handle?.node;
+          if (!clone) continue;
+          assertCard(handle);
+          counters.cardsConsidered++;
+          const group = status === "complete" ? "watched" : "main", hidden = filters[group] !== "all" && filters[group] !== type;
+          const manual = Boolean(facts.manual);
+          if (!full && prior.clone === clone && prior.status === status && prior.type === type && prior.group === group && prior.hidden === hidden && prior.disabled === disabled && prior.locale === locale && prior.title === item.ariaLabel && prior.manual === manual && clone.parentElement === (group === "main" ? root : resource.watchedGrid)) continue;
+          const entry = {
+            id,
+            item,
+            clone,
+            handle,
+            status,
+            type,
+            group,
+            hidden,
+            disabled,
+            locale,
+            title: item.ariaLabel,
+            manual,
+            order: full ? next.order.length : prior.order
+          };
+          const controlsChanged = !prior || prior.clone !== clone || prior.group !== group || prior.type !== type || prior.disabled !== disabled || prior.locale !== locale || prior.title !== entry.title || prior.manual !== manual;
+          const visibilityChanged = hidden !== (clone.getAttribute("data-tm-type-hidden") === "true");
+          guard();
+          assertCard(handle);
+          const moved = Boolean(prior && prior.group !== group) || clone.parentElement !== (group === "main" ? root : resource.watchedGrid);
+          if (!full) countEntry(prior, -1);
+          countEntry(entry, 1);
+          staged.set(id, entry);
+          if (full) next.order.push(id);
+          updates.push({ entry, controlsChanged, visibilityChanged, moved });
+        }
+        const counts = next.counts, visibleCount = counts.main[filters.main], visibleCompleted = counts.watched[filters.watched];
+        const uiSignature = JSON.stringify([
+          counts,
+          next.unknown,
+          filters,
+          metadata.loading,
+          metadata.manualFailure,
+          locale,
+          items.length,
+          metadata.totalCount,
+          metadata.initializationElapsedMs
+        ]);
+        const uiChanged = uiSignature !== previous?.uiSignature;
+        const targets = [...new Set(input.readProtectedCards?.() || [])];
+        guard();
+        const beforeRects = /* @__PURE__ */ new Map();
+        if (uiChanged || full || updates.some((update) => update.moved || update.visibilityChanged || update.controlsChanged)) {
+          for (const clone of targets) {
+            guard();
+            beforeRects.set(clone, clone.getBoundingClientRect());
+            guard();
+          }
+        }
+        for (const { entry, controlsChanged, visibilityChanged, moved } of updates) {
+          const cardGuard = () => {
+            guard();
+            assertCard(entry.handle);
+          };
+          cardGuard();
+          if (controlsChanged) {
+            updateCardPlacement(entry.handle, entry, cardGuard);
+            counters.controlsUpdated++;
+          }
+          if (visibilityChanged) {
+            if (entry.hidden) entry.clone.setAttribute("data-tm-type-hidden", "true");
+            else entry.clone.removeAttribute("data-tm-type-hidden");
+            cardGuard();
+          }
+          if (moved || visibilityChanged) {
+            input.releaseInteraction?.(entry.handle);
+            cardGuard();
+          }
+          if (moved && !full) {
+            const parent = entry.group === "main" ? root : resource.watchedGrid;
+            let reference = entry.group === "main" ? resource.empty : null;
+            for (let offset = entry.order + 1; offset < next.order.length; offset++) {
+              const candidate = staged.get(next.order[offset]) || next.entries.get(next.order[offset]);
+              if (candidate.group === entry.group && candidate.clone.parentElement === parent) {
+                reference = candidate.clone;
+                break;
+              }
+            }
+            moveCard(entry.handle, parent, reference);
+            cardGuard();
+            counters.categoryMoves++;
+          }
+        }
+        if (full) {
+          const remaining = [], completed = [];
+          for (const entry of staged.values()) (entry.group === "watched" ? completed : remaining).push(entry.clone);
+          counters.categoryMoves += updates.filter((update) => update.moved).length;
+          guard();
+          orderChildren(root, [resource.mainFilter.root, ...remaining, resource.empty, resource.controls, resource.details], guard);
+          guard();
+          orderChildren(resource.watchedGrid, completed, guard);
+          guard();
+        }
+        if (uiChanged) {
+          paintFilter(resource.mainFilter, filters.main, counts.main, guard);
+          paintFilter(resource.watchedFilter, filters.watched, counts.watched, guard);
+          writeProperty(resource.empty, "hidden", visibleCount > 0, guard);
+          writeProperty(resource.empty, "textContent", metadata.loading ? tUi("checkingViewingStatus") : !counts.main.all && counts.watched.all ? tUi("caughtUpMessage") : tUi("noMatchingTitles"), guard);
+          writeProperty(resource.watchedEmpty, "hidden", visibleCompleted > 0, guard);
+          writeProperty(resource.refresh, "disabled", Boolean(metadata.loading), guard);
+          writeProperty(resource.summary, "textContent", tUi("watchedCaughtUp") + " (" + formatUiNumber(counts.watched.all) + ")", guard);
+          let note = metadata.loading ? tUi("checkingViewingStatus") : next.unknown ? tUi("unknownViewingStatus", { count: formatUiNumber(next.unknown) }) : "";
+          const unknownTypes = counts.main.all - counts.main.movie - counts.main.series;
+          if (unknownTypes && filters.main !== "all") note += (note ? " " : "") + tUi("unknownTitleTypes", { count: formatUiNumber(unknownTypes) });
+          if (metadata.manualFailure) note += (note ? " " : "") + tUi("viewingChoiceStorageFailed");
+          writeProperty(resource.note, "textContent", note, guard);
+          if (input.formatHeader) {
+            const header = input.formatHeader(presentationFor(next));
+            guard();
+            updateStatus(header, guard);
+            guard();
+          }
+        }
+        guard();
+        for (const [id, entry] of staged) next.entries.set(id, entry);
+        next.filters = { ...filters };
+        next.disabled = disabled;
+        next.locale = locale;
+        next.uiSignature = uiSignature;
+        index = next;
+        command = { ...input, root, metadata };
+        if (!actions || actions.root !== root) attachPlacementActions({ assertCurrent: () => {
+          if (!currentUi(resource)) throw createError("GRID_FRAME_RETIRED", "Grouped action owner changed");
+        }, onAction: (item) => command.onAction?.(item) });
+        guard();
+        const hoverChanged = targets.some((clone) => {
+          guard();
+          if (!visible(clone, root)) return true;
+          const before = beforeRects.get(clone);
+          if (!before) return false;
+          const after = clone.getBoundingClientRect();
+          guard();
+          return ["left", "top", "width", "height"].some((key) => Math.abs(before[key] - after[key]) > 0.5);
+        }) || input.isProtectedSourceCurrent?.() === false;
+        guard();
+        if (hoverChanged) {
+          input.onHoverChanged?.();
+          guard();
+          counters.hoverCancelled++;
+        } else if (targets.length) counters.hoverPreserved++;
+        return presentationFor();
+      } finally {
+        syncDepth--;
+      }
+    }
+    function replacePresentation(previous, next) {
+      const entry = index?.entries.get(String(next.node.__tmMyListItem?.videoId));
+      if (!entry || entry.clone !== previous.node || index.grid !== readRoot() || !command) return;
+      const admission = command, root = readRoot();
+      const guard = () => {
+        admission.assertCurrent();
+        assertCard(next);
+        if (command !== admission || readRoot() !== root) throw createError("GRID_FRAME_RETIRED", "Replacement presentation changed");
+      };
+      guard();
+      const facts = admission.readPlacement(entry.item, true);
+      guard();
+      updateCardPlacement(next, { ...facts, disabled: admission.metadata.disabled }, guard);
+      if (entry.hidden) next.node.setAttribute("data-tm-type-hidden", "true");
+      else next.node.removeAttribute("data-tm-type-hidden");
+      guard();
+      entry.clone = next.node;
+      entry.handle = next;
+    }
+    function retireRoot(root) {
+      retireActions(root);
+      if (ui?.grid !== root) return;
+      viewRevision++;
+      const previous = ui;
+      ui = index = command = null;
+      releaseUi(previous);
+    }
+    function resetViewing() {
+      const owner = ++viewRevision;
+      const previous = ui, previousIndex = index, root = readRoot();
+      ui = index = command = null;
+      filters = { main: "movie", watched: "movie" };
+      expanded = false;
+      work = freshWork();
+      retireActions(previous?.grid);
+      try {
+        if (root?.isConnected && previous?.grid === root && previousIndex) {
+          for (const entry of previousIndex.entries.values()) {
+            if (viewRevision !== owner || readRoot() !== root) break;
+            const current = getCard(entry.item);
+            if (current?.node === entry.clone && entry.clone.parentElement !== root) moveCard(current, root, null);
+          }
+        }
+      } finally {
+        releaseUi(previous);
+      }
+    }
+    function retirePresentation() {
+      viewRevision++;
       revision++;
-      const previous = actions;
-      actions = null;
+      const previous = { actions, ui };
+      actions = ui = index = command = null;
       controlsByNode = /* @__PURE__ */ new WeakMap();
-      release(previous);
+      filters = { main: "movie", watched: "movie" };
+      expanded = false;
+      work = freshWork();
+      return previous;
+    }
+    function releasePresentation(previous) {
+      release(previous.actions);
+      releaseUi(previous.ui);
+    }
+    function dispose() {
+      releasePresentation(retirePresentation());
     }
     function retireActions(root) {
       if (actions?.root !== root) return;
@@ -1912,7 +2339,19 @@
       updateCardPlacement,
       attachPlacementActions,
       retireActions,
+      retireRoot,
+      resetViewing,
+      applyViewingChange,
+      replacePresentation,
       dispose,
+      retirePresentation,
+      releasePresentation,
+      presentation: presentationFor,
+      groupDiagnostics: () => Object.freeze({ ...work }),
+      isCardVisible(node, root = readRoot()) {
+        const controls = node && controlsByNode.get(node);
+        return Boolean(root === readRoot() && controls && getCard(controls.item)?.node === node && visible(node, root));
+      },
       diagnostics: () => ({ placementReleaseFailures: releaseFailures })
     };
   }
@@ -1936,6 +2375,8 @@
     copyLogs = async () => {
     },
     isActive = () => true,
+    formatUiNumber = String,
+    formatItemCount = String,
     readEmptyContent = () => null,
     readEmptyShell = () => null,
     setTimeout: setTimeout2 = globalThis.setTimeout,
@@ -1963,7 +2404,19 @@
       readRoot: () => frame.root,
       createError,
       getCard: (item) => cards.getCard(item),
-      assertCard: (handle) => cards.assertCard(handle)
+      assertCard: (handle) => cards.assertCard(handle),
+      formatUiNumber,
+      formatItemCount,
+      moveCard: (handle, parent, before) => {
+        cards.assertCard(handle);
+        frame.assertParent(parent);
+        frame.moveCard(handle.node, parent, before);
+      },
+      orderChildren: (parent, nodes, guard) => {
+        frame.assertParent(parent);
+        frame.orderChildren(parent, nodes, guard);
+      },
+      updateStatus: frame.updateStatus
     });
     cards = createCards({
       markup,
@@ -1973,7 +2426,10 @@
         prepareCard(...args);
       },
       onRetire,
-      onReplace,
+      onReplace: (...args) => {
+        groups.replacePresentation(...args);
+        onReplace(...args);
+      },
       readRoot: () => frame.root,
       keyFor: (item) => item.videoId ? `v:${item.videoId}` : `h:${item.href}`
     });
@@ -1995,7 +2451,7 @@
         const previous = frame.publish(root, { ...mount, assertCurrent: guard });
         cards.publish(staged);
         items.forEach(cards.releaseStartup);
-        groups.retireActions(previous);
+        groups.retireRoot(previous);
         frame.setEmpty(staged.size === 0);
         const acceptedRevision = cards.revision;
         frame.releaseReplacedRoot(previous);
@@ -2010,10 +2466,11 @@
     function dispose() {
       ++buildGeneration;
       const previous = frame.retire();
-      groups.dispose();
+      const previousGroups = groups.retirePresentation();
       try {
         cards.dispose();
       } finally {
+        groups.releasePresentation(previousGroups);
         frame.release(previous);
       }
     }
@@ -2078,6 +2535,11 @@
       materialFor: cards.materialFor,
       updateCardPlacement: groups.updateCardPlacement,
       attachPlacementActions: groups.attachPlacementActions,
+      applyViewingChange: groups.applyViewingChange,
+      resetViewing: groups.resetViewing,
+      presentation: groups.presentation,
+      groupDiagnostics: groups.groupDiagnostics,
+      isCardVisible: groups.isCardVisible,
       hasRetained: cards.hasRetained,
       releaseRetained: cards.releaseRetained,
       clearRetained: cards.clearRetained,
@@ -9788,6 +10250,8 @@
       onReplace: onGridCardReplaced,
       tLog,
       tUi,
+      formatUiNumber,
+      formatItemCount,
       copyLogs: copyDiagnosticLogs,
       setTimeout,
       clearTimeout,
@@ -9836,7 +10300,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.35";
+    const SCRIPT_VERSION = "1.4.36";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -9966,9 +10430,9 @@
       const missingText = tUiPlural("itemCount", missing, { count: formatUiNumber(missing) });
       return `${itemText} ${tUi("errorCount", { count: missingText })}`;
     }
-    function formatHeaderParts(current, total, elapsedMs = null, finalized = false) {
+    function formatHeaderParts(current, total, elapsedMs = null, finalized = false, presentation = null) {
       if (finalized && sourceState?.watchStatus && current === sourceState.items?.length && total === current) {
-        const watch = sourceState.watchStatus;
+        const watch = presentation || gridView.presentation();
         current = Number.isFinite(watch.visibleCount) ? watch.visibleCount : Math.max(0, current - (watch.completedCount || 0));
         total = current;
       }
@@ -10036,16 +10500,6 @@
     let hoverFrameDiagnosticOwner = null;
     function createPerformanceDiagnostics() {
       return {
-        viewingGroups: {
-          syncs: 0,
-          fullSyncs: 0,
-          cardsConsidered: 0,
-          controlsUpdated: 0,
-          categoryMoves: 0,
-          hoverPreserved: 0,
-          hoverCancelled: 0,
-          lastReason: ""
-        },
         hoverPreparation: { calls: 0, slotsConsidered: 0, clonesRebuilt: 0, neighborsSkipped: 0 },
         hoverLifecycle: {
           replayAttempts: 0,
@@ -10242,7 +10696,7 @@
     function collectPerformanceDiagnostics() {
       const snapshots = Object.fromEntries(Object.entries(performanceDiagnostics).map(([key, counters]) => [key, { ...counters }]));
       return {
-        viewingGroups: snapshots.viewingGroups,
+        viewingGroups: gridView.groupDiagnostics(),
         hoverPreparation: snapshots.hoverPreparation,
         popupInvestigation: popupInspection.diagnostics(),
         ...snapshots,
@@ -10897,8 +11351,8 @@
           nextExpiryInMs: undoExpiryTimer ? Math.max(0, Math.round(undoExpiryTimer.dueAt - performance.now())) : null
         },
         viewingStatus: sourceState?.watchStatus ? {
-          completed: sourceState.watchStatus.completedCount,
-          unknown: sourceState.watchStatus.unknownCount,
+          completed: gridView.presentation().completedCount,
+          unknown: gridView.presentation().unknownCount,
           loading: sourceState.watchStatus.loading,
           requests: sourceState.watchStatus.requests,
           passes: sourceState.watchStatus.passes,
@@ -11989,26 +12443,6 @@
     function viewingTitleType(watch, id) {
       return watch.types.get(id) || watch.cachedTypes?.get(id) || watch.manualChoices.get(id)?.type;
     }
-    function syncManualViewingCard(state, clone, item, status) {
-      const watch = state.watchStatus, handle = gridView.getCard(item);
-      if (!handle || handle.node !== clone) throw initializationError("GRID_CARD_RETIRED", "grid-controls", "Placement card changed");
-      gridView.updateCardPlacement(handle, {
-        status,
-        type: viewingTitleType(watch, String(item.videoId)),
-        manual: watch.manualChoices.has(String(item.videoId)),
-        disabled: !watch.manualProfileGuid || watch.manualFailure
-      }, () => {
-        assertRouteSession(watch.sessionToken);
-        if (sourceState !== state || state.watchStatus !== watch) throw createRouteSessionCancelledError();
-      });
-    }
-    function ensureManualViewingBehavior(state) {
-      const grid = state.grid, watch = state.watchStatus;
-      gridView.attachPlacementActions({ assertCurrent() {
-        assertRouteSession(watch.sessionToken);
-        if (sourceState !== state || state.grid !== grid || state.watchStatus !== watch) throw createRouteSessionCancelledError();
-      }, onAction: (item) => applyManualViewingChoice(state, item) });
-    }
     function applyManualViewingChoice(state, item) {
       const watch = state.watchStatus;
       if (netflixContext.activeProfile() !== watch.manualProfileGuid) {
@@ -12029,7 +12463,7 @@
       const saved = saveManualViewingChoices(watch, changes);
       const changed = saved ? changedManualViewingIds(watch.manualChoices, saved) : /* @__PURE__ */ new Set();
       if (saved) watch.manualChoices = saved;
-      const beforeWork = { ...performanceDiagnostics.viewingGroups };
+      const beforeWork = { ...gridView.groupDiagnostics() };
       syncWatchGroups(state, changed, "manual-choice");
       log(tLog("viewingChoiceApplied"), {
         saved: Boolean(saved),
@@ -12040,294 +12474,66 @@
         restoredAutomatic: Boolean(saved) && restoreAutomatic,
         manualMarkerVisible: watch.manualChoices.has(id),
         changedTitles: changed.size,
-        completed: watch.completedCount,
-        work: Object.fromEntries(Object.entries(performanceDiagnostics.viewingGroups).filter(([, value]) => typeof value === "number").map(([key, value]) => [key, value - beforeWork[key]]))
+        completed: gridView.presentation().completedCount,
+        work: Object.fromEntries(Object.entries(gridView.groupDiagnostics()).filter(([, value]) => typeof value === "number").map(([key, value]) => [key, value - beforeWork[key]]))
       });
     }
     function gridOwnsClone(clone, grid) {
-      if (!grid || !clone || clone.getAttribute("data-tm-type-hidden") === "true") return false;
-      if (clone.parentElement === grid) return true;
-      const parent = clone.parentElement;
-      const details = parent?.parentElement;
-      return parent?.getAttribute("data-tm-watch-grid") === "true" && details?.parentElement === grid && details.open === true;
+      return gridView.isCardVisible(clone, grid);
     }
-    function createWatchTypeFilter(state, group) {
-      const grid = state.grid;
-      const root = document.createElement("div");
-      root.setAttribute("data-tm-type-filter", group);
-      root.setAttribute("role", "group");
-      root.setAttribute("aria-label", tUi(group === "main" ? "legacyMyList" : "watchedCaughtUp") + ": " + tUi("titleTypeFilter"));
-      const buttons = /* @__PURE__ */ new Map();
-      for (const [type, key] of [["movie", "filterFilms"], ["series", "filterSeries"], ["all", "filterAll"]]) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.setAttribute("data-tm-filter-value", type);
-        const label = document.createElement("span");
-        label.textContent = tUi(key);
-        const count = document.createElement("span");
-        count.setAttribute("data-tm-type-count", "true");
-        button.appendChild(label);
-        button.appendChild(count);
-        button.addEventListener("click", () => {
-          if (sourceState !== state || state.grid !== grid || state.watchStatus?.ui?.grid !== grid || !grid.isConnected || state.watchStatus.filters[group] === type) return;
-          state.watchStatus.filters[group] = type;
-          syncWatchGroups(state, [], "type-filter");
-        });
-        root.appendChild(button);
-        buttons.set(type, { button, count, key });
-      }
-      return { root, buttons };
-    }
-    function syncWatchTypeFilter(control, selected, counts) {
-      for (const [type, { button, count, key }] of control.buttons) {
-        const pressed = String(type === selected);
-        if (button.getAttribute("aria-pressed") !== pressed) button.setAttribute("aria-pressed", pressed);
-        const value = formatUiNumber(counts[type]);
-        if (count.textContent !== value) count.textContent = value;
-        const label = tUi(key) + ": " + formatItemCount(counts[type]);
-        if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
-      }
-    }
-    function ensureWatchGroupUi(state) {
-      const watch = state.watchStatus;
-      if (watch.ui?.grid === state.grid) return watch.ui;
-      ensureManualViewingBehavior(state);
-      const details = document.createElement("details");
-      details.setAttribute("data-tm-watch-section", "true");
-      details.open = watch.expanded;
-      const summary = document.createElement("summary");
-      const watchedGrid = document.createElement("div");
-      watchedGrid.setAttribute("data-tm-watch-grid", "true");
-      details.appendChild(summary);
-      const mainFilter = createWatchTypeFilter(state, "main");
-      const watchedFilter = createWatchTypeFilter(state, "watched");
-      const watchedEmpty = document.createElement("p");
-      watchedEmpty.setAttribute("data-tm-watch-empty", "true");
-      watchedEmpty.textContent = tUi("noMatchingTitles");
-      details.appendChild(watchedFilter.root);
-      details.appendChild(watchedEmpty);
-      details.appendChild(watchedGrid);
-      const empty = document.createElement("p");
-      empty.setAttribute("data-tm-watch-empty", "true");
-      empty.textContent = tUi("caughtUpMessage");
-      const controls = document.createElement("div");
-      controls.setAttribute("data-tm-watch-controls", "true");
-      const note = document.createElement("span");
-      note.setAttribute("role", "status");
-      const refresh = document.createElement("button");
-      refresh.type = "button";
-      refresh.textContent = tUi("refreshViewingStatus");
-      refresh.addEventListener("click", () => refreshViewingStatus(state));
-      controls.appendChild(note);
-      controls.appendChild(refresh);
-      details.addEventListener("toggle", () => {
-        if (sourceState !== state || watch.ui?.details !== details) return;
-        watch.expanded = details.open;
-        cancelPendingGridHover("group");
-        advanceHoverToken("group");
-        clearSourceAlignment();
-        activeClone = null;
-        activeVideoId = null;
-        activePage = null;
-        invalidateGridReact();
-      });
-      return watch.ui = {
-        grid: state.grid,
-        details,
-        summary,
-        watchedGrid,
-        empty,
-        controls,
-        note,
-        refresh,
-        mainFilter,
-        watchedFilter,
-        watchedEmpty
-      };
-    }
-    function syncWatchChildOrder(parent, desired) {
-      gridView.orderChildren(parent, desired);
+    function cancelGroupHover() {
+      cancelPendingGridHover("group");
+      advanceHoverToken("group");
+      clearSourceAlignment();
+      activeClone = null;
+      activeVideoId = null;
+      activePage = null;
+      invalidateGridReact();
     }
     function syncWatchGroups(state, changedIds = null, reason = "reconcile") {
       if (sourceState !== state || !state.grid?.isConnected || !state.watchStatus) return;
-      const watch = state.watchStatus;
+      const watch = state.watchStatus, grid = state.grid;
+      const guard = () => {
+        assertRouteSession(watch.sessionToken);
+        if (sourceState !== state || state.watchStatus !== watch || state.grid !== grid || gridView.root !== grid) throw createRouteSessionCancelledError();
+      };
+      guard();
       const profileChanged = syncManualViewingProfile(watch);
-      const ui = ensureWatchGroupUi(state);
-      const previousIndex = watch.groupIndex?.grid === state.grid ? watch.groupIndex : null;
-      const full = changedIds === null || profileChanged || !previousIndex;
+      const full = changedIds === null || profileChanged || !gridView.presentation().initialized;
       const ids = full ? null : new Set([...changedIds].map(String));
       for (const id of reconcileManualViewingCoverage(watch, ids)) ids?.add(id);
-      const index = full ? {
-        grid: state.grid,
-        entries: /* @__PURE__ */ new Map(),
-        order: [],
-        unknown: 0,
-        counts: { main: { movie: 0, series: 0, all: 0 }, watched: { movie: 0, series: 0, all: 0 } }
-      } : previousIndex;
-      const disabled = !watch.manualProfileGuid || watch.manualFailure;
-      const locale = getUiLocale();
-      let candidates = state.items || [];
-      if (!full) {
-        const selected = /* @__PURE__ */ new Map();
-        for (const id of ids) {
-          const entry = previousIndex.entries.get(id);
-          if (entry) selected.set(id, entry.item);
-        }
-        if (previousIndex.disabled !== disabled || previousIndex.locale !== locale || previousIndex.filters.main !== watch.filters.main || previousIndex.filters.watched !== watch.filters.watched) {
-          for (const entry of previousIndex.entries.values()) {
-            if (previousIndex.disabled !== disabled || previousIndex.locale !== locale || previousIndex.filters[entry.group] !== watch.filters[entry.group]) selected.set(entry.id, entry.item);
-          }
-        }
-        candidates = [...selected.values()];
-      }
-      const updates = [];
-      const work = performanceDiagnostics.viewingGroups;
-      work.syncs++;
-      work.lastReason = reason;
-      if (full) work.fullSyncs++;
-      const countEntry = (entry, delta) => {
-        index.counts[entry.group].all += delta;
-        if (entry.type === "movie" || entry.type === "series") index.counts[entry.group][entry.type] += delta;
-        if (entry.status === "unknown") index.unknown += delta;
-      };
-      for (const item of candidates) {
-        const id = String(item.videoId);
-        const previous = previousIndex?.entries.get(id);
-        const status = !full && !ids.has(id) ? previous.status : effectiveViewingStatus(watch, id);
-        const type = !full && !ids.has(id) ? previous.type : viewingTitleType(watch, id);
-        const clone = state.cloneMap?.get(itemKey(item));
-        if (!clone) continue;
-        work.cardsConsidered++;
-        const group = status === "complete" ? "watched" : "main";
-        const hidden = watch.filters[group] !== "all" && watch.filters[group] !== type;
-        const manual = watch.manualChoices.has(id);
-        if (!full && previous.clone === clone && previous.status === status && previous.type === type && previous.group === group && previous.hidden === hidden && previous.disabled === disabled && previous.locale === locale && previous.title === item.ariaLabel && previous.manual === manual && clone.parentElement === (group === "main" ? state.grid : ui.watchedGrid)) continue;
-        const entry = {
-          id,
-          item,
-          clone,
-          status,
-          type,
-          group,
-          hidden,
-          disabled,
-          locale,
-          title: item.ariaLabel,
-          manual,
-          order: full ? index.order.length : previous.order
-        };
-        const controlsChanged = !previous || previous.clone !== clone || previous.group !== group || previous.type !== type || previous.disabled !== disabled || previous.locale !== locale || previous.title !== entry.title || previous.manual !== entry.manual;
-        const visibilityChanged = hidden !== (clone.getAttribute("data-tm-type-hidden") === "true");
-        const moved = Boolean(previous && previous.group !== group) || clone.parentElement !== (group === "main" ? state.grid : ui.watchedGrid);
-        if (!full) countEntry(previous, -1);
-        countEntry(entry, 1);
-        index.entries.set(id, entry);
-        if (full) index.order.push(id);
-        updates.push({ entry, controlsChanged, visibilityChanged, moved });
-      }
-      const counts = index.counts;
-      const visibleCount = counts.main[watch.filters.main];
-      const visibleCompleted = counts.watched[watch.filters.watched];
-      const uiSignature = JSON.stringify([
-        counts,
-        index.unknown,
-        watch.filters,
-        watch.loading,
-        watch.manualFailure,
-        locale,
-        state.items.length,
-        state.totalCount,
-        state.initializationElapsedMs
-      ]);
-      const uiChanged = uiSignature !== previousIndex?.uiSignature;
-      const targets = [...new Set([activeClone, pendingGridHoverClone].filter(Boolean))];
-      const beforeRects = /* @__PURE__ */ new Map();
-      if (uiChanged || full || updates.some((update) => update.moved || update.visibilityChanged || update.controlsChanged)) {
-        for (const clone of targets) beforeRects.set(clone, clone.getBoundingClientRect());
-      }
-      for (const { entry, controlsChanged, visibilityChanged, moved } of updates) {
-        if (controlsChanged) {
-          syncManualViewingCard(state, entry.clone, entry.item, entry.status);
-          work.controlsUpdated++;
-        }
-        if (visibilityChanged) {
-          if (entry.hidden) entry.clone.setAttribute("data-tm-type-hidden", "true");
-          else entry.clone.removeAttribute("data-tm-type-hidden");
-        }
-        if (moved || visibilityChanged) releaseGridReact(entry.clone);
-        if (moved && !full) {
-          const parent = entry.group === "main" ? state.grid : ui.watchedGrid;
-          let reference = entry.group === "main" ? ui.empty : null;
-          for (let offset = entry.order + 1; offset < index.order.length; offset++) {
-            const next = index.entries.get(index.order[offset]);
-            if (next.group === entry.group && next.clone.parentElement === parent) {
-              reference = next.clone;
-              break;
-            }
-          }
-          gridView.moveCard(gridView.getCard(entry.item), parent, reference);
-          work.categoryMoves++;
-        }
-      }
-      if (full) {
-        const remaining = [], completed = [];
-        for (const entry of index.entries.values()) (entry.group === "watched" ? completed : remaining).push(entry.clone);
-        const mainOrder = [ui.mainFilter.root, ...remaining, ui.empty, ui.controls, ui.details];
-        work.categoryMoves += updates.filter((update) => update.moved).length;
-        syncWatchChildOrder(state.grid, mainOrder);
-        syncWatchChildOrder(ui.watchedGrid, completed);
-      }
-      watch.completedCount = counts.watched.all;
-      watch.unknownCount = index.unknown;
-      watch.visibleCount = visibleCount;
-      if (uiChanged) {
-        syncWatchTypeFilter(ui.mainFilter, watch.filters.main, counts.main);
-        syncWatchTypeFilter(ui.watchedFilter, watch.filters.watched, counts.watched);
-        ui.empty.hidden = visibleCount > 0;
-        const emptyText = watch.loading ? tUi("checkingViewingStatus") : !counts.main.all && counts.watched.all ? tUi("caughtUpMessage") : tUi("noMatchingTitles");
-        if (ui.empty.textContent !== emptyText) ui.empty.textContent = emptyText;
-        ui.watchedEmpty.hidden = visibleCompleted > 0;
-        ui.refresh.disabled = watch.loading;
-        const label = tUi("watchedCaughtUp") + " (" + formatUiNumber(counts.watched.all) + ")";
-        if (ui.summary.textContent !== label) ui.summary.textContent = label;
-        let note = watch.loading ? tUi("checkingViewingStatus") : index.unknown ? tUi("unknownViewingStatus", { count: formatUiNumber(index.unknown) }) : "";
-        const unknownTypes = counts.main.all - counts.main.movie - counts.main.series;
-        if (unknownTypes && watch.filters.main !== "all") {
-          note += (note ? " " : "") + tUi("unknownTitleTypes", { count: formatUiNumber(unknownTypes) });
-        }
-        if (watch.manualFailure) note += (note ? " " : "") + tUi("viewingChoiceStorageFailed");
-        if (ui.note.textContent !== note) ui.note.textContent = note;
-        state.status = updateStatus(formatHeaderParts(
-          state.items.length,
-          state.totalCount,
-          state.initializationElapsedMs,
-          true
-        ));
-      }
-      index.filters = { ...watch.filters };
-      index.disabled = disabled;
-      index.locale = locale;
-      index.uiSignature = uiSignature;
-      watch.groupIndex = index;
-      const hoverChanged = targets.some((clone) => {
-        if (!clone.isConnected || !gridOwnsClone(clone, state.grid)) return true;
-        const before = beforeRects.get(clone);
-        if (!before) return false;
-        const after = clone.getBoundingClientRect();
-        return ["left", "top", "width", "height"].some((key) => Math.abs(before[key] - after[key]) > 0.5);
-      }) || Boolean(activeSourceSlot && !activeSourceSlot.isConnected);
-      if (hoverChanged) {
-        cancelPendingGridHover("group");
-        advanceHoverToken("group");
-        clearSourceAlignment();
-        activeClone = null;
-        activeVideoId = null;
-        activePage = null;
-        invalidateGridReact();
-        work.hoverCancelled++;
-      } else if (targets.length) {
-        work.hoverPreserved++;
-      }
+      guard();
+      gridView.applyViewingChange({
+        items: state.items || [],
+        changedIds: ids,
+        reason,
+        assertCurrent: guard,
+        metadata: {
+          disabled: !watch.manualProfileGuid || watch.manualFailure,
+          loading: watch.loading,
+          manualFailure: watch.manualFailure,
+          locale: getUiLocale(),
+          totalCount: state.totalCount,
+          initializationElapsedMs: state.initializationElapsedMs
+        },
+        readPlacement(item, classify) {
+          const id = String(item.videoId);
+          return {
+            ...classify ? { status: effectiveViewingStatus(watch, id), type: viewingTitleType(watch, id) } : {},
+            manual: watch.manualChoices.has(id)
+          };
+        },
+        onAction: (item) => applyManualViewingChoice(state, item),
+        onRefresh: () => refreshViewingStatus(state),
+        onRequest: (request) => syncWatchGroups(state, [], request),
+        onHoverChanged: cancelGroupHover,
+        readProtectedCards: () => [activeClone, pendingGridHoverClone].filter(Boolean),
+        isProtectedSourceCurrent: () => !activeSourceSlot || activeSourceSlot.isConnected,
+        releaseInteraction: (handle) => releaseGridReact(handle.node),
+        formatHeader: (summary) => formatHeaderParts(state.items.length, state.totalCount, state.initializationElapsedMs, true, summary)
+      });
+      guard();
+      state.status = gridView.status;
     }
     function initializeWatchGroups(state, sessionToken) {
       const active = netflixContext.activeProfile();
@@ -12338,7 +12544,6 @@
         results: /* @__PURE__ */ new Map(),
         types: /* @__PURE__ */ new Map(),
         seriesDetails: /* @__PURE__ */ new Map(),
-        filters: { main: "movie", watched: "movie" },
         cachedResults: cached.results,
         cachedTypes: cached.types,
         cachedTitles: cached.types.size,
@@ -12347,12 +12552,7 @@
         manualChoices: /* @__PURE__ */ new Map(),
         manualProfileGuid: void 0,
         manualFailure: false,
-        completedCount: 0,
-        unknownCount: state.items.length,
-        visibleCount: 0,
         loading: false,
-        expanded: false,
-        ui: null,
         promise: null,
         requests: 0,
         passes: 0,
@@ -12360,6 +12560,7 @@
         profileGuid: profile,
         network: null
       };
+      gridView.resetViewing();
       syncWatchGroups(state);
       refreshViewingStatus(state);
     }
@@ -12495,8 +12696,8 @@
         syncWatchGroups(state, unresolvedCachedIds, "scan-complete");
         writeViewingCache(job);
         log(tLog("viewingStatusCompleted"), {
-          completed: watch.completedCount,
-          unknown: watch.unknownCount,
+          completed: gridView.presentation().completedCount,
+          unknown: gridView.presentation().unknownCount,
           requests: watch.requests,
           passes: watch.passes,
           failure: watch.failure,
@@ -14038,12 +14239,7 @@
       }
     }
     function onGridCardReplaced(previous, next) {
-      const clone = next.node, item = clone.__tmMyListItem;
-      if (sourceState?.watchStatus) {
-        syncManualViewingCard(sourceState, clone, item, effectiveViewingStatus(sourceState.watchStatus, String(item.videoId)));
-        const entry = sourceState.watchStatus.groupIndex?.entries.get(String(item.videoId));
-        if (entry) entry.clone = clone;
-      }
+      const clone = next.node;
       if (clone?.getAttribute("data-tm-react-grafted") === "true") graftedGridClones.add(clone);
     }
     function findItemForSourceSlot(slot) {
@@ -14569,8 +14765,6 @@
       fresh.setAttribute("data-tm-hover-ready", String(Boolean(stats?.fiberAssignments || stats?.propsAssignments)));
       fresh.setAttribute("data-tm-backed-page", String(actualPage));
       fresh.__tmHoverActivationGeneration = oldClone?.__tmHoverActivationGeneration;
-      if (oldClone?.getAttribute("data-tm-type-hidden") === "true") fresh.setAttribute("data-tm-type-hidden", "true");
-      else fresh.removeAttribute("data-tm-type-hidden");
       if (oldClone?.getAttribute("data-tm-preparing") === "true" && oldClone.getAttribute("data-tm-hover-token") === String(hoverToken)) {
         fresh.setAttribute("data-tm-preparing", "true");
         fresh.setAttribute("data-tm-hover-token", String(hoverToken));
