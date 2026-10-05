@@ -15,6 +15,7 @@ const legacyImports = new Map([
     ['src/legacy.js -> src/netflix/popup-inspection.js', 'P20: application wires inspection lifetime and native consumers'],
     ['src/legacy.js -> src/netflix/context.js', 'P20: application injects current page context'],
     ['src/legacy.js -> src/netflix/page-dom.js', 'P20: application composes remaining DOM consumers'],
+    ['src/legacy.js -> src/list/list.js', 'P20: application composes list collection and membership'],
     ['src/legacy.js -> src/grid/grid.js', 'P20: application composes grid and its remaining callbacks'],
     ['src/legacy.js -> src/netflix/list-data.js', 'P20: application injects list data into collection and count consumers'],
     ['src/legacy.js -> src/netflix/viewing-data.js', 'P20: application injects typed viewing data into the scan'],

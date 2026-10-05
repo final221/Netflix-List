@@ -1,6 +1,7 @@
 import { createNetflixContext } from './netflix/context.js';
 import { createNetflixPageDom, NETFLIX_DOM_SELECTORS } from './netflix/page-dom.js';
 import { createGrid } from './grid/grid.js';
+import { createList } from './list/list.js';
 import { createLogger } from './diagnostics/logger.js';
 import { createReport } from './diagnostics/report.js';
 import { createPopupInspection } from './netflix/popup-inspection.js';
@@ -51,6 +52,12 @@ export function startLegacy() {
         tLog, tUi, formatUiNumber, formatItemCount, copyLogs: copyDiagnosticLogs, setTimeout, clearTimeout,
         readEmptyContent: section => netflixDom.readEmptyContent(section), readEmptyShell: () => netflixDom.readEmptyShell(),
         isActive: () => targetSessionActive && isTargetPage() });
+
+    const listView = createList({ runChunks: runConstructionChunks, assertSession: assertRouteSession,
+        isCancelled: isRouteSessionCancelledError, collectMounted: collectMountedSinglePageItems,
+        captureTemplate: source => gridView.captureTemplate(source), assertSource: source => nativeCarousel.assertSource(source),
+        collectRecords: input => listData.collectRecords(input),
+        onReuseRejected: detail => log('Mounted single-page membership reuse rejected; using fresh collection', detail) });
 
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
@@ -289,7 +296,6 @@ export function startLegacy() {
                 parkedHeightChangesIgnored: 0, parkedHeightHoverPreserved: 0 },
             nativeRecovery: { attempts: 0, completed: 0, exhausted: 0, alignmentRestores: 0, alignmentRestoreFailures: 0 },
             undoRetention: { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 },
-            membershipReuse: { attempts: 0, reused: 0, rejected: 0, itemsCaptured: 0, requestsAvoided: 0 },
             imageResources: { scope: 'page-images-during-list-route', supported: false, active: false, stopReason: '',
                 limit: IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES, batches: 0, entriesExamined: 0, beforeRouteOrInvalid: 0,
                 skippedAtLimit: 0, imageEntries: 0, startedAfterViewingScan: 0, durationSamples: 0,
@@ -301,7 +307,7 @@ export function startLegacy() {
     function collectPerformanceDiagnostics() {
         const snapshots = Object.fromEntries(Object.entries(performanceDiagnostics).map(([key, counters]) => [key, { ...counters }]));
         return { viewingGroups: gridView.groupDiagnostics(), hoverPreparation: snapshots.hoverPreparation,
-            popupInvestigation: popupInspection.diagnostics(), ...snapshots, nativeCollection: nativeCarousel.diagnostics().collection, grid: gridView.diagnostics() };
+            popupInvestigation: popupInspection.diagnostics(), ...snapshots, ...listView.diagnostics(), nativeCollection: nativeCarousel.diagnostics().collection, grid: gridView.diagnostics() };
     }
 
     function createNavigationDiagnosticSink(token) {
@@ -773,6 +779,7 @@ export function startLegacy() {
         initializationBlockedSessionToken = null;
         nativeInitializationFailure = null;
         performanceDiagnostics = createPerformanceDiagnostics();
+        listView.resetDiagnostics();
         popupInspection.reset();
         startImageResourceDiagnostics(sessionScope.token);
         targetSessionEntryKind = reason === 'route:initial' ? 'initial' : 'spa';
@@ -2252,64 +2259,8 @@ export function startLegacy() {
         return true;
     }
 
-    async function buildGraphqlMyListItems(records, totalCount, columns, template, sessionToken = null) {
-        assertRouteSession(sessionToken);
-        if (!Array.isArray(records) || !template || !Number.isFinite(totalCount)) return null;
-        // Material was captured before asynchronous data work; no live slot is borrowed here.
-        const items = [];
-        const seen = new Set();
-        const complete = await runConstructionChunks(records.length, index => {
-            const record = records[index];
-            const videoId = record?.videoId;
-            if (!videoId || seen.has(videoId)) return;
-            const itemIndex = items.length;
-            items.push({
-                ...record,
-                page: Math.floor(itemIndex / Math.max(1, columns)),
-                logicalIndex: itemIndex,
-                cardTemplate: template,
-                graphql: true
-            });
-            seen.add(videoId);
-        }, () => assertRouteSession(sessionToken));
-        assertRouteSession(sessionToken);
-        return complete && items.length === totalCount ? items : null;
-    }
-
-    // Collection strategy remains here until P13; data results contain no wire fields or DOM.
-    async function collectLogicalListItems({ bootstrap, totalCount, columns, templateSource, sessionToken = null, assertCurrent = () => {} }) {
-        let current = bootstrap;
-        try {
-            assertRouteSession(sessionToken);
-            assertCurrent();
-            if (bootstrap?.source === 'mounted-single-page-fast-path') {
-                const reuse = collectMountedSinglePageItems(bootstrap, totalCount, columns, sessionToken);
-                const work = performanceDiagnostics.membershipReuse;
-                work.attempts++;
-                if (reuse.items) {
-                    work.reused++; work.itemsCaptured += reuse.items.length; work.requestsAvoided++;
-                    return { bootstrap, items: reuse.items, collectionSource: 'mounted-single-page' };
-                }
-                work.rejected++;
-                log('Mounted single-page membership reuse rejected; using fresh collection', {
-                    collectionSource: 'mounted-single-page', reason: reuse.reason, totalCount });
-            }
-            // One detached template survives pagination/normalization yields. Grid owns it after acceptance.
-            const template = templateSource ? gridView.captureTemplate(templateSource.slot) : null;
-            if (templateSource) nativeCarousel.assertSource(templateSource);
-            assertCurrent();
-            const data = await listData.collectRecords({ bootstrap, totalCount, sessionToken });
-            current = data.bootstrap;
-            assertRouteSession(sessionToken);
-            const items = await buildGraphqlMyListItems(data.records, totalCount, columns, template, sessionToken);
-            assertRouteSession(sessionToken);
-            return { bootstrap: current, items, ...(data.error ? { error: data.error } : {}) };
-        } catch (error) {
-            assertRouteSession(sessionToken);
-            if (isRouteSessionCancelledError(error)) throw error;
-            return { bootstrap: current, items: null, error };
-        }
-    }
+    function buildGraphqlMyListItems(...args) { return listView.buildItems(...args); }
+    function collectLogicalListItems(...args) { return listView.collectLogical(...args); }
 
     async function waitForMyListTotalCount(timeout = TOTAL_COUNT_TIMEOUT_MS, sessionToken = null) {
         assertRouteSession(sessionToken);

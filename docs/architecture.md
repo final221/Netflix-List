@@ -29,6 +29,8 @@ src/main.js
      -> src/netflix/popup-inspection.js: bounded response/component investigation
      -> src/netflix/context.js: lazy page/profile/locale/request context
      -> src/netflix/page-dom.js: native discovery and membership identity facts
+     -> src/list/list.js: logical mounted/fresh collection strategy and completeness
+        -> collection.js: cooperative transferable material construction and copied reuse work
      -> src/grid/grid.js: card registry, handles, rendering and retained removal material
         -> cards.js / frame.js / groups.js: private card/frame resources and grouped presentation
         -> styles.js: private stylesheet acquisition by frame
@@ -265,3 +267,9 @@ Release remains usable after route invalidation, attempts all remaining fields a
 The transitional nativeSourcePresentation bridge supplies captured parent/native admission and retains only its releasable handle. markOriginalHeader, beginSourceScan and parkSource request complete native operations. Actual initial/provisional/final empty frames, incoming populated/empty adoption, fast/native collection and menu visibility use this owner. cleanupTargetSessionDom releases the exact borrowed lease after navigation/hover cleanup rather than removing native classes independently. Page-DOM interprets status row gaps; grid owns frame attachment, synthetic UI and detached empty-content presentation. Group/filter/control presentation transfers in P12. Native popup alignment/proxies and React grafting remain with their explicitly planned P17 owner; these do not write carousel binding/model/navigation state.
 
 Optional observeSource presentation facts copy hidden/parked booleans and reject changes before responsive policy accepts its existing height-only shortcut. CopyLogs explicitly requests passive fallback source discovery inside carousel; missing/failing discovery leaves its native report unavailable without aborting other fields. Counter-only diagnostics add no discovery, card, geometry or marker reads, and report only bounded presentation-owner/failure counters. No listener, observer, timer, request, scheduler or eager hover work is added.
+
+## List collection checkpoint
+
+list/list.js exposes the live collectLogical and buildItems operations, with private collection.js owning logical mounted-versus-fresh selection, duplicate/count validation and cooperative shared-template material construction. Composition supplies current session/parent admission, the existing scheduler, native mounted proof and source validation, grid template capture and normalized list-data operations. Guards run after data completion and construction yields; failed/cancelled collection publishes no successful partial list. Mounted reuse work is privately retained and returned as frozen copied counters through the existing report path. No extra request, timer, observer or retained cache is added. Legacy collection wrappers only delegate; their algorithms and writable reuse counters are removed.
+
+P13 remains in progress: lasting membership/index/order/counts and native page-hint removal, initial/SPA bootstrap and native fallback selection still reside in legacy. Collected items remain transferable startup material rather than the final lasting record representation. P14 still owns the planned queue/Undo transfer. The exact legacy-to-list public composition import is removed in P20.

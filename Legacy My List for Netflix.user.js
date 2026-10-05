@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.36
+// @version      1.4.37
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -2557,6 +2557,104 @@
       },
       applyGeometry: frame.updateGeometry,
       diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics(), ...groups.diagnostics() })
+    });
+  }
+
+  // src/list/collection.js
+  function createCollection({
+    runChunks,
+    assertSession,
+    isCancelled,
+    collectMounted,
+    captureTemplate,
+    assertSource,
+    collectRecords,
+    onReuseRejected = () => {
+    }
+  }) {
+    const reuse = { attempts: 0, reused: 0, rejected: 0, itemsCaptured: 0, requestsAvoided: 0 };
+    async function buildItems(records, totalCount, columns, template, sessionToken = null, assertCurrent = () => {
+    }) {
+      const guard = () => {
+        assertSession(sessionToken);
+        assertCurrent();
+      };
+      guard();
+      if (!Array.isArray(records) || !template || !Number.isFinite(totalCount)) return null;
+      const items = [], seen = /* @__PURE__ */ new Set();
+      const complete = await runChunks(records.length, (index) => {
+        guard();
+        const record = records[index], videoId = record?.videoId;
+        if (!videoId || seen.has(videoId)) return;
+        const itemIndex = items.length;
+        items.push({
+          ...record,
+          page: Math.floor(itemIndex / Math.max(1, columns)),
+          logicalIndex: itemIndex,
+          cardTemplate: template,
+          graphql: true
+        });
+        seen.add(videoId);
+      }, guard);
+      guard();
+      return complete !== false && items.length === totalCount ? items : null;
+    }
+    async function collectLogical({ bootstrap, totalCount, columns, templateSource, sessionToken = null, assertCurrent = () => {
+    } }) {
+      const guard = () => {
+        assertSession(sessionToken);
+        assertCurrent();
+      };
+      let current = bootstrap;
+      try {
+        guard();
+        if (bootstrap?.source === "mounted-single-page-fast-path") {
+          const result = collectMounted(bootstrap, totalCount, columns, sessionToken);
+          guard();
+          reuse.attempts++;
+          if (result.items && result.items.length === totalCount) {
+            reuse.reused++;
+            reuse.itemsCaptured += result.items.length;
+            reuse.requestsAvoided++;
+            return { bootstrap, items: result.items, collectionSource: "mounted-single-page" };
+          }
+          reuse.rejected++;
+          onReuseRejected({ collectionSource: "mounted-single-page", reason: result.reason || "incomplete-membership", totalCount });
+          guard();
+        }
+        const template = templateSource ? captureTemplate(templateSource.slot) : null;
+        if (templateSource) assertSource(templateSource);
+        guard();
+        const data = await collectRecords({ bootstrap, totalCount, sessionToken });
+        guard();
+        current = data.bootstrap;
+        const items = await buildItems(data.records, totalCount, columns, template, sessionToken, assertCurrent);
+        guard();
+        return { bootstrap: current, items, ...data.error ? { error: data.error } : {} };
+      } catch (error) {
+        guard();
+        if (isCancelled(error)) throw error;
+        return { bootstrap: current, items: null, error };
+      }
+    }
+    return {
+      buildItems,
+      collectLogical,
+      resetDiagnostics: () => {
+        for (const key of Object.keys(reuse)) reuse[key] = 0;
+      },
+      diagnostics: () => Object.freeze({ membershipReuse: Object.freeze({ ...reuse }) })
+    };
+  }
+
+  // src/list/list.js
+  function createList(options) {
+    const collection = createCollection(options);
+    return Object.freeze({
+      collectLogical: collection.collectLogical,
+      buildItems: collection.buildItems,
+      diagnostics: collection.diagnostics,
+      resetDiagnostics: collection.resetDiagnostics
     });
   }
 
@@ -6627,7 +6725,7 @@
   }
 
   // src/netflix/carousel/collection.js
-  function createCollection({
+  function createCollection2({
     native,
     navigation,
     scope,
@@ -7904,7 +8002,7 @@
         track: (scroller) => acceptedBinding?.scroller === scroller && acceptedBinding.track?.isConnected ? acceptedBinding.track : netflixDom.findTrack(scroller)
       }
     });
-    const collection = createCollection({
+    const collection = createCollection2({
       scope,
       performance: performance2,
       requestAnimationFrame: requestAnimationFrame2,
@@ -10259,6 +10357,16 @@
       readEmptyShell: () => netflixDom.readEmptyShell(),
       isActive: () => targetSessionActive && isTargetPage()
     });
+    const listView = createList({
+      runChunks: runConstructionChunks,
+      assertSession: assertRouteSession,
+      isCancelled: isRouteSessionCancelledError,
+      collectMounted: collectMountedSinglePageItems,
+      captureTemplate: (source) => gridView.captureTemplate(source),
+      assertSource: (source) => nativeCarousel.assertSource(source),
+      collectRecords: (input) => listData.collectRecords(input),
+      onReuseRejected: (detail) => log("Mounted single-page membership reuse rejected; using fresh collection", detail)
+    });
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
     const VIEWING_TITLE_BATCH_SIZE = viewingData.limits.titleBatch;
@@ -10300,7 +10408,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.36";
+    const SCRIPT_VERSION = "1.4.37";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -10669,7 +10777,6 @@
         },
         nativeRecovery: { attempts: 0, completed: 0, exhausted: 0, alignmentRestores: 0, alignmentRestoreFailures: 0 },
         undoRetention: { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 },
-        membershipReuse: { attempts: 0, reused: 0, rejected: 0, itemsCaptured: 0, requestsAvoided: 0 },
         imageResources: {
           scope: "page-images-during-list-route",
           supported: false,
@@ -10700,6 +10807,7 @@
         hoverPreparation: snapshots.hoverPreparation,
         popupInvestigation: popupInspection.diagnostics(),
         ...snapshots,
+        ...listView.diagnostics(),
         nativeCollection: nativeCarousel.diagnostics().collection,
         grid: gridView.diagnostics()
       };
@@ -11198,6 +11306,7 @@
       initializationBlockedSessionToken = null;
       nativeInitializationFailure = null;
       performanceDiagnostics = createPerformanceDiagnostics();
+      listView.resetDiagnostics();
       popupInspection.reset();
       startImageResourceDiagnostics(sessionScope.token);
       targetSessionEntryKind = reason === "route:initial" ? "initial" : "spa";
@@ -12736,65 +12845,11 @@
       assertActive();
       return true;
     }
-    async function buildGraphqlMyListItems(records, totalCount, columns, template, sessionToken = null) {
-      assertRouteSession(sessionToken);
-      if (!Array.isArray(records) || !template || !Number.isFinite(totalCount)) return null;
-      const items = [];
-      const seen = /* @__PURE__ */ new Set();
-      const complete = await runConstructionChunks(records.length, (index) => {
-        const record = records[index];
-        const videoId = record?.videoId;
-        if (!videoId || seen.has(videoId)) return;
-        const itemIndex = items.length;
-        items.push({
-          ...record,
-          page: Math.floor(itemIndex / Math.max(1, columns)),
-          logicalIndex: itemIndex,
-          cardTemplate: template,
-          graphql: true
-        });
-        seen.add(videoId);
-      }, () => assertRouteSession(sessionToken));
-      assertRouteSession(sessionToken);
-      return complete && items.length === totalCount ? items : null;
+    function buildGraphqlMyListItems(...args) {
+      return listView.buildItems(...args);
     }
-    async function collectLogicalListItems({ bootstrap, totalCount, columns, templateSource, sessionToken = null, assertCurrent = () => {
-    } }) {
-      let current = bootstrap;
-      try {
-        assertRouteSession(sessionToken);
-        assertCurrent();
-        if (bootstrap?.source === "mounted-single-page-fast-path") {
-          const reuse = collectMountedSinglePageItems(bootstrap, totalCount, columns, sessionToken);
-          const work = performanceDiagnostics.membershipReuse;
-          work.attempts++;
-          if (reuse.items) {
-            work.reused++;
-            work.itemsCaptured += reuse.items.length;
-            work.requestsAvoided++;
-            return { bootstrap, items: reuse.items, collectionSource: "mounted-single-page" };
-          }
-          work.rejected++;
-          log("Mounted single-page membership reuse rejected; using fresh collection", {
-            collectionSource: "mounted-single-page",
-            reason: reuse.reason,
-            totalCount
-          });
-        }
-        const template = templateSource ? gridView.captureTemplate(templateSource.slot) : null;
-        if (templateSource) nativeCarousel.assertSource(templateSource);
-        assertCurrent();
-        const data = await listData.collectRecords({ bootstrap, totalCount, sessionToken });
-        current = data.bootstrap;
-        assertRouteSession(sessionToken);
-        const items = await buildGraphqlMyListItems(data.records, totalCount, columns, template, sessionToken);
-        assertRouteSession(sessionToken);
-        return { bootstrap: current, items, ...data.error ? { error: data.error } : {} };
-      } catch (error) {
-        assertRouteSession(sessionToken);
-        if (isRouteSessionCancelledError(error)) throw error;
-        return { bootstrap: current, items: null, error };
-      }
+    function collectLogicalListItems(...args) {
+      return listView.collectLogical(...args);
     }
     async function waitForMyListTotalCount(timeout = TOTAL_COUNT_TIMEOUT_MS, sessionToken = null) {
       assertRouteSession(sessionToken);

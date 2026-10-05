@@ -11,6 +11,7 @@ const { createNetflixContext } = require('../src/netflix/context.js');
 const { createNetflixPageDom } = require('../src/netflix/page-dom.js');
 const { createCardMarkup } = require('../src/netflix/card-markup.js');
 const { createGrid } = require('../src/grid/grid.js');
+const { createList } = require('../src/list/list.js');
 const { GRID_ID: OWNED_GRID_ID } = require('../src/dom-names.js');
 const { createListData } = require('../src/netflix/list-data.js');
 const { createViewingData } = require('../src/netflix/viewing-data.js');
@@ -385,6 +386,12 @@ function environment(names, overrides = {}) {
     c.waitPage = (...args) => acknowledgement().acknowledgeIndicator(...args);
     c.performanceDiagnostics = c.createPerformanceDiagnostics();
     c.listData ||= fixtureListData(c);
+    c.listView = createList({ runChunks: (...args) => c.runConstructionChunks(...args),
+        assertSession: token => c.assertRouteSession(token), isCancelled: error => c.isRouteSessionCancelledError(error),
+        collectMounted: (...args) => c.collectMountedSinglePageItems(...args),
+        captureTemplate: slot => c.gridView.captureTemplate(slot), assertSource: source => c.nativeCarousel.assertSource(source),
+        collectRecords: input => c.listData.collectRecords(input),
+        onReuseRejected: detail => c.log('Mounted single-page membership reuse rejected; using fresh collection', detail) });
     async function flush() { for (let i = 0; i < 24; i++) await Promise.resolve(); }
     return {
         c, timers, frames, flush,
