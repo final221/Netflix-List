@@ -367,6 +367,8 @@ function environment(names, overrides = {}) {
         collectMounted: (...args) => c.collectMountedSinglePageItems(...args),
         captureTemplate: slot => c.gridView.captureTemplate(slot), assertSource: source => c.nativeCarousel.assertSource(source),
         collectRecords: input => c.listData.collectRecords(input),
+        waitInitialCount: token => c.waitForMyListTotalCount(c.TOTAL_COUNT_TIMEOUT_MS, token),
+        readInitialFirstId: () => c.listData.firstMyListVideoId(), fetchBootstrap: token => c.listData.fetchBootstrap(token),
         onReuseRejected: detail => c.log('Mounted single-page membership reuse rejected; using fresh collection', detail) });
     if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
     Object.defineProperty(c, 'nativeReadScope', { get: () => c.nativeCarousel.diagnostics().readScopeActive ? true : null });

@@ -153,3 +153,98 @@ test('source access cannot return a transfer after retiring its caller during ca
     Object.defineProperty(source,'imageUrl',{get(){if(++reads===2)active=false;return 'art';}});
     assert.throws(()=>e.list.prepareRecords([source],{assertCurrent(){if(!active)throw new Error('retired');}}),/retired/);
 });
+
+
+test('entry strategy uses initial cached count without mounted proof or fresh requests', async () => {
+    const calls=[];const e=fixture({waitInitialCount:async()=>{calls.push('cached');return 3;},
+        readInitialFirstId:()=> '1',fetchBootstrap:async()=>{throw new Error('unexpected fresh');}});
+    const entry=await e.list.prepareEntry({entryKind:'initial',sessionToken:1,hasNativeSource:true,
+        readMountedBootstrap:()=>{throw new Error('unexpected native');},readMountedCards:()=>{throw new Error('unexpected cards');}});
+    assert.equal(entry.totalCount,3);assert.equal(entry.bootstrap.firstVideoId,'1');
+    assert.deepEqual(calls,['cached']);let options;
+    await entry.prepareReadiness(input=>{options=input;return Promise.resolve({ready:true});});
+    assert.deepEqual(options,{fastSinglePageTotalCount:null});
+});
+
+test('entry strategy reuses proven mounted SPA bootstrap without starting parallel readiness or fresh data', async () => {
+    const bootstrap={source:'mounted-single-page-fast-path',totalCount:2,firstVideoId:'1',elapsedMs:7};
+    const detections=[];const e=fixture({fetchBootstrap:async()=>{throw new Error('unexpected fresh');}});
+    const entry=await e.list.prepareEntry({entryKind:'spa',sessionToken:1,hasNativeSource:true,
+        readMountedBootstrap:async()=>bootstrap,readMountedCards:()=>{throw new Error('unexpected cards');},
+        startReadiness:()=>{throw new Error('unexpected parallel readiness');},onCount:detail=>detections.push(detail)});
+    assert.equal(entry.bootstrap,bootstrap);assert.equal(entry.mountedSinglePage,true);
+    let count;await entry.prepareReadiness(input=>{count=input.fastSinglePageTotalCount;return Promise.resolve({ready:true});});
+    assert.equal(count,2);assert.equal(detections[0].detectionReason,bootstrap.source);
+});
+
+test('entry strategy overlaps native readiness with fresh SPA data and exposes early readiness failure safely', async () => {
+    const calls=[];let completeData;
+    const failure=new Error('native failed');
+    const e=fixture({fetchBootstrap:()=>{calls.push('fresh');return new Promise(resolve=>{completeData=resolve;});}});
+    const pending=e.list.prepareEntry({entryKind:'spa',sessionToken:1,hasNativeSource:true,
+        readMountedBootstrap:async()=>null,readMountedCards:()=>2,
+        startReadiness:()=>{calls.push('ready');return Promise.reject(failure);}});
+    await Promise.resolve();await Promise.resolve();assert.deepEqual(calls,['ready','fresh']);
+    completeData({totalCount:4,firstVideoId:'2'});const entry=await pending;
+    assert.equal(entry.totalCount,4);assert.equal(entry.mountedSinglePage,false);
+    await assert.rejects(entry.prepareReadiness(()=>{throw new Error('unexpected restart');}),error=>error===failure);
+});
+
+test('entry strategy rejects retired data completion and retired readiness before publication', async () => {
+    let active=true;const guard=()=>{if(!active)throw Object.assign(new Error('retired'),{code:'CANCELLED'});};
+    const e=fixture({assertSession:guard,fetchBootstrap:async()=>{active=false;return {totalCount:2};}});
+    await assert.rejects(e.list.prepareEntry({entryKind:'spa',sessionToken:1,hasNativeSource:false}),{code:'CANCELLED'});
+    active=true;const current=fixture({assertSession:guard,waitInitialCount:async()=>1,readInitialFirstId:()=> '1'});
+    const entry=await current.list.prepareEntry({entryKind:'initial',sessionToken:1,hasNativeSource:false});
+    await assert.rejects(entry.prepareReadiness(async()=>{active=false;return {ready:true};}),{code:'CANCELLED'});
+});
+
+
+test('entry count policy admits mounted logical count and keeps indicator count without a native read', async () => {
+    const e=fixture({waitInitialCount:async()=>5,readInitialFirstId:()=> '1'});
+    const entry=await e.list.prepareEntry({entryKind:'initial',sessionToken:1});
+    assert.equal(entry.confirmCount({mode:'indicator',readNativeCount(){throw new Error('unexpected read');}}),null);
+    const facts=entry.confirmCount({mode:'logical',readNativeCount:()=>({totalCount:7,readings:[7]})});
+    assert.equal(facts.totalCount,7);assert.equal(facts.changed,true);assert.equal(facts.provisionalSource,'graphql-cache');
+    assert.equal(entry.confirmCount({mode:'logical',readNativeCount:()=>({totalCount:5,readings:[5]})}).changed,false);
+});
+
+test('entry count policy rejects invalid bootstrap and invalid or obsolete native confirmation', async () => {
+    const invalid=fixture({fetchBootstrap:async()=>({totalCount:NaN})});
+    await assert.rejects(invalid.list.prepareEntry({entryKind:'spa'}),{code:'LIST_COUNT_INVALID'});
+    let active=true;const e=fixture({waitInitialCount:async()=>2,readInitialFirstId:()=> '1'});
+    const entry=await e.list.prepareEntry({entryKind:'initial',assertCurrent(){if(!active)throw new Error('retired');}});
+    assert.throws(()=>entry.confirmCount({mode:'logical',readNativeCount:()=>({totalCount:-1})}),{code:'LIST_COUNT_INVALID'});
+    assert.throws(()=>entry.confirmCount({mode:'logical',readNativeCount:()=>{active=false;return {totalCount:4};}}),/retired/);
+});
+
+
+test('entry readiness is shared and its early rejection remains handled when fresh bootstrap fails', async () => {
+    const failure=new Error('fresh failed');const e=fixture({fetchBootstrap:async()=>{throw failure;}});
+    await assert.rejects(e.list.prepareEntry({entryKind:'spa',hasNativeSource:true,readMountedBootstrap:async()=>null,
+        readMountedCards:()=>1,startReadiness:()=>Promise.reject(new Error('readiness failed'))}),error=>error===failure);
+    await Promise.resolve();
+    const current=fixture({waitInitialCount:async()=>1,readInitialFirstId:()=> '1'});
+    const entry=await current.list.prepareEntry({entryKind:'initial'});let calls=0;
+    const first=entry.prepareReadiness(async()=>{calls++;return {ready:true};});
+    const second=entry.prepareReadiness(()=>{throw new Error('duplicate readiness');});
+    assert.equal(await first,await second);assert.equal(calls,1);
+});
+
+
+test('initial count polling stays bounded, accepts authoritative zero and revalidates after adapter reads', async () => {
+    const e=fixture();let time=0,reads=0;
+    const count=await e.list.waitForInitialCount({timeout:20,now:()=>time,pause:async()=>{time+=5;},
+        read:()=>({available:true,count:++reads===3?0:null})});
+    assert.equal(count,0);assert.equal(reads,3);assert.equal(time,10);
+    let active=true;
+    await assert.rejects(e.list.waitForInitialCount({timeout:20,now:()=>time,pause:async()=>{},
+        read:()=>{active=false;return {available:true,count:2};},assertCurrent(){if(!active)throw new Error('retired');}}),/retired/);
+});
+
+test('initial count timeout reports the last availability once through the existing diagnostic adapter', async () => {
+    const e=fixture();let time=0,reports=0;const error=new Error('timeout');
+    await assert.rejects(e.list.waitForInitialCount({timeout:20,now:()=>time,pause:async()=>{time+=5;},
+        read:()=>({available:time>=10,count:null}),onTimeout(facts){reports++;assert.equal(facts.available,true);return error;}}),value=>value===error);
+    assert.equal(time,20);assert.equal(reports,1);
+});

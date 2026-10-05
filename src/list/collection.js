@@ -1,7 +1,70 @@
 // Strategy and completeness policy. Native proof and wire interpretation stay in adapters.
 export function createCollection({ runChunks, assertSession, isCancelled, collectMounted,
-    captureTemplate, assertSource, collectRecords, toRecord, onReuseRejected = () => {} }) {
+    captureTemplate, assertSource, collectRecords, toRecord, waitInitialCount, readInitialFirstId, fetchBootstrap,
+    onReuseRejected = () => {} }) {
     const reuse = { attempts: 0, reused: 0, rejected: 0, itemsCaptured: 0, requestsAvoided: 0 };
+    const assertCount = count => {
+        if (!Number.isFinite(count) || count < 0) throw Object.assign(new Error('List entry requires an authoritative nonnegative count'),
+            { code: 'LIST_COUNT_INVALID' });
+    };
+    async function waitForInitialCount({ timeout, sessionToken = null, now, pause, read, pollMs = 25,
+        assertCurrent = () => {}, onTimeout = () => Object.assign(new Error('Initial list count timed out'), { code: 'LIST_COUNT_TIMEOUT' }) }) {
+        const guard = () => { assertSession(sessionToken); assertCurrent(); };
+        guard(); const started = now(); let available = false;
+        while (now() - started < timeout) {
+            guard(); const facts = read();
+            available = facts.available; const count = facts.count; guard();
+            if (Number.isFinite(count) && count >= 0) return count;
+            await pause(pollMs); guard();
+        }
+        guard(); const error = onTimeout({ available }); guard(); throw error;
+    }
+    async function prepareEntry({ entryKind, sessionToken = null, hasNativeSource = false,
+        readMountedBootstrap, readMountedCards, startReadiness, onCount = () => {}, assertCurrent = () => {} }) {
+        const guard = () => { assertSession(sessionToken); assertCurrent(); };
+        const handled = promise => Promise.resolve(promise).then(value => ({ value }), error => ({ error }));
+        let bootstrap, mountedSinglePage = false, readiness = null;
+        guard();
+        if (entryKind === 'initial') {
+            const totalCount = await waitInitialCount(sessionToken); guard(); assertCount(totalCount);
+            bootstrap = { totalCount, firstVideoId: readInitialFirstId() }; guard();
+        } else {
+            const mounted = hasNativeSource ? await readMountedBootstrap() : null; guard();
+            if (mounted) {
+                assertCount(mounted.totalCount);
+                bootstrap = mounted; mountedSinglePage = true;
+                onCount({ totalCount: mounted.totalCount, detectionReason: mounted.source,
+                    firstVideoId: mounted.firstVideoId || null, elapsedMs: mounted.elapsedMs }); guard();
+            } else {
+                if (hasNativeSource) {
+                    const count = readMountedCards(); guard();
+                    if (count > 0) { readiness = handled(startReadiness()); guard(); }
+                }
+                bootstrap = await fetchBootstrap(sessionToken); guard(); assertCount(bootstrap.totalCount);
+                onCount({ totalCount: bootstrap.totalCount, detectionReason: 'fresh-netflix-my-list-carousel',
+                    firstVideoId: bootstrap.firstVideoId || null }); guard();
+            }
+        }
+        const totalCount = bootstrap.totalCount; guard(); assertCount(totalCount);
+        return Object.freeze({ bootstrap, totalCount, mountedSinglePage,
+            confirmCount({ mode, readNativeCount, assertNativeCurrent = () => {} }) {
+                guard(); if (mode !== 'logical') return null;
+                const assertConfirmation = () => { guard(); assertNativeCurrent(); guard(); };
+                const facts = readNativeCount(), confirmedCount = facts.totalCount, readings = facts.readings;
+                assertConfirmation(); assertCount(confirmedCount);
+                return Object.freeze({ totalCount: confirmedCount, readings,
+                    changed: confirmedCount !== totalCount,
+                    provisionalSource: entryKind === 'initial' ? 'graphql-cache' : 'fresh-netflix-my-list-carousel',
+                    assertCurrent: assertConfirmation });
+            },
+            async prepareReadiness(prepare) {
+                guard();
+                if (!readiness) readiness = handled(prepare({ fastSinglePageTotalCount: mountedSinglePage ? totalCount : null }));
+                const result = await readiness; guard();
+                if (Object.hasOwn(result, 'error')) throw result.error;
+                return result.value;
+            } });
+    }
     async function buildItems(records, totalCount, columns, template, sessionToken = null, assertCurrent = () => {}) {
         const guard = () => { assertSession(sessionToken); assertCurrent(); };
         guard();
@@ -76,6 +139,6 @@ export function createCollection({ runChunks, assertSession, isCancelled, collec
                 if (failure) throw failure;
             }, discard() { released = true; materials.clear(); inputs.length = 0; } });
     }
-    return { buildItems, collectLogical, prepareRecords, resetDiagnostics: () => { for (const key of Object.keys(reuse)) reuse[key] = 0; },
+    return { waitForInitialCount, prepareEntry, buildItems, collectLogical, prepareRecords, resetDiagnostics: () => { for (const key of Object.keys(reuse)) reuse[key] = 0; },
         diagnostics: () => Object.freeze({ membershipReuse: Object.freeze({ ...reuse }) }) };
 }

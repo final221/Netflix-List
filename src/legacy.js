@@ -57,6 +57,8 @@ export function startLegacy() {
         isCancelled: isRouteSessionCancelledError, collectMounted: collectMountedSinglePageItems,
         captureTemplate: source => gridView.captureTemplate(source), assertSource: source => nativeCarousel.assertSource(source),
         collectRecords: input => listData.collectRecords(input),
+        waitInitialCount: token => waitForMyListTotalCount(TOTAL_COUNT_TIMEOUT_MS, token),
+        readInitialFirstId: () => listData.firstMyListVideoId(), fetchBootstrap: token => listData.fetchBootstrap(token),
         onReuseRejected: detail => log('Mounted single-page membership reuse rejected; using fresh collection', detail) });
 
     const BUILD_CHUNK_MAX_ITEMS = 24;
@@ -2284,24 +2286,15 @@ export function startLegacy() {
     function collectLogicalListItems(...args) { return listView.collectLogical(...args); }
 
     async function waitForMyListTotalCount(timeout = TOTAL_COUNT_TIMEOUT_MS, sessionToken = null) {
-        assertRouteSession(sessionToken);
-        const started = performance.now();
-        let lastGraphqlAvailable = false;
-        while (performance.now() - started < timeout) {
-            assertRouteSession(sessionToken);
-            lastGraphqlAvailable = listData.isAvailable();
-            const n = listData.detectMyListTotalCount();
-            if (Number.isFinite(n) && n >= 0) return n;
-            await sleep(NATIVE_READY_POLL_MS);
-        }
-        assertRouteSession(sessionToken);
-        const details = {
-            graphqlAvailable: lastGraphqlAvailable,
-            graphqlKey: listData.diagnostics().graphqlKey,
-            domGeneration: nativeSourceDiagnostics()?.carouselDom?.generation ?? null
-        };
-        logOperationTimeout('total-count-detection', timeout, details);
-        throw initializationTimeoutError('total-count-detection', timeout, details);
+        return listView.waitForInitialCount({ timeout, sessionToken, now: () => performance.now(), pause: sleep,
+            pollMs: NATIVE_READY_POLL_MS,
+            read: () => ({ available: listData.isAvailable(), count: listData.detectMyListTotalCount() }),
+            onTimeout({ available }) {
+                const details = { graphqlAvailable: available, graphqlKey: listData.diagnostics().graphqlKey,
+                    domGeneration: nativeSourceDiagnostics()?.carouselDom?.generation ?? null };
+                logOperationTimeout('total-count-detection', timeout, details);
+                return initializationTimeoutError('total-count-detection', timeout, details);
+            } });
     }
 
     function nativeDiscoveryObservation({ bindingOnly = false } = {}) {
@@ -5827,55 +5820,27 @@ export function startLegacy() {
         runningSessionToken = sessionToken;
         assertRouteSession(sessionToken);
         let earlyTotalCount;
-        let freshMyListBootstrap = null;
-        let mountedSinglePageFastBootstrap = false;
+        let freshMyListBootstrap = null, entryCollection;
         let fastItems = null;
         let fastCollectionSource = 'graphql';
-        let parallelReadinessPromise = null;
-        const startParallelReadiness = () => {
-            if (parallelReadinessPromise || !scroller || !track) return;
-            parallelReadinessPromise = waitForNativeCarouselReady(section, scroller, track, sessionToken)
-                .then(value => ({ value, error: null }), error => ({ value: null, error }));
-        };
+        const entryParent = sourceState;
         try {
-            if (targetSessionEntryKind === 'initial') {
-                earlyTotalCount = await waitForMyListTotalCount(TOTAL_COUNT_TIMEOUT_MS, sessionToken);
-                freshMyListBootstrap = {
-                    totalCount: earlyTotalCount,
-                    firstVideoId: listData.firstMyListVideoId()
-                };
-            } else {
-                const mountedFast = scroller && track
-                    ? await tryMountedSinglePageFastBootstrap(section, scroller, track, sessionToken)
-                    : null;
-                if (mountedFast) {
-                    freshMyListBootstrap = mountedFast;
-                    mountedSinglePageFastBootstrap = true;
-                    earlyTotalCount = mountedFast.totalCount;
-                    log(tLog('totalCountDetected'), {
-                        totalCount: earlyTotalCount,
-                        detectionReason: mountedFast.source,
-                        firstVideoId: mountedFast.firstVideoId || null,
-                        elapsedMs: mountedFast.elapsedMs
-                    });
-                } else {
-                    // When a non-empty native carousel is already mounted, readiness and
-                    // the authoritative fresh count are independent read-only checks. Run
-                    // them together instead of serializing their latency.
-                    if (scroller && track) {
-                        const mounted = nativePageObservation();
-                        nativeCarousel.assertObservation(mounted);
-                        if (mounted.cards.length > 0) startParallelReadiness();
-                    }
-                    freshMyListBootstrap = await listData.fetchBootstrap(sessionToken);
-                    earlyTotalCount = freshMyListBootstrap.totalCount;
-                    log(tLog('totalCountDetected'), {
-                        totalCount: earlyTotalCount,
-                        detectionReason: 'fresh-netflix-my-list-carousel',
-                        firstVideoId: freshMyListBootstrap.firstVideoId || null
-                    });
-                }
-            }
+            entryCollection = await listView.prepareEntry({ entryKind: targetSessionEntryKind, sessionToken,
+                hasNativeSource: Boolean(scroller && track),
+                readMountedBootstrap: () => tryMountedSinglePageFastBootstrap(section, scroller, track, sessionToken),
+                readMountedCards() {
+                    const mounted = nativePageObservation();
+                    nativeCarousel.assertObservation(mounted);
+                    return mounted.cards.length;
+                },
+                startReadiness: () => waitForNativeCarouselReady(section, scroller, track, sessionToken),
+                onCount: detail => log(tLog('totalCountDetected'), detail),
+                assertCurrent() {
+                    if (sourceState !== entryParent) throw initializationError('NATIVE_SOURCE_REPLACED',
+                        'list-entry', 'List entry parent changed during source selection');
+                } });
+            freshMyListBootstrap = entryCollection.bootstrap;
+            earlyTotalCount = entryCollection.totalCount;
             assertRouteSession(sessionToken);
         } catch (error) {
             if (error?.code === 'NATIVE_SOURCE_REPLACED') {
@@ -5972,15 +5937,8 @@ export function startLegacy() {
         // until the native page/slot structure has settled.
         let readiness;
         try {
-            if (parallelReadinessPromise) {
-                const parallelReadiness = await parallelReadinessPromise;
-                if (parallelReadiness.error) throw parallelReadiness.error;
-                readiness = parallelReadiness.value;
-            } else {
-                readiness = await waitForNativeCarouselReady(section, scroller, track, sessionToken, {
-                    fastSinglePageTotalCount: mountedSinglePageFastBootstrap ? earlyTotalCount : null
-                });
-            }
+            readiness = await entryCollection.prepareReadiness(options =>
+                waitForNativeCarouselReady(section, scroller, track, sessionToken, options));
         } catch (error) {
             if (error?.code === 'NATIVE_SOURCE_REPLACED') {
                 clearRunningSession(sessionToken, false);
@@ -6068,32 +6026,31 @@ export function startLegacy() {
             }
         }
 
-        if (mountedMode === 'logical') {
+        {
             const countOwner = sourceState;
             try {
-                const countObservation = nativeSourceObservation(countOwner, { count: 'required', provisionalTotalCount: earlyTotalCount });
-                const mountedCountState = countObservation.count;
-                const mountedTotalCount = mountedCountState.totalCount;
-                if (mountedTotalCount !== earlyTotalCount) {
-                    warn('Netflix My List totalCount reconciled from mounted carousel', {
-                        provisionalTotalCount: earlyTotalCount,
-                        mountedTotalCount,
-                        readings: mountedCountState.readings,
-                        entryKind: targetSessionEntryKind,
-                        provisionalSource: targetSessionEntryKind === 'initial'
-                            ? 'graphql-cache'
-                            : 'fresh-netflix-my-list-carousel'
-                    });
-                } else {
-                    log('Netflix My List mounted totalCount confirmed', {
-                        totalCount: mountedTotalCount,
-                        readings: mountedCountState.readings,
-                        entryKind: targetSessionEntryKind
-                    });
+                let countObservation;
+                const mountedCount = entryCollection.confirmCount({ mode: mountedMode, readNativeCount() {
+                    countObservation = nativeSourceObservation(countOwner, { count: 'required', provisionalTotalCount: earlyTotalCount });
+                    return countObservation.count;
+                }, assertNativeCurrent: () => nativeCarousel.assertObservation(countObservation) });
+                if (mountedCount) {
+                    const mountedTotalCount = mountedCount.totalCount;
+                    if (mountedCount.changed) {
+                        warn('Netflix My List totalCount reconciled from mounted carousel', {
+                            provisionalTotalCount: earlyTotalCount, mountedTotalCount,
+                            readings: mountedCount.readings, entryKind: targetSessionEntryKind,
+                            provisionalSource: mountedCount.provisionalSource
+                        });
+                    } else {
+                        log('Netflix My List mounted totalCount confirmed', {
+                            totalCount: mountedTotalCount, readings: mountedCount.readings, entryKind: targetSessionEntryKind
+                        });
+                    }
+                    mountedCount.assertCurrent();
+                    earlyTotalCount = mountedTotalCount;
+                    ensureListMembership(countOwner).observeCount({ totalCount: mountedTotalCount }, { assertCurrent: mountedCount.assertCurrent });
                 }
-                nativeCarousel.assertObservation(countObservation);
-                earlyTotalCount = mountedTotalCount;
-                if (sourceState) ensureListMembership(sourceState).observeCount({ totalCount: mountedTotalCount });
             } catch (error) {
                 if (error?.code === 'NATIVE_SOURCE_REPLACED' || sourceState !== countOwner) {
                     clearRunningSession(sessionToken, false);
