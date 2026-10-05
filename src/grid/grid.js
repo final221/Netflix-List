@@ -1,6 +1,7 @@
 import { createCardMarkup } from '../netflix/card-markup.js';
 import { createCards } from './cards.js';
 import { createFrame } from './frame.js';
+import { createGroups } from './groups.js';
 
 export function createGrid({ document, location, runChunks,
     createError = (code, message) => Object.assign(new Error(message), { code }),
@@ -12,7 +13,10 @@ export function createGrid({ document, location, runChunks,
     const frame = createFrame({ document, tLog, tUi, copyLogs, isActive, setTimeout, clearTimeout, createError,
         readEmptyContent, readEmptyShell, cloneEmptyContent: markup.cloneEmptyContent });
     let buildGeneration = 0;
-    const cards = createCards({ markup, createError, prepareCard, onRetire, onReplace,
+    let cards;
+    const groups = createGroups({ document, tUi, readRoot: () => frame.root, createError,
+        getCard: item => cards.getCard(item), assertCard: handle => cards.assertCard(handle) });
+    cards = createCards({ markup, createError, prepareCard: (...args) => { groups.prepareCard(...args); prepareCard(...args); }, onRetire, onReplace,
         readRoot: () => frame.root, keyFor: item => item.videoId ? `v:${item.videoId}` : `h:${item.href}` });
 
     async function publish({ items, assertCurrent, ...mount }) {
@@ -33,6 +37,7 @@ export function createGrid({ document, location, runChunks,
             const previous = frame.publish(root, { ...mount, assertCurrent: guard });
             cards.publish(staged);
             items.forEach(cards.releaseStartup);
+            groups.retireActions(previous);
             frame.setEmpty(staged.size === 0);
             const acceptedRevision = cards.revision;
             frame.releaseReplacedRoot(previous);
@@ -47,6 +52,7 @@ export function createGrid({ document, location, runChunks,
     function dispose() {
         ++buildGeneration;
         const previous = frame.retire();
+        groups.dispose();
         try { cards.dispose(); }
         finally { frame.release(previous); }
     }
@@ -72,9 +78,10 @@ export function createGrid({ document, location, runChunks,
         insertCard: (...args) => { const result = cards.insertCard(...args); frame.setEmpty(false); return result; },
         setEmpty: frame.setEmpty,
         updateCard: cards.updateCard, materialFor: cards.materialFor,
+        updateCardPlacement: groups.updateCardPlacement, attachPlacementActions: groups.attachPlacementActions,
         hasRetained: cards.hasRetained, releaseRetained: cards.releaseRetained, clearRetained: cards.clearRetained,
         captureCard: markup.capture, captureTemplate: markup.captureTemplate, normalizeCard: markup.normalize,
         moveCard: (handle, parent, before) => { cards.assertCard(handle); frame.assertParent(parent); frame.moveCard(handle.node, parent, before); },
         orderChildren: (parent, desired) => { frame.assertParent(parent); frame.orderChildren(parent, desired); },
-        applyGeometry: frame.updateGeometry, diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics() }) });
+        applyGeometry: frame.updateGeometry, diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics(), ...groups.diagnostics() }) });
 }

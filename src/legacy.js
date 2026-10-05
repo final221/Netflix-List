@@ -46,7 +46,7 @@ export function startLegacy() {
         requestTimeoutMs: FRESH_MY_LIST_FETCH_TIMEOUT_MS });
     const gridView = createGrid({ document, location, runChunks: runConstructionChunks,
         createError: (code, message) => initializationError(code, 'grid-cards', message),
-        prepareCard: clone => ensureManualViewingControls(clone), installHover: ensureGridHoverBehavior,
+        installHover: ensureGridHoverBehavior,
         onRetire: retireGridCard, onReplace: onGridCardReplaced,
         tLog, tUi, copyLogs: copyDiagnosticLogs, setTimeout, clearTimeout,
         readEmptyContent: section => netflixDom.readEmptyContent(section), readEmptyShell: () => netflixDom.readEmptyShell(),
@@ -2029,99 +2029,55 @@ export function startLegacy() {
         return watch.types.get(id) || watch.cachedTypes?.get(id) || watch.manualChoices.get(id)?.type;
     }
 
-    function ensureManualViewingControls(clone) {
-        let controls = clone.__tmViewingControls;
-        if (!controls || controls.root.parentElement !== clone) {
-            // Snapshot clones can contain copied controls without their JS state.
-            for (const child of [...clone.children]) {
-                if (child.getAttribute('data-tm-viewing-actions') === 'true') child.remove();
-            }
-            const root = document.createElement('div');
-            root.setAttribute('data-tm-viewing-actions', 'true');
-            const toggle = document.createElement('button');
-            toggle.type = 'button';
-            toggle.setAttribute('data-tm-viewing-action', 'toggle');
-            const marker = document.createElement('span');
-            marker.setAttribute('data-tm-manual-choice', 'true');
-            marker.setAttribute('role', 'img');
-            root.appendChild(toggle);
-            root.appendChild(marker);
-            clone.appendChild(root);
-            controls = clone.__tmViewingControls = { root, toggle, marker };
-        }
-        return controls;
-    }
-
     function syncManualViewingCard(state, clone, item, status) {
-        const watch = state.watchStatus;
-        const controls = ensureManualViewingControls(clone);
-        const id = String(item.videoId);
-        const type = viewingTitleType(watch, id);
-        const label = status === 'complete' ? tUi('moveBackToMyList')
-            : tUi(type === 'series' ? 'markCaughtUp' : 'markWatched');
-        if (controls.toggle.textContent !== label) controls.toggle.textContent = label;
-        const toggleLabel = label + ': ' + (item.ariaLabel || id);
-        if (controls.toggle.getAttribute('aria-label') !== toggleLabel) controls.toggle.setAttribute('aria-label', toggleLabel);
-        const disabled = !watch.manualProfileGuid || watch.manualFailure;
-        if (controls.toggle.disabled !== disabled) controls.toggle.disabled = disabled;
-        const markerLabel = tUi('manualViewingChoice');
-        if (controls.marker.textContent !== markerLabel) controls.marker.textContent = markerLabel;
-        const description = tUi('manualViewingChoiceDescription');
-        if (controls.marker.getAttribute('title') !== description) controls.marker.setAttribute('title', description);
-        if (controls.marker.getAttribute('aria-label') !== description) controls.marker.setAttribute('aria-label', description);
-        const hidden = !watch.manualChoices.has(id);
-        if (controls.marker.hidden !== hidden) controls.marker.hidden = hidden;
+        const watch = state.watchStatus, handle = gridView.getCard(item);
+        if (!handle || handle.node !== clone) throw initializationError('GRID_CARD_RETIRED', 'grid-controls', 'Placement card changed');
+        gridView.updateCardPlacement(handle, { status, type: viewingTitleType(watch, String(item.videoId)),
+            manual: watch.manualChoices.has(String(item.videoId)), disabled: !watch.manualProfileGuid || watch.manualFailure }, () => {
+            assertRouteSession(watch.sessionToken);
+            if (sourceState !== state || state.watchStatus !== watch) throw createRouteSessionCancelledError();
+        });
     }
 
     function ensureManualViewingBehavior(state) {
-        const grid = state.grid;
-        if (grid.__tmViewingBehaviorInstalled) return;
-        grid.__tmViewingBehaviorInstalled = true;
-        grid.addEventListener('click', event => {
-            let button = event.target instanceof Element ? event.target : event.target?.parentElement;
-            while (button && button !== grid && !button.getAttribute('data-tm-viewing-action')) button = button.parentElement;
-            if (!button || button === grid || button.getAttribute('data-tm-viewing-action') !== 'toggle') return;
-            event.preventDefault();
-            event.stopPropagation();
-            event.stopImmediatePropagation();
-            if (button.disabled) return;
-            if (sourceState !== state || state.grid !== grid || !grid.isConnected || !isRouteSessionActive(state.watchStatus.sessionToken)) return;
-            let clone = button.parentElement;
-            while (clone && clone !== grid && !clone.__tmMyListItem) clone = clone.parentElement;
-            if (!clone || !gridOwnsClone(clone, grid) || state.cloneMap.get(itemKey(clone.__tmMyListItem)) !== clone) return;
-            if (clone.__tmViewingControls?.toggle !== button) return;
-            const watch = state.watchStatus;
-            if (netflixContext.activeProfile() !== watch.manualProfileGuid) {
-                syncWatchGroups(state);
-                return;
-            }
-            syncManualViewingProfile(watch);
-            const id = String(clone.__tmMyListItem.videoId);
-            const status = effectiveViewingStatus(watch, id) === 'complete' ? 'main' : 'complete';
-            const automatic = watch.results.get(id) || watch.cachedResults?.get(id) || 'unknown';
-            // Returning to an agreed automatic group also clears the old override.
-            // Unknown/in-flight data cannot establish agreement: keep that explicit
-            // placement, just as when automatic classification would undo the move.
-            const restoreAutomatic = automatic !== 'unknown' && (automatic === 'complete') === (status === 'complete');
-            const choice = restoreAutomatic ? null : { status, type: viewingTitleType(watch, id) || 'unknown',
-                coverage: status === 'complete' ? watch.seriesCoverage.get(id) || null : null };
-            const changes = new Map([[id, choice]]);
-            const saved = saveManualViewingChoices(watch, changes);
-            const changed = saved ? changedManualViewingIds(watch.manualChoices, saved) : new Set();
-            if (saved) watch.manualChoices = saved;
-            const beforeWork = { ...performanceDiagnostics.viewingGroups };
-            syncWatchGroups(state, changed, 'manual-choice');
-            log(tLog('viewingChoiceApplied'), {
-                saved: Boolean(saved), action: button.getAttribute('data-tm-viewing-action'),
-                targetGroup: status === 'complete' ? 'watched' : 'main', automaticStatus: automatic,
-                placement: choice ? 'manual' : 'automatic', restoredAutomatic: Boolean(saved) && restoreAutomatic,
-                manualMarkerVisible: watch.manualChoices.has(id),
-                changedTitles: changed.size, completed: watch.completedCount,
-                work: Object.fromEntries(Object.entries(performanceDiagnostics.viewingGroups)
-                    .filter(([, value]) => typeof value === 'number').map(([key, value]) => [key, value - beforeWork[key]]))
-            });
-            if (!gridOwnsClone(clone, grid)) watch.ui.summary.focus?.({ preventScroll: true });
-        }, true);
+        const grid = state.grid, watch = state.watchStatus;
+        gridView.attachPlacementActions({ assertCurrent() {
+            assertRouteSession(watch.sessionToken);
+            if (sourceState !== state || state.grid !== grid || state.watchStatus !== watch) throw createRouteSessionCancelledError();
+        }, onAction: item => applyManualViewingChoice(state, item) });
+    }
+
+    function applyManualViewingChoice(state, item) {
+        const watch = state.watchStatus;
+        if (netflixContext.activeProfile() !== watch.manualProfileGuid) {
+            syncWatchGroups(state);
+            return;
+        }
+        syncManualViewingProfile(watch);
+        const id = String(item.videoId);
+        const status = effectiveViewingStatus(watch, id) === 'complete' ? 'main' : 'complete';
+        const automatic = watch.results.get(id) || watch.cachedResults?.get(id) || 'unknown';
+        // Returning to an agreed automatic group also clears the old override.
+        // Unknown/in-flight data cannot establish agreement: keep that explicit
+        // placement, just as when automatic classification would undo the move.
+        const restoreAutomatic = automatic !== 'unknown' && (automatic === 'complete') === (status === 'complete');
+        const choice = restoreAutomatic ? null : { status, type: viewingTitleType(watch, id) || 'unknown',
+            coverage: status === 'complete' ? watch.seriesCoverage.get(id) || null : null };
+        const changes = new Map([[id, choice]]);
+        const saved = saveManualViewingChoices(watch, changes);
+        const changed = saved ? changedManualViewingIds(watch.manualChoices, saved) : new Set();
+        if (saved) watch.manualChoices = saved;
+        const beforeWork = { ...performanceDiagnostics.viewingGroups };
+        syncWatchGroups(state, changed, 'manual-choice');
+        log(tLog('viewingChoiceApplied'), {
+            saved: Boolean(saved), action: 'toggle',
+            targetGroup: status === 'complete' ? 'watched' : 'main', automaticStatus: automatic,
+            placement: choice ? 'manual' : 'automatic', restoredAutomatic: Boolean(saved) && restoreAutomatic,
+            manualMarkerVisible: watch.manualChoices.has(id),
+            changedTitles: changed.size, completed: watch.completedCount,
+            work: Object.fromEntries(Object.entries(performanceDiagnostics.viewingGroups)
+                .filter(([, value]) => typeof value === 'number').map(([key, value]) => [key, value - beforeWork[key]]))
+        });
     }
 
     function gridOwnsClone(clone, grid) {
@@ -3795,8 +3751,6 @@ export function startLegacy() {
 
     function normalizeClone(slot) {
         gridView.normalizeCard(slot);
-        // Group controls remain with the presentation callback until P12.
-        ensureManualViewingControls(slot);
     }
 
     function currentGridGeometry(section, layout) {

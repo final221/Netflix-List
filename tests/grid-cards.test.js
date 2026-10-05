@@ -186,7 +186,7 @@ test('disposal releases registry and retained material and prevents reentrant in
     grid.dispose();
     assert.equal(grid.isCardCurrent(stale), false);
     assert.equal(root.isConnected, false);
-    assert.deepEqual(grid.diagnostics(), { activeCards: 0, retainedCards: 0, retirementFailures: 0, frameReleaseFailures: 0 });
+    assert.deepEqual(grid.diagnostics(), { activeCards: 0, retainedCards: 0, retirementFailures: 0, frameReleaseFailures: 0, placementReleaseFailures: 0 });
 });
 
 test('a failed retirement callback cannot prevent disposal of other cards or leave a retained registry view', async () => {
@@ -199,7 +199,7 @@ test('a failed retirement callback cannot prevent disposal of other cards or lea
     e.grid.dispose();
     assert.deepEqual(released, ['v:1', 'v:2']);
     assert.equal(oldView.size, 0);
-    assert.deepEqual(e.grid.diagnostics(), { activeCards: 0, retainedCards: 0, retirementFailures: 2, frameReleaseFailures: 0 });
+    assert.deepEqual(e.grid.diagnostics(), { activeCards: 0, retainedCards: 0, retirementFailures: 2, frameReleaseFailures: 0, placementReleaseFailures: 0 });
 });
 
 test('empty frame accepts the first addition and can move between native and synthetic anchors without retaining retired cards', async () => {

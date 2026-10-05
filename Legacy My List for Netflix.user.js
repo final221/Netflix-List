@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.34
+// @version      1.4.35
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -1753,6 +1753,170 @@
     };
   }
 
+  // src/grid/groups.js
+  function createGroups({ document: document2, tUi, readRoot, getCard, assertCard, createError }) {
+    let controlsByNode = /* @__PURE__ */ new WeakMap(), actions = null, revision = 0, releaseFailures = 0;
+    function release(resource) {
+      if (!resource) return;
+      try {
+        resource.root.removeEventListener("click", resource.listener, true);
+      } catch (_) {
+        releaseFailures++;
+      }
+    }
+    function prepareCard(node, item) {
+      let controls = controlsByNode.get(node);
+      if (!controls || controls.root.parentElement !== node) {
+        for (const child of [...node.children]) {
+          if (child.getAttribute("data-tm-viewing-actions") === "true") child.remove();
+        }
+        const root = document2.createElement("div");
+        root.setAttribute("data-tm-viewing-actions", "true");
+        const toggle = document2.createElement("button");
+        toggle.type = "button";
+        toggle.setAttribute("data-tm-viewing-action", "toggle");
+        const marker = document2.createElement("span");
+        marker.setAttribute("data-tm-manual-choice", "true");
+        marker.setAttribute("role", "img");
+        root.appendChild(toggle);
+        root.appendChild(marker);
+        node.appendChild(root);
+        controls = { root, toggle, marker, item };
+        controlsByNode.set(node, controls);
+      }
+      return controls;
+    }
+    function updateCardPlacement(handle, facts, assertCurrent = () => {
+    }) {
+      let controls;
+      const guard = () => {
+        assertCurrent();
+        assertCard(handle);
+        if (controls && (controlsByNode.get(handle.node) !== controls || controls.root.parentElement !== handle.node || controls.toggle.parentElement !== controls.root || controls.marker.parentElement !== controls.root)) {
+          throw createError("GRID_CONTROL_RETIRED", "Placement controls changed");
+        }
+      };
+      guard();
+      controls = controlsByNode.get(handle.node);
+      if (!controls || controls.root.parentElement !== handle.node) throw createError("GRID_CONTROL_RETIRED", "Placement controls changed");
+      const write = (read, apply, value) => {
+        guard();
+        if (read() !== value) apply(value);
+        guard();
+      };
+      const label = tUi(facts.status === "complete" ? "moveBackToMyList" : facts.type === "series" ? "markCaughtUp" : "markWatched");
+      write(() => controls.toggle.textContent, (value) => {
+        controls.toggle.textContent = value;
+      }, label);
+      write(
+        () => controls.toggle.getAttribute("aria-label"),
+        (value) => controls.toggle.setAttribute("aria-label", value),
+        label + ": " + (controls.item.ariaLabel || String(controls.item.videoId))
+      );
+      write(() => controls.toggle.disabled, (value) => {
+        controls.toggle.disabled = value;
+      }, Boolean(facts.disabled));
+      write(() => controls.marker.textContent, (value) => {
+        controls.marker.textContent = value;
+      }, tUi("manualViewingChoice"));
+      const description = tUi("manualViewingChoiceDescription");
+      write(() => controls.marker.getAttribute("title"), (value) => controls.marker.setAttribute("title", value), description);
+      write(() => controls.marker.getAttribute("aria-label"), (value) => controls.marker.setAttribute("aria-label", value), description);
+      write(() => controls.marker.hidden, (value) => {
+        controls.marker.hidden = value;
+      }, !facts.manual);
+    }
+    function visible(node, root) {
+      if (!node?.isConnected || !root?.isConnected || node.getAttribute("data-tm-type-hidden") === "true") return false;
+      if (node.parentElement === root) return true;
+      const parent = node.parentElement, details = parent?.parentElement;
+      return parent?.getAttribute("data-tm-watch-grid") === "true" && details?.parentElement === root && details.open === true;
+    }
+    function attachPlacementActions({ assertCurrent, onAction }) {
+      const root = readRoot(), owner = ++revision;
+      const guard = () => {
+        assertCurrent();
+        if (revision !== owner || root !== readRoot() || !root?.isConnected) throw createError("GRID_FRAME_RETIRED", "Placement action frame changed");
+      };
+      guard();
+      const previous = actions;
+      actions = null;
+      release(previous);
+      guard();
+      const resource = { root, listener: null };
+      resource.listener = (event) => {
+        if (actions !== resource) return;
+        let button = event.target?.getAttribute ? event.target : event.target?.parentElement;
+        while (button && button !== root && !button.getAttribute("data-tm-viewing-action")) button = button.parentElement;
+        if (!button || button === root || button.getAttribute("data-tm-viewing-action") !== "toggle") return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        if (button.disabled) return;
+        try {
+          guard();
+        } catch (_) {
+          return;
+        }
+        let node = button.parentElement;
+        while (node && node !== root && !controlsByNode.has(node)) node = node.parentElement;
+        const controls = controlsByNode.get(node);
+        if (!controls || controls.toggle !== button || !visible(node, root)) return;
+        const handle = getCard(controls.item);
+        if (!handle || handle.node !== node) return;
+        try {
+          assertCard(handle);
+          guard();
+        } catch (_) {
+          return;
+        }
+        onAction(controls.item);
+        try {
+          guard();
+        } catch (_) {
+          return;
+        }
+        const current = getCard(controls.item);
+        if (!current || !visible(current.node, root)) {
+          root.querySelector("[data-tm-watch-section]")?.querySelector("summary")?.focus?.({ preventScroll: true });
+        }
+      };
+      actions = resource;
+      root.addEventListener("click", resource.listener, true);
+      try {
+        guard();
+      } catch (error) {
+        if (actions === resource) {
+          actions = null;
+          release(resource);
+        }
+        throw error;
+      }
+    }
+    function dispose() {
+      revision++;
+      const previous = actions;
+      actions = null;
+      controlsByNode = /* @__PURE__ */ new WeakMap();
+      release(previous);
+    }
+    function retireActions(root) {
+      if (actions?.root !== root) return;
+      revision++;
+      const previous = actions;
+      actions = null;
+      release(previous);
+    }
+    return {
+      prepareCard,
+      updateCardPlacement,
+      attachPlacementActions,
+      retireActions,
+      dispose,
+      diagnostics: () => ({ placementReleaseFailures: releaseFailures })
+    };
+  }
+
   // src/grid/grid.js
   function createGrid({
     document: document2,
@@ -1792,10 +1956,22 @@
       cloneEmptyContent: markup.cloneEmptyContent
     });
     let buildGeneration = 0;
-    const cards = createCards({
+    let cards;
+    const groups = createGroups({
+      document: document2,
+      tUi,
+      readRoot: () => frame.root,
+      createError,
+      getCard: (item) => cards.getCard(item),
+      assertCard: (handle) => cards.assertCard(handle)
+    });
+    cards = createCards({
       markup,
       createError,
-      prepareCard,
+      prepareCard: (...args) => {
+        groups.prepareCard(...args);
+        prepareCard(...args);
+      },
       onRetire,
       onReplace,
       readRoot: () => frame.root,
@@ -1819,6 +1995,7 @@
         const previous = frame.publish(root, { ...mount, assertCurrent: guard });
         cards.publish(staged);
         items.forEach(cards.releaseStartup);
+        groups.retireActions(previous);
         frame.setEmpty(staged.size === 0);
         const acceptedRevision = cards.revision;
         frame.releaseReplacedRoot(previous);
@@ -1833,6 +2010,7 @@
     function dispose() {
       ++buildGeneration;
       const previous = frame.retire();
+      groups.dispose();
       try {
         cards.dispose();
       } finally {
@@ -1898,6 +2076,8 @@
       setEmpty: frame.setEmpty,
       updateCard: cards.updateCard,
       materialFor: cards.materialFor,
+      updateCardPlacement: groups.updateCardPlacement,
+      attachPlacementActions: groups.attachPlacementActions,
       hasRetained: cards.hasRetained,
       releaseRetained: cards.releaseRetained,
       clearRetained: cards.clearRetained,
@@ -1914,7 +2094,7 @@
         frame.orderChildren(parent, desired);
       },
       applyGeometry: frame.updateGeometry,
-      diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics() })
+      diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics(), ...groups.diagnostics() })
     });
   }
 
@@ -9603,7 +9783,6 @@
       location,
       runChunks: runConstructionChunks,
       createError: (code, message) => initializationError(code, "grid-cards", message),
-      prepareCard: (clone) => ensureManualViewingControls(clone),
       installHover: ensureGridHoverBehavior,
       onRetire: retireGridCard,
       onReplace: onGridCardReplaced,
@@ -9657,7 +9836,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.34";
+    const SCRIPT_VERSION = "1.4.35";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -11810,98 +11989,60 @@
     function viewingTitleType(watch, id) {
       return watch.types.get(id) || watch.cachedTypes?.get(id) || watch.manualChoices.get(id)?.type;
     }
-    function ensureManualViewingControls(clone) {
-      let controls = clone.__tmViewingControls;
-      if (!controls || controls.root.parentElement !== clone) {
-        for (const child of [...clone.children]) {
-          if (child.getAttribute("data-tm-viewing-actions") === "true") child.remove();
-        }
-        const root = document.createElement("div");
-        root.setAttribute("data-tm-viewing-actions", "true");
-        const toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.setAttribute("data-tm-viewing-action", "toggle");
-        const marker = document.createElement("span");
-        marker.setAttribute("data-tm-manual-choice", "true");
-        marker.setAttribute("role", "img");
-        root.appendChild(toggle);
-        root.appendChild(marker);
-        clone.appendChild(root);
-        controls = clone.__tmViewingControls = { root, toggle, marker };
-      }
-      return controls;
-    }
     function syncManualViewingCard(state, clone, item, status) {
-      const watch = state.watchStatus;
-      const controls = ensureManualViewingControls(clone);
-      const id = String(item.videoId);
-      const type = viewingTitleType(watch, id);
-      const label = status === "complete" ? tUi("moveBackToMyList") : tUi(type === "series" ? "markCaughtUp" : "markWatched");
-      if (controls.toggle.textContent !== label) controls.toggle.textContent = label;
-      const toggleLabel = label + ": " + (item.ariaLabel || id);
-      if (controls.toggle.getAttribute("aria-label") !== toggleLabel) controls.toggle.setAttribute("aria-label", toggleLabel);
-      const disabled = !watch.manualProfileGuid || watch.manualFailure;
-      if (controls.toggle.disabled !== disabled) controls.toggle.disabled = disabled;
-      const markerLabel = tUi("manualViewingChoice");
-      if (controls.marker.textContent !== markerLabel) controls.marker.textContent = markerLabel;
-      const description = tUi("manualViewingChoiceDescription");
-      if (controls.marker.getAttribute("title") !== description) controls.marker.setAttribute("title", description);
-      if (controls.marker.getAttribute("aria-label") !== description) controls.marker.setAttribute("aria-label", description);
-      const hidden = !watch.manualChoices.has(id);
-      if (controls.marker.hidden !== hidden) controls.marker.hidden = hidden;
+      const watch = state.watchStatus, handle = gridView.getCard(item);
+      if (!handle || handle.node !== clone) throw initializationError("GRID_CARD_RETIRED", "grid-controls", "Placement card changed");
+      gridView.updateCardPlacement(handle, {
+        status,
+        type: viewingTitleType(watch, String(item.videoId)),
+        manual: watch.manualChoices.has(String(item.videoId)),
+        disabled: !watch.manualProfileGuid || watch.manualFailure
+      }, () => {
+        assertRouteSession(watch.sessionToken);
+        if (sourceState !== state || state.watchStatus !== watch) throw createRouteSessionCancelledError();
+      });
     }
     function ensureManualViewingBehavior(state) {
-      const grid = state.grid;
-      if (grid.__tmViewingBehaviorInstalled) return;
-      grid.__tmViewingBehaviorInstalled = true;
-      grid.addEventListener("click", (event) => {
-        let button = event.target instanceof Element ? event.target : event.target?.parentElement;
-        while (button && button !== grid && !button.getAttribute("data-tm-viewing-action")) button = button.parentElement;
-        if (!button || button === grid || button.getAttribute("data-tm-viewing-action") !== "toggle") return;
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-        if (button.disabled) return;
-        if (sourceState !== state || state.grid !== grid || !grid.isConnected || !isRouteSessionActive(state.watchStatus.sessionToken)) return;
-        let clone = button.parentElement;
-        while (clone && clone !== grid && !clone.__tmMyListItem) clone = clone.parentElement;
-        if (!clone || !gridOwnsClone(clone, grid) || state.cloneMap.get(itemKey(clone.__tmMyListItem)) !== clone) return;
-        if (clone.__tmViewingControls?.toggle !== button) return;
-        const watch = state.watchStatus;
-        if (netflixContext.activeProfile() !== watch.manualProfileGuid) {
-          syncWatchGroups(state);
-          return;
-        }
-        syncManualViewingProfile(watch);
-        const id = String(clone.__tmMyListItem.videoId);
-        const status = effectiveViewingStatus(watch, id) === "complete" ? "main" : "complete";
-        const automatic = watch.results.get(id) || watch.cachedResults?.get(id) || "unknown";
-        const restoreAutomatic = automatic !== "unknown" && automatic === "complete" === (status === "complete");
-        const choice = restoreAutomatic ? null : {
-          status,
-          type: viewingTitleType(watch, id) || "unknown",
-          coverage: status === "complete" ? watch.seriesCoverage.get(id) || null : null
-        };
-        const changes = /* @__PURE__ */ new Map([[id, choice]]);
-        const saved = saveManualViewingChoices(watch, changes);
-        const changed = saved ? changedManualViewingIds(watch.manualChoices, saved) : /* @__PURE__ */ new Set();
-        if (saved) watch.manualChoices = saved;
-        const beforeWork = { ...performanceDiagnostics.viewingGroups };
-        syncWatchGroups(state, changed, "manual-choice");
-        log(tLog("viewingChoiceApplied"), {
-          saved: Boolean(saved),
-          action: button.getAttribute("data-tm-viewing-action"),
-          targetGroup: status === "complete" ? "watched" : "main",
-          automaticStatus: automatic,
-          placement: choice ? "manual" : "automatic",
-          restoredAutomatic: Boolean(saved) && restoreAutomatic,
-          manualMarkerVisible: watch.manualChoices.has(id),
-          changedTitles: changed.size,
-          completed: watch.completedCount,
-          work: Object.fromEntries(Object.entries(performanceDiagnostics.viewingGroups).filter(([, value]) => typeof value === "number").map(([key, value]) => [key, value - beforeWork[key]]))
-        });
-        if (!gridOwnsClone(clone, grid)) watch.ui.summary.focus?.({ preventScroll: true });
-      }, true);
+      const grid = state.grid, watch = state.watchStatus;
+      gridView.attachPlacementActions({ assertCurrent() {
+        assertRouteSession(watch.sessionToken);
+        if (sourceState !== state || state.grid !== grid || state.watchStatus !== watch) throw createRouteSessionCancelledError();
+      }, onAction: (item) => applyManualViewingChoice(state, item) });
+    }
+    function applyManualViewingChoice(state, item) {
+      const watch = state.watchStatus;
+      if (netflixContext.activeProfile() !== watch.manualProfileGuid) {
+        syncWatchGroups(state);
+        return;
+      }
+      syncManualViewingProfile(watch);
+      const id = String(item.videoId);
+      const status = effectiveViewingStatus(watch, id) === "complete" ? "main" : "complete";
+      const automatic = watch.results.get(id) || watch.cachedResults?.get(id) || "unknown";
+      const restoreAutomatic = automatic !== "unknown" && automatic === "complete" === (status === "complete");
+      const choice = restoreAutomatic ? null : {
+        status,
+        type: viewingTitleType(watch, id) || "unknown",
+        coverage: status === "complete" ? watch.seriesCoverage.get(id) || null : null
+      };
+      const changes = /* @__PURE__ */ new Map([[id, choice]]);
+      const saved = saveManualViewingChoices(watch, changes);
+      const changed = saved ? changedManualViewingIds(watch.manualChoices, saved) : /* @__PURE__ */ new Set();
+      if (saved) watch.manualChoices = saved;
+      const beforeWork = { ...performanceDiagnostics.viewingGroups };
+      syncWatchGroups(state, changed, "manual-choice");
+      log(tLog("viewingChoiceApplied"), {
+        saved: Boolean(saved),
+        action: "toggle",
+        targetGroup: status === "complete" ? "watched" : "main",
+        automaticStatus: automatic,
+        placement: choice ? "manual" : "automatic",
+        restoredAutomatic: Boolean(saved) && restoreAutomatic,
+        manualMarkerVisible: watch.manualChoices.has(id),
+        changedTitles: changed.size,
+        completed: watch.completedCount,
+        work: Object.fromEntries(Object.entries(performanceDiagnostics.viewingGroups).filter(([, value]) => typeof value === "number").map(([key, value]) => [key, value - beforeWork[key]]))
+      });
     }
     function gridOwnsClone(clone, grid) {
       if (!grid || !clone || clone.getAttribute("data-tm-type-hidden") === "true") return false;
@@ -13581,7 +13722,6 @@
     }
     function normalizeClone(slot) {
       gridView.normalizeCard(slot);
-      ensureManualViewingControls(slot);
     }
     function currentGridGeometry(section, layout) {
       return withNativeReadScope(() => {

@@ -3415,12 +3415,14 @@ class ConstructionNode extends Element {
         const all = this.children.flatMap(child => [child, ...child.querySelectorAll('*')]);
         return selector === '*' ? all : all.filter(node => {
             if (node.id === selector) return true;
+            if (/^[\w-]+$/.test(selector) && node.tagName === selector.toUpperCase()) return true;
             const match = /^([\w-]+)?\[([\w-]+)(?:="([^"]*)")?\]$/.exec(selector);
             return Boolean(match && (!match[1] || node.tagName === match[1].toUpperCase()) &&
                 (match[3] === undefined ? node.getAttribute(match[2]) !== null : node.getAttribute(match[2]) === match[3]));
         });
     }
     addEventListener(type, callback) { this.listeners.set(type, callback); }
+    removeEventListener(type, callback) { if (this.listeners.get(type) === callback) this.listeners.delete(type); }
     replaceWith(fresh) {
         const parent = this.parentElement;
         parent.insertBefore(fresh, this);
@@ -3459,7 +3461,7 @@ function constructionEnvironment() {
     const e = environment([
         'sleep', 'runConstructionChunks', 'buildGraphqlMyListItems', 'collectFreshMyListCarouselItems', 'assertRouteSession',
         'createRouteSessionCancelledError', 'isRouteSessionCancelledError', 'initializationError',
-        'buildGrid', 'normalizeClone', 'ensureManualViewingControls', 'copyItemAttributes', 'associateGridHoverItem', 'ensureGridHoverBehavior',
+        'buildGrid', 'normalizeClone', 'copyItemAttributes', 'associateGridHoverItem', 'ensureGridHoverBehavior',
         'itemKey', 'clearRunningSession', 'retryPendingMyListMutations', 'tryApplyMyListMutation',
         'applyLegacyRemoval', 'applyLegacyAddition', 'disposeMyListMutation',
         'cardSourceForItem',
@@ -3499,7 +3501,7 @@ function constructionEnvironment() {
     e.c.gridView = createGrid({ document: e.c.document, location: e.c.location,
         runChunks: (...args) => e.c.runConstructionChunks(...args),
         createError: (code, message) => e.c.initializationError(code, 'grid-cards', message),
-        prepareCard: clone => e.c.ensureManualViewingControls(clone),
+        tUi: (...args) => e.c.tUi?.(...args) || args[0],
         installHover: root => e.c.ensureGridHoverBehavior(root),
         onRetire: (handle, detail) => e.c.retireGridCard(handle, detail),
         onReplace: (old, next) => e.c.onGridCardReplaced(old, next) });
@@ -5593,7 +5595,7 @@ const viewingFunctions = [
     'saveViewingSeriesDetails', 'collectViewingSeriesDiagnostics',
     'viewingLatestEpisode', 'viewingProgressSummary', 'viewingSeriesResult',
     'validViewingCoverage', 'readManualViewingChoices', 'syncManualViewingProfile', 'saveManualViewingChoices', 'changedManualViewingIds', 'reconcileManualViewingCoverage',
-    'effectiveViewingStatus', 'ensureManualViewingControls', 'syncManualViewingCard', 'ensureManualViewingBehavior',
+    'effectiveViewingStatus', 'syncManualViewingCard', 'ensureManualViewingBehavior', 'applyManualViewingChoice',
     'handleGridClonePointerOver', 'handleGridClonePointerLeave',
     'gridOwnsClone', 'createWatchTypeFilter', 'syncWatchTypeFilter', 'ensureWatchGroupUi', 'syncWatchChildOrder', 'syncWatchGroups',
     'initializeWatchGroups', 'refreshViewingStatus', 'createRouteFetch', 'finishRouteFetch',
@@ -7557,10 +7559,16 @@ test('profile and route changes cancel direct episode reads and discard profile-
     }
 });
 
+function viewingControls(node) {
+    const root = node.children.find(child => child.getAttribute('data-tm-viewing-actions') === 'true');
+    return root && { root, toggle: root.children.find(child => child.getAttribute('data-tm-viewing-action') === 'toggle'),
+        marker: root.children.find(child => child.getAttribute('data-tm-manual-choice') === 'true') };
+}
+
 function clickManualViewing(e, id, action = 'toggle', grid = e.state.grid, button = null) {
     const clone = e.state.cloneMap.get('v:' + id);
     assert.equal(action, 'toggle');
-    button ||= clone.__tmViewingControls.toggle;
+    button ||= viewingControls(clone).toggle;
     const events = [];
     grid.listeners.get('click')({ target: button, preventDefault: () => events.push('prevent'),
         stopPropagation: () => events.push('stop'), stopImmediatePropagation: () => events.push('immediate') });
@@ -7657,7 +7665,7 @@ test('manual choices move cards immediately, update filters and counts, and perf
     assert.deepEqual(e.state.items.map(item => item.videoId), itemOrder);
     assert.equal(e.state.totalCount, 7);
     assert.equal(e.storageCalls.writes, 1);
-    assert.equal(e.state.cloneMap.get('v:2').__tmViewingControls.toggle.textContent, 'Move back to My List');
+    assert.equal(viewingControls(e.state.cloneMap.get('v:2')).toggle.textContent, 'Move back to My List');
 });
 
 test('manual choices survive reloads and refresh and the move button restores automatic classification when it agrees', async () => {
@@ -7673,25 +7681,25 @@ test('manual choices survive reloads and refresh and the move button restores au
     clickManualViewing(next, '2');
     assert.ok(mainViewingIds(next).includes('2'));
     assert.equal(next.state.watchStatus.manualChoices.has('2'), false, 'returning to the automatic main group clears the correction');
-    assert.equal(next.state.cloneMap.get('v:2').__tmViewingControls.marker.hidden, true);
+    assert.equal(viewingControls(next.state.cloneMap.get('v:2')).marker.hidden, true);
     next.fixtures().titles.videos[2] = viewingVideo('movie', true);
     await next.c.refreshViewingStatus(next.state);
     assert.ok(completedViewingIds(next).includes('2'), 'automatic classification resumes after clearing the override');
     clickManualViewing(next, '2');
     assert.equal(next.state.watchStatus.manualChoices.get('2').status, 'main');
-    assert.equal(next.state.cloneMap.get('v:2').__tmViewingControls.marker.hidden, false);
+    assert.equal(viewingControls(next.state.cloneMap.get('v:2')).marker.hidden, false);
     await next.c.refreshViewingStatus(next.state);
     assert.ok(mainViewingIds(next).includes('2'), 'an explicit main-list choice outweighs automatic completion');
     clickManualViewing(next, '2');
     assert.ok(completedViewingIds(next).includes('2'));
     assert.equal(next.state.watchStatus.manualChoices.has('2'), false);
-    assert.equal(next.state.cloneMap.get('v:2').__tmViewingControls.marker.hidden, true);
+    assert.equal(viewingControls(next.state.cloneMap.get('v:2')).marker.hidden, true);
 });
 
 test('cards show one move button and a passive manual marker that survives reload without becoming a hover or click action', async () => {
     const e = await viewingEnvironment();
     await e.start();
-    const clone = e.state.cloneMap.get('v:2'), controls = clone.__tmViewingControls;
+    const clone = e.state.cloneMap.get('v:2'), controls = viewingControls(clone);
     assert.equal(controls.root.children.filter(child => child.type === 'button').length, 1);
     assert.equal(controls.marker.hidden, true);
     clickManualViewing(e, '2');
@@ -7711,8 +7719,8 @@ test('cards show one move button and a passive manual marker that survives reloa
     assert.deepEqual({ writes: e.storageCalls.writes, requests: e.requests.length, completed: e.state.watchStatus.completedCount }, before);
     const next = await viewingEnvironment(7, null, e.storage);
     await next.start();
-    assert.equal(next.state.cloneMap.get('v:2').__tmViewingControls.marker.hidden, false);
-    assert.equal(next.state.cloneMap.get('v:1').__tmViewingControls.marker.hidden, true, 'an automatic watched title has no marker');
+    assert.equal(viewingControls(next.state.cloneMap.get('v:2')).marker.hidden, false);
+    assert.equal(viewingControls(next.state.cloneMap.get('v:1')).marker.hidden, true, 'an automatic watched title has no marker');
 });
 
 test('moving back with unknown automatic progress retains the explicit main choice when a later scan reports complete', async () => {
@@ -7726,7 +7734,7 @@ test('moving back with unknown automatic progress retains the explicit main choi
     clickViewingFilter(e, 'watched', 'all');
     clickManualViewing(e, '7');
     assert.equal(e.state.watchStatus.manualChoices.get('7').status, 'main');
-    assert.equal(e.state.cloneMap.get('v:7').__tmViewingControls.marker.hidden, false);
+    assert.equal(viewingControls(e.state.cloneMap.get('v:7')).marker.hidden, false);
     assert.equal(e.requests.length, requests);
     e.fixtures().titles.videos[7] = viewingVideo('movie', true);
     await e.c.refreshViewingStatus(e.state);
@@ -7752,7 +7760,7 @@ test('the move button can restore an agreed cached classification without a live
     clickManualViewing(e, '1');
     assert.equal(e.state.watchStatus.manualChoices.has('1'), false);
     assert.ok(completedViewingIds(e).includes('1'));
-    assert.equal(e.state.cloneMap.get('v:1').__tmViewingControls.marker.hidden, true);
+    assert.equal(viewingControls(e.state.cloneMap.get('v:1')).marker.hidden, true);
     const action = e.logs.filter(row => row.name === 'viewingChoiceApplied').at(-1).details;
     assert.equal(action.targetGroup, 'watched');
     assert.equal(action.placement, 'automatic');
@@ -7770,7 +7778,7 @@ test('failed automatic restoration keeps the saved placement and marker and the 
     clickManualViewing(e, '2');
     assert.ok(completedViewingIds(e).includes('2'));
     assert.equal(e.state.watchStatus.manualChoices.get('2').status, 'complete');
-    const controls = e.state.cloneMap.get('v:2').__tmViewingControls;
+    const controls = viewingControls(e.state.cloneMap.get('v:2'));
     assert.equal(controls.marker.hidden, false);
     assert.equal(controls.toggle.disabled, true);
     const action = e.logs.filter(row => row.name === 'viewingChoiceApplied').at(-1).details;
@@ -7781,7 +7789,7 @@ test('failed automatic restoration keeps the saved placement and marker and the 
     const next = await viewingEnvironment(7, null, e.storage);
     await next.start();
     assert.ok(completedViewingIds(next).includes('2'));
-    assert.equal(next.state.cloneMap.get('v:2').__tmViewingControls.marker.hidden, false);
+    assert.equal(viewingControls(next.state.cloneMap.get('v:2')).marker.hidden, false);
 });
 
 test('manual corrections remain available when optional viewing requests fail', async () => {
@@ -7895,7 +7903,7 @@ test('storage read/write failures surface without pretending a correction was re
         assert.equal(e.state.watchStatus.manualChoices.has('2'), false);
         assert.equal([...e.storage.keys()].filter(key => key.startsWith('test.viewingChoices.')).length, 0);
         assert.match(e.state.watchStatus.ui.note.textContent, /Could not save viewing choices/);
-        assert.equal(e.state.cloneMap.get('v:2').__tmViewingControls.toggle.disabled, true);
+        assert.equal(viewingControls(e.state.cloneMap.get('v:2')).toggle.disabled, true);
     }
 });
 
@@ -7921,9 +7929,11 @@ test('rebuilds and card replacements keep one working action row and reject obso
     const e = await viewingEnvironment();
     await e.start();
     const oldGrid = e.state.grid;
-    const oldButton = e.state.cloneMap.get('v:2').__tmViewingControls.toggle;
+    const oldListener = oldGrid.listeners.get('click');
+    const oldButton = viewingControls(e.state.cloneMap.get('v:2')).toggle;
     await e.c.buildGrid(e.section, e.scroller, e.items, e.layout, 7, 1);
-    clickManualViewing(e, '2', 'toggle', oldGrid, oldButton);
+    assert.equal(oldGrid.listeners.get('click'), undefined, 'publication releases the exact old listener');
+    oldListener({ target: oldButton, preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {} });
     assert.equal(e.storageCalls.writes, 0);
     const clone = e.state.cloneMap.get('v:2');
     assert.equal(clone.children.filter(child => child.getAttribute('data-tm-viewing-actions') === 'true').length, 1);
@@ -7933,7 +7943,7 @@ test('rebuilds and card replacements keep one working action row and reject obso
     e.c.gridView.replaceCard(e.c.gridView.getCard(clone.__tmMyListItem), { node: replacement });
     e.c.syncWatchGroups(e.state);
     assert.equal(replacement.children.filter(child => child.getAttribute('data-tm-viewing-actions') === 'true').length, 1);
-    clickManualViewing(e, '2', 'toggle', e.state.grid, clone.__tmViewingControls.toggle);
+    clickManualViewing(e, '2', 'toggle', e.state.grid, viewingControls(clone).toggle);
     assert.equal(e.storageCalls.writes, 0);
     clickManualViewing(e, '2');
     assert.ok(completedViewingIds(e).includes('2'));
@@ -7947,7 +7957,7 @@ test('viewing controls cancel pending popup preparation and ordinary artwork can
     const handler = e.state.grid.listeners.get('pointerover');
     handler({ target: card, relatedTarget: null });
     assert.equal(e.c.pendingGridHoverClone, clone);
-    const button = clone.__tmViewingControls.toggle;
+    const button = viewingControls(clone).toggle;
     handler({ target: button, relatedTarget: card });
     assert.equal(e.c.pendingGridHoverClone, null);
     assert.equal(e.c.gridCloneFromPointerEvent({ target: button }, e.state.grid), null);
@@ -8000,7 +8010,7 @@ test('stable manual card synchronization performs no storage calls, allocations 
     clickManualViewing(e, '2');
     const before = { ...e.storageCalls, created: e.created.length, requests: e.requests.length };
     for (const clone of e.state.cloneMap.values()) {
-        for (const button of [clone.__tmViewingControls.toggle, clone.__tmViewingControls.marker]) {
+        for (const button of [viewingControls(clone).toggle, viewingControls(clone).marker]) {
             button.setAttribute = () => { throw new Error('unchanged button attribute write'); };
         }
     }
@@ -8040,10 +8050,10 @@ test('native hover clone replacement publishes correctly labeled manual controls
     const item = e.state.items.find(item => item.videoId === '2');
     const old = e.state.cloneMap.get('v:2');
     const { fresh } = e.c.makeLiveClone(e.template, item, old, item.page);
-    assert.equal(fresh.__tmViewingControls.toggle.textContent, 'Mark watched');
+    assert.equal(viewingControls(fresh).toggle.textContent, 'Mark watched');
     clickManualViewing(e, '2');
     assert.ok(completedViewingIds(e).includes('2'));
-    assert.equal(fresh.__tmViewingControls.toggle.textContent, 'Move back to My List');
+    assert.equal(viewingControls(fresh).toggle.textContent, 'Move back to My List');
 });
 
 test('late automatic baseline capture preserves an override cleared by the move button in another tab', async () => {
@@ -9392,7 +9402,7 @@ test('actual grid admission rejects an obsolete preparation before native captur
     assert.throws(() => e.c.makeLiveClone(native, items[0], old, 0), { code: 'GRID_CARD_RETIRED' });
     assert.equal(captures, 0);
     e.c.gridView.assertCard(next);
-    assert.ok(next.node.__tmViewingControls);
+    assert.ok(viewingControls(next.node));
 });
 
 test('actual grid replacement hands the admitted hover attempt to its new handle and cancels unrelated replacement', async () => {
@@ -9411,7 +9421,7 @@ test('actual grid replacement hands the admitted hover attempt to its new handle
     assert.equal(e.c.gridView.isCardCurrent(old), false);
     e.c.gridView.assertCard(handle);
     assert.equal(fresh.__tmHoverReplacementToken, 3);
-    assert.ok(fresh.__tmViewingControls);
+    assert.ok(viewingControls(fresh));
     e.c.activeClone = fresh;
     e.c.gridView.replaceCard(handle, { node: fresh.cloneNode(true) });
     assert.equal(e.c.hoverToken, 4);

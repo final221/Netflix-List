@@ -97,7 +97,7 @@ The target test files are created or deepened with the owner they exercise. This
 | tests/netflix-data.test.js | P05–P07 | Page/context/markup interpretation and actual list/viewing protocol operations |
 | tests/app.test.js | P08; deepen in P20 | Session/request invalidation first, then composed initialization, recovery and disposal |
 | tests/carousel.test.js | P08–P10 | Binding replacement, shared reads, readiness, page mapping, serialized movement and native collection |
-| tests/grid.test.js; tests/grid-cards.test.js; tests/grid-frame.test.js; tests/grid-empty.test.js | P03 resource checks; P11 ownership suites; deepen in P12 | Frame/card lifetime, complete replacement, native/provisional/synthetic empty transitions, exact disposal, groups, controls, filters and focus |
+| tests/grid.test.js; tests/grid-cards.test.js; tests/grid-frame.test.js; tests/grid-empty.test.js; tests/grid-controls.test.js | P03 resource checks; P11 ownership suites; P12 placement controls and later groups | Frame/card lifetime, complete replacement, native/provisional/synthetic empty transitions, exact disposal, groups, controls, filters and focus |
 | tests/list.test.js | P13–P14 | Collection strategy, validated membership/order, pending changes, deferral and Undo |
 | tests/viewing.test.js | P15–P16 | Completion/cache use, bounded scan, partial results, repairs and incremental publication |
 | tests/viewing-choices.test.js | P15 | Profile-scoped manual placement, persistence, precedence and coverage expiry |
@@ -274,6 +274,8 @@ These checkpoints specify the destination of each remaining workflow, not its cu
 - **Evidence:** Grid owns all group/filter/control DOM and selections; legacy completion/choice code has no direct card presentation writes; one-title updates and stationary-hover preservation keep their current bounds. Remove P11 grouping bridges. Complete the common gate.
 - **Dependencies:** P11 cards/frame and P07 normalized type/status data.
 - **Depth:** Deepen grid with complete grouped presentation, while keeping placement decisions out of it.
+
+P12 can use bounded working checkpoints without weakening its parent evidence: first placement-control DOM/private identity/action-listener ownership, then group/filter/expansion/index/count and local regrouping ownership, followed by the complete caller/coverage audit and common parent gate. A checkpoint release does not complete P12 or authorize skipping its remaining acceptance conditions.
 
 ### P13 — Transfer membership records, order and collection strategy
 
