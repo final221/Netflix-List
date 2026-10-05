@@ -88,3 +88,19 @@ test('reentrant membership admission preserves the newer publication instead of 
     assert.throws(()=>m.remove('v:1',{assertCurrent(){if(!invoked){invoked=true;m.publish([{videoId:'2'}],1);}}}),{code:'LIST_REPLACED'});
     assert.equal(m.lookup.has('v:2'),true);
 });
+
+test('membership retirement clears owned collections and rejects old commands before invoking their callbacks', () => {
+    const e=fixture(),m=e.list.createMembership();m.publish([{videoId:'1'}],1);
+    const lookup=m.lookup, staged=m.preparePublication([{videoId:'2'}],1);let callbacks=0;
+    m.dispose();m.dispose();assert.equal(m.records.length,0);assert.equal(lookup.size,0);
+    assert.equal(m.expectedCount,null);assert.equal(m.collectedCount,0);
+    assert.throws(()=>staged.commit(),{code:'LIST_RETIRED'});
+    assert.throws(()=>m.insert({videoId:'3'},0,{assertCurrent(){callbacks++;}}),{code:'LIST_RETIRED'});
+    assert.equal(callbacks,0);
+});
+
+test('retirement during admission cannot commit a partially prepared membership update', () => {
+    const e=fixture(),m=e.list.createMembership();m.publish([{videoId:'1'}],1);
+    assert.throws(()=>m.remove('v:1',{assertCurrent(){m.dispose();}}),{code:'LIST_RETIRED'});
+    assert.equal(m.records.length,0);
+});

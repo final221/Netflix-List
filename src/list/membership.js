@@ -1,7 +1,7 @@
 // Private membership/order/count state; callers borrow collections and request changes.
 export function createMembership({ items = [], totalCount = null, collectedCount = 0 } = {}) {
     let records = Object.freeze([]), map = new Map(), lookup;
-    let expectedCount = totalCount, collected = collectedCount, revision = 0;
+    let expectedCount = totalCount, collected = collectedCount, revision = 0, disposed = false;
     const keyFor = record => record.videoId ? 'v:' + record.videoId : 'h:' + record.href;
     const error = (code, message) => Object.assign(new Error(message), { code });
     function view() {
@@ -13,7 +13,9 @@ export function createMembership({ items = [], totalCount = null, collectedCount
     function guardFor({ assertCurrent = () => {} } = {}) {
         const owner = revision;
         return () => {
+            if (disposed) throw error('LIST_RETIRED', 'Membership parent was retired');
             assertCurrent();
+            if (disposed) throw error('LIST_RETIRED', 'Membership parent was retired');
             if (owner !== revision) throw error('LIST_REPLACED', 'Membership command was superseded');
         };
     }
@@ -68,7 +70,12 @@ export function createMembership({ items = [], totalCount = null, collectedCount
         if (progress !== undefined && progress !== collected) { collected = progress; revision++; }
     }
     publish(items, totalCount); collected = collectedCount;
-    return Object.freeze({ preparePublication, publish, remove, insert, alignVisible, observeCount,
+    function dispose() {
+        if (disposed) return;
+        disposed = true; revision++;
+        records = Object.freeze([]); map.clear(); expectedCount = null; collected = 0;
+    }
+    return Object.freeze({ preparePublication, publish, remove, insert, alignVisible, observeCount, dispose,
         get records() { return records; }, get lookup() { return lookup; }, get expectedCount() { return expectedCount; },
         get collectedCount() { return collected; }, get revision() { return revision; } });
 }

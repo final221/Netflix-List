@@ -166,7 +166,7 @@ function environment(names, overrides = {}) {
     vm.runInContext(source.match(/^    const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_INTERRUPTION_LOG_LIMIT = \d+;/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_CANCELLATION_REASONS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
-    for (const name of ['ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
+    for (const name of ['publishSourceState', 'ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
         'hoverScrollElapsed', 'recordHoverCancellation', 'advanceHoverToken', 'hoverIntentDiagnosticSnapshot', 'hoverScrollStateSnapshot',
@@ -8741,6 +8741,8 @@ test('detached reset restores original geometry descriptors before dropping sour
     for (const name of ['restoreGeometryProxy', 'clearSourceAlignment', 'cancelPendingGridHover', 'resetDetachedTargetState']) {
         vm.runInContext(declaration(name), e.c);
     }
+    const membership = e.c.sourceState.listMembership;
+    const staged = membership.preparePublication(e.items(1), 1);
     e.section.setConnected(false);
     e.c.resetDetachedTargetState();
     assert.equal(Object.hasOwn(slot, 'getBoundingClientRect'), false);
@@ -8749,6 +8751,8 @@ test('detached reset restores original geometry descriptors before dropping sour
     assert.equal(e.c.activeGeometryProxy, null);
     assert.equal(e.c.activeSourceSlot, null);
     assert.equal(e.c.sourceState, null);
+    assert.equal(membership.records.length, 0);
+    assert.throws(() => staged.commit(), { code: 'LIST_RETIRED' });
     assert.equal(e.c.performanceDiagnostics.nativeRecovery.alignmentRestores, 1);
 });
 
@@ -9499,4 +9503,24 @@ test('actual grid caller discards a yielded build when newer membership has been
     await e.drain();await rejection;
     assert.equal(e.oldGrid.isConnected,true);assert.equal(state.itemMap.get('v:999').videoId,'999');
     assert.equal(state.cloneMap.size,0);
+});
+
+test('actual parent publication retires old membership without disposing the accepted replacement or a same-parent adoption', () => {
+    const e=constructionEnvironment(),old=e.c.sourceState.listMembership;
+    old.publish([{videoId:'1'}],1);const staged=old.preparePublication([{videoId:'2'}],1);
+    const next=e.c.attachNativeBinding({items:[{videoId:'3'}],totalCount:1},e.section,e.scroller,e.track);
+    e.c.publishSourceState(next);e.c.publishSourceState(next);
+    assert.equal(old.records.length,0);assert.throws(()=>staged.commit(),{code:'LIST_RETIRED'});
+    next.listMembership.insert({videoId:'4'},1);
+    assert.deepEqual(next.items.map(item=>item.videoId),['3','4']);assert.equal(e.c.sourceState,next);
+});
+
+test('actual parent cleanup retires membership before native or frame resource callbacks', () => {
+    const e=constructionEnvironment(),membership=e.c.sourceState.listMembership;let releases=0;
+    membership.publish([{videoId:'1'}],1);
+    Object.assign(e.c,{nativePresentationLease:null,orderMismatchDialogOpen:false,
+        restoreActiveCarouselStyles(){releases++;assert.throws(()=>membership.insert({videoId:'2'}),{code:'LIST_RETIRED'});},
+        clearSourceAlignment(){},invalidateGridReact(){}});
+    vm.runInContext(declaration('cleanupTargetSessionDom'),e.c);
+    e.c.cleanupTargetSessionDom();assert.equal(releases,1);assert.equal(membership.records.length,0);
 });

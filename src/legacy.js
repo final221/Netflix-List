@@ -136,8 +136,14 @@ export function startLegacy() {
 
     let nativePresentationLease = null;
 
-    // Temporary publication bridge: sourceState may borrow native references,
-    // but only the carousel can accept a binding or invalidate its generation.
+    // Composition publishes the replacement before retiring the exact previous list parent.
+    function publishSourceState(next) {
+        const previous = sourceState;
+        sourceState = next;
+        if (previous !== next) previous?.listMembership?.dispose();
+        return next;
+    }
+
     function ensureListMembership(state) {
         if (state.listMembership) return state.listMembership;
         const membership = listView.createMembership({ items: state.items || [], totalCount: state.totalCount ?? null,
@@ -148,6 +154,7 @@ export function startLegacy() {
         return membership;
     }
 
+    // Native binding and membership remain distinct owners in transitional composition.
     function attachNativeBinding(state, section, scroller = null, track = null) {
         ensureListMembership(state);
         const binding = nativeCarousel.bind(section, scroller, track);
@@ -676,6 +683,7 @@ export function startLegacy() {
 
     function resetDetachedTargetState() {
         if (completedSection?.isConnected && document.getElementById(GRID_ID)) return;
+        if (sourceState?.section && !sourceState.section.isConnected) sourceState.listMembership?.dispose();
 
         clearSourceAlignment();
         restoreActiveCarouselStyles();
@@ -685,7 +693,7 @@ export function startLegacy() {
         completedSection = null;
         if (sourceState?.section && !sourceState.section.isConnected) {
             nativeCarousel.clearBinding();
-            sourceState = null;
+            publishSourceState(null);
         }
         resizeObserver?.disconnect();
         resizeObserver = null;
@@ -713,6 +721,7 @@ export function startLegacy() {
     }
 
     function cleanupTargetSessionDom() {
+        sourceState?.listMembership?.dispose();
         restoreActiveCarouselStyles();
         clearSourceAlignment();
         invalidateGridReact();
@@ -727,6 +736,7 @@ export function startLegacy() {
     function suspendTargetSession(reason = 'route-leave') {
         const hadSession = targetSessionActive || running || sourceState || completedSection || scheduled;
         const previousToken = sessionScope.token;
+        sourceState?.listMembership?.dispose();
         sessionScope.dispose();
         targetSessionActive = false;
         stopImageResourceDiagnostics();
@@ -757,7 +767,7 @@ export function startLegacy() {
         runningSessionToken = null;
         completedSection = null;
         nativeCarousel.clearBinding();
-        sourceState = null;
+        publishSourceState(null);
         activeVideoId = null;
         activePage = null;
         activeClone = null;
@@ -1367,7 +1377,7 @@ export function startLegacy() {
         if (admission) nativeCarousel.assertObservation(admission);
         gridView.setEmpty(true);
         nativeSourcePresentation(section, scroller, track, { phase: 'parked' });
-        sourceState = attachNativeBinding({
+        publishSourceState(attachNativeBinding({
             layout,
             items: [],
             totalCount: 0,
@@ -1378,7 +1388,7 @@ export function startLegacy() {
             resizeViewportSignature: responsiveViewportSignature(),
             initializationStartedAt: initializationStarted,
             initializationElapsedMs: elapsedMs
-        }, section, scroller || null, track || null);
+        }, section, scroller || null, track || null));
         attachGridRegistry(sourceState);
         waitingForNativeEmpty = false;
         syncLegacyEmptyState(section, { allowProvisional: true });
@@ -2923,7 +2933,7 @@ export function startLegacy() {
         responsiveRefreshing = false;
         completedSection = null;
         nativeCarousel.clearBinding();
-        sourceState = null;
+        publishSourceState(null);
         waitingForNativeEmpty = false;
         missingSectionSince = 0;
         lastResponsiveSignature = '';
@@ -5689,7 +5699,7 @@ export function startLegacy() {
         responsiveRefreshPromise = null;
         responsiveRefreshing = false;
         nativeCarousel.clearBinding();
-        sourceState = null;
+        publishSourceState(null);
         completedSection = null;
         initializationBlockedSessionToken = null;
         nativeInitializationFailure = null;
@@ -5781,7 +5791,7 @@ export function startLegacy() {
             if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
             return;
         }
-        sourceState = attachNativeBinding({
+        publishSourceState(attachNativeBinding({
             layout: provisionalLayout,
             items: [],
             collectedCount: 0,
@@ -5792,7 +5802,7 @@ export function startLegacy() {
             empty: false,
             resizeViewportSignature: responsiveViewportSignature(),
             initializationStartedAt: initializationStarted
-        }, section, scroller || null, track || null);
+        }, section, scroller || null, track || null));
         applyOriginalMyListVisibility();
 
         running = true;
@@ -5908,7 +5918,7 @@ export function startLegacy() {
                 invalidateGridReact();
                 gridView.dispose();
                 nativeCarousel.clearBinding();
-                sourceState = null;
+                publishSourceState(null);
                 completedSection = null;
                 clearRunningSession(sessionToken);
                 scheduleRun(0, sessionToken);
@@ -6208,7 +6218,7 @@ export function startLegacy() {
             // moves still need the track marker used by the animation suppression CSS.
             nativeSourcePresentation(section, scroller, track, { phase: 'mounted' });
             waitingForNativeEmpty = false;
-            sourceState = attachNativeBinding({ layout, initializationStartedAt: initializationStarted, empty: false, collectedCount: 0, totalCount }, section, scroller, track);
+            publishSourceState(attachNativeBinding({ layout, initializationStartedAt: initializationStarted, empty: false, collectedCount: 0, totalCount }, section, scroller, track));
             const collectionState = sourceState;
             const collectionBinding = nativeCarousel.borrowBinding(section, scroller, track);
             const assertCollectionCurrent = () => {
@@ -6343,7 +6353,7 @@ export function startLegacy() {
                 log('Grid construction discarded after native source replacement', { sessionToken });
                 cleanupTargetSessionDom();
                 nativeCarousel.clearBinding();
-                sourceState = null;
+                publishSourceState(null);
                 completedSection = null;
                 retryGridBuild = true;
             } else {

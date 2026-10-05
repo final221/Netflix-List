@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.38
+// @version      1.4.39
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -2650,7 +2650,7 @@
   // src/list/membership.js
   function createMembership({ items = [], totalCount = null, collectedCount = 0 } = {}) {
     let records = Object.freeze([]), map = /* @__PURE__ */ new Map(), lookup;
-    let expectedCount = totalCount, collected = collectedCount, revision = 0;
+    let expectedCount = totalCount, collected = collectedCount, revision = 0, disposed = false;
     const keyFor = (record) => record.videoId ? "v:" + record.videoId : "h:" + record.href;
     const error = (code, message) => Object.assign(new Error(message), { code });
     function view() {
@@ -2675,7 +2675,9 @@
     } } = {}) {
       const owner = revision;
       return () => {
+        if (disposed) throw error("LIST_RETIRED", "Membership parent was retired");
         assertCurrent();
+        if (disposed) throw error("LIST_RETIRED", "Membership parent was retired");
         if (owner !== revision) throw error("LIST_REPLACED", "Membership command was superseded");
       };
     }
@@ -2768,6 +2770,15 @@
     }
     publish(items, totalCount);
     collected = collectedCount;
+    function dispose() {
+      if (disposed) return;
+      disposed = true;
+      revision++;
+      records = Object.freeze([]);
+      map.clear();
+      expectedCount = null;
+      collected = 0;
+    }
     return Object.freeze({
       preparePublication,
       publish,
@@ -2775,6 +2786,7 @@
       insert,
       alignVisible,
       observeCount,
+      dispose,
       get records() {
         return records;
       },
@@ -10555,7 +10567,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.38";
+    const SCRIPT_VERSION = "1.4.39";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -10659,6 +10671,12 @@
       onRelevantMutation: handleRelevantTargetDocumentMutation
     });
     let nativePresentationLease = null;
+    function publishSourceState(next) {
+      const previous = sourceState;
+      sourceState = next;
+      if (previous !== next) previous?.listMembership?.dispose();
+      return next;
+    }
     function ensureListMembership(state) {
       if (state.listMembership) return state.listMembership;
       const membership = listView.createMembership({
@@ -11362,6 +11380,7 @@
     }
     function resetDetachedTargetState() {
       if (completedSection?.isConnected && document.getElementById(GRID_ID)) return;
+      if (sourceState?.section && !sourceState.section.isConnected) sourceState.listMembership?.dispose();
       clearSourceAlignment();
       restoreActiveCarouselStyles();
       advanceHoverToken("source");
@@ -11370,7 +11389,7 @@
       completedSection = null;
       if (sourceState?.section && !sourceState.section.isConnected) {
         nativeCarousel.clearBinding();
-        sourceState = null;
+        publishSourceState(null);
       }
       resizeObserver?.disconnect();
       resizeObserver = null;
@@ -11397,6 +11416,7 @@
       waitingForNativeEmpty = false;
     }
     function cleanupTargetSessionDom() {
+      sourceState?.listMembership?.dispose();
       restoreActiveCarouselStyles();
       clearSourceAlignment();
       invalidateGridReact();
@@ -11408,6 +11428,7 @@
     function suspendTargetSession(reason = "route-leave") {
       const hadSession = targetSessionActive || running || sourceState || completedSection || scheduled;
       const previousToken = sessionScope.token;
+      sourceState?.listMembership?.dispose();
       sessionScope.dispose();
       targetSessionActive = false;
       stopImageResourceDiagnostics();
@@ -11435,7 +11456,7 @@
       runningSessionToken = null;
       completedSection = null;
       nativeCarousel.clearBinding();
-      sourceState = null;
+      publishSourceState(null);
       activeVideoId = null;
       activePage = null;
       activeClone = null;
@@ -12062,7 +12083,7 @@
       if (admission) nativeCarousel.assertObservation(admission);
       gridView.setEmpty(true);
       nativeSourcePresentation(section, scroller, track, { phase: "parked" });
-      sourceState = attachNativeBinding({
+      publishSourceState(attachNativeBinding({
         layout,
         items: [],
         totalCount: 0,
@@ -12073,7 +12094,7 @@
         resizeViewportSignature: responsiveViewportSignature(),
         initializationStartedAt: initializationStarted,
         initializationElapsedMs: elapsedMs
-      }, section, scroller || null, track || null);
+      }, section, scroller || null, track || null));
       attachGridRegistry(sourceState);
       waitingForNativeEmpty = false;
       syncLegacyEmptyState(section, { allowProvisional: true });
@@ -13635,7 +13656,7 @@
       responsiveRefreshing = false;
       completedSection = null;
       nativeCarousel.clearBinding();
-      sourceState = null;
+      publishSourceState(null);
       waitingForNativeEmpty = false;
       missingSectionSince = 0;
       lastResponsiveSignature = "";
@@ -16331,7 +16352,7 @@
       responsiveRefreshPromise = null;
       responsiveRefreshing = false;
       nativeCarousel.clearBinding();
-      sourceState = null;
+      publishSourceState(null);
       completedSection = null;
       initializationBlockedSessionToken = null;
       nativeInitializationFailure = null;
@@ -16423,7 +16444,7 @@
         if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
         return;
       }
-      sourceState = attachNativeBinding({
+      publishSourceState(attachNativeBinding({
         layout: provisionalLayout,
         items: [],
         collectedCount: 0,
@@ -16434,7 +16455,7 @@
         empty: false,
         resizeViewportSignature: responsiveViewportSignature(),
         initializationStartedAt: initializationStarted
-      }, section, scroller || null, track || null);
+      }, section, scroller || null, track || null));
       applyOriginalMyListVisibility();
       running = true;
       runningSessionToken = sessionToken;
@@ -16539,7 +16560,7 @@
           invalidateGridReact();
           gridView.dispose();
           nativeCarousel.clearBinding();
-          sourceState = null;
+          publishSourceState(null);
           completedSection = null;
           clearRunningSession(sessionToken);
           scheduleRun(0, sessionToken);
@@ -16821,7 +16842,7 @@
         nativeCarousel.assertObservation(layoutObservation);
         nativeSourcePresentation(section, scroller, track, { phase: "mounted" });
         waitingForNativeEmpty = false;
-        sourceState = attachNativeBinding({ layout, initializationStartedAt: initializationStarted, empty: false, collectedCount: 0, totalCount }, section, scroller, track);
+        publishSourceState(attachNativeBinding({ layout, initializationStartedAt: initializationStarted, empty: false, collectedCount: 0, totalCount }, section, scroller, track));
         const collectionState = sourceState;
         const collectionBinding = nativeCarousel.borrowBinding(section, scroller, track);
         const assertCollectionCurrent = () => {
@@ -16954,7 +16975,7 @@
           log("Grid construction discarded after native source replacement", { sessionToken });
           cleanupTargetSessionDom();
           nativeCarousel.clearBinding();
-          sourceState = null;
+          publishSourceState(null);
           completedSection = null;
           retryGridBuild = true;
         } else {
