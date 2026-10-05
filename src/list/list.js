@@ -9,7 +9,6 @@ export function createList(options) {
         if (normalized.has(input)) return normalized.get(input);
         const record = Object.seal({ videoId: text(input.videoId), href: text(input.href), ariaLabel: text(input.ariaLabel),
             imageUrl: text(input.imageUrl), page: Number.isFinite(input.page) ? input.page : 0,
-            logicalIndex: Number.isSafeInteger(input.logicalIndex) ? input.logicalIndex : undefined,
             graphql: Boolean(input.graphql) });
         normalized.set(input, record); normalized.set(record, record);
         return record;

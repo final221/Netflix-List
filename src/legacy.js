@@ -3651,10 +3651,7 @@ export function startLegacy() {
     function nativePositionDeviation(item, source) {
         if (!item || !source || !sourceState?.items?.length) return null;
         nativeCarousel.assertSource(source);
-        const expectedIndexFromItems = sourceState.items.indexOf(item);
-        const expectedIndex = Number.isSafeInteger(expectedIndexFromItems) && expectedIndexFromItems >= 0
-            ? expectedIndexFromItems
-            : item.logicalIndex;
+        const expectedIndex = sourceState.items.indexOf(item);
         const actualIndex = source.itemIndex;
         if (!Number.isSafeInteger(expectedIndex) || expectedIndex < 0 ||
             !Number.isSafeInteger(actualIndex) || actualIndex < 0) {
@@ -5227,7 +5224,6 @@ export function startLegacy() {
             items.forEach((item, index) => {
                 assertPublication();
                 const page = Math.min(result.knownPageCount - 1, Math.floor(index / columns));
-                item.logicalIndex = index;
                 if (item.page !== page) changed++;
                 item.page = page;
                 const clone = cloneMap?.get(itemKey(item));

@@ -5,7 +5,8 @@ export function createMembership({ items = [], totalCount = null, collectedCount
     const keyFor = record => record.videoId ? 'v:' + record.videoId : 'h:' + record.href;
     const error = (code, message) => Object.assign(new Error(message), { code });
     function assertRecord(record) {
-        if (!record || typeof record !== 'object' || 'snapshot' in record || 'cardTemplate' in record || 'undoId' in record ||
+        if (!record || typeof record !== 'object' || 'snapshot' in record || 'cardTemplate' in record ||
+            'undoId' in record || 'logicalIndex' in record ||
             Object.values(record).some(value => value !== null && (typeof value === 'object' || typeof value === 'function'))) {
             throw error('LIST_RECORD_INVALID', 'Membership requires scalar records and separate material');
         }

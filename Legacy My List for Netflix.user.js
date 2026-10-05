@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.41
+// @version      1.4.42
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -2746,7 +2746,7 @@
     const keyFor = (record) => record.videoId ? "v:" + record.videoId : "h:" + record.href;
     const error = (code, message) => Object.assign(new Error(message), { code });
     function assertRecord(record) {
-      if (!record || typeof record !== "object" || "snapshot" in record || "cardTemplate" in record || "undoId" in record || Object.values(record).some((value) => value !== null && (typeof value === "object" || typeof value === "function"))) {
+      if (!record || typeof record !== "object" || "snapshot" in record || "cardTemplate" in record || "undoId" in record || "logicalIndex" in record || Object.values(record).some((value) => value !== null && (typeof value === "object" || typeof value === "function"))) {
         throw error("LIST_RECORD_INVALID", "Membership requires scalar records and separate material");
       }
     }
@@ -2923,7 +2923,6 @@
         ariaLabel: text(input.ariaLabel),
         imageUrl: text(input.imageUrl),
         page: Number.isFinite(input.page) ? input.page : 0,
-        logicalIndex: Number.isSafeInteger(input.logicalIndex) ? input.logicalIndex : void 0,
         graphql: Boolean(input.graphql)
       });
       normalized.set(input, record);
@@ -10692,7 +10691,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.41";
+    const SCRIPT_VERSION = "1.4.42";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -14484,8 +14483,7 @@
     function nativePositionDeviation(item, source) {
       if (!item || !source || !sourceState?.items?.length) return null;
       nativeCarousel.assertSource(source);
-      const expectedIndexFromItems = sourceState.items.indexOf(item);
-      const expectedIndex = Number.isSafeInteger(expectedIndexFromItems) && expectedIndexFromItems >= 0 ? expectedIndexFromItems : item.logicalIndex;
+      const expectedIndex = sourceState.items.indexOf(item);
       const actualIndex = source.itemIndex;
       if (!Number.isSafeInteger(expectedIndex) || expectedIndex < 0 || !Number.isSafeInteger(actualIndex) || actualIndex < 0) {
         return null;
@@ -16069,7 +16067,6 @@
         items.forEach((item, index) => {
           assertPublication();
           const page = Math.min(result.knownPageCount - 1, Math.floor(index / columns));
-          item.logicalIndex = index;
           if (item.page !== page) changed++;
           item.page = page;
           const clone = cloneMap?.get(itemKey(item));

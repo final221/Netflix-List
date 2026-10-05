@@ -2411,7 +2411,8 @@ test('mapping bridges keep membership/card publication and convergence outside n
     assert.ok(e.clones.every(clone => clone.getAttribute('data-tm-item-page') === null));
     assert.equal(await e.c.rebuildLogicalPageModelFromNativePosition({ columns: 6 }, 'test-remap', 1), 8);
     assert.deepEqual(e.items.map(item => item.page), [0, 0, 0, 0, 0, 0, 1, 1]);
-    assert.deepEqual(e.items.map(item => item.logicalIndex), [0, 1, 2, 3, 4, 5, 6, 7]);
+    assert.ok(e.items.every(item => !Object.hasOwn(item, 'logicalIndex')));
+    assert.deepEqual(Array.from(e.c.sourceState.items), e.items, 'native reconstruction preserves authoritative membership order');
     assert.equal(e.c.sourceState.initialPage, 0);
     assert.equal(e.c.myListCountConvergencePending, false);
     e.c.myListCountConvergencePending = true;
@@ -9582,4 +9583,26 @@ test('actual click queue carries explicit Undo correlation beyond entry expiry w
     assert.equal(e.c.sourceState.itemMap.get('v:1'),entry.item);
     assert.equal(Object.hasOwn(entry.item,'undoId'),false);
     assert.equal(e.c.pendingMyListMutations.size,0);assert.equal(e.timers.size,0);
+});
+
+
+test('native mismatch comparison rejects an obsolete same-title record index instead of borrowing current order', () => {
+    const e=preparedHoverEnvironment();vm.runInContext(declaration('nativePositionDeviation'),e.c);
+    const state=e.c.sourceState,item=e.clone.__tmMyListItem;
+    e.sourceSlot.__reactFiber$mismatch={memoizedProps:{itemIndex:42},return:null};
+    const source=e.c.nativeCarousel.mountedCard({section:state.section,scroller:state.scroller,track:state.track,item,sessionToken:1});
+    assert.equal(e.c.nativePositionDeviation({...item,logicalIndex:0},source),null);
+});
+
+
+test('native expected position follows controlled membership order after visible-span reconciliation', () => {
+    const e=remappingBridgeEnvironment();vm.runInContext(declaration('nativePositionDeviation'),e.c);
+    const state=e.c.sourceState,item=e.items[0];
+    const observed=e.c.nativeCarousel.pageCards({section:state.section,scroller:state.scroller,track:state.track,
+        totalCount:8,columns:6,sessionToken:1});const source=observed.cards[0].source;
+    assert.equal(e.c.nativePositionDeviation(item,source).expectedIndex,0);
+    e.c.ensureListMembership(state).alignVisible(['2','1','0'],0);
+    const deviation=e.c.nativePositionDeviation(item,source);
+    assert.equal(deviation.expectedIndex,2);assert.equal(deviation.actualIndex,0);assert.equal(deviation.delta,-2);
+    assert.equal(Object.hasOwn(item,'logicalIndex'),false);
 });
