@@ -29,8 +29,9 @@ src/main.js
      -> src/netflix/popup-inspection.js: bounded response/component investigation
      -> src/netflix/context.js: lazy page/profile/locale/request context
      -> src/netflix/page-dom.js: native discovery and membership identity facts
-     -> src/list/list.js: logical mounted/fresh collection strategy and completeness
+     -> src/list/list.js: membership collections/order/counts and logical collection completeness
         -> collection.js: cooperative transferable material construction and copied reuse work
+        -> membership.js: private collections, lookup, staged acceptance and guarded changes
      -> src/grid/grid.js: card registry, handles, rendering and retained removal material
         -> cards.js / frame.js / groups.js: private card/frame resources and grouped presentation
         -> styles.js: private stylesheet acquisition by frame
@@ -272,4 +273,8 @@ Optional observeSource presentation facts copy hidden/parked booleans and reject
 
 list/list.js exposes the live collectLogical and buildItems operations, with private collection.js owning logical mounted-versus-fresh selection, duplicate/count validation and cooperative shared-template material construction. Composition supplies current session/parent admission, the existing scheduler, native mounted proof and source validation, grid template capture and normalized list-data operations. Guards run after data completion and construction yields; failed/cancelled collection publishes no successful partial list. Mounted reuse work is privately retained and returned as frozen copied counters through the existing report path. No extra request, timer, observer or retained cache is added. Legacy collection wrappers only delegate; their algorithms and writable reuse counters are removed.
 
-P13 remains in progress: lasting membership/index/order/counts and native page-hint removal, initial/SPA bootstrap and native fallback selection still reside in legacy. Collected items remain transferable startup material rather than the final lasting record representation. P14 still owns the planned queue/Undo transfer. The exact legacy-to-list public composition import is removed in P20.
+P13 remains in progress: record-content normalization, native page-hint removal, initial/SPA bootstrap and native fallback selection still reside in legacy. Membership collections/index/order/counts have transferred in the following checkpoint. Collected items remain transferable startup material rather than the final lasting record representation. P14 still owns the planned queue/Undo transfer. The exact legacy-to-list public composition import is removed in P20.
+
+The P13 membership checkpoint adds private membership.js. It owns the authoritative array, index, order, expected/collected counts and revision per current list parent. Frozen borrowed arrays and lookup views have no collection mutations; controlled publication/removal/insertion/visible-span alignment return records or small change sets. Publication validates duplicates and stages membership before grid construction, then commits only after admitted grid acceptance. A newer membership revision cancels yielded/staged publication. Count progress does not replace expected count. Initial/empty/native-adoption states acquire this same owner through a composition bridge; remaining residual mutations use its guarded operations.
+
+The transitional ensureListMembership bridge only acquires the capability and exposes borrowed getters, with no compatibility setters or duplicate membership map. Record page/logical hints, startup material and Undo correlation remain explicitly transitional P13 work, so this checkpoint does not prove the final DOM-free record contract or complete the P13 parent gate. Remaining bootstrap/native strategy and full lifetime/material transfer audits are also required.

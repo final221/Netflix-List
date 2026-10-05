@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.37
+// @version      1.4.38
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -2647,10 +2647,157 @@
     };
   }
 
+  // src/list/membership.js
+  function createMembership({ items = [], totalCount = null, collectedCount = 0 } = {}) {
+    let records = Object.freeze([]), map = /* @__PURE__ */ new Map(), lookup;
+    let expectedCount = totalCount, collected = collectedCount, revision = 0;
+    const keyFor = (record) => record.videoId ? "v:" + record.videoId : "h:" + record.href;
+    const error = (code, message) => Object.assign(new Error(message), { code });
+    function view() {
+      return Object.freeze({
+        get size() {
+          return map.size;
+        },
+        get: (key) => map.get(key),
+        has: (key) => map.has(key),
+        *values() {
+          yield* records;
+        },
+        *entries() {
+          for (const record of records) yield [keyFor(record), record];
+        },
+        [Symbol.iterator]() {
+          return this.entries();
+        }
+      });
+    }
+    function guardFor({ assertCurrent = () => {
+    } } = {}) {
+      const owner = revision;
+      return () => {
+        assertCurrent();
+        if (owner !== revision) throw error("LIST_REPLACED", "Membership command was superseded");
+      };
+    }
+    function preparePublication(items2, totalCount2, admission = {}) {
+      const guard = guardFor(admission);
+      guard();
+      const next = [...items2], nextMap = /* @__PURE__ */ new Map();
+      for (const record of next) {
+        const key = keyFor(record);
+        if (nextMap.has(key)) throw error("LIST_DUPLICATE_RECORD", "Duplicate membership: " + key);
+        nextMap.set(key, record);
+        guard();
+      }
+      guard();
+      const accepted = Object.freeze(next);
+      return Object.freeze({ records: accepted, assertCurrent: guard, commit() {
+        guard();
+        records = accepted;
+        map = nextMap;
+        expectedCount = totalCount2;
+        collected = next.length;
+        revision++;
+        lookup = view();
+        return records;
+      } });
+    }
+    function publish(items2, totalCount2, admission = {}) {
+      return preparePublication(items2, totalCount2, admission).commit();
+    }
+    function remove(key, admission = {}) {
+      const guard = guardFor(admission);
+      guard();
+      const record = map.get(key);
+      if (!record) return null;
+      const index = records.indexOf(record), next = records.filter((item) => item !== record);
+      guard();
+      records = Object.freeze(next);
+      map.delete(key);
+      expectedCount = records.length;
+      collected = records.length;
+      revision++;
+      lookup = view();
+      return Object.freeze({ record, index });
+    }
+    function insert(record, position = 0, admission = {}) {
+      const guard = guardFor(admission);
+      guard();
+      const key = keyFor(record);
+      guard();
+      if (map.has(key)) return false;
+      const index = Math.max(0, Math.min(records.length, Number.isFinite(position) ? Math.floor(position) : 0));
+      const next = [...records.slice(0, index), record, ...records.slice(index)];
+      guard();
+      records = Object.freeze(next);
+      map.set(key, record);
+      expectedCount = records.length;
+      collected = records.length;
+      revision++;
+      lookup = view();
+      return true;
+    }
+    function alignVisible(ids, base, admission = {}) {
+      const guard = guardFor(admission);
+      guard();
+      if (!ids.length || new Set(ids).size !== ids.length || ids.some((id) => !map.has("v:" + id))) return false;
+      base = Math.min(records.length, Math.max(0, base));
+      if (records.slice(base, base + ids.length).map((item) => item.videoId).join("|") === ids.join("|")) return false;
+      const selected = new Set(ids), ordered = ids.map((id) => map.get("v:" + id));
+      const remaining = records.filter((item) => !selected.has(item.videoId)), insertion = Math.min(base, remaining.length);
+      const next = [...remaining.slice(0, insertion), ...ordered, ...remaining.slice(insertion)];
+      guard();
+      records = Object.freeze(next);
+      revision++;
+      lookup = view();
+      return Object.freeze({ records, ordered: Object.freeze(ordered), index: insertion });
+    }
+    function observeCount(facts, admission = {}) {
+      const guard = guardFor(admission);
+      guard();
+      const expected = facts.totalCount, progress = facts.collectedCount;
+      guard();
+      if (expected !== void 0 && expected !== expectedCount) {
+        expectedCount = expected;
+        revision++;
+      }
+      if (progress !== void 0 && progress !== collected) {
+        collected = progress;
+        revision++;
+      }
+    }
+    publish(items, totalCount);
+    collected = collectedCount;
+    return Object.freeze({
+      preparePublication,
+      publish,
+      remove,
+      insert,
+      alignVisible,
+      observeCount,
+      get records() {
+        return records;
+      },
+      get lookup() {
+        return lookup;
+      },
+      get expectedCount() {
+        return expectedCount;
+      },
+      get collectedCount() {
+        return collected;
+      },
+      get revision() {
+        return revision;
+      }
+    });
+  }
+
   // src/list/list.js
   function createList(options) {
     const collection = createCollection(options);
     return Object.freeze({
+      createMembership,
       collectLogical: collection.collectLogical,
       buildItems: collection.buildItems,
       diagnostics: collection.diagnostics,
@@ -10408,7 +10555,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.37";
+    const SCRIPT_VERSION = "1.4.38";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -10512,7 +10659,20 @@
       onRelevantMutation: handleRelevantTargetDocumentMutation
     });
     let nativePresentationLease = null;
+    function ensureListMembership(state) {
+      if (state.listMembership) return state.listMembership;
+      const membership = listView.createMembership({
+        items: state.items || [],
+        totalCount: state.totalCount ?? null,
+        collectedCount: state.collectedCount ?? 0
+      });
+      Object.defineProperty(state, "listMembership", { value: membership, configurable: true });
+      for (const [field, owned] of [["items", "records"], ["itemMap", "lookup"], ["totalCount", "expectedCount"], ["collectedCount", "collectedCount"]])
+        Object.defineProperty(state, field, { enumerable: true, configurable: true, get: () => membership[owned] });
+      return membership;
+    }
     function attachNativeBinding(state, section, scroller = null, track = null) {
+      ensureListMembership(state);
       const binding = nativeCarousel.bind(section, scroller, track);
       for (const key of ["section", "scroller", "track"]) Object.defineProperty(
         state,
@@ -13229,15 +13389,16 @@
     function reindexLegacyItemsAfterDelta(reason = "delta-reindex") {
       if (!sourceState) return;
       const state = sourceState;
+      const membership = ensureListMembership(state);
       const items = state.items || [];
       const columns = Math.max(1, state.layout?.columns || 1);
       const runtime = nativeSourceObservation(state);
       const logicalMode = runtime?.mode === "logical";
       const resetLogicalPages = reason === "mutation-reindex";
-      const itemMap = state.itemMap = /* @__PURE__ */ new Map();
+      const itemMap = state.itemMap;
       const assertCurrent = () => {
         nativeCarousel.assertObservation(runtime);
-        if (state.itemMap !== itemMap || state.items && state.items !== items) throw createRouteSessionCancelledError();
+        if (sourceState !== state || state.itemMap !== itemMap || state.items && state.items !== items) throw createRouteSessionCancelledError();
       };
       nativeCarousel.sample(() => items.forEach((item, index) => {
         assertCurrent();
@@ -13245,13 +13406,12 @@
           item.page = Math.floor(index / columns);
         }
         const key = itemKey(item);
-        itemMap.set(key, item);
         const clone = state.cloneMap?.get(key);
         if (clone?.isConnected) copyItemAttributes(clone, item, index);
         assertCurrent();
       }));
       assertCurrent();
-      sourceState.totalCount = items.length;
+      membership.observeCount({ totalCount: items.length, collectedCount: items.length }, { assertCurrent });
       sourceState.empty = items.length === 0;
       if (logicalMode) {
         syncLogicalPageModelAfterDelta(reason);
@@ -13278,7 +13438,8 @@
       const key = `v:${videoId}`;
       const index = sourceState.items.findIndex((item) => itemKey(item) === key);
       if (index < 0) return false;
-      const state = sourceState, items = state.items, removed = items[index];
+      const state = sourceState;
+      const membership = ensureListMembership(state), items = state.items, removed = items[index];
       const assertCurrent = () => {
         if (sourceState !== state || state.items !== items || items[index] !== removed) throw createRouteSessionCancelledError();
       };
@@ -13296,9 +13457,8 @@
         gridView.removeCard(handle, { correlationId: removed.undoId, assertCurrent });
       }
       assertCurrent();
-      items.splice(index, 1);
+      membership.remove(key, { assertCurrent });
       rememberUndoEntry(removed, index);
-      sourceState.itemMap?.delete(key);
       reindexLegacyItemsAfterDelta("mutation-reindex");
       mutationSourceRecoveryPending = true;
       if (!sourceState.items.length) {
@@ -13316,7 +13476,7 @@
       const key = itemKey(item);
       if (sourceState.itemMap?.has(key) || sourceState.items?.some((existing) => itemKey(existing) === key)) return false;
       const state = sourceState;
-      const items = sourceState.items || (sourceState.items = []);
+      const membership = ensureListMembership(state), items = state.items;
       const assertCurrent = () => {
         if (sourceState !== state || state.items !== items || state.itemMap?.has(key)) throw createRouteSessionCancelledError();
       };
@@ -13327,9 +13487,7 @@
       item.page = Math.floor(index / Math.max(1, sourceState.layout?.columns || 1));
       const before = sourceState.watchStatus ? null : grid.children[index] || null;
       gridView.insertCard(item, { index, before, correlationId: item.undoId, assertCurrent });
-      items.splice(index, 0, item);
-      sourceState.itemMap ||= /* @__PURE__ */ new Map();
-      sourceState.itemMap.set(key, item);
+      membership.insert(item, index, { assertCurrent });
       forgetUndoEntry(item.videoId);
       waitingForNativeEmpty = false;
       sourceState.empty = false;
@@ -13372,33 +13530,37 @@
     }
     function alignLegacyVisiblePageOrder(live) {
       if (!sourceState?.items?.length || !live?.pageSignature) return false;
-      const nativeItems = visibleNativeItems(live);
-      const nativeIds = nativeItems.map((item) => item.videoId);
-      if (!nativeIds.length || nativeIds.some((id) => !sourceState.itemMap?.has(`v:${id}`))) return false;
-      const columns = Math.max(1, sourceState.layout?.columns || nativeIds.length);
-      const base = Math.min(sourceState.items.length, (live.selectedPage || 0) * columns);
-      const currentIds = sourceState.items.slice(base, base + nativeIds.length).map((item) => item.videoId);
-      if (currentIds.join("|") === nativeIds.join("|")) return false;
-      const nativeSet = new Set(nativeIds);
-      const ordered = nativeIds.map((id) => sourceState.itemMap.get(`v:${id}`)).filter(Boolean);
-      const remaining = sourceState.items.filter((item) => !nativeSet.has(item.videoId));
-      const insertion = Math.min(base, remaining.length);
-      sourceState.items = [...remaining.slice(0, insertion), ...ordered, ...remaining.slice(insertion)];
-      const grid = sourceState.grid;
-      if (grid && !sourceState.watchStatus) {
-        for (let i = 0; i < ordered.length; i++) {
-          const clone = sourceState.cloneMap?.get(itemKey(ordered[i]));
+      const state = sourceState, membership = ensureListMembership(state), recordOwner = state.items;
+      const nativeItems = visibleNativeItems(live), nativeIds = nativeItems.map((item) => item.videoId);
+      const columns = Math.max(1, state.layout?.columns || nativeIds.length);
+      const base = Math.min(state.items.length, (live.selectedPage || 0) * columns);
+      const assertParent = () => {
+        nativeCarousel.assertObservation(live);
+        if (sourceState !== state) throw createRouteSessionCancelledError();
+      };
+      const change = membership.alignVisible(nativeIds, base, { assertCurrent() {
+        assertParent();
+        if (state.items !== recordOwner) throw createRouteSessionCancelledError();
+      } });
+      if (!change) return false;
+      const guard = () => {
+        assertParent();
+        if (state.items !== change.records) throw createRouteSessionCancelledError();
+      };
+      const grid = state.grid;
+      if (grid && !state.watchStatus) {
+        for (let i = 0; i < change.ordered.length; i++) {
+          guard();
+          const item = change.ordered[i], clone = state.cloneMap?.get(itemKey(item));
           if (!clone) continue;
-          const targetIndex = insertion + i;
-          const reference = grid.children[targetIndex] || null;
-          if (reference !== clone) gridView.moveCard(gridView.getCard(ordered[i]), grid, reference);
+          const reference = grid.children[change.index + i] || null;
+          if (reference !== clone) gridView.moveCard(gridView.getCard(item), grid, reference);
+          guard();
         }
       }
+      guard();
       reindexLegacyItemsAfterDelta();
-      log(tLog("legacyVisibleOrderAligned"), {
-        page: live.selectedPage,
-        ids: nativeIds
-      });
+      log(tLog("legacyVisibleOrderAligned"), { page: live.selectedPage, ids: nativeIds });
       return true;
     }
     function disposeMyListMutation(videoId, expected = null) {
@@ -13969,7 +14131,7 @@
           if (sourceState !== state) return;
           if (facts.initialPage !== void 0 && state) state.initialPage = facts.initialPage;
           if (facts.collectedCount !== void 0) {
-            if (state) state.collectedCount = facts.collectedCount;
+            if (state) ensureListMembership(state).observeCount({ collectedCount: facts.collectedCount });
             updateStatus(formatHeaderParts(facts.collectedCount, totalCount, null));
           }
         }
@@ -15514,7 +15676,7 @@
     async function buildGrid(section, scroller, items, layout, totalCount, sessionToken = sessionScope.token) {
       const buildState = sourceState;
       const track = buildState?.track;
-      const assertBuildActive = () => {
+      const assertBuildParent = () => {
         assertRouteSession(sessionToken);
         if (sourceState !== buildState) throw createRouteSessionCancelledError();
         if (!section.isConnected || !scroller.isConnected || !track?.isConnected || buildState.section !== section || buildState.scroller !== scroller || buildState.track !== track) {
@@ -15524,6 +15686,11 @@
             "Native My List source changed during grid construction"
           );
         }
+      };
+      const publication = ensureListMembership(buildState).preparePublication(items, totalCount, { assertCurrent: assertBuildParent });
+      const assertBuildActive = () => {
+        assertBuildParent();
+        publication.assertCurrent();
       };
       assertBuildActive();
       const geometry = currentGridGeometry(section, layout);
@@ -15540,10 +15707,8 @@
         assertCurrent: assertBuildActive
       });
       clearLegacyEmptyState({ restoreGrid: false });
-      buildState.itemMap = new Map(items.map((item) => [itemKey(item), item]));
+      publication.commit();
       attachGridRegistry(buildState);
-      sourceState.items = items;
-      sourceState.totalCount = totalCount;
       sourceState.grid = grid;
       sourceState.status = status;
       sourceState.layout = layout;
@@ -16514,7 +16679,7 @@
           }
           nativeCarousel.assertObservation(countObservation);
           earlyTotalCount = mountedTotalCount;
-          if (sourceState) sourceState.totalCount = mountedTotalCount;
+          if (sourceState) ensureListMembership(sourceState).observeCount({ totalCount: mountedTotalCount });
         } catch (error) {
           if (error?.code === "NATIVE_SOURCE_REPLACED" || sourceState !== countOwner) {
             clearRunningSession(sessionToken, false);
@@ -16758,10 +16923,7 @@
           selectedPage: deferredNative?.selectedPage ?? null,
           currentPageCards: deferredNative?.currentPageCards ?? 0
         });
-        if (sourceState) {
-          sourceState.collectedCount = items.length;
-          sourceState.totalCount = totalCount;
-        }
+        if (sourceState) ensureListMembership(sourceState).observeCount({ collectedCount: items.length, totalCount });
         completedSection = section;
         if (performanceDiagnostics.nativeRecovery.attempts > performanceDiagnostics.nativeRecovery.completed) {
           performanceDiagnostics.nativeRecovery.completed++;

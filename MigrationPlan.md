@@ -286,7 +286,7 @@ P12 can use bounded working checkpoints without weakening its parent evidence: f
 - **Dependencies:** P12 publication/presentation, P06 list data and P10 native collection.
 - **Depth:** New list capability hides strategy, completeness and order. It exposes meaningful membership views/changes instead of its mutable arrays/maps.
 
-P13 may use a logical collection checkpoint before membership/order and remaining bootstrap/native strategy transfer. Its local and exact Windows checkpoint gate does not complete the P13 parent acceptance.
+P13 may use logical collection and membership-collection checkpoints before final DOM-free records/native page-hint removal and remaining bootstrap/native strategy transfer. Its local and exact Windows checkpoint gate does not complete the P13 parent acceptance.
 
 ### P14 — Transfer mutation queues, reconciliation deferral and Undo
 

@@ -118,6 +118,11 @@ function mountNativeControls(section, mode = 'logical') {
         ? (mode === 'indicator' ? [indicator] : []) : queryAll(selector);
 }
 
+function publishMembershipForTest(state, items, totalCount = state.totalCount) {
+    if (state.listMembership) state.listMembership.publish(items, totalCount);
+    else { state.items = items; state.itemMap = new Map(items.map(item => [item.videoId ? 'v:' + item.videoId : 'h:' + item.href, item])); }
+}
+
 function environment(names, overrides = {}) {
     let now = 0;
     let id = 0;
@@ -161,7 +166,7 @@ function environment(names, overrides = {}) {
     vm.runInContext(source.match(/^    const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_INTERRUPTION_LOG_LIMIT = \d+;/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_CANCELLATION_REASONS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
-    for (const name of ['attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
+    for (const name of ['ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
         'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
         'hoverScrollElapsed', 'recordHoverCancellation', 'advanceHoverToken', 'hoverIntentDiagnosticSnapshot', 'hoverScrollStateSnapshot',
@@ -357,6 +362,12 @@ function environment(names, overrides = {}) {
     vm.runInContext(declaration('nativeLayoutObservation'), c);
     vm.runInContext(declaration('layoutFrameStatus'), c);
     vm.runInContext(declaration('nativeDiscoveryObservation'), c);
+    c.listView = createList({ runChunks: (...args) => c.runConstructionChunks(...args),
+        assertSession: token => c.assertRouteSession(token), isCancelled: error => c.isRouteSessionCancelledError(error),
+        collectMounted: (...args) => c.collectMountedSinglePageItems(...args),
+        captureTemplate: slot => c.gridView.captureTemplate(slot), assertSource: source => c.nativeCarousel.assertSource(source),
+        collectRecords: input => c.listData.collectRecords(input),
+        onReuseRejected: detail => c.log('Mounted single-page membership reuse rejected; using fresh collection', detail) });
     if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
     Object.defineProperty(c, 'nativeReadScope', { get: () => c.nativeCarousel.diagnostics().readScopeActive ? true : null });
     // Supplementary characterization of private acknowledgement resources. Full
@@ -386,12 +397,6 @@ function environment(names, overrides = {}) {
     c.waitPage = (...args) => acknowledgement().acknowledgeIndicator(...args);
     c.performanceDiagnostics = c.createPerformanceDiagnostics();
     c.listData ||= fixtureListData(c);
-    c.listView = createList({ runChunks: (...args) => c.runConstructionChunks(...args),
-        assertSession: token => c.assertRouteSession(token), isCancelled: error => c.isRouteSessionCancelledError(error),
-        collectMounted: (...args) => c.collectMountedSinglePageItems(...args),
-        captureTemplate: slot => c.gridView.captureTemplate(slot), assertSource: source => c.nativeCarousel.assertSource(source),
-        collectRecords: input => c.listData.collectRecords(input),
-        onReuseRejected: detail => c.log('Mounted single-page membership reuse rejected; using fresh collection', detail) });
     async function flush() { for (let i = 0; i < 24; i++) await Promise.resolve(); }
     return {
         c, timers, frames, flush,
@@ -494,7 +499,7 @@ function preparedHoverEnvironment(options = {}) {
     const nativeScroller = new Element('scroller');
     e.c.attachNativeBinding(e.c.sourceState, e.c.sourceState.section, nativeScroller, new Element('track', nativeScroller));
     e.c.sourceState.layout = { columns: 6 };
-    e.c.sourceState.items = [e.clone.__tmMyListItem];
+    publishMembershipForTest(e.c.sourceState, [e.clone.__tmMyListItem]);
     sourceSlot.parentElement = e.c.sourceState.track;
     mountNativeControls(e.c.sourceState.section, 'indicator');
     e.c.netflixDom = { ...e.c.netflixDom, filledSlots: () => [sourceSlot], directSlots: () => [sourceSlot],
@@ -2159,7 +2164,7 @@ test('differential reindexing rejects an obsolete source observation before copy
         e.c.updateStatus = () => null;
         const state = e.c.sourceState;
         const items = [e.clone.__tmMyListItem, { videoId: '456', page: 9 }];
-        state.items = items;
+        publishMembershipForTest(state, items);
         state.cloneMap = new Map(items.map(item => [item.videoId, new Element('clone-' + item.videoId)]));
         let copies = 0;
         e.c.copyItemAttributes = () => {
@@ -2334,8 +2339,8 @@ test('recovery bridges consume native observations and own only transitional lis
     const slots = e.mount([6, 7, 8, 9, 10, 11]);
     const items = slots.map(slot => ({ videoId: String(slot.index), href: '/watch/' + slot.index, page: 77 }));
     const clones = items.map(() => new Element('clone'));
-    e.c.sourceState.items = items;
-    e.c.sourceState.itemMap = new Map(items.map(item => ['v:' + item.videoId, item]));
+    publishMembershipForTest(e.c.sourceState, items);
+
     e.c.findGridClone = item => clones[items.indexOf(item)];
     let bindings = 0;
     e.c.ensureLiveNativeBinding = () => bindings++;
@@ -2387,8 +2392,8 @@ function remappingBridgeEnvironment() {
     }
     const items = Array.from({ length: 8 }, (_, index) => ({ videoId: String(index), href: '/watch/' + index, page: 77 }));
     const clones = items.map(() => new Element('clone'));
-    Object.assign(e.c.sourceState, { items, itemMap: new Map(items.map(item => ['v:' + item.videoId, item])),
-        cloneMap: new Map(items.map((item, index) => ['v:' + item.videoId, clones[index]])), totalCount: 8 });
+    publishMembershipForTest(e.c.sourceState, items, 8);
+    e.c.sourceState.cloneMap = new Map(items.map((item, index) => ['v:' + item.videoId, clones[index]]));
     e.c.ensureLiveNativeBinding = () => e.c.sourceState;
     e.c.myListCountConvergencePending = false;
     return { ...e, slots, items, clones };
@@ -2424,9 +2429,9 @@ test('mapping bridge rejects replaced parent records and card owners before nati
         const pending = e.c.rebuildLogicalPageModelFromNativePosition({ columns: 6 }, 'obsolete', 1);
         const rejected = assert.rejects(pending, { code: 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' });
         if (change === 'state') e.c.sourceState = { ...e.c.sourceState };
-        if (change === 'membership-map') e.c.sourceState.itemMap = new Map(e.c.sourceState.itemMap);
-        if (change === 'items') e.c.sourceState.items = [...e.items];
-        if (change === 'count') e.items.push({ videoId: '8', page: 77 });
+        if (change === 'membership-map') publishMembershipForTest(e.c.sourceState, e.c.sourceState.items);
+        if (change === 'items') publishMembershipForTest(e.c.sourceState, [...e.items]);
+        if (change === 'count') publishMembershipForTest(e.c.sourceState, [...e.c.sourceState.items, { videoId: '8', page: 77 }]);
         if (change === 'cards') e.c.sourceState.cloneMap = new Map(e.c.sourceState.cloneMap);
         await rejected;
         assert.ok(e.items.every(item => item.page === 77));
@@ -3011,7 +3016,7 @@ test('native empty transitions bypass the identity-only shortcut', async () => {
     const e = observerEnvironment();
     e.c.waitingForNativeEmpty = true;
     e.c.sourceState.empty = true;
-    e.c.sourceState.items = [];
+    publishMembershipForTest(e.c.sourceState, []);
     e.section.querySelector = () => null;
     let adoptedEmpty = 0;
     e.c.adoptLiveEmptyMyListSection = () => adoptedEmpty++;
@@ -3148,8 +3153,8 @@ test('expected-source bridge consumes real native handles and keeps position mis
     const slots = e.mount([20, 21, 22, 23, 24, 25]);
     e.c.videoIdFromHref = href => href?.split('/').at(-1) || '';
     e.c.ORDER_MISMATCH_POSITION_THRESHOLD = 10;
-    e.c.sourceState.totalCount = 6;
-    e.c.sourceState.items = slots.map(slot => ({ videoId: String(slot.index), href: '/watch/' + slot.index, page: 0 }));
+    e.c.sourceState.listMembership.observeCount({ totalCount: 6 });
+    publishMembershipForTest(e.c.sourceState, slots.map(slot => ({ videoId: String(slot.index), href: '/watch/' + slot.index, page: 0 })));
     e.c.ensureLiveNativeBinding = () => {};
     e.c.clearSourceAlignment = () => {};
     for (const name of ['hoverPreparationCancelled', 'itemKey', 'pageItemKeys', 'firstVisibleNativePositionMismatch', 'resolveExpectedPageSourceItem']) {
@@ -3255,7 +3260,7 @@ test('binding adoption clears old grafts and does not retain reads collected bef
     e.c.netflixReactHover = { clearClone: () => cleared++ };
     e.c.sourceState.grid = grid;
     e.c.sourceState.status = status;
-    e.c.sourceState.items = [{ videoId: '0' }];
+    publishMembershipForTest(e.c.sourceState, [{ videoId: '0' }]);
     const replacement = e.replaceTrack();
     e.c.attachNativeBinding(e.c.sourceState, e.c.sourceState.section, e.c.sourceState.scroller, slots[0].parentElement);
     const nextScroller = new Element('next-scroller');
@@ -3363,7 +3368,7 @@ test('removal and route cleanup release tracked metadata even if the grid is det
     });
     const removed = e.add('123');
     removed.remove = () => { removed.isConnected = false; };
-    e.c.sourceState.items = [{ videoId: '123' }, { videoId: '456' }];
+    publishMembershipForTest(e.c.sourceState, [{ videoId: '123' }, { videoId: '456' }]);
     assert.equal(e.c.applyLegacyRemoval('123'), true);
     assert.equal(removed.__reactProps$test, undefined);
     e.add('456').isConnected = false;
@@ -6151,7 +6156,16 @@ test('native order alignment preserves separate group order without changing Net
     e.c.visibleNativeItems = () => [{ videoId: '4' }, { videoId: '3' }, { videoId: '1' }];
     vm.runInContext(declaration('reindexLegacyItemsAfterDelta'), e.c);
     vm.runInContext(declaration('alignLegacyVisiblePageOrder'), e.c);
-    assert.equal(e.c.alignLegacyVisiblePageOrder({ pageSignature: '4|3|1', selectedPage: 0 }), true);
+    e.c.findMyListSection = () => e.state.section;
+    e.c.netflixDom.findTrack = () => e.track;
+    const query = e.section.querySelector.bind(e.section);
+    e.section.querySelector = selector => selector.includes('scroller') ? e.scroller : query(selector);
+    for (const id of ['4','3','1']) {
+        const slot = e.template.cloneNode(true); slot.querySelector('card').href = 'https://www.netflix.com/browse?jbv=' + id;
+        e.track.appendChild(slot);
+    }
+    const live = e.c.nativeDiscoveryObservation();
+    assert.equal(e.c.alignLegacyVisiblePageOrder(live), true);
     assert.deepEqual(completedViewingIds(e), ['4', '1']);
     assert.deepEqual(mainViewingIds(e), ['3', '2', '5', '6', '7']);
     assert.equal(e.state.items.length, 7);
@@ -8755,7 +8769,7 @@ test('six mounted cards rebuild only the hover target, and another card prepares
     const clones = new Map(items.map((item, i) => [item.videoId, i ? new Element('clone-' + i, e.grid) : e.clone]));
     const originals = new Map(clones);
     for (const item of items) clones.get(item.videoId).__tmMyListItem = item;
-    e.c.sourceState.items = items;
+    publishMembershipForTest(e.c.sourceState, items);
     e.c.currentPageSlots = () => slots;
     e.c.netflixDom = { ...e.c.netflixDom, filledSlots: () => slots, directSlots: () => slots };
     e.c.resolveExpectedPageSourceItem = async item => ({ status: 'found', slot: slots[items.indexOf(item)], slots, page: 0 });
@@ -9135,7 +9149,7 @@ test('target-only hover preparation still rejects a target in the wrapped tail b
         }
     });
     e.c.netflixDom.filledSlots = e.c.netflixDom.directSlots = () => slots;
-    e.c.sourceState.items = [e.clone.__tmMyListItem, ...Array.from({ length: 36 }, (_, i) => ({ videoId: String(i + 200) }))];
+    publishMembershipForTest(e.c.sourceState, [e.clone.__tmMyListItem, ...Array.from({ length: 36 }, (_, i) => ({ videoId: String(i + 200) }))]);
     e.c.nativeCarousel.refreshMapping({ mode: 'delta', section: e.c.sourceState.section,
         scroller: e.c.sourceState.scroller, track: e.c.sourceState.track, totalCount: 37, columns: 6,
         sessionToken: 1, pageHintForVideoId: () => 6 });
@@ -9468,4 +9482,21 @@ test('actual grid replacement hands the admitted hover attempt to its new handle
     e.c.gridView.replaceCard(handle, { node: fresh.cloneNode(true) });
     assert.equal(e.c.hoverToken, 4);
     assert.equal(e.c.activeClone, null);
+});
+
+test('actual grid caller rejects duplicate membership before constructing or replacing the current frame', async () => {
+    const e=constructionEnvironment(),items=e.items(2),oldRecords=e.c.sourceState.items;
+    items[1].videoId=items[0].videoId;
+    await assert.rejects(e.c.buildGrid(e.section,e.scroller,items,e.layout,2,1),{code:'LIST_DUPLICATE_RECORD'});
+    assert.equal(e.oldGrid.isConnected,true);assert.equal(e.c.sourceState.items,oldRecords);assert.equal(e.created.length,0);
+});
+
+test('actual grid caller discards a yielded build when newer membership has been accepted', async () => {
+    const e=constructionEnvironment(),state=e.c.sourceState;
+    const completion=e.c.buildGrid(e.section,e.scroller,e.items(150),e.layout,150,1);
+    const rejection=assert.rejects(completion,{code:'LIST_REPLACED'});
+    state.listMembership.publish([{videoId:'999'}],1);
+    await e.drain();await rejection;
+    assert.equal(e.oldGrid.isConnected,true);assert.equal(state.itemMap.get('v:999').videoId,'999');
+    assert.equal(state.cloneMap.size,0);
 });

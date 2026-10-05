@@ -138,7 +138,18 @@ export function startLegacy() {
 
     // Temporary publication bridge: sourceState may borrow native references,
     // but only the carousel can accept a binding or invalidate its generation.
+    function ensureListMembership(state) {
+        if (state.listMembership) return state.listMembership;
+        const membership = listView.createMembership({ items: state.items || [], totalCount: state.totalCount ?? null,
+            collectedCount: state.collectedCount ?? 0 });
+        Object.defineProperty(state, 'listMembership', { value: membership, configurable: true });
+        for (const [field, owned] of [['items', 'records'], ['itemMap', 'lookup'], ['totalCount', 'expectedCount'], ['collectedCount', 'collectedCount']])
+            Object.defineProperty(state, field, { enumerable: true, configurable: true, get: () => membership[owned] });
+        return membership;
+    }
+
     function attachNativeBinding(state, section, scroller = null, track = null) {
+        ensureListMembership(state);
         const binding = nativeCarousel.bind(section, scroller, track);
         for (const key of ['section', 'scroller', 'track']) Object.defineProperty(state, key,
             { enumerable: true, configurable: true, get: () => binding[key] });
@@ -2648,15 +2659,16 @@ export function startLegacy() {
     function reindexLegacyItemsAfterDelta(reason = 'delta-reindex') {
         if (!sourceState) return;
         const state = sourceState;
+        const membership = ensureListMembership(state);
         const items = state.items || [];
         const columns = Math.max(1, state.layout?.columns || 1);
         const runtime = nativeSourceObservation(state);
         const logicalMode = runtime?.mode === 'logical';
         const resetLogicalPages = reason === 'mutation-reindex';
-        const itemMap = state.itemMap = new Map();
+        const itemMap = state.itemMap;
         const assertCurrent = () => {
             nativeCarousel.assertObservation(runtime);
-            if (state.itemMap !== itemMap || (state.items && state.items !== items)) throw createRouteSessionCancelledError();
+            if (sourceState !== state || state.itemMap !== itemMap || (state.items && state.items !== items)) throw createRouteSessionCancelledError();
         };
         nativeCarousel.sample(() => items.forEach((item, index) => {
             assertCurrent();
@@ -2669,13 +2681,12 @@ export function startLegacy() {
                 item.page = Math.floor(index / columns);
             }
             const key = itemKey(item);
-            itemMap.set(key, item);
             const clone = state.cloneMap?.get(key);
             if (clone?.isConnected) copyItemAttributes(clone, item, index);
             assertCurrent();
         }));
         assertCurrent();
-        sourceState.totalCount = items.length;
+        membership.observeCount({ totalCount: items.length, collectedCount: items.length }, { assertCurrent });
         sourceState.empty = items.length === 0;
         if (logicalMode) {
             syncLogicalPageModelAfterDelta(reason);
@@ -2704,7 +2715,8 @@ export function startLegacy() {
         const index = sourceState.items.findIndex(item => itemKey(item) === key);
         if (index < 0) return false;
 
-        const state = sourceState, items = state.items, removed = items[index];
+        const state = sourceState;
+        const membership = ensureListMembership(state), items = state.items, removed = items[index];
         const assertCurrent = () => {
             if (sourceState !== state || state.items !== items || items[index] !== removed) throw createRouteSessionCancelledError();
         };
@@ -2722,9 +2734,8 @@ export function startLegacy() {
             gridView.removeCard(handle, { correlationId: removed.undoId, assertCurrent });
         }
         assertCurrent();
-        items.splice(index, 1);
+        membership.remove(key, { assertCurrent });
         rememberUndoEntry(removed, index);
-        sourceState.itemMap?.delete(key);
         reindexLegacyItemsAfterDelta('mutation-reindex');
         mutationSourceRecoveryPending = true;
         if (!sourceState.items.length) {
@@ -2747,7 +2758,7 @@ export function startLegacy() {
         if (sourceState.itemMap?.has(key) || sourceState.items?.some(existing => itemKey(existing) === key)) return false;
 
         const state = sourceState;
-        const items = sourceState.items || (sourceState.items = []);
+        const membership = ensureListMembership(state), items = state.items;
         const assertCurrent = () => {
             if (sourceState !== state || state.items !== items || state.itemMap?.has(key)) throw createRouteSessionCancelledError();
         };
@@ -2758,9 +2769,7 @@ export function startLegacy() {
         item.page = Math.floor(index / Math.max(1, sourceState.layout?.columns || 1));
         const before = sourceState.watchStatus ? null : (grid.children[index] || null);
         gridView.insertCard(item, { index, before, correlationId: item.undoId, assertCurrent });
-        items.splice(index, 0, item);
-        sourceState.itemMap ||= new Map();
-        sourceState.itemMap.set(key, item);
+        membership.insert(item, index, { assertCurrent });
         forgetUndoEntry(item.videoId);
         waitingForNativeEmpty = false;
         sourceState.empty = false;
@@ -2806,38 +2815,33 @@ export function startLegacy() {
 
     function alignLegacyVisiblePageOrder(live) {
         if (!sourceState?.items?.length || !live?.pageSignature) return false;
-        const nativeItems = visibleNativeItems(live);
-        const nativeIds = nativeItems.map(item => item.videoId);
-        if (!nativeIds.length || nativeIds.some(id => !sourceState.itemMap?.has(`v:${id}`))) return false;
-
-        const columns = Math.max(1, sourceState.layout?.columns || nativeIds.length);
-        const base = Math.min(sourceState.items.length, (live.selectedPage || 0) * columns);
-        const currentIds = sourceState.items.slice(base, base + nativeIds.length).map(item => item.videoId);
-        if (currentIds.join('|') === nativeIds.join('|')) return false;
-
-        const nativeSet = new Set(nativeIds);
-        const ordered = nativeIds.map(id => sourceState.itemMap.get(`v:${id}`)).filter(Boolean);
-        const remaining = sourceState.items.filter(item => !nativeSet.has(item.videoId));
-        const insertion = Math.min(base, remaining.length);
-        sourceState.items = [...remaining.slice(0, insertion), ...ordered, ...remaining.slice(insertion)];
-
-        const grid = sourceState.grid;
-        if (grid && !sourceState.watchStatus) {
-            // Only move the visible native page worth of clones. The remaining clones
-            // keep their relative order, so DOM work stays O(columns), not O(all items).
-            for (let i = 0; i < ordered.length; i++) {
-                const clone = sourceState.cloneMap?.get(itemKey(ordered[i]));
+        const state = sourceState, membership = ensureListMembership(state), recordOwner = state.items;
+        const nativeItems = visibleNativeItems(live), nativeIds = nativeItems.map(item => item.videoId);
+        const columns = Math.max(1, state.layout?.columns || nativeIds.length);
+        const base = Math.min(state.items.length, (live.selectedPage || 0) * columns);
+        const assertParent = () => {
+            nativeCarousel.assertObservation(live);
+            if (sourceState !== state) throw createRouteSessionCancelledError();
+        };
+        const change = membership.alignVisible(nativeIds, base, { assertCurrent() {
+            assertParent(); if (state.items !== recordOwner) throw createRouteSessionCancelledError();
+        } });
+        if (!change) return false;
+        const guard = () => { assertParent(); if (state.items !== change.records) throw createRouteSessionCancelledError(); };
+        const grid = state.grid;
+        if (grid && !state.watchStatus) {
+            // Preserve bounded visible-page DOM work after authoritative order acceptance.
+            for (let i = 0; i < change.ordered.length; i++) {
+                guard();
+                const item = change.ordered[i], clone = state.cloneMap?.get(itemKey(item));
                 if (!clone) continue;
-                const targetIndex = insertion + i;
-                const reference = grid.children[targetIndex] || null;
-                if (reference !== clone) gridView.moveCard(gridView.getCard(ordered[i]), grid, reference);
+                const reference = grid.children[change.index + i] || null;
+                if (reference !== clone) gridView.moveCard(gridView.getCard(item), grid, reference);
+                guard();
             }
         }
-        reindexLegacyItemsAfterDelta();
-        log(tLog('legacyVisibleOrderAligned'), {
-            page: live.selectedPage,
-            ids: nativeIds
-        });
+        guard(); reindexLegacyItemsAfterDelta();
+        log(tLog('legacyVisibleOrderAligned'), { page: live.selectedPage, ids: nativeIds });
         return true;
     }
 
@@ -3447,7 +3451,7 @@ export function startLegacy() {
                 if (sourceState !== state) return;
                 if (facts.initialPage !== undefined && state) state.initialPage = facts.initialPage;
                 if (facts.collectedCount !== undefined) {
-                    if (state) state.collectedCount = facts.collectedCount;
+                    if (state) ensureListMembership(state).observeCount({ collectedCount: facts.collectedCount });
                     updateStatus(formatHeaderParts(facts.collectedCount, totalCount, null));
                 }
             } });
@@ -5007,7 +5011,7 @@ export function startLegacy() {
     async function buildGrid(section, scroller, items, layout, totalCount, sessionToken = sessionScope.token) {
         const buildState = sourceState;
         const track = buildState?.track;
-        const assertBuildActive = () => {
+        const assertBuildParent = () => {
             assertRouteSession(sessionToken);
             if (sourceState !== buildState) throw createRouteSessionCancelledError();
             if (!section.isConnected || !scroller.isConnected || !track?.isConnected ||
@@ -5016,6 +5020,8 @@ export function startLegacy() {
                     'Native My List source changed during grid construction');
             }
         };
+        const publication = ensureListMembership(buildState).preparePublication(items, totalCount, { assertCurrent: assertBuildParent });
+        const assertBuildActive = () => { assertBuildParent(); publication.assertCurrent(); };
         assertBuildActive();
         const geometry = currentGridGeometry(section, layout);
         const status = updateStatus(formatHeaderParts(items.length, totalCount, null));
@@ -5023,10 +5029,8 @@ export function startLegacy() {
         const grid = await gridView.publish({ items, section, anchor: scroller, status, geometry, layout,
             visible: viewOriginalMyList, assertCurrent: assertBuildActive });
         clearLegacyEmptyState({ restoreGrid: false });
-        buildState.itemMap = new Map(items.map(item => [itemKey(item), item]));
+        publication.commit();
         attachGridRegistry(buildState);
-        sourceState.items = items;
-        sourceState.totalCount = totalCount;
         sourceState.grid = grid;
         sourceState.status = status;
         sourceState.layout = layout;
@@ -6061,7 +6065,7 @@ export function startLegacy() {
                 }
                 nativeCarousel.assertObservation(countObservation);
                 earlyTotalCount = mountedTotalCount;
-                if (sourceState) sourceState.totalCount = mountedTotalCount;
+                if (sourceState) ensureListMembership(sourceState).observeCount({ totalCount: mountedTotalCount });
             } catch (error) {
                 if (error?.code === 'NATIVE_SOURCE_REPLACED' || sourceState !== countOwner) {
                     clearRunningSession(sessionToken, false);
@@ -6306,7 +6310,7 @@ export function startLegacy() {
                 selectedPage: deferredNative?.selectedPage ?? null,
                 currentPageCards: deferredNative?.currentPageCards ?? 0
             });
-            if (sourceState) { sourceState.collectedCount = items.length; sourceState.totalCount = totalCount; }
+            if (sourceState) ensureListMembership(sourceState).observeCount({ collectedCount: items.length, totalCount });
             completedSection = section;
             if (performanceDiagnostics.nativeRecovery.attempts > performanceDiagnostics.nativeRecovery.completed) {
                 performanceDiagnostics.nativeRecovery.completed++;
