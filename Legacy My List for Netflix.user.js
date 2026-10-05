@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.45
+// @version      1.4.46
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -2607,6 +2607,143 @@
     });
   }
 
+  // src/list/mutations.js
+  function createMutations({
+    now,
+    readSession,
+    isSessionActive,
+    setTimeout: setTimeout2,
+    clearTimeout: clearTimeout2,
+    ttl,
+    hasRetained,
+    releaseRetained,
+    readPending = () => null,
+    normalizeTitle = String,
+    onCounter = () => {
+    },
+    onExpired = () => {
+    }
+  }) {
+    let entries = /* @__PURE__ */ new Map(), timer = null, generation = 0;
+    function cancelExpiry() {
+      const old = timer;
+      timer = null;
+      if (old) clearTimeout2(old.id);
+    }
+    function scheduleExpiry() {
+      let dueAt = Infinity;
+      for (const entry of entries.values()) dueAt = Math.min(dueAt, entry.removedAt + ttl);
+      const token = readSession();
+      if (!Number.isFinite(dueAt) || !isSessionActive(token)) {
+        cancelExpiry();
+        return;
+      }
+      if (timer?.dueAt === dueAt && timer.token === token) return;
+      cancelExpiry();
+      const owner = { id: null, token, dueAt };
+      timer = owner;
+      onCounter("schedules", 1);
+      if (timer !== owner) return;
+      owner.id = setTimeout2(() => {
+        if (timer !== owner) return;
+        timer = null;
+        if (!isSessionActive(owner.token)) return;
+        onCounter("expiryCallbacks", 1);
+        pruneUndo();
+      }, Math.max(0, dueAt - now()));
+      if (timer !== owner) clearTimeout2(owner.id);
+    }
+    function clearUndo() {
+      const old = entries;
+      entries = /* @__PURE__ */ new Map();
+      generation++;
+      cancelExpiry();
+      onCounter("cleared", old.size);
+      for (const entry of old.values()) releaseRetained(entry.correlationId);
+    }
+    function forgetUndo(videoId) {
+      const key = String(videoId), entry = entries.get(key);
+      if (!entries.delete(key)) return;
+      generation++;
+      releaseRetained(entry.correlationId);
+      onCounter("consumed", 1);
+      scheduleExpiry();
+    }
+    function pruneUndo(at = now()) {
+      let expired = 0, pendingFallbacksPreserved = 0;
+      for (const [videoId, entry] of [...entries]) {
+        if (entries.get(videoId) !== entry) continue;
+        if (!Number.isFinite(entry.removedAt) || at - entry.removedAt >= ttl) {
+          const admitted2 = generation, pending = readPending(videoId);
+          if (generation !== admitted2 || entries.get(videoId) !== entry) return false;
+          const keep = pending?.fallbackItem === entry.item && pending?.correlationId === entry.correlationId;
+          entries.delete(videoId);
+          generation++;
+          expired++;
+          if (keep) pendingFallbacksPreserved++;
+          else {
+            const admittedRelease = generation;
+            releaseRetained(entry.correlationId);
+            if (generation !== admittedRelease) return false;
+          }
+        }
+      }
+      const admitted = generation;
+      onCounter("expired", expired);
+      scheduleExpiry();
+      if (expired) onExpired({ expired, remaining: entries.size, pendingFallbacksPreserved });
+      return generation === admitted;
+    }
+    function rememberUndo(item, index, correlationId) {
+      if (!item?.videoId) return;
+      const token = readSession(), owner = generation;
+      if (!isSessionActive(token) || !hasRetained(correlationId, item)) return;
+      if (owner !== generation || !isSessionActive(token)) return;
+      if (!pruneUndo() || !isSessionActive(token)) return;
+      const admitted = generation, title = normalizeTitle(item.ariaLabel || ""), removedAt = now();
+      if (generation !== admitted || !isSessionActive(token)) return;
+      entries.set(String(item.videoId), Object.freeze({
+        videoId: String(item.videoId),
+        correlationId,
+        item,
+        index: Math.max(0, Number.isFinite(index) ? Math.floor(index) : 0),
+        title,
+        removedAt
+      }));
+      generation++;
+      onCounter("remembered", 1);
+      scheduleExpiry();
+    }
+    function correlationFor(item) {
+      if (!item?.videoId) return null;
+      const key = String(item.videoId), entry = entries.get(key);
+      if (entry?.item === item) return entry.correlationId;
+      const pending = readPending(key);
+      return pending?.fallbackItem === item ? pending.correlationId || null : null;
+    }
+    function latestUndo() {
+      pruneUndo();
+      let latest = null;
+      for (const entry of entries.values()) if (!latest || entry.removedAt > latest.removedAt) latest = entry;
+      return latest;
+    }
+    return Object.freeze({
+      rememberUndo,
+      forgetUndo,
+      pruneUndo,
+      clearUndo,
+      latestUndo,
+      correlationFor,
+      ownsUndoCorrelation: (videoId, id) => entries.get(String(videoId))?.correlationId === id,
+      undoEntries: () => Object.freeze([...entries.values()]),
+      undoDiagnostics: () => ({
+        entries: entries.size,
+        expiryScheduled: Boolean(timer),
+        nextExpiryInMs: timer ? Math.max(0, Math.round(timer.dueAt - now())) : null
+      })
+    });
+  }
+
   // src/list/collection.js
   function createCollection({
     runChunks,
@@ -3194,6 +3331,7 @@
     }
     const collection = createCollection({ ...options, toRecord });
     return Object.freeze({
+      createMutations,
       createMembership,
       toRecord,
       prepareEntry: collection.prepareEntry,
@@ -11002,6 +11140,22 @@
       fetchBootstrap: (token) => listData.fetchBootstrap(token),
       onReuseRejected: (detail) => log("Mounted single-page membership reuse rejected; using fresh collection", detail)
     });
+    const listMutations = listView.createMutations({
+      now: () => performance.now(),
+      readSession: () => sessionScope.token,
+      isSessionActive: isRouteSessionActive,
+      setTimeout,
+      clearTimeout,
+      ttl: UNDO_ENTRY_TTL_MS,
+      hasRetained: (id, item) => gridView.hasRetained(id, item),
+      releaseRetained: (id) => gridView.releaseRetained(id),
+      readPending: (id) => pendingMyListMutations.get(id),
+      normalizeTitle: normalizeNetflixUiText,
+      onCounter: (name, amount) => {
+        performanceDiagnostics.undoRetention[name] += amount;
+      },
+      onExpired: (detail) => log(tLog("undoEntriesExpired"), detail)
+    });
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
     const VIEWING_TITLE_BATCH_SIZE = viewingData.limits.titleBatch;
@@ -11043,7 +11197,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.45";
+    const SCRIPT_VERSION = "1.4.46";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -11273,8 +11427,6 @@
     let viewOriginalMenuId = null;
     let missingSectionSince = 0;
     let pendingMyListMutations = /* @__PURE__ */ new Map();
-    let recentRemovedMyListItems = /* @__PURE__ */ new Map();
-    let undoExpiryTimer = null;
     let myListMutationSequence = 0;
     let waitingForNativeEmpty = false;
     let initializationBlockedSessionToken = null;
@@ -12138,11 +12290,7 @@
         currentPageCards: native?.currentPageCards ?? 0,
         gridCards: sourceState?.cloneMap?.size ?? 0,
         performanceWork: collectPerformanceDiagnostics(),
-        undoRetention: {
-          entries: recentRemovedMyListItems.size,
-          expiryScheduled: Boolean(undoExpiryTimer),
-          nextExpiryInMs: undoExpiryTimer ? Math.max(0, Math.round(undoExpiryTimer.dueAt - performance.now())) : null
-        },
+        undoRetention: listMutations.undoDiagnostics(),
         viewingStatus: sourceState?.watchStatus ? {
           completed: gridView.presentation().completedCount,
           unknown: gridView.presentation().unknownCount,
@@ -13562,74 +13710,17 @@
     function normalizeNetflixUiText(value) {
       return String(value || "").replace(/[\u200b-\u200f\u2060\ufeff]/g, "").replace(/\s+/g, "").trim();
     }
-    function clearUndoExpiryTimer() {
-      if (undoExpiryTimer) clearTimeout(undoExpiryTimer.id);
-      undoExpiryTimer = null;
-    }
     function clearUndoEntries() {
-      clearUndoExpiryTimer();
-      performanceDiagnostics.undoRetention.cleared += recentRemovedMyListItems.size;
-      recentRemovedMyListItems.clear();
-      gridView.clearRetained();
-    }
-    function scheduleUndoExpiry() {
-      let dueAt = Infinity;
-      for (const entry of recentRemovedMyListItems.values()) {
-        if (Number.isFinite(entry?.removedAt)) dueAt = Math.min(dueAt, entry.removedAt + UNDO_ENTRY_TTL_MS);
-      }
-      if (!Number.isFinite(dueAt) || !isRouteSessionActive(sessionScope.token)) {
-        clearUndoExpiryTimer();
-        return;
-      }
-      if (undoExpiryTimer?.dueAt === dueAt && undoExpiryTimer.sessionToken === sessionScope.token) return;
-      clearUndoExpiryTimer();
-      const owner = { id: null, sessionToken: sessionScope.token, dueAt };
-      undoExpiryTimer = owner;
-      performanceDiagnostics.undoRetention.schedules++;
-      owner.id = setTimeout(() => {
-        if (undoExpiryTimer !== owner) return;
-        undoExpiryTimer = null;
-        if (!isRouteSessionActive(owner.sessionToken)) return;
-        performanceDiagnostics.undoRetention.expiryCallbacks++;
-        pruneUndoEntries();
-      }, Math.max(0, dueAt - performance.now()));
+      listMutations.clearUndo();
     }
     function forgetUndoEntry(videoId) {
-      const entry = recentRemovedMyListItems.get(String(videoId));
-      if (!recentRemovedMyListItems.delete(String(videoId))) return;
-      gridView.releaseRetained(entry.correlationId);
-      performanceDiagnostics.undoRetention.consumed++;
-      scheduleUndoExpiry();
+      listMutations.forgetUndo(videoId);
     }
     function pruneUndoEntries(now = performance.now()) {
-      let expired = 0, pendingFallbacksPreserved = 0;
-      for (const [videoId, entry] of recentRemovedMyListItems.entries()) {
-        if (!Number.isFinite(entry?.removedAt) || now - entry.removedAt >= UNDO_ENTRY_TTL_MS) {
-          const pending = pendingMyListMutations.get(videoId);
-          const pendingOwnsMaterial = Boolean(entry?.item && pending?.fallbackItem === entry.item && pending.correlationId === entry.correlationId);
-          if (pendingOwnsMaterial) pendingFallbacksPreserved++;
-          recentRemovedMyListItems.delete(videoId);
-          if (!pendingOwnsMaterial) gridView.releaseRetained(entry?.correlationId);
-          expired++;
-        }
-      }
-      performanceDiagnostics.undoRetention.expired += expired;
-      scheduleUndoExpiry();
-      if (expired) log(tLog("undoEntriesExpired"), { expired, remaining: recentRemovedMyListItems.size, pendingFallbacksPreserved });
+      listMutations.pruneUndo(now);
     }
     function rememberUndoEntry(item, index, correlationId) {
-      if (!item?.videoId || !gridView.hasRetained(correlationId, item)) return;
-      pruneUndoEntries();
-      recentRemovedMyListItems.set(String(item.videoId), {
-        videoId: String(item.videoId),
-        correlationId,
-        item,
-        index: Math.max(0, Number.isFinite(index) ? Math.floor(index) : 0),
-        title: normalizeNetflixUiText(item.ariaLabel || ""),
-        removedAt: performance.now()
-      });
-      performanceDiagnostics.undoRetention.remembered++;
-      scheduleUndoExpiry();
+      listMutations.rememberUndo(item, index, correlationId);
     }
     function describeMyListUndoClick(event) {
       const target = event.target instanceof Element ? event.target : null;
@@ -13639,11 +13730,7 @@
       if (!toast) return null;
       const toastButtons = [...toast.querySelectorAll("button")];
       if (toastButtons.length !== 1 || toastButtons[0] !== button) return null;
-      pruneUndoEntries();
-      let entry = null;
-      for (const candidate of recentRemovedMyListItems.values()) {
-        if (!entry || candidate.removedAt > entry.removedAt) entry = candidate;
-      }
+      const entry = listMutations.latestUndo();
       if (!entry) return null;
       return {
         button,
@@ -14106,7 +14193,7 @@
       }
       if (mutation.timeoutId !== null && mutation.timeoutId !== void 0) clearTimeout(mutation.timeoutId);
       pendingMyListMutations.delete(key);
-      if (mutation.correlationId && recentRemovedMyListItems.get(key)?.correlationId !== mutation.correlationId) {
+      if (mutation.correlationId && !listMutations.ownsUndoCorrelation(key, mutation.correlationId)) {
         gridView.releaseRetained(mutation.correlationId);
       }
     }
@@ -14607,11 +14694,7 @@
       return nativeCarousel.stablePage(...args);
     }
     function undoCorrelationForItem(item) {
-      if (!item?.videoId) return null;
-      const key = String(item.videoId), entry = recentRemovedMyListItems.get(key);
-      if (entry?.item === item) return entry.correlationId;
-      const pending = pendingMyListMutations.get(key);
-      return pending?.fallbackItem === item ? pending.correlationId || null : null;
+      return listMutations.correlationFor(item);
     }
     function cardSourceForItem(item, correlationId = undoCorrelationForItem(item)) {
       return gridView.materialFor(item, correlationId);

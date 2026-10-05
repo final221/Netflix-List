@@ -61,6 +61,14 @@ export function startLegacy() {
         readInitialFirstId: () => listData.firstMyListVideoId(), fetchBootstrap: token => listData.fetchBootstrap(token),
         onReuseRejected: detail => log('Mounted single-page membership reuse rejected; using fresh collection', detail) });
 
+    const listMutations = listView.createMutations({ now: () => performance.now(),
+        readSession: () => sessionScope.token, isSessionActive: isRouteSessionActive, setTimeout, clearTimeout,
+        ttl: UNDO_ENTRY_TTL_MS, hasRetained: (id, item) => gridView.hasRetained(id, item),
+        releaseRetained: id => gridView.releaseRetained(id), readPending: id => pendingMyListMutations.get(id),
+        normalizeTitle: normalizeNetflixUiText,
+        onCounter: (name, amount) => { performanceDiagnostics.undoRetention[name] += amount; },
+        onExpired: detail => log(tLog('undoEntriesExpired'), detail) });
+
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
     const VIEWING_TITLE_BATCH_SIZE = viewingData.limits.titleBatch;
@@ -273,8 +281,6 @@ export function startLegacy() {
     let viewOriginalMenuId = null;
     let missingSectionSince = 0;
     let pendingMyListMutations = new Map();
-    let recentRemovedMyListItems = new Map();
-    let undoExpiryTimer = null;
     let myListMutationSequence = 0;
     let waitingForNativeEmpty = false;
     let initializationBlockedSessionToken = null;
@@ -993,8 +999,7 @@ export function startLegacy() {
             currentPageCards: native?.currentPageCards ?? 0,
             gridCards: sourceState?.cloneMap?.size ?? 0,
             performanceWork: collectPerformanceDiagnostics(),
-            undoRetention: { entries: recentRemovedMyListItems.size, expiryScheduled: Boolean(undoExpiryTimer),
-                nextExpiryInMs: undoExpiryTimer ? Math.max(0, Math.round(undoExpiryTimer.dueAt - performance.now())) : null },
+            undoRetention: listMutations.undoDiagnostics(),
             viewingStatus: sourceState?.watchStatus ? {
                 completed: gridView.presentation().completedCount,
                 unknown: gridView.presentation().unknownCount,
@@ -2339,84 +2344,10 @@ export function startLegacy() {
             .trim();
     }
 
-    function clearUndoExpiryTimer() {
-        if (undoExpiryTimer) clearTimeout(undoExpiryTimer.id);
-        undoExpiryTimer = null;
-    }
-
-    function clearUndoEntries() {
-        clearUndoExpiryTimer();
-        performanceDiagnostics.undoRetention.cleared += recentRemovedMyListItems.size;
-        recentRemovedMyListItems.clear();
-        gridView.clearRetained();
-    }
-
-    function scheduleUndoExpiry() {
-        let dueAt = Infinity;
-        for (const entry of recentRemovedMyListItems.values()) {
-            if (Number.isFinite(entry?.removedAt)) dueAt = Math.min(dueAt, entry.removedAt + UNDO_ENTRY_TTL_MS);
-        }
-        if (!Number.isFinite(dueAt) || !isRouteSessionActive(sessionScope.token)) {
-            clearUndoExpiryTimer();
-            return;
-        }
-        if (undoExpiryTimer?.dueAt === dueAt && undoExpiryTimer.sessionToken === sessionScope.token) return;
-        clearUndoExpiryTimer();
-        // Capture only the timer owner, never a card or a removed-entry array.
-        const owner = { id: null, sessionToken: sessionScope.token, dueAt };
-        undoExpiryTimer = owner;
-        performanceDiagnostics.undoRetention.schedules++;
-        owner.id = setTimeout(() => {
-            if (undoExpiryTimer !== owner) return;
-            undoExpiryTimer = null;
-            if (!isRouteSessionActive(owner.sessionToken)) return;
-            performanceDiagnostics.undoRetention.expiryCallbacks++;
-            pruneUndoEntries();
-        }, Math.max(0, dueAt - performance.now()));
-    }
-
-    function forgetUndoEntry(videoId) {
-        const entry = recentRemovedMyListItems.get(String(videoId));
-        if (!recentRemovedMyListItems.delete(String(videoId))) return;
-        gridView.releaseRetained(entry.correlationId);
-        performanceDiagnostics.undoRetention.consumed++;
-        scheduleUndoExpiry();
-    }
-
-    function pruneUndoEntries(now = performance.now()) {
-        let expired = 0, pendingFallbacksPreserved = 0;
-        for (const [videoId, entry] of recentRemovedMyListItems.entries()) {
-            if (!Number.isFinite(entry?.removedAt) || now - entry.removedAt >= UNDO_ENTRY_TTL_MS) {
-                const pending = pendingMyListMutations.get(videoId);
-                const pendingOwnsMaterial = Boolean(entry?.item && pending?.fallbackItem === entry.item &&
-                    pending.correlationId === entry.correlationId);
-                if (pendingOwnsMaterial) pendingFallbacksPreserved++;
-                // Drop this cache's ownership only. A queued Undo mutation may
-                // still owns the correlation and needs its retained material to finish.
-                recentRemovedMyListItems.delete(videoId);
-                if (!pendingOwnsMaterial) gridView.releaseRetained(entry?.correlationId);
-                expired++;
-            }
-        }
-        performanceDiagnostics.undoRetention.expired += expired;
-        scheduleUndoExpiry();
-        if (expired) log(tLog('undoEntriesExpired'), { expired, remaining: recentRemovedMyListItems.size, pendingFallbacksPreserved });
-    }
-
-    function rememberUndoEntry(item, index, correlationId) {
-        if (!item?.videoId || !gridView.hasRetained(correlationId, item)) return;
-        pruneUndoEntries();
-        recentRemovedMyListItems.set(String(item.videoId), {
-            videoId: String(item.videoId),
-            correlationId,
-            item,
-            index: Math.max(0, Number.isFinite(index) ? Math.floor(index) : 0),
-            title: normalizeNetflixUiText(item.ariaLabel || ''),
-            removedAt: performance.now()
-        });
-        performanceDiagnostics.undoRetention.remembered++;
-        scheduleUndoExpiry();
-    }
+    function clearUndoEntries() { listMutations.clearUndo(); }
+    function forgetUndoEntry(videoId) { listMutations.forgetUndo(videoId); }
+    function pruneUndoEntries(now = performance.now()) { listMutations.pruneUndo(now); }
+    function rememberUndoEntry(item, index, correlationId) { listMutations.rememberUndo(item, index, correlationId); }
 
     function describeMyListUndoClick(event) {
         const target = event.target instanceof Element ? event.target : null;
@@ -2428,11 +2359,7 @@ export function startLegacy() {
         const toastButtons = [...toast.querySelectorAll('button')];
         if (toastButtons.length !== 1 || toastButtons[0] !== button) return null;
 
-        pruneUndoEntries();
-        let entry = null;
-        for (const candidate of recentRemovedMyListItems.values()) {
-            if (!entry || candidate.removedAt > entry.removedAt) entry = candidate;
-        }
+        const entry = listMutations.latestUndo();
         if (!entry) return null;
 
         // A single action button inside a recent-removal toast is treated as Undo.
@@ -2885,7 +2812,7 @@ export function startLegacy() {
         try { mutation.observer?.disconnect(); } catch (_) {}
         if (mutation.timeoutId !== null && mutation.timeoutId !== undefined) clearTimeout(mutation.timeoutId);
         pendingMyListMutations.delete(key);
-        if (mutation.correlationId && recentRemovedMyListItems.get(key)?.correlationId !== mutation.correlationId) {
+        if (mutation.correlationId && !listMutations.ownsUndoCorrelation(key, mutation.correlationId)) {
             gridView.releaseRetained(mutation.correlationId);
         }
     }
@@ -3419,13 +3346,7 @@ export function startLegacy() {
         return nativeCarousel.stablePage(...args);
     }
 
-    function undoCorrelationForItem(item) {
-        if (!item?.videoId) return null;
-        const key = String(item.videoId), entry = recentRemovedMyListItems.get(key);
-        if (entry?.item === item) return entry.correlationId;
-        const pending = pendingMyListMutations.get(key);
-        return pending?.fallbackItem === item ? pending.correlationId || null : null;
-    }
+    function undoCorrelationForItem(item) { return listMutations.correlationFor(item); }
 
     function cardSourceForItem(item, correlationId = undoCorrelationForItem(item)) {
         return gridView.materialFor(item, correlationId);

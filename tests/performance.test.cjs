@@ -149,7 +149,7 @@ function environment(names, overrides = {}) {
         activeNativeHover: null,
         orderMismatchDialogOpen: false, orderMismatchReinitializing: false, responsiveRefreshPromise: null,
         routeSessionToken: 1, targetSessionActive: true,
-        recentRemovedMyListItems: new Map(), undoExpiryTimer: null, myListMutationSequence: 0,
+        myListMutationSequence: 0,
         sourceState: null,
         nativeInitializationFailure: null,
         imageResourceObserver: null, IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES: 4000,
@@ -170,7 +170,7 @@ function environment(names, overrides = {}) {
     vm.runInContext(source.match(/^    const HOVER_INTERRUPTION_LOG_LIMIT = \d+;/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_CANCELLATION_REASONS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     for (const name of ['publishSourceState', 'ensurePageHints', 'pageForItem', 'setPageForItem', 'ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
-        'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoExpiryTimer', 'clearUndoEntries', 'scheduleUndoExpiry', 'forgetUndoEntry',
+        'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoEntries', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
         'hoverScrollElapsed', 'recordHoverCancellation', 'advanceHoverToken', 'hoverIntentDiagnosticSnapshot', 'hoverScrollStateSnapshot',
         'createLogicalMoveSignal', 'createNavigationDiagnosticSink',
@@ -373,6 +373,15 @@ function environment(names, overrides = {}) {
         waitInitialCount: token => c.waitForMyListTotalCount(c.TOTAL_COUNT_TIMEOUT_MS, token),
         readInitialFirstId: () => c.listData.firstMyListVideoId(), fetchBootstrap: token => c.listData.fetchBootstrap(token),
         onReuseRejected: detail => c.log('Mounted single-page membership reuse rejected; using fresh collection', detail) });
+    c.listMutations = c.listView.createMutations({ now: () => c.performance.now(), readSession: () => c.sessionScope.token,
+        isSessionActive: token => c.isRouteSessionActive(token), setTimeout: (...args) => c.setTimeout(...args),
+        clearTimeout: id => c.clearTimeout(id), ttl: c.UNDO_ENTRY_TTL_MS || 30000,
+        hasRetained: (id, item) => c.gridView.hasRetained(id, item), releaseRetained: id => c.gridView.releaseRetained(id),
+        readPending: id => c.pendingMyListMutations?.get(id), normalizeTitle: text => c.normalizeNetflixUiText?.(text) || text,
+        onCounter: (name, amount) => { if (c.performanceDiagnostics?.undoRetention) c.performanceDiagnostics.undoRetention[name] += amount; },
+        onExpired: detail => c.log(c.tLog('undoEntriesExpired'), detail) });
+    Object.defineProperty(c, 'recentRemovedMyListItems', { configurable: true,
+        get: () => new Map(c.listMutations.undoEntries().map(entry => [entry.videoId, entry])) });
     if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
     Object.defineProperty(c, 'nativeReadScope', { get: () => c.nativeCarousel.diagnostics().readScopeActive ? true : null });
     // Supplementary characterization of private acknowledgement resources. Full
@@ -3506,7 +3515,7 @@ function constructionEnvironment() {
         },
         sourceState: { section, scroller, track, grid: oldGrid, status, layout, items: [], cloneMap: new Map(), itemMap: new Map() },
         findMyListSection: () => null,
-        pendingMyListMutations: new Map(), recentRemovedMyListItems: new Map(),
+        pendingMyListMutations: new Map(),
         UNDO_ENTRY_TTL_MS: 30000,
         running: true, runningSessionToken: 1, responsiveRefreshing: false,
         clearLegacyEmptyState() {}, invalidateGridReact() {}, releaseGridReact() {}, clearSourceAlignment() {},
@@ -4773,7 +4782,7 @@ test('Undo expiry releases idle snapshots at 30 seconds using one finite timer a
     assert.equal(e.c.recentRemovedMyListItems.size, 0, 'expiry needs no later removal, Undo click or explicit prune');
     assert.equal(retainedCardTrees(e.c.sourceState, e.c.recentRemovedMyListItems).has(removed), false);
     assert.equal(e.timers.size, 0);
-    assert.equal(e.c.undoExpiryTimer, null);
+    assert.equal(e.c.listMutations.undoDiagnostics().expiryScheduled, false);
     const counters = e.c.collectPerformanceDiagnostics().undoRetention;
     assert.equal(counters.expired, 1);
     assert.equal(counters.expiryCallbacks, 1);
@@ -4842,7 +4851,7 @@ test('Undo expiry clears route-owned timers and ignores an obsolete callback aft
     e.c.suspendTargetSession('undo-test-leave');
     assert.equal(e.timers.size, 0);
     assert.equal(e.c.recentRemovedMyListItems.size, 0);
-    assert.equal(e.c.undoExpiryTimer, null);
+    assert.equal(e.c.listMutations.undoDiagnostics().expiryScheduled, false);
     e.c.scheduleRun = () => {};
     e.c.startTargetSession('undo-test-enter');
     e.c.isRouteSessionActive = token => e.c.targetSessionActive && token === e.c.routeSessionToken;
@@ -4851,9 +4860,9 @@ test('Undo expiry clears route-owned timers and ignores an obsolete callback aft
     const newBuild = e.c.buildGrid(e.section, e.scroller, newItems, e.layout, 1, e.c.routeSessionToken);
     await e.drain(); await newBuild;
     e.c.applyLegacyRemoval('1');
-    const currentTimer = e.c.undoExpiryTimer;
+    const currentTimer = [...e.timers.keys()][0];
     obsoleteCallback();
-    assert.equal(e.c.undoExpiryTimer, currentTimer);
+    assert.equal([...e.timers.keys()][0], currentTimer);
     assert.equal(e.timers.size, 1);
     assert.equal(e.c.recentRemovedMyListItems.size, 1);
     await e.advance(30000);

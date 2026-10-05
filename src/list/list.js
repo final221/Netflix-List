@@ -1,3 +1,4 @@
+import { createMutations } from './mutations.js';
 import { createCollection } from './collection.js';
 import { createMembership } from './membership.js';
 
@@ -14,7 +15,7 @@ export function createList(options) {
         return record;
     }
     const collection = createCollection({ ...options, toRecord });
-    return Object.freeze({ createMembership, toRecord, prepareEntry: collection.prepareEntry, prepareRecords: collection.prepareRecords,
+    return Object.freeze({ createMutations, createMembership, toRecord, prepareEntry: collection.prepareEntry, prepareRecords: collection.prepareRecords,
         waitForInitialCount: collection.waitForInitialCount,
         collectForPublication: collection.collectForPublication,
         preparePreferred: collection.preparePreferred,
