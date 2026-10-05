@@ -1,5 +1,5 @@
 // Private card ownership. Membership and Undo expiry are supplied by the list owner.
-export function createCards({ markup, keyFor, createError, prepareCard, onRetire, onReplace, readRoot }) {
+export function createCards({ markup, keyFor, createError, prepareCard, onRetire, onReplace, readRoot, onMaterialReleaseFailure }) {
     let entries = new Map(), view = readOnlyView(entries), generation = 0, revision = 0, retirementFailures = 0;
     const handles = new WeakMap(), retained = new Map();
 
@@ -41,10 +41,10 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
         if (removed?.item === item) return removed.node;
         return item.cardTemplate || null;
     }
-    function createClone(item, correlationId) {
-        const source = materialFor(item, correlationId);
+    function createClone(item, correlationId, material = null) {
+        const source = material ? material.source : materialFor(item, correlationId);
         if (!source) throw createError('GRID_CARD_MATERIAL_MISSING', 'No card markup available for ' + keyFor(item));
-        return markup.createClone(source, item, source === item.cardTemplate);
+        return markup.createClone(source, item, material ? material.template : source === item.cardTemplate);
     }
     function prepare(node, item, index, detail = {}) {
         markup.normalize(node);
@@ -55,12 +55,13 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
         prepareCard(node, item, detail);
     }
     function releaseStartup(item) {
+        const hadMaterial = Boolean(item.snapshot || item.cardTemplate);
         if (item.snapshot) item.snapshot = null;
         if (item.cardTemplate) item.cardTemplate = null;
-        if (item.imageUrl) item.imageUrl = '';
+        if (hadMaterial && item.imageUrl) item.imageUrl = '';
     }
-    function stage(items, root, index, map) {
-        const item = items[index], node = createClone(item);
+    function stage(items, root, index, map, material = null) {
+        const item = items[index], node = createClone(item, null, material);
         prepare(node, item, index);
         root.appendChild(node);
         register(map, item, node);
@@ -138,12 +139,13 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
         if (correlationId !== null) retained.set(correlationId, { item: entry.item, node: entry.node });
         return true;
     }
-    function insertCard(item, { index = 0, correlationId = item?.undoId, before = null, assertCurrent = () => {} } = {}) {
+    function insertCard(item, { index = 0, correlationId = item?.undoId, before = null, material = null,
+        onAccepted = () => {}, releaseMaterial = null, assertCurrent = () => {} } = {}) {
         assertCurrent();
         if (entries.has(keyFor(item))) throw createError('GRID_DUPLICATE_CARD', 'Card is already displayed');
         const root = readRoot();
         if (!root?.isConnected) throw createError('GRID_FRAME_RETIRED', 'Grid is not mounted');
-        const node = createClone(item, correlationId);
+        const node = createClone(item, correlationId, material);
         prepare(node, item, index);
         assertCurrent();
         if (readRoot() !== root || entries.has(keyFor(item))) throw createError('GRID_FRAME_RETIRED', 'Grid changed during insertion');
@@ -154,8 +156,14 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
         } catch (error) { node.remove(); throw error; }
         const handle = register(entries, item, node);
         revision++;
-        releaseStartup(item);
         retained.delete(correlationId);
+        try { onAccepted(handle); }
+        finally {
+            if (releaseMaterial) {
+                try { releaseMaterial(); } catch (_) { onMaterialReleaseFailure(); }
+            } else releaseStartup(item);
+        }
+        assertCard(handle);
         return handle;
     }
     function updateCard(expected, item, index = null) {

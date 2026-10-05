@@ -104,3 +104,48 @@ test('retirement during admission cannot commit a partially prepared membership 
     assert.throws(()=>m.remove('v:1',{assertCurrent(){m.dispose();}}),{code:'LIST_RETIRED'});
     assert.equal(m.records.length,0);
 });
+
+test('collection transfer separates DOM material from stable scalar records and discards unaccepted material without clearing its source', () => {
+    const e=fixture(),source={videoId:'1',href:'one',ariaLabel:'One',page:0,imageUrl:'art',snapshot:{clone:true},fiber:{private:true}};
+    const transfer=e.list.prepareRecords([source]);const record=transfer.records[0];
+    assert.equal(record.snapshot,undefined);assert.equal(record.cardTemplate,undefined);assert.equal(record.fiber,undefined);
+    assert.equal(record.imageUrl,'art');assert.equal(transfer.readMaterial(record).source,source.snapshot);
+    transfer.discard();assert.equal(source.snapshot.clone,true);assert.equal(transfer.readMaterial(record),null);
+    const next=e.list.prepareRecords([source]);assert.equal(next.records[0],record);next.release();
+    assert.equal(source.snapshot,null);assert.equal(record.imageUrl,'art');
+});
+
+test('membership rejects DOM-bearing source objects while accepting their separately prepared scalar records', () => {
+    const e=fixture(),m=e.list.createMembership(),source={videoId:'1',snapshot:{tree:true}};
+    assert.throws(()=>m.publish([source],1),{code:'LIST_RECORD_INVALID'});
+    const transfer=e.list.prepareRecords([source]);m.publish(transfer.records,1);
+    assert.equal(m.records[0],transfer.records[0]);assert.equal(Object.hasOwn(m.records[0],'snapshot'),false);
+    transfer.discard();
+});
+
+test('material release closes access before host failure and still releases other inputs', () => {
+    const e=fixture(),tree={},first={videoId:'1',imageUrl:'art'};
+    Object.defineProperty(first,'snapshot',{get:()=>tree,set(){throw new Error('host release');}});
+    const second={videoId:'2',snapshot:{},imageUrl:'second'};
+    const transfer=e.list.prepareRecords([first,second]);
+    assert.throws(()=>transfer.release(),/host release/);
+    assert.equal(transfer.readMaterial(transfer.records[0]),null);
+    assert.equal(second.snapshot,null);assert.equal(second.imageUrl,'');
+    assert.equal(transfer.records[1].imageUrl,'second');transfer.release();
+});
+
+test('accepted publication remains admitted until another membership change supersedes it', () => {
+    const e=fixture(),m=e.list.createMembership(),record={videoId:'1'};
+    const publication=m.preparePublication([record],1);
+    publication.commit();publication.assertCurrent();const revision=m.revision;
+    publication.commit();assert.equal(m.revision,revision);
+    m.remove('v:1');assert.throws(()=>publication.assertCurrent(),{code:'LIST_REPLACED'});
+    assert.throws(()=>publication.commit(),{code:'LIST_REPLACED'});
+});
+
+test('source access cannot return a transfer after retiring its caller during capture', () => {
+    const e=fixture();let active=true,reads=0;
+    const source={videoId:'1'};
+    Object.defineProperty(source,'imageUrl',{get(){if(++reads===2)active=false;return 'art';}});
+    assert.throws(()=>e.list.prepareRecords([source],{assertCurrent(){if(!active)throw new Error('retired');}}),/retired/);
+});

@@ -2946,7 +2946,7 @@ function observerEnvironment() {
         GRID_ID: 'grid', STATUS_ID: 'status', LEGACY_EMPTY_STATE_ID: 'empty', ORDER_MISMATCH_DIALOG_ID: 'dialog',
         NETFLIX_DOM_SELECTORS: { browseSections: 'host', carouselScroller: 'scroller' },
         location: { href: 'same' }, lastObservedUrl: 'same', initializationBlockedSessionToken: null,
-        sourceState: { section, scroller, track, grid, empty: false, items: [1] }, completedSection: section,
+        sourceState: { section, scroller, track, grid, empty: false, items: [{ videoId: '1' }] }, completedSection: section,
         waitingForNativeEmpty: false, document: { getElementById: id => id === 'grid' ? grid : null, querySelector: () => host },
         findMyListSection: () => section, netflixDom: { findTrack: () => track,
             directSlots: () => [], filledSlots: () => { reads++; return []; } },
@@ -3659,7 +3659,8 @@ test('chunked grid publishes its complete tree and maps once while preserving ca
     assert.equal(e.logs.filter(entry => entry.name === 'legacyGridBuilt').length, 1);
     assert.deepEqual([...grid.listeners.keys()], ['pointerover', 'pointerout']);
     grid.children.forEach((clone, index) => {
-        assert.equal(clone.__tmMyListItem, items[index]);
+        assert.equal(clone.__tmMyListItem, state.items[index]);
+        assert.equal(Object.hasOwn(clone.__tmMyListItem, 'snapshot'), false);
         assert.equal(clone.getAttribute('data-tm-item-order'), String(index));
         assert.equal(clone.getAttribute('data-tm-item-page'), String(Math.floor(index / 6)));
         assert.equal(clone.querySelector('card').tabIndex, 0);
@@ -3727,7 +3728,8 @@ test('queued add/remove deltas apply after complete publication and stay deferre
     assert.equal(e.c.sourceState.items.length, 150);
     assert.equal(e.c.sourceState.itemMap.has('v:2'), false);
     assert.equal(e.c.sourceState.itemMap.has('v:999'), true);
-    assert.equal(grid.children[0].__tmMyListItem, added);
+    assert.equal(grid.children[0].__tmMyListItem, e.c.sourceState.itemMap.get('v:999'));
+    assert.notEqual(grid.children[0].__tmMyListItem, added);
     assert.equal(grid.children.length, 150);
 });
 
@@ -4663,7 +4665,7 @@ test('remove and Undo retain only the removed tree then restore membership, orde
         let items = e.items(6);
         if (mode === 'graphql') items = await e.c.buildGraphqlMyListItems(e.records(6), 6, 6, e.c.cardMarkup.captureTemplate(e.template), 1);
         const grid = await e.c.buildGrid(e.section, e.scroller, items, e.layout, 6, 1);
-        const item = items[2], removed = grid.children[2];
+        const item = e.c.sourceState.itemMap.get('v:3'), removed = grid.children[2];
         removed.appendChild(new ConstructionNode('button')).setAttribute('aria-label', 'Preserved action');
         for (const name of ['data-tm-hover-ready', 'data-tm-backed-page', 'data-tm-react-grafted',
             'data-tm-preparing', 'data-tm-hover-token']) removed.setAttribute(name, 'true');
@@ -4712,7 +4714,7 @@ test('hover replacements become the sole card source for rebuild and Undo withou
     };
     const items = e.items(6);
     const grid = await e.c.buildGrid(e.section, e.scroller, items, e.layout, 6, 1);
-    const old = grid.children[0], item = items[0];
+    const old = grid.children[0], item = e.c.sourceState.itemMap.get('v:1');
     const liveSource = e.template.cloneNode(true);
     liveSource.markup = 'fresh-live-markup';
     liveSource.querySelector('card').href = item.href;
@@ -4815,7 +4817,7 @@ test('Undo expiry preserves a queued mutation fallback after removing the Undo c
     assert.equal(e.c.tryApplyMyListMutation(mutation, 'after-expiry'), true);
     assert.equal(e.c.sourceState.items.length, 6);
     assert.equal(e.c.pendingMyListMutations.size, 0);
-    assert.equal(mutation.fallbackItem.snapshot, null);
+    assert.equal(Object.hasOwn(mutation.fallbackItem, 'snapshot'), false);
     assert.equal(e.timers.size, 0);
 });
 
@@ -4854,7 +4856,7 @@ test('stale same-id item objects cannot borrow another item tree', async () => {
     const stale = { videoId: '1', href: items[0].href };
     assert.equal(e.c.cardSourceForItem(stale), null);
     assert.throws(() => e.c.gridView.insertCard(stale), { code: 'GRID_DUPLICATE_CARD' });
-    assert.equal(e.c.cardSourceForItem(items[0]), e.c.sourceState.grid.children[0]);
+    assert.equal(e.c.cardSourceForItem(e.c.sourceState.itemMap.get('v:1')), e.c.sourceState.grid.children[0]);
 });
 
 test('native order reads allocate no card trees and native additions capture only the matching card', () => {
@@ -5353,7 +5355,7 @@ test('verified mounted single-page reuse is integrated into initialization witho
     assert.equal(e.c.sourceState.items.length, 6);
     assert.deepEqual(e.c.sourceState.grid.children.map(clone => clone.getAttribute('native-variant')),
         ['0', '1', '2', '3', '4', '5']);
-    assert.ok(e.c.sourceState.items.every(item => item.snapshot === null));
+    assert.ok(e.c.sourceState.items.every(item => !Object.hasOwn(item, 'snapshot') && !Object.hasOwn(item, 'cardTemplate')));
     assert.ok(e.logs.some(row => row.details.collectionSource === 'mounted-single-page'));
     assert.equal(e.warnings.length, 0);
 });
@@ -8742,7 +8744,8 @@ test('detached reset restores original geometry descriptors before dropping sour
         vm.runInContext(declaration(name), e.c);
     }
     const membership = e.c.sourceState.listMembership;
-    const staged = membership.preparePublication(e.items(1), 1);
+    const transfer = e.c.listView.prepareRecords(e.items(1));
+    const staged = membership.preparePublication(transfer.records, 1);
     e.section.setConnected(false);
     e.c.resetDetachedTargetState();
     assert.equal(Object.hasOwn(slot, 'getBoundingClientRect'), false);
@@ -8753,6 +8756,7 @@ test('detached reset restores original geometry descriptors before dropping sour
     assert.equal(e.c.sourceState, null);
     assert.equal(membership.records.length, 0);
     assert.throws(() => staged.commit(), { code: 'LIST_RETIRED' });
+    transfer.discard();
     assert.equal(e.c.performanceDiagnostics.nativeRecovery.alignmentRestores, 1);
 });
 
@@ -9454,12 +9458,13 @@ test('actual grid admission rejects an obsolete preparation before native captur
     const e = constructionEnvironment();
     const items = e.items(1);
     await e.c.buildGrid(e.section, e.scroller, items, e.layout, 1, 1);
+    const record = e.c.sourceState.itemMap.get('v:1');
     vm.runInContext(declaration('makeLiveClone'), e.c);
-    const oldHandle = e.c.gridView.getCard(items[0]), old = oldHandle.node;
+    const oldHandle = e.c.gridView.getCard(record), old = oldHandle.node;
     const next = e.c.gridView.replaceCard(oldHandle, { node: old.cloneNode(true) });
     let captures = 0;
     const native = { cloneNode() { captures++; return e.template.cloneNode(true); } };
-    assert.throws(() => e.c.makeLiveClone(native, items[0], old, 0), { code: 'GRID_CARD_RETIRED' });
+    assert.throws(() => e.c.makeLiveClone(native, record, old, 0), { code: 'GRID_CARD_RETIRED' });
     assert.equal(captures, 0);
     e.c.gridView.assertCard(next);
     assert.ok(viewingControls(next.node));
@@ -9469,14 +9474,15 @@ test('actual grid replacement hands the admitted hover attempt to its new handle
     const e = constructionEnvironment();
     const items = e.items(1);
     await e.c.buildGrid(e.section, e.scroller, items, e.layout, 1, 1);
+    const record = e.c.sourceState.itemMap.get('v:1');
     vm.runInContext(declaration('makeLiveClone'), e.c);
     e.c.netflixReactHover = { graftTreeToClone() { return { propsAssignments: 1 }; } };
-    const old = e.c.gridView.getCard(items[0]);
+    const old = e.c.gridView.getCard(record);
     e.c.hoverToken = 3;
     e.c.activeClone = old.node;
     old.node.setAttribute('data-tm-preparing', 'true');
     old.node.setAttribute('data-tm-hover-token', '3');
-    const { fresh, handle } = e.c.makeLiveClone(e.template, items[0], old.node, 0, () => {}, 3, 1);
+    const { fresh, handle } = e.c.makeLiveClone(e.template, record, old.node, 0, () => {}, 3, 1);
     assert.equal(e.c.hoverToken, 3);
     assert.equal(e.c.gridView.isCardCurrent(old), false);
     e.c.gridView.assertCard(handle);

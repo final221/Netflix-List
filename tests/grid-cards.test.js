@@ -186,7 +186,7 @@ test('disposal releases registry and retained material and prevents reentrant in
     grid.dispose();
     assert.equal(grid.isCardCurrent(stale), false);
     assert.equal(root.isConnected, false);
-    assert.deepEqual(grid.diagnostics(), { activeCards: 0, retainedCards: 0, retirementFailures: 0, frameReleaseFailures: 0, placementReleaseFailures: 0 });
+    assert.deepEqual(grid.diagnostics(), { activeCards: 0, retainedCards: 0, retirementFailures: 0, frameReleaseFailures: 0, placementReleaseFailures: 0, materialReleaseFailures: 0 });
 });
 
 test('a failed retirement callback cannot prevent disposal of other cards or leave a retained registry view', async () => {
@@ -199,7 +199,7 @@ test('a failed retirement callback cannot prevent disposal of other cards or lea
     e.grid.dispose();
     assert.deepEqual(released, ['v:1', 'v:2']);
     assert.equal(oldView.size, 0);
-    assert.deepEqual(e.grid.diagnostics(), { activeCards: 0, retainedCards: 0, retirementFailures: 2, frameReleaseFailures: 0, placementReleaseFailures: 0 });
+    assert.deepEqual(e.grid.diagnostics(), { activeCards: 0, retainedCards: 0, retirementFailures: 2, frameReleaseFailures: 0, placementReleaseFailures: 0, materialReleaseFailures: 0 });
 });
 
 test('empty frame accepts the first addition and can move between native and synthetic anchors without retaining retired cards', async () => {
@@ -241,4 +241,41 @@ test('a host exception after replacement commits cannot leave the registry point
     assert.equal(e.grid.isCardCurrent(old), false);
     assert.equal(e.retired.at(-1).handle, current);
     assert.equal(e.retired.at(-1).detail.reason, 'replacement-commit-failed');
+});
+
+test('grid accepts separate captured material for an immutable DOM-free record', async () => {
+    const e=await fixture(), captured=e.item('1'),record=Object.freeze({videoId:'1',href:captured.href,ariaLabel:'Immutable',page:0,imageUrl:'art'});
+    let released=0,accepted=0;
+    await e.grid.publish({items:[record],readMaterial:()=>({source:captured.snapshot,template:false}),releaseMaterial(){released++;},
+        onAccepted(){accepted++;},section:e.section,anchor:e.anchor,status:e.status,
+        geometry:{left:10,width:600,columns:6},layout:{gap:8},assertCurrent(){}});
+    e.grid.assertCard(e.grid.getCard(record));assert.equal(record.imageUrl,'art');
+    assert.equal(Object.hasOwn(record,'snapshot'),false);assert.equal(released,1);assert.equal(accepted,1);
+});
+
+test('accepted material release failure cannot split the published frame and registry', async () => {
+    const e=await fixture(),raw=e.item('1'),record=Object.freeze({videoId:'1',href:raw.href,page:0});
+    const root=await e.grid.publish({items:[record],readMaterial:()=>({source:raw.snapshot,template:false}),
+        releaseMaterial(){throw new Error('release failed');},section:e.section,anchor:e.anchor,status:e.status,
+        geometry:{left:0,width:600,columns:6},layout:{gap:8},assertCurrent(){}});
+    assert.equal(root,e.grid.root);e.grid.assertCard(e.grid.getCard(record));
+    assert.equal(e.grid.diagnostics().materialReleaseFailures,1);
+});
+
+test('separate insertion material preserves exact retained record identity through Undo', async () => {
+    const e=await fixture();await e.publish([]);
+    const raw=e.item('1'),record=Object.freeze({videoId:'1',href:raw.href,page:0,imageUrl:'art'});
+    let releases=0;
+    const first=e.grid.insertCard(record,{material:{source:raw.snapshot,template:false},releaseMaterial(){releases++;}});
+    e.grid.removeCard(first,{correlationId:'undo'});
+    const restored=e.grid.insertCard(record,{correlationId:'undo',releaseMaterial(){releases++;}});
+    e.grid.assertCard(restored);assert.equal(releases,2);assert.equal(record.imageUrl,'art');
+    assert.equal(e.grid.diagnostics().retainedCards,0);
+});
+
+test('material release which retires the accepted grid cannot return an admitted insertion', async () => {
+    const e=await fixture();await e.publish([]);
+    const raw=e.item('1'),record=Object.freeze({videoId:'1',href:raw.href,page:0});
+    assert.throws(()=>e.grid.insertCard(record,{material:{source:raw.snapshot,template:false},releaseMaterial(){e.grid.dispose();}}),{code:'GRID_CARD_RETIRED'});
+    assert.equal(e.grid.cards.size,0);
 });

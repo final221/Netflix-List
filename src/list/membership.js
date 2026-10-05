@@ -4,6 +4,12 @@ export function createMembership({ items = [], totalCount = null, collectedCount
     let expectedCount = totalCount, collected = collectedCount, revision = 0, disposed = false;
     const keyFor = record => record.videoId ? 'v:' + record.videoId : 'h:' + record.href;
     const error = (code, message) => Object.assign(new Error(message), { code });
+    function assertRecord(record) {
+        if (!record || typeof record !== 'object' || 'snapshot' in record || 'cardTemplate' in record ||
+            Object.values(record).some(value => value !== null && (typeof value === 'object' || typeof value === 'function'))) {
+            throw error('LIST_RECORD_INVALID', 'Membership requires scalar records and separate material');
+        }
+    }
     function view() {
         return Object.freeze({ get size() { return map.size; }, get: key => map.get(key), has: key => map.has(key),
             *values() { yield* records; },
@@ -20,18 +26,21 @@ export function createMembership({ items = [], totalCount = null, collectedCount
         };
     }
     function preparePublication(items, totalCount, admission = {}) {
-        const guard = guardFor(admission); guard();
+        let guard = guardFor(admission); guard();
         const next = [...items], nextMap = new Map();
         for (const record of next) {
+            assertRecord(record); guard();
             const key = keyFor(record);
             if (nextMap.has(key)) throw error('LIST_DUPLICATE_RECORD', 'Duplicate membership: ' + key);
             nextMap.set(key, record); guard();
         }
         guard();
         const accepted = Object.freeze(next);
-        return Object.freeze({ records: accepted, assertCurrent: guard, commit() {
+        let committed = false;
+        return Object.freeze({ records: accepted, assertCurrent: () => guard(), commit() {
+            guard(); if (committed) return records;
             guard(); records = accepted; map = nextMap; expectedCount = totalCount; collected = next.length;
-            revision++; lookup = view(); return records;
+            revision++; lookup = view(); committed = true; guard = guardFor(admission); return records;
         } });
     }
     function publish(items, totalCount, admission = {}) {
@@ -46,6 +55,7 @@ export function createMembership({ items = [], totalCount = null, collectedCount
     }
     function insert(record, position = 0, admission = {}) {
         const guard = guardFor(admission); guard();
+        assertRecord(record); guard();
         const key = keyFor(record); guard(); if (map.has(key)) return false;
         const index = Math.max(0, Math.min(records.length, Number.isFinite(position) ? Math.floor(position) : 0));
         const next = [...records.slice(0, index), record, ...records.slice(index)]; guard();

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.39
+// @version      1.4.40
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -506,7 +506,7 @@
   }
 
   // src/grid/cards.js
-  function createCards({ markup, keyFor, createError, prepareCard, onRetire, onReplace, readRoot }) {
+  function createCards({ markup, keyFor, createError, prepareCard, onRetire, onReplace, readRoot, onMaterialReleaseFailure }) {
     let entries = /* @__PURE__ */ new Map(), view = readOnlyView(entries), generation = 0, revision = 0, retirementFailures = 0;
     const handles = /* @__PURE__ */ new WeakMap(), retained = /* @__PURE__ */ new Map();
     function readOnlyView(map) {
@@ -558,10 +558,10 @@
       if (removed?.item === item) return removed.node;
       return item.cardTemplate || null;
     }
-    function createClone(item, correlationId) {
-      const source = materialFor(item, correlationId);
+    function createClone(item, correlationId, material = null) {
+      const source = material ? material.source : materialFor(item, correlationId);
       if (!source) throw createError("GRID_CARD_MATERIAL_MISSING", "No card markup available for " + keyFor(item));
-      return markup.createClone(source, item, source === item.cardTemplate);
+      return markup.createClone(source, item, material ? material.template : source === item.cardTemplate);
     }
     function prepare(node, item, index, detail = {}) {
       markup.normalize(node);
@@ -572,12 +572,13 @@
       prepareCard(node, item, detail);
     }
     function releaseStartup(item) {
+      const hadMaterial = Boolean(item.snapshot || item.cardTemplate);
       if (item.snapshot) item.snapshot = null;
       if (item.cardTemplate) item.cardTemplate = null;
-      if (item.imageUrl) item.imageUrl = "";
+      if (hadMaterial && item.imageUrl) item.imageUrl = "";
     }
-    function stage(items, root, index, map) {
-      const item = items[index], node = createClone(item);
+    function stage(items, root, index, map, material = null) {
+      const item = items[index], node = createClone(item, null, material);
       prepare(node, item, index);
       root.appendChild(node);
       register(map, item, node);
@@ -666,13 +667,22 @@
       if (correlationId !== null) retained.set(correlationId, { item: entry.item, node: entry.node });
       return true;
     }
-    function insertCard(item, { index = 0, correlationId = item?.undoId, before = null, assertCurrent = () => {
-    } } = {}) {
+    function insertCard(item, {
+      index = 0,
+      correlationId = item?.undoId,
+      before = null,
+      material = null,
+      onAccepted = () => {
+      },
+      releaseMaterial = null,
+      assertCurrent = () => {
+      }
+    } = {}) {
       assertCurrent();
       if (entries.has(keyFor(item))) throw createError("GRID_DUPLICATE_CARD", "Card is already displayed");
       const root = readRoot();
       if (!root?.isConnected) throw createError("GRID_FRAME_RETIRED", "Grid is not mounted");
-      const node = createClone(item, correlationId);
+      const node = createClone(item, correlationId, material);
       prepare(node, item, index);
       assertCurrent();
       if (readRoot() !== root || entries.has(keyFor(item))) throw createError("GRID_FRAME_RETIRED", "Grid changed during insertion");
@@ -686,8 +696,19 @@
       }
       const handle = register(entries, item, node);
       revision++;
-      releaseStartup(item);
       retained.delete(correlationId);
+      try {
+        onAccepted(handle);
+      } finally {
+        if (releaseMaterial) {
+          try {
+            releaseMaterial();
+          } catch (_) {
+            onMaterialReleaseFailure();
+          }
+        } else releaseStartup(item);
+      }
+      assertCard(handle);
       return handle;
     }
     function updateCard(expected, item, index = null) {
@@ -2396,7 +2417,7 @@
       readEmptyShell,
       cloneEmptyContent: markup.cloneEmptyContent
     });
-    let buildGeneration = 0;
+    let buildGeneration = 0, materialReleaseFailures = 0;
     let cards;
     const groups = createGroups({
       document: document2,
@@ -2426,6 +2447,9 @@
         prepareCard(...args);
       },
       onRetire,
+      onMaterialReleaseFailure: () => {
+        materialReleaseFailures++;
+      },
       onReplace: (...args) => {
         groups.replacePresentation(...args);
         onReplace(...args);
@@ -2433,7 +2457,9 @@
       readRoot: () => frame.root,
       keyFor: (item) => item.videoId ? `v:${item.videoId}` : `h:${item.href}`
     });
-    async function publish({ items, assertCurrent, ...mount }) {
+    async function publish({ items, assertCurrent, readMaterial = null, releaseMaterial = () => {
+    }, onAccepted = () => {
+    }, ...mount }) {
       const owner = ++buildGeneration;
       const revision = cards.revision;
       const guard = () => {
@@ -2445,18 +2471,35 @@
       installHover(root);
       guard();
       try {
-        await runChunks(items.length, (index) => cards.stage(items, root, index, staged), guard);
+        await runChunks(items.length, (index) => {
+          guard();
+          const material = readMaterial?.(items[index], index);
+          guard();
+          cards.stage(items, root, index, staged, material);
+        }, guard);
         guard();
         cards.retireForPublication(guard);
         const previous = frame.publish(root, { ...mount, assertCurrent: guard });
         cards.publish(staged);
-        items.forEach(cards.releaseStartup);
-        groups.retireRoot(previous);
-        frame.setEmpty(staged.size === 0);
         const acceptedRevision = cards.revision;
-        frame.releaseReplacedRoot(previous);
+        try {
+          onAccepted(root);
+        } finally {
+          if (readMaterial) {
+            try {
+              releaseMaterial();
+            } catch (_) {
+              materialReleaseFailures++;
+            }
+          } else items.forEach(cards.releaseStartup);
+          groups.retireRoot(previous);
+          frame.releaseReplacedRoot(previous);
+        }
         assertCurrent();
-        if (owner !== buildGeneration || acceptedRevision !== cards.revision) throw createError("GRID_BUILD_REPLACED", "Accepted grid was superseded");
+        if (owner !== buildGeneration || acceptedRevision !== cards.revision || frame.root !== root) throw createError("GRID_BUILD_REPLACED", "Accepted grid was superseded");
+        frame.setEmpty(staged.size === 0);
+        assertCurrent();
+        if (owner !== buildGeneration || acceptedRevision !== cards.revision || frame.root !== root) throw createError("GRID_BUILD_REPLACED", "Accepted grid was superseded");
         return root;
       } catch (error) {
         if (frame.root !== root) root.remove();
@@ -2556,7 +2599,7 @@
         frame.orderChildren(parent, desired);
       },
       applyGeometry: frame.updateGeometry,
-      diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics(), ...groups.diagnostics() })
+      diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics(), ...groups.diagnostics(), materialReleaseFailures })
     });
   }
 
@@ -2569,6 +2612,7 @@
     captureTemplate,
     assertSource,
     collectRecords,
+    toRecord,
     onReuseRejected = () => {
     }
   }) {
@@ -2637,9 +2681,57 @@
         return { bootstrap: current, items: null, error };
       }
     }
+    function prepareRecords(items, { assertCurrent = () => {
+    } } = {}) {
+      const materials = /* @__PURE__ */ new Map(), inputs = [], records = [];
+      assertCurrent();
+      for (const input of items) {
+        const record = toRecord(input), source = input.snapshot || input.cardTemplate || null;
+        const material = source ? Object.freeze({ source, template: !input.snapshot && source === input.cardTemplate }) : null;
+        assertCurrent();
+        records.push(record);
+        inputs.push({ input, snapshot: input.snapshot, cardTemplate: input.cardTemplate, imageUrl: input.imageUrl });
+        materials.set(record, material);
+        assertCurrent();
+      }
+      let released = false;
+      return Object.freeze({
+        records: Object.freeze(records),
+        readMaterial(record) {
+          if (released) return null;
+          assertCurrent();
+          const material = materials.get(record) || null;
+          assertCurrent();
+          return material;
+        },
+        release() {
+          if (released) return;
+          released = true;
+          materials.clear();
+          const pending = inputs.splice(0);
+          let failure = null;
+          for (const entry of pending) if (entry.snapshot || entry.cardTemplate) {
+            for (const field of ["snapshot", "cardTemplate", "imageUrl"]) {
+              try {
+                if (entry[field] && entry.input[field] === entry[field]) entry.input[field] = field === "imageUrl" ? "" : null;
+              } catch (error) {
+                failure ||= error;
+              }
+            }
+          }
+          if (failure) throw failure;
+        },
+        discard() {
+          released = true;
+          materials.clear();
+          inputs.length = 0;
+        }
+      });
+    }
     return {
       buildItems,
       collectLogical,
+      prepareRecords,
       resetDiagnostics: () => {
         for (const key of Object.keys(reuse)) reuse[key] = 0;
       },
@@ -2653,6 +2745,11 @@
     let expectedCount = totalCount, collected = collectedCount, revision = 0, disposed = false;
     const keyFor = (record) => record.videoId ? "v:" + record.videoId : "h:" + record.href;
     const error = (code, message) => Object.assign(new Error(message), { code });
+    function assertRecord(record) {
+      if (!record || typeof record !== "object" || "snapshot" in record || "cardTemplate" in record || Object.values(record).some((value) => value !== null && (typeof value === "object" || typeof value === "function"))) {
+        throw error("LIST_RECORD_INVALID", "Membership requires scalar records and separate material");
+      }
+    }
     function view() {
       return Object.freeze({
         get size() {
@@ -2682,10 +2779,12 @@
       };
     }
     function preparePublication(items2, totalCount2, admission = {}) {
-      const guard = guardFor(admission);
+      let guard = guardFor(admission);
       guard();
       const next = [...items2], nextMap = /* @__PURE__ */ new Map();
       for (const record of next) {
+        assertRecord(record);
+        guard();
         const key = keyFor(record);
         if (nextMap.has(key)) throw error("LIST_DUPLICATE_RECORD", "Duplicate membership: " + key);
         nextMap.set(key, record);
@@ -2693,7 +2792,10 @@
       }
       guard();
       const accepted = Object.freeze(next);
-      return Object.freeze({ records: accepted, assertCurrent: guard, commit() {
+      let committed = false;
+      return Object.freeze({ records: accepted, assertCurrent: () => guard(), commit() {
+        guard();
+        if (committed) return records;
         guard();
         records = accepted;
         map = nextMap;
@@ -2701,6 +2803,8 @@
         collected = next.length;
         revision++;
         lookup = view();
+        committed = true;
+        guard = guardFor(admission);
         return records;
       } });
     }
@@ -2724,6 +2828,8 @@
     }
     function insert(record, position = 0, admission = {}) {
       const guard = guardFor(admission);
+      guard();
+      assertRecord(record);
       guard();
       const key = keyFor(record);
       guard();
@@ -2807,9 +2913,29 @@
 
   // src/list/list.js
   function createList(options) {
-    const collection = createCollection(options);
+    const normalized = /* @__PURE__ */ new WeakMap();
+    const text = (value) => value === null || value === void 0 ? "" : String(value);
+    function toRecord(input) {
+      if (normalized.has(input)) return normalized.get(input);
+      const record = Object.seal({
+        videoId: text(input.videoId),
+        href: text(input.href),
+        ariaLabel: text(input.ariaLabel),
+        imageUrl: text(input.imageUrl),
+        page: Number.isFinite(input.page) ? input.page : 0,
+        logicalIndex: Number.isSafeInteger(input.logicalIndex) ? input.logicalIndex : void 0,
+        graphql: Boolean(input.graphql),
+        undoId: text(input.undoId) || null
+      });
+      normalized.set(input, record);
+      normalized.set(record, record);
+      return record;
+    }
+    const collection = createCollection({ ...options, toRecord });
     return Object.freeze({
       createMembership,
+      toRecord,
+      prepareRecords: collection.prepareRecords,
       collectLogical: collection.collectLogical,
       buildItems: collection.buildItems,
       diagnostics: collection.diagnostics,
@@ -10567,7 +10693,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.39";
+    const SCRIPT_VERSION = "1.4.40";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -13505,10 +13631,23 @@
       if (!grid) return false;
       ensureGridHoverBehavior(grid);
       const index = Math.max(0, Math.min(items.length, Number.isFinite(preferredIndex) ? Math.floor(preferredIndex) : 0));
+      const transfer = listView.prepareRecords([item], { assertCurrent });
+      item = transfer.records[0];
       item.page = Math.floor(index / Math.max(1, sourceState.layout?.columns || 1));
       const before = sourceState.watchStatus ? null : grid.children[index] || null;
-      gridView.insertCard(item, { index, before, correlationId: item.undoId, assertCurrent });
-      membership.insert(item, index, { assertCurrent });
+      try {
+        gridView.insertCard(item, {
+          index,
+          before,
+          material: transfer.readMaterial(item),
+          releaseMaterial: transfer.release,
+          onAccepted: () => membership.insert(item, index, { assertCurrent }),
+          correlationId: item.undoId,
+          assertCurrent
+        });
+      } finally {
+        transfer.discard();
+      }
       forgetUndoEntry(item.videoId);
       waitingForNativeEmpty = false;
       sourceState.empty = false;
@@ -15708,7 +15847,8 @@
           );
         }
       };
-      const publication = ensureListMembership(buildState).preparePublication(items, totalCount, { assertCurrent: assertBuildParent });
+      const transfer = listView.prepareRecords(items, { assertCurrent: assertBuildParent });
+      const publication = ensureListMembership(buildState).preparePublication(transfer.records, totalCount, { assertCurrent: assertBuildParent });
       const assertBuildActive = () => {
         assertBuildParent();
         publication.assertCurrent();
@@ -15717,22 +15857,31 @@
       const geometry = currentGridGeometry(section, layout);
       const status = updateStatus(formatHeaderParts(items.length, totalCount, null));
       syncStatusTypography(section, status);
-      const grid = await gridView.publish({
-        items,
-        section,
-        anchor: scroller,
-        status,
-        geometry,
-        layout,
-        visible: viewOriginalMyList,
-        assertCurrent: assertBuildActive
-      });
+      let grid;
+      try {
+        grid = await gridView.publish({
+          items: transfer.records,
+          readMaterial: transfer.readMaterial,
+          releaseMaterial: transfer.release,
+          section,
+          anchor: scroller,
+          status,
+          geometry,
+          layout,
+          visible: viewOriginalMyList,
+          assertCurrent: assertBuildActive,
+          onAccepted(root) {
+            publication.commit();
+            attachGridRegistry(buildState);
+            buildState.grid = root;
+            buildState.status = status;
+            buildState.layout = layout;
+          }
+        });
+      } finally {
+        transfer.discard();
+      }
       clearLegacyEmptyState({ restoreGrid: false });
-      publication.commit();
-      attachGridRegistry(buildState);
-      sourceState.grid = grid;
-      sourceState.status = status;
-      sourceState.layout = layout;
       if (sourceState.watchStatus) syncWatchGroups(sourceState);
       lastResponsiveSignature = responsiveSignature(layout);
       lastPageShape = responsivePageShape(layout);

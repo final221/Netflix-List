@@ -1,6 +1,6 @@
 // Strategy and completeness policy. Native proof and wire interpretation stay in adapters.
 export function createCollection({ runChunks, assertSession, isCancelled, collectMounted,
-    captureTemplate, assertSource, collectRecords, onReuseRejected = () => {} }) {
+    captureTemplate, assertSource, collectRecords, toRecord, onReuseRejected = () => {} }) {
     const reuse = { attempts: 0, reused: 0, rejected: 0, itemsCaptured: 0, requestsAvoided: 0 };
     async function buildItems(records, totalCount, columns, template, sessionToken = null, assertCurrent = () => {}) {
         const guard = () => { assertSession(sessionToken); assertCurrent(); };
@@ -46,6 +46,36 @@ export function createCollection({ runChunks, assertSession, isCancelled, collec
             return { bootstrap: current, items: null, error };
         }
     }
-    return { buildItems, collectLogical, resetDiagnostics: () => { for (const key of Object.keys(reuse)) reuse[key] = 0; },
+    function prepareRecords(items, { assertCurrent = () => {} } = {}) {
+        const materials = new Map(), inputs = [], records = [];
+        assertCurrent();
+        for (const input of items) {
+            const record = toRecord(input), source = input.snapshot || input.cardTemplate || null;
+            const material = source ? Object.freeze({ source, template: !input.snapshot && source === input.cardTemplate }) : null;
+            assertCurrent(); records.push(record);
+            inputs.push({ input, snapshot: input.snapshot, cardTemplate: input.cardTemplate, imageUrl: input.imageUrl });
+            materials.set(record, material);
+            assertCurrent();
+        }
+        let released = false;
+        return Object.freeze({ records: Object.freeze(records), readMaterial(record) {
+            if (released) return null;
+            assertCurrent(); const material = materials.get(record) || null; assertCurrent(); return material;
+        },
+            release() {
+                if (released) return;
+                released = true; materials.clear();
+                const pending = inputs.splice(0);
+                let failure = null;
+                for (const entry of pending) if (entry.snapshot || entry.cardTemplate) {
+                    for (const field of ['snapshot', 'cardTemplate', 'imageUrl']) {
+                        try { if (entry[field] && entry.input[field] === entry[field]) entry.input[field] = field === 'imageUrl' ? '' : null; }
+                        catch (error) { failure ||= error; }
+                    }
+                }
+                if (failure) throw failure;
+            }, discard() { released = true; materials.clear(); inputs.length = 0; } });
+    }
+    return { buildItems, collectLogical, prepareRecords, resetDiagnostics: () => { for (const key of Object.keys(reuse)) reuse[key] = 0; },
         diagnostics: () => Object.freeze({ membershipReuse: Object.freeze({ ...reuse }) }) };
 }

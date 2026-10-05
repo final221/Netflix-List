@@ -2776,10 +2776,14 @@ export function startLegacy() {
         if (!grid) return false;
         ensureGridHoverBehavior(grid);
         const index = Math.max(0, Math.min(items.length, Number.isFinite(preferredIndex) ? Math.floor(preferredIndex) : 0));
+        const transfer = listView.prepareRecords([item], { assertCurrent });
+        item = transfer.records[0];
         item.page = Math.floor(index / Math.max(1, sourceState.layout?.columns || 1));
         const before = sourceState.watchStatus ? null : (grid.children[index] || null);
-        gridView.insertCard(item, { index, before, correlationId: item.undoId, assertCurrent });
-        membership.insert(item, index, { assertCurrent });
+        try {
+            gridView.insertCard(item, { index, before, material: transfer.readMaterial(item), releaseMaterial: transfer.release,
+                onAccepted: () => membership.insert(item, index, { assertCurrent }), correlationId: item.undoId, assertCurrent });
+        } finally { transfer.discard(); }
         forgetUndoEntry(item.videoId);
         waitingForNativeEmpty = false;
         sourceState.empty = false;
@@ -5030,20 +5034,23 @@ export function startLegacy() {
                     'Native My List source changed during grid construction');
             }
         };
-        const publication = ensureListMembership(buildState).preparePublication(items, totalCount, { assertCurrent: assertBuildParent });
+        const transfer = listView.prepareRecords(items, { assertCurrent: assertBuildParent });
+        const publication = ensureListMembership(buildState).preparePublication(transfer.records, totalCount, { assertCurrent: assertBuildParent });
         const assertBuildActive = () => { assertBuildParent(); publication.assertCurrent(); };
         assertBuildActive();
         const geometry = currentGridGeometry(section, layout);
         const status = updateStatus(formatHeaderParts(items.length, totalCount, null));
         syncStatusTypography(section, status);
-        const grid = await gridView.publish({ items, section, anchor: scroller, status, geometry, layout,
-            visible: viewOriginalMyList, assertCurrent: assertBuildActive });
+        let grid;
+        try {
+            grid = await gridView.publish({ items: transfer.records, readMaterial: transfer.readMaterial, releaseMaterial: transfer.release,
+                section, anchor: scroller, status, geometry, layout, visible: viewOriginalMyList, assertCurrent: assertBuildActive,
+                onAccepted(root) {
+                    publication.commit(); attachGridRegistry(buildState);
+                    buildState.grid = root; buildState.status = status; buildState.layout = layout;
+                } });
+        } finally { transfer.discard(); }
         clearLegacyEmptyState({ restoreGrid: false });
-        publication.commit();
-        attachGridRegistry(buildState);
-        sourceState.grid = grid;
-        sourceState.status = status;
-        sourceState.layout = layout;
         if (sourceState.watchStatus) syncWatchGroups(sourceState);
 
         lastResponsiveSignature = responsiveSignature(layout);

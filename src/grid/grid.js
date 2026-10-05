@@ -13,17 +13,18 @@ export function createGrid({ document, location, runChunks,
     const markup = createCardMarkup({ location, document });
     const frame = createFrame({ document, tLog, tUi, copyLogs, isActive, setTimeout, clearTimeout, createError,
         readEmptyContent, readEmptyShell, cloneEmptyContent: markup.cloneEmptyContent });
-    let buildGeneration = 0;
+    let buildGeneration = 0, materialReleaseFailures = 0;
     let cards;
     const groups = createGroups({ document, tUi, readRoot: () => frame.root, createError,
         getCard: item => cards.getCard(item), assertCard: handle => cards.assertCard(handle), formatUiNumber, formatItemCount,
         moveCard: (handle, parent, before) => { cards.assertCard(handle); frame.assertParent(parent); frame.moveCard(handle.node, parent, before); },
         orderChildren: (parent, nodes, guard) => { frame.assertParent(parent); frame.orderChildren(parent, nodes, guard); }, updateStatus: frame.updateStatus });
     cards = createCards({ markup, createError, prepareCard: (...args) => { groups.prepareCard(...args); prepareCard(...args); }, onRetire,
+        onMaterialReleaseFailure: () => { materialReleaseFailures++; },
         onReplace: (...args) => { groups.replacePresentation(...args); onReplace(...args); },
         readRoot: () => frame.root, keyFor: item => item.videoId ? `v:${item.videoId}` : `h:${item.href}` });
 
-    async function publish({ items, assertCurrent, ...mount }) {
+    async function publish({ items, assertCurrent, readMaterial = null, releaseMaterial = () => {}, onAccepted = () => {}, ...mount }) {
         const owner = ++buildGeneration;
         const revision = cards.revision;
         const guard = () => {
@@ -35,18 +36,28 @@ export function createGrid({ document, location, runChunks,
         installHover(root);
         guard();
         try {
-            await runChunks(items.length, index => cards.stage(items, root, index, staged), guard);
+            await runChunks(items.length, index => {
+                guard(); const material = readMaterial?.(items[index], index); guard();
+                cards.stage(items, root, index, staged, material);
+            }, guard);
             guard();
             cards.retireForPublication(guard);
             const previous = frame.publish(root, { ...mount, assertCurrent: guard });
             cards.publish(staged);
-            items.forEach(cards.releaseStartup);
-            groups.retireRoot(previous);
-            frame.setEmpty(staged.size === 0);
             const acceptedRevision = cards.revision;
-            frame.releaseReplacedRoot(previous);
+            try { onAccepted(root); }
+            finally {
+                if (readMaterial) {
+                    try { releaseMaterial(); } catch (_) { materialReleaseFailures++; }
+                } else items.forEach(cards.releaseStartup);
+                groups.retireRoot(previous);
+                frame.releaseReplacedRoot(previous);
+            }
             assertCurrent();
-            if (owner !== buildGeneration || acceptedRevision !== cards.revision) throw createError('GRID_BUILD_REPLACED', 'Accepted grid was superseded');
+            if (owner !== buildGeneration || acceptedRevision !== cards.revision || frame.root !== root) throw createError('GRID_BUILD_REPLACED', 'Accepted grid was superseded');
+            frame.setEmpty(staged.size === 0);
+            assertCurrent();
+            if (owner !== buildGeneration || acceptedRevision !== cards.revision || frame.root !== root) throw createError('GRID_BUILD_REPLACED', 'Accepted grid was superseded');
             return root;
         } catch (error) {
             if (frame.root !== root) root.remove();
@@ -90,5 +101,5 @@ export function createGrid({ document, location, runChunks,
         captureCard: markup.capture, captureTemplate: markup.captureTemplate, normalizeCard: markup.normalize,
         moveCard: (handle, parent, before) => { cards.assertCard(handle); frame.assertParent(parent); frame.moveCard(handle.node, parent, before); },
         orderChildren: (parent, desired) => { frame.assertParent(parent); frame.orderChildren(parent, desired); },
-        applyGeometry: frame.updateGeometry, diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics(), ...groups.diagnostics() }) });
+        applyGeometry: frame.updateGeometry, diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics(), ...groups.diagnostics(), materialReleaseFailures }) });
 }
