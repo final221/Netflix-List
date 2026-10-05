@@ -32,7 +32,7 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
         const entry = entries.get(typeof item === 'string' ? item : keyFor(item));
         return entry && (typeof item === 'string' || entry.item === item) ? entry.handle : null;
     }
-    function materialFor(item, correlationId = item?.undoId) {
+    function materialFor(item, correlationId = null) {
         if (!item) return null;
         if (item.snapshot) return item.snapshot;
         const entry = entries.get(keyFor(item));
@@ -139,7 +139,7 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
         if (correlationId !== null) retained.set(correlationId, { item: entry.item, node: entry.node });
         return true;
     }
-    function insertCard(item, { index = 0, correlationId = item?.undoId, before = null, material = null,
+    function insertCard(item, { index = 0, correlationId = null, before = null, material = null,
         onAccepted = () => {}, releaseMaterial = null, assertCurrent = () => {} } = {}) {
         assertCurrent();
         if (entries.has(keyFor(item))) throw createError('GRID_DUPLICATE_CARD', 'Card is already displayed');

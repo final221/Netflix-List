@@ -2372,11 +2372,14 @@ export function startLegacy() {
         let expired = 0, pendingFallbacksPreserved = 0;
         for (const [videoId, entry] of recentRemovedMyListItems.entries()) {
             if (!Number.isFinite(entry?.removedAt) || now - entry.removedAt >= UNDO_ENTRY_TTL_MS) {
-                if (entry?.item && pendingMyListMutations.get(videoId)?.fallbackItem === entry.item) pendingFallbacksPreserved++;
+                const pending = pendingMyListMutations.get(videoId);
+                const pendingOwnsMaterial = Boolean(entry?.item && pending?.fallbackItem === entry.item &&
+                    pending.correlationId === entry.correlationId);
+                if (pendingOwnsMaterial) pendingFallbacksPreserved++;
                 // Drop this cache's ownership only. A queued Undo mutation may
                 // still owns the correlation and needs its retained material to finish.
                 recentRemovedMyListItems.delete(videoId);
-                if (pendingMyListMutations.get(videoId)?.fallbackItem !== entry?.item) gridView.releaseRetained(entry?.correlationId);
+                if (!pendingOwnsMaterial) gridView.releaseRetained(entry?.correlationId);
                 expired++;
             }
         }
@@ -2385,12 +2388,12 @@ export function startLegacy() {
         if (expired) log(tLog('undoEntriesExpired'), { expired, remaining: recentRemovedMyListItems.size, pendingFallbacksPreserved });
     }
 
-    function rememberUndoEntry(item, index) {
-        if (!item?.videoId || !gridView.hasRetained(item.undoId, item)) return;
+    function rememberUndoEntry(item, index, correlationId) {
+        if (!item?.videoId || !gridView.hasRetained(correlationId, item)) return;
         pruneUndoEntries();
         recentRemovedMyListItems.set(String(item.videoId), {
             videoId: String(item.videoId),
-            correlationId: item.undoId,
+            correlationId,
             item,
             index: Math.max(0, Number.isFinite(index) ? Math.floor(index) : 0),
             title: normalizeNetflixUiText(item.ariaLabel || ''),
@@ -2429,6 +2432,7 @@ export function startLegacy() {
             uia: 'toast-undo',
             trackingContext: null,
             fallbackItem: entry.item,
+            correlationId: entry.correlationId,
             preferredIndex: entry.index,
             undo: true
         };
@@ -2739,13 +2743,13 @@ export function startLegacy() {
             activePage = null;
         }
         const handle = gridView.getCard(removed);
+        const correlationId = handle ? 'undo:' + sessionScope.token + ':' + (++myListMutationSequence) : null;
         if (handle) {
-            removed.undoId = 'undo:' + sessionScope.token + ':' + (++myListMutationSequence);
-            gridView.removeCard(handle, { correlationId: removed.undoId, assertCurrent });
+            gridView.removeCard(handle, { correlationId, assertCurrent });
         }
         assertCurrent();
         membership.remove(key, { assertCurrent });
-        rememberUndoEntry(removed, index);
+        rememberUndoEntry(removed, index, correlationId);
         reindexLegacyItemsAfterDelta('mutation-reindex');
         mutationSourceRecoveryPending = true;
         if (!sourceState.items.length) {
@@ -2762,8 +2766,8 @@ export function startLegacy() {
         return true;
     }
 
-    function applyLegacyAddition(item, preferredIndex = 0, reason = 'click-delta') {
-        if (!sourceState || !item?.videoId || !cardSourceForItem(item)) return false;
+    function applyLegacyAddition(item, preferredIndex = 0, reason = 'click-delta', correlationId = undoCorrelationForItem(item)) {
+        if (!sourceState || !item?.videoId || !cardSourceForItem(item, correlationId)) return false;
         const key = itemKey(item);
         if (sourceState.itemMap?.has(key) || sourceState.items?.some(existing => itemKey(existing) === key)) return false;
 
@@ -2782,7 +2786,7 @@ export function startLegacy() {
         const before = sourceState.watchStatus ? null : (grid.children[index] || null);
         try {
             gridView.insertCard(item, { index, before, material: transfer.readMaterial(item), releaseMaterial: transfer.release,
-                onAccepted: () => membership.insert(item, index, { assertCurrent }), correlationId: item.undoId, assertCurrent });
+                onAccepted: () => membership.insert(item, index, { assertCurrent }), correlationId, assertCurrent });
         } finally { transfer.discard(); }
         forgetUndoEntry(item.videoId);
         waitingForNativeEmpty = false;
@@ -2866,8 +2870,9 @@ export function startLegacy() {
         try { mutation.observer?.disconnect(); } catch (_) {}
         if (mutation.timeoutId !== null && mutation.timeoutId !== undefined) clearTimeout(mutation.timeoutId);
         pendingMyListMutations.delete(key);
-        const item = mutation.fallbackItem;
-        if (item?.undoId && recentRemovedMyListItems.get(key)?.item !== item) gridView.releaseRetained(item.undoId);
+        if (mutation.correlationId && recentRemovedMyListItems.get(key)?.correlationId !== mutation.correlationId) {
+            gridView.releaseRetained(mutation.correlationId);
+        }
     }
 
     function scheduleMyListMutationTimeout(mutation) {
@@ -3099,14 +3104,15 @@ export function startLegacy() {
             const nativeItem = findNativeMyListItemByVideoId(videoId, live);
             assertMutationCurrent();
             const candidate = nativeItem || mutation.fallbackItem || findAnyStandardCardItemByVideoId(videoId);
-            if (!cardSourceForItem(candidate)) return false;
+            if (!cardSourceForItem(candidate, candidate === mutation.fallbackItem ? mutation.correlationId : null)) return false;
 
             const preferredIndex = nativeItem
                 ? preferredIndexForNativeItem(videoId, live)
                 : (Number.isFinite(mutation.preferredIndex) ? mutation.preferredIndex : 0);
             assertMutationCurrent();
             nativeCarousel.assertObservation(live);
-            const changed = applyLegacyAddition(candidate, preferredIndex, nativeItem ? `${reason}-native` : `${reason}-captured`);
+            const changed = applyLegacyAddition(candidate, preferredIndex, nativeItem ? `${reason}-native` : `${reason}-captured`,
+                candidate === mutation.fallbackItem ? mutation.correlationId : null);
             assertMutationCurrent();
             if (changed || sourceState.itemMap?.has(`v:${videoId}`)) {
                 live = refreshNativeSectionAfterDelta() || live;
@@ -3141,6 +3147,7 @@ export function startLegacy() {
             source: 'user-click',
             detectedAt: performance.now(),
             fallbackItem,
+            correlationId: descriptor.correlationId || undoCorrelationForItem(fallbackItem),
             preferredIndex: Number.isFinite(descriptor.preferredIndex) ? Math.max(0, Math.floor(descriptor.preferredIndex)) : null,
             undo: Boolean(descriptor.undo),
             observer: null,
@@ -3397,8 +3404,16 @@ export function startLegacy() {
         return nativeCarousel.stablePage(...args);
     }
 
-    function cardSourceForItem(item) {
-        return gridView.materialFor(item);
+    function undoCorrelationForItem(item) {
+        if (!item?.videoId) return null;
+        const key = String(item.videoId), entry = recentRemovedMyListItems.get(key);
+        if (entry?.item === item) return entry.correlationId;
+        const pending = pendingMyListMutations.get(key);
+        return pending?.fallbackItem === item ? pending.correlationId || null : null;
+    }
+
+    function cardSourceForItem(item, correlationId = undoCorrelationForItem(item)) {
+        return gridView.materialFor(item, correlationId);
     }
 
     function itemKey(item) {

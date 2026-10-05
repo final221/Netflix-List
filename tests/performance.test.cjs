@@ -3480,7 +3480,7 @@ function constructionEnvironment() {
         'buildGrid', 'normalizeClone', 'copyItemAttributes', 'associateGridHoverItem', 'ensureGridHoverBehavior',
         'itemKey', 'clearRunningSession', 'retryPendingMyListMutations', 'tryApplyMyListMutation',
         'applyLegacyRemoval', 'applyLegacyAddition', 'disposeMyListMutation',
-        'cardSourceForItem',
+        'cardSourceForItem', 'undoCorrelationForItem',
         'alignLegacyVisiblePageOrder',
         'rememberUndoEntry', 'pruneUndoEntries', 'normalizeNetflixUiText', 'videoIdFromHref',
         'itemFromSlot', 'visibleNativeItems', 'findNativeMyListItemByVideoId'
@@ -4741,7 +4741,8 @@ test('expired Undo entries release their last retained snapshot reference when p
     const items = e.items(6);
     await e.c.buildGrid(e.section, e.scroller, items, e.layout, 6, 1);
     e.c.applyLegacyRemoval('1');
-    const removed = e.c.gridView.materialFor(e.c.recentRemovedMyListItems.get('1').item);
+    const entry = e.c.recentRemovedMyListItems.get('1');
+    const removed = e.c.gridView.materialFor(entry.item, entry.correlationId);
     assert.equal(retainedCardTrees(e.c.sourceState, e.c.recentRemovedMyListItems).has(removed), true);
     await e.advance(30001);
     e.c.pruneUndoEntries();
@@ -4753,7 +4754,10 @@ test('Undo expiry releases idle snapshots at 30 seconds using one finite timer a
     const e = constructionEnvironment();
     await e.c.buildGrid(e.section, e.scroller, e.items(6), e.layout, 6, 1);
     e.c.applyLegacyRemoval('1');
-    const removed = e.c.recentRemovedMyListItems.get('1').item.snapshot;
+    const entry = e.c.recentRemovedMyListItems.get('1');
+    const removed = e.c.gridView.materialFor(entry.item, entry.correlationId);
+    assert.ok(removed);
+    assert.equal(Object.hasOwn(entry.item, 'undoId'), false);
     assert.equal(e.timers.size, 1);
     await e.advance(29999);
     assert.equal(e.c.recentRemovedMyListItems.size, 1);
@@ -4802,14 +4806,14 @@ test('Undo expiry preserves a queued mutation fallback after removing the Undo c
     await e.c.buildGrid(e.section, e.scroller, e.items(6), e.layout, 6, 1);
     e.c.applyLegacyRemoval('1');
     const entry = e.c.recentRemovedMyListItems.get('1');
-    const snapshot = e.c.gridView.materialFor(entry.item);
-    const mutation = { videoId: '1', action: 'add', fallbackItem: entry.item, preferredIndex: entry.index,
+    const snapshot = e.c.gridView.materialFor(entry.item, entry.correlationId);
+    const mutation = { videoId: '1', action: 'add', fallbackItem: entry.item, correlationId: entry.correlationId, preferredIndex: entry.index,
         timeoutId: null, observer: null };
     e.c.pendingMyListMutations.set('1', mutation);
     await e.advance(30000);
     assert.equal(e.c.recentRemovedMyListItems.size, 0);
     assert.equal(mutation.fallbackItem.snapshot ?? null, null, 'removed records carry no retained tree');
-    assert.equal(e.c.gridView.materialFor(mutation.fallbackItem), snapshot);
+    assert.equal(e.c.gridView.materialFor(mutation.fallbackItem, mutation.correlationId), snapshot);
     assert.equal(e.c.cardSourceForItem(mutation.fallbackItem), snapshot);
     const expiry = e.logs.find(row => row.name === 'undoEntriesExpired');
     assert.equal(expiry.details.pendingFallbacksPreserved, 1);
@@ -9529,4 +9533,53 @@ test('actual parent cleanup retires membership before native or frame resource c
         clearSourceAlignment(){},invalidateGridReact(){}});
     vm.runInContext(declaration('cleanupTargetSessionDom'),e.c);
     e.c.cleanupTargetSessionDom();assert.equal(releases,1);assert.equal(membership.records.length,0);
+});
+
+
+test('expired correlation cannot retain or borrow a later removal of the same canonical record', async () => {
+    const e=constructionEnvironment();
+    await e.c.buildGrid(e.section,e.scroller,e.items(2),e.layout,2,1);
+    e.c.applyLegacyRemoval('1');const first=e.c.recentRemovedMyListItems.get('1');
+    e.c.applyLegacyAddition(first.item,first.index,'undo');
+    e.c.applyLegacyRemoval('1');const latest=e.c.recentRemovedMyListItems.get('1');
+    assert.equal(first.item,latest.item);assert.notEqual(first.correlationId,latest.correlationId);
+    assert.equal(Object.hasOwn(latest.item,'undoId'),false);
+    const mutation={videoId:'1',action:'add',fallbackItem:first.item,correlationId:first.correlationId,timeoutId:null};
+    e.c.pendingMyListMutations.set('1',mutation);
+    assert.equal(e.c.gridView.materialFor(first.item,first.correlationId),null);
+    assert.equal(e.c.applyLegacyAddition(first.item,first.index,'obsolete',first.correlationId),false);
+    await e.advance(30000);
+    assert.equal(e.c.gridView.hasRetained(latest.correlationId,latest.item),false);
+    assert.equal(e.c.cardSourceForItem(mutation.fallbackItem),null);
+});
+
+test('disposing an old queued correlation preserves a newer removal entry and its exact tree', async () => {
+    const e=constructionEnvironment();
+    await e.c.buildGrid(e.section,e.scroller,e.items(2),e.layout,2,1);
+    e.c.applyLegacyRemoval('1');const first=e.c.recentRemovedMyListItems.get('1');
+    e.c.applyLegacyAddition(first.item,first.index,'undo');e.c.applyLegacyRemoval('1');
+    const latest=e.c.recentRemovedMyListItems.get('1');
+    const mutation={videoId:'1',action:'add',fallbackItem:first.item,correlationId:first.correlationId,timeoutId:null};
+    e.c.pendingMyListMutations.set('1',mutation);e.c.disposeMyListMutation('1',mutation);
+    assert.equal(e.c.gridView.hasRetained(latest.correlationId,latest.item),true);
+    assert.equal(e.c.undoCorrelationForItem({videoId:'1'}),null);
+});
+
+
+test('actual click queue carries explicit Undo correlation beyond entry expiry without record state', async () => {
+    const e=constructionEnvironment();
+    await e.c.buildGrid(e.section,e.scroller,e.items(2),e.layout,2,1);
+    e.c.applyLegacyRemoval('1');const entry=e.c.recentRemovedMyListItems.get('1');
+    vm.runInContext(declaration('queueMyListMutation')+'\n'+declaration('scheduleMyListMutationTimeout'),e.c);
+    e.c.DELTA_MUTATION_TIMEOUT_MS=4000;e.c.queueMicrotask=callback=>callback();e.c.running=true;
+    e.c.queueMyListMutation({videoId:'1',action:'add',fallbackItem:entry.item,correlationId:entry.correlationId,
+        preferredIndex:entry.index,undo:true});
+    const mutation=e.c.pendingMyListMutations.get('1');
+    assert.equal(mutation.correlationId,entry.correlationId);
+    await e.advance(30000);assert.equal(e.c.recentRemovedMyListItems.size,0);
+    assert.equal(e.c.gridView.hasRetained(mutation.correlationId,mutation.fallbackItem),true);
+    e.c.running=false;e.c.retryPendingMyListMutations('after-expiry');
+    assert.equal(e.c.sourceState.itemMap.get('v:1'),entry.item);
+    assert.equal(Object.hasOwn(entry.item,'undoId'),false);
+    assert.equal(e.c.pendingMyListMutations.size,0);assert.equal(e.timers.size,0);
 });
