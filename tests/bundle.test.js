@@ -1,3 +1,5 @@
+import { viewingVideo } from './helpers/fixtures.js';
+import { mountPopulatedMyList } from './helpers/populated-browser.js';
 import { createBrowser } from './helpers/browser.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -344,4 +346,135 @@ test('production graph accepts public composition and private capability depende
         await writeFile(path.join(directory, distribution), (await generateUserscript({ root: directory })).code);
         await checkUserscript({ root: directory });
     });
+});
+
+for (const viewingFailure of ['missing-context', 'http']) {
+    test(`generated populated journey preserves the complete list after ${viewingFailure} viewing failure and fresh reentry`, async () => {
+        const b = browser({ pathname: '/browse/my-list' });
+        const { section } = mountPopulatedMyList(b, { count: 3 });
+        const requests = [];
+        b.context.URLSearchParams = URLSearchParams;
+        const listFetch = b.context.fetch;
+        if (viewingFailure === 'http') {
+            const models = { userInfo: { userGuid: 'active-profile', authURL: 'test-auth' },
+                services: { memberapi: '/api/shakti/test-build' } };
+            b.window.netflix.appContext = { getModelData: name => models[name] };
+        }
+        b.context.fetch = async (url, options) => {
+            requests.push({ url, options });
+            return options?.method === 'POST' ? { ok: false, status: 503, json: async () => ({}) } : listFetch(url, options);
+        };
+        async function settle(visit) {
+            for (let i = 0; i < 80 && b.logs.filter(row => row.includes('Initialization completed')).length < visit; i++) {
+                await b.scheduler.advance(25); await b.scheduler.frame();
+            }
+            await b.scheduler.flush();
+            assert.equal(b.logs.filter(row => row.includes('Initialization completed')).length, visit);
+        }
+        function cards() {
+            return b.document.getElementById('tm-netflix-mylist-v15-grid').querySelectorAll('[data-tm-item-video-id]');
+        }
+        function filter(group, value) {
+            return b.document.querySelector(`[data-tm-type-filter="${group}"]`).querySelector(`[data-tm-filter-value="${value}"]`);
+        }
+        function assertList() {
+            assert.deepEqual(cards().map(node => node.getAttribute('data-tm-item-video-id')), ['1', '2', '3']);
+            assert.equal(b.document.querySelectorAll('#tm-netflix-mylist-v15-grid').length, 1);
+            assert.equal(filter('main', 'movie').getAttribute('aria-pressed'), 'true');
+            assert.equal(filter('watched', 'movie').getAttribute('aria-pressed'), 'true');
+            assert.equal(b.document.querySelector('[data-tm-watch-section]').open, false);
+            assert.equal(b.document.querySelector('[data-tm-watch-grid]').querySelectorAll('[data-tm-item-video-id]').length, 0);
+            assert.equal(b.document.listenerCount('pointermove'), 1);
+            assert.equal(b.window.listenerCount('resize'), 1);
+            assert.equal(b.window.listenerCount('popstate'), 1);
+            assert.equal(b.window.listenerCount('hashchange'), 1);
+            assert.equal(b.menus.size, 1);
+        }
+        b.start(); await settle(1); assertList();
+        assert.ok(JSON.stringify(b.logs).includes(viewingFailure === 'http' ? 'VIEWING_STATUS_HTTP_503' : 'VIEWING_STATUS_CONTEXT'));
+        const firstRoot = b.document.getElementById('tm-netflix-mylist-v15-grid');
+        const firstCards = cards();
+        // Unknown metadata stays reachable through All after the optional failure.
+        filter('main', 'all').dispatchEvent({ type: 'click' });
+        assert.ok(cards().every(node => node.getAttribute('data-tm-type-hidden') !== 'true'));
+        assert.equal(filter('watched', 'movie').getAttribute('aria-pressed'), 'true');
+        filter('watched', 'series').dispatchEvent({ type: 'click' });
+        assert.equal(filter('main', 'all').getAttribute('aria-pressed'), 'true');
+        assert.equal(filter('watched', 'series').getAttribute('aria-pressed'), 'true');
+        [...b.menus.values()][0].callback();
+        assert.equal(section.getAttribute('data-tm-original-mylist-visible'), 'false');
+        await b.navigate('/browse');
+        assert.equal(firstRoot.isConnected, false);
+        assert.ok(firstCards.every(node => !node.isConnected));
+        assert.equal(b.document.getElementById('tm-netflix-mylist-v15-grid'), null);
+        assert.equal(b.document.getElementById('tm-netflix-mylist-v15-status'), null);
+        assert.equal(b.document.head.querySelectorAll('style').length, 0);
+        assert.equal(section.getAttribute('data-tm-original-mylist-visible'), null);
+        assert.equal(b.document.listenerCount('pointermove'), 0);
+        assert.equal(b.window.listenerCount('resize'), 0);
+        assert.equal(b.observers.filter(observer => observer.active).length, 0);
+        assert.equal(b.scheduler.timers.size, 0); assert.equal(b.scheduler.frames.size, 0);
+        await b.navigate('/browse/my-list'); await settle(2); assertList();
+        assert.notEqual(b.document.getElementById('tm-netflix-mylist-v15-grid'), firstRoot);
+        assert.ok(cards().every(node => !firstCards.includes(node)));
+        assert.equal(section.getAttribute('data-tm-original-mylist-visible'), 'false', 'semantic preference survives route retirement');
+        assert.equal(b.logs.filter(row => row.includes('Script started')).length, 1);
+        assert.equal(requests.filter(request => request.options?.method === 'POST').length, viewingFailure === 'http' ? 2 : 0,
+            'one optional attempt per visit, no retry loop');
+        await b.navigate('/browse');
+        assert.equal(b.scheduler.timers.size, 0); assert.equal(b.scheduler.frames.size, 0);
+    });
+}
+
+test('generated populated viewing results update groups and independent filters through real session callbacks', async () => {
+    const b = browser({ pathname: '/browse/my-list' });
+    mountPopulatedMyList(b, { count: 3 });
+    b.context.URLSearchParams = URLSearchParams;
+    const models = { userInfo: { userGuid: 'active-profile', authURL: 'test-auth' },
+        services: { memberapi: '/api/shakti/test-build' } };
+    b.window.netflix.appContext = { getModelData: name => models[name] };
+    const listFetch = b.context.fetch, requests = [];
+    b.context.fetch = async (url, options) => {
+        if (options?.method !== 'POST') return listFetch(url, options);
+        requests.push({ url, options });
+        return { ok: true, json: async () => ({ jsonGraph: { videos: {
+            1: viewingVideo('movie', true), 2: viewingVideo('movie', false, 25), 3: viewingVideo('show', false)
+        } } }) };
+    };
+    b.start();
+    for (let i = 0; i < 80 && !b.logs.some(row => row.includes('Viewing status collection completed')); i++) {
+        await b.scheduler.advance(25); await b.scheduler.frame();
+    }
+    assert.ok(b.logs.some(row => row.includes('Viewing status collection completed')), 'viewing scan completes within the modeled bound');
+    const root = b.document.getElementById('tm-netflix-mylist-v15-grid');
+    assert.ok(root);
+    const watched = root.querySelector('[data-tm-watch-grid]');
+    const ids = parent => parent.children.filter(node => node.getAttribute('data-tm-item-video-id') !== null)
+        .map(node => node.getAttribute('data-tm-item-video-id'));
+    const filter = (group, value) => root.querySelector(`[data-tm-type-filter="${group}"]`).querySelector(`[data-tm-filter-value="${value}"]`);
+    const visible = parent => parent.children.filter(node => node.getAttribute('data-tm-item-video-id') !== null && node.getAttribute('data-tm-type-hidden') !== 'true')
+        .map(node => node.getAttribute('data-tm-item-video-id'));
+    assert.deepEqual(ids(root), ['2', '3']);
+    assert.deepEqual(ids(watched), ['1']);
+    assert.deepEqual(visible(root), ['2']);
+    assert.deepEqual(visible(watched), ['1']);
+    assert.equal(filter('main', 'movie').getAttribute('aria-pressed'), 'true');
+    assert.equal(filter('watched', 'movie').getAttribute('aria-pressed'), 'true');
+    assert.equal(filter('main', 'all').querySelector('[data-tm-type-count]').textContent, '2');
+    assert.equal(filter('watched', 'all').querySelector('[data-tm-type-count]').textContent, '1');
+    assert.equal(root.querySelector('[data-tm-watch-section]').open, false);
+    const requestsAtCompletion = requests.length;
+    assert.ok(requestsAtCompletion > 0);
+    filter('main', 'series').dispatchEvent({ type: 'click' });
+    assert.deepEqual(visible(root), ['3']);
+    assert.equal(filter('watched', 'movie').getAttribute('aria-pressed'), 'true');
+    filter('watched', 'series').dispatchEvent({ type: 'click' });
+    assert.deepEqual(visible(watched), []);
+    assert.deepEqual(visible(root), ['3']);
+    filter('main', 'all').dispatchEvent({ type: 'click' });
+    assert.deepEqual(visible(root), ['2', '3']);
+    assert.equal(requests.length, requestsAtCompletion, 'filter changes reuse the completed result without requests');
+    await b.navigate('/browse');
+    assert.equal(root.isConnected, false);
+    assert.equal(b.scheduler.timers.size, 0); assert.equal(b.scheduler.frames.size, 0);
 });
