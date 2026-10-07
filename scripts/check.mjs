@@ -5,27 +5,6 @@ import { pathToFileURL } from 'node:url';
 import { Script } from 'node:vm';
 import { distributionName, generateUserscript, repositoryRoot } from './build.mjs';
 
-// Each temporary edge is exact, justified in findings.md and removed at its named step.
-const legacyImports = new Map([
-    ['src/main.js -> src/legacy.js', 'P20: replace the transitional startup entry'],
-    ['src/legacy.js -> src/dom-names.js', 'P20: move remaining runtime consumers to application composition'],
-    ['src/legacy.js -> src/i18n/i18n.js', 'P20: inject localization into the remaining consumers'],
-    ['src/legacy.js -> src/diagnostics/logger.js', 'P20: application owns logger composition'],
-    ['src/legacy.js -> src/diagnostics/report.js', 'P20: application wires explicit summary providers'],
-    ['src/legacy.js -> src/netflix/native-popup.js', 'P20: application composes native interaction'],
-    ['src/legacy.js -> src/app/responsive.js', 'P20: application composes responsive coordination'],
-    ['src/legacy.js -> src/hover/hover.js', 'P20: application composes hover and native resolution'],
-    ['src/legacy.js -> src/netflix/popup-inspection.js', 'P20: application wires inspection lifetime and native consumers'],
-    ['src/legacy.js -> src/netflix/context.js', 'P20: application injects current page context'],
-    ['src/legacy.js -> src/netflix/page-dom.js', 'P20: application composes remaining DOM consumers'],
-    ['src/legacy.js -> src/list/list.js', 'P20: application composes list collection and membership'],
-    ['src/legacy.js -> src/grid/grid.js', 'P20: application composes grid and its remaining callbacks'],
-    ['src/legacy.js -> src/netflix/list-data.js', 'P20: application injects list data into collection and count consumers'],
-    ['src/legacy.js -> src/viewing/viewing.js', 'P20: application composes opaque viewing sessions and semantic presentation'],
-    ['src/legacy.js -> src/netflix/viewing-data.js', 'P20: application injects typed viewing data into the scan'],
-    ['src/legacy.js -> src/app/session-scope.js', 'P20: application composes the session scope'],
-    ['src/legacy.js -> src/netflix/carousel/carousel.js', 'P20: application composes the carousel and remaining native consumers']
-]);
 const publicFeatures = new Set(['src/list/list.js', 'src/viewing/viewing.js', 'src/grid/grid.js', 'src/hover/hover.js']);
 const netflixEntries = new Set(['context', 'page-dom', 'list-data', 'viewing-data', 'card-markup', 'native-popup', 'popup-inspection']
     .map(name => `src/netflix/${name}.js`).concat('src/netflix/carousel/carousel.js'));
@@ -69,7 +48,6 @@ async function productionFiles(root, directory = 'src') {
 
 async function checkDependencies(metafile, root) {
     const graph = new Map();
-    const usedExceptions = new Set();
     for (const [name, input] of Object.entries(metafile.inputs)) {
         const from = name.replaceAll('\\', '/');
         assert.ok(from.startsWith('src/'), 'Production input must be authored source: ' + from);
@@ -78,17 +56,13 @@ async function checkDependencies(metafile, root) {
             const to = dependency.path.replaceAll('\\', '/');
             const edge = `${from} -> ${to}`;
             assert.ok(!dependency.external && to.startsWith('src/'), 'External production import: ' + edge);
-            if (legacyImports.has(edge)) usedExceptions.add(edge);
-            else assert.ok(allowedImport(from, to), 'Forbidden production import: ' + edge);
+            assert.ok(allowedImport(from, to), 'Forbidden production import: ' + edge);
             dependencies.push(to);
         }
         graph.set(from, dependencies);
     }
     for (const file of await productionFiles(root)) {
         assert.ok(graph.has(file), 'Unreachable production module: ' + file);
-    }
-    for (const edge of legacyImports.keys()) {
-        assert.ok(usedExceptions.has(edge), 'Remove obsolete legacy import exception: ' + edge);
     }
     const visited = new Set(), visiting = new Set(), chain = [];
     function visit(file) {

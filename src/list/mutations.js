@@ -17,6 +17,8 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
     let pending = new Map(), sequence = 0;
     let publicationGeneration = 0;
     let deferralEpoch = 0, disposedToken = null, cleanupFailures = 0;
+    const undoWork = { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 };
+    function recordCounter(name, amount) { undoWork[name] += amount; onCounter(name, amount); }
     function cleanup(operation) { try { operation(); } catch (_) { cleanupFailures++; } }
     const isAdmitted = token => token !== disposedToken && isSessionActive(token);
     function start(token = readSession()) { if (!isSessionActive(token)) return false; disposedToken = null; return true; }
@@ -38,7 +40,7 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         pending = new Map(); entries = new Map(); timer = null;
         deferrals.clear(); deferralEpoch++; sequence++; generation++; publicationGeneration++; disposedToken = readSession();
         if (oldTimer) cleanup(() => clearTimeout(oldTimer.id));
-        cleanup(() => onCounter('cleared', oldEntries.size));
+        cleanup(() => recordCounter('cleared', oldEntries.size));
         for (const intent of oldPending.values()) releaseIntent(intent, oldEntries);
         for (const entry of oldEntries.values()) {
             const current = entries.get(entry.videoId), intent = readPending(entry.videoId);
@@ -224,26 +226,26 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         if (timer?.dueAt === dueAt && timer.token === token) return;
         cancelExpiry();
         const owner = { id: null, token, dueAt }; timer = owner;
-        onCounter('schedules', 1);
+        recordCounter('schedules', 1);
         if (timer !== owner) return;
         owner.id = setTimeout(() => {
             if (timer !== owner) return;
             timer = null;
             if (!isAdmitted(owner.token)) return;
-            onCounter('expiryCallbacks', 1); pruneUndo();
+            recordCounter('expiryCallbacks', 1); pruneUndo();
         }, Math.max(0, dueAt - now()));
         if (timer !== owner) clearTimeout(owner.id);
     }
     function clearUndo() {
         const old = entries; entries = new Map(); generation++; cancelExpiry();
-        onCounter('cleared', old.size);
+        recordCounter('cleared', old.size);
         for (const entry of old.values()) releaseRetained(entry.correlationId);
     }
     function forgetUndo(videoId) {
         const key = String(videoId), entry = entries.get(key);
         if (!entries.delete(key)) return;
         generation++;
-        releaseRetained(entry.correlationId); onCounter('consumed', 1); scheduleExpiry();
+        releaseRetained(entry.correlationId); recordCounter('consumed', 1); scheduleExpiry();
     }
     function pruneUndo(at = now()) {
         let expired = 0, pendingFallbacksPreserved = 0;
@@ -261,7 +263,7 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
             }
         }
         const admitted = generation;
-        onCounter('expired', expired); scheduleExpiry();
+        recordCounter('expired', expired); scheduleExpiry();
         if (expired) onExpired({ expired, remaining: entries.size, pendingFallbacksPreserved });
         return generation === admitted;
     }
@@ -276,7 +278,7 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         entries.set(String(item.videoId), Object.freeze({ videoId: String(item.videoId), correlationId, item,
             index: Math.max(0, Number.isFinite(index) ? Math.floor(index) : 0),
             title, removedAt }));
-        generation++; onCounter('remembered', 1); scheduleExpiry();
+        generation++; recordCounter('remembered', 1); scheduleExpiry();
     }
     function correlationFor(item) {
         if (!item?.videoId) return null;
@@ -414,6 +416,7 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         return true;
     }
     return Object.freeze({ start, deferReconciliation, dispose,
+        workDiagnostics: () => ({ ...undoWork }),
         deferralDiagnostics: () => ({ cleanupFailures, active: [...deferrals.values()].filter(owner => isAdmitted(owner.token)).map(owner => owner.reason) }),
         observeMembership, observeClick, queueMutation, reconcileMutation, disposeMutation, clearPending,
         remove, add, reindex, preferredIndex, reconcileOrder,

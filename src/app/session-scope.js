@@ -1,7 +1,7 @@
 // Parent cancellation owns route epochs and request registration. A scan may
 // abort its borrowed controller, but cannot mutate the registry or timer owner.
 export function createSessionScope({ isTargetPage, AbortController, setTimeout, clearTimeout,
-    requestTimeoutMs = 10000 }) {
+    requestTimeoutMs = 10000, nextToken = null }) {
     let token = 0;
     let active = false;
     const requests = new Set();
@@ -68,13 +68,13 @@ export function createSessionScope({ isTargetPage, AbortController, setTimeout, 
     return Object.freeze({
         get token() { return token; },
         begin() {
-            token++;
+            token = nextToken ? nextToken() : token + 1;
             active = true;
             abortObsoleteRequests();
             return token;
         },
         dispose() {
-            token++;
+            token = nextToken ? nextToken() : token + 1;
             active = false;
             abortObsoleteRequests();
         },

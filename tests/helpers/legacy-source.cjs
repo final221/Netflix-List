@@ -5,9 +5,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const source = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'legacy.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'app', 'my-list-session.js'), 'utf8').replaceAll('settings.preferences().viewOriginalMyList', 'viewOriginalMyList');
 function declaration(name) {
-    if (name === 'createPerformanceDiagnostics') return declaration('fixtureAppCounters')+'\nfunction createPerformanceDiagnostics() { return {...fixtureAppCounters(), ...createHoverCounters(), resize: createResponsiveCounters(), imageResources: createImageCounters()}; }';
+    if (name === 'normalizeNetflixUiText') return 'var normalizeNetflixUiText = fixtureNormalizeTitle;';
+    if (name === 'gridOwnsClone') return 'function gridOwnsClone(node, root) { return gridView.isCardVisible(node, root); }';
+    if (name === 'normalizeClone') return 'function normalizeClone(node) { return gridView.normalizeCard(node); }';
+    if (name === 'itemKeyFromCard') return 'function itemKeyFromCard(card) { const identity = nativeCarousel.cardIdentity(card); return identity ? itemKey(identity) : ""; }';
+    if (name === 'createPerformanceDiagnostics') return declaration('fixtureAppCounters')+'\nfunction createPerformanceDiagnostics() { return {...fixtureAppCounters(), nativeRecovery: {...fixtureAppCounters().nativeRecovery, alignmentRestores:0, alignmentRestoreFailures:0}, undoRetention: {remembered:0,expired:0,consumed:0,cleared:0,schedules:0,expiryCallbacks:0}, ...createHoverCounters(), resize: createResponsiveCounters(), imageResources: createImageCounters()}; }';
     if (require('./responsive.cjs').names.includes(name)) return 'var '+name+' = fixtureResponsiveOriginal.'+name+';';
     if (require('./responsive.cjs').imageNames.includes(name)) return 'var '+name+' = fixtureImagesOriginal.'+name+';';
     if (name === 'fixtureAppCounters') return source.match(/    function createPerformanceDiagnostics\([\s\S]*?\n    }/)[0].replace('createPerformanceDiagnostics','fixtureAppCounters');

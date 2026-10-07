@@ -86,7 +86,24 @@ export function createMembership({ items = [], totalCount = null, collectedCount
         disposed = true; revision++;
         records = Object.freeze([]); map.clear(); expectedCount = null; collected = 0;
     }
+    function positionDeviation(item, actualIndex) {
+        if (disposed || !item || !records.length) return null;
+        const expectedIndex = records.indexOf(item);
+        if (expectedIndex < 0 || !Number.isSafeInteger(actualIndex) || actualIndex < 0) return null;
+        const delta = actualIndex - expectedIndex;
+        return Object.freeze({ expectedIndex, actualIndex, delta, absoluteDelta: Math.abs(delta) });
+    }
+    function firstPositionMismatch(cards, threshold) {
+        if (disposed) return null;
+        for (const card of cards || []) {
+            const item = card.videoId ? map.get('v:' + card.videoId) : records.find(record => record.href === card.href);
+            const deviation = positionDeviation(item, card.itemIndex);
+            if (deviation && deviation.absoluteDelta >= threshold) return Object.freeze({ item, deviation });
+        }
+        return null;
+    }
     return Object.freeze({ preparePublication, publish, remove, insert, alignVisible, observeCount, dispose,
+        positionDeviation, firstPositionMismatch,
         get records() { return records; }, get lookup() { return lookup; }, get expectedCount() { return expectedCount; },
         get collectedCount() { return collected; }, get revision() { return revision; } });
 }

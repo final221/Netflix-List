@@ -20,7 +20,10 @@ function transactionFixture() {
     const window = { innerWidth: 100, innerHeight: 100, addEventListener() {}, removeEventListener() {} };
     const carousel = { sample: fn => fn(), assertObservation() {}, isObservationCurrent: () => true };
     const observed = () => ({ layout, mode: 'indicator', position: { pages: pages }, presentation: { hidden: false, parked: false } });
-    const owner = createResponsive({ ...scheduler, window, ResizeObserver: class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
+    const owner = createResponsive({
+        acceptLayoutChange: (state, layout) => { state.layout = layout; },
+        acceptInitialPage: (state, page) => { state.initialPage = page; },
+        acceptViewportSignature: (state, signature) => { state.resizeViewportSignature = signature; }, ...scheduler, window, ResizeObserver: class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
         nativeCarousel: carousel, readState: () => state, readSessionToken: () => 1, isRouteSessionActive: () => true,
         assertRouteSession() {}, createRouteSessionCancelledError: () => Object.assign(new Error('retired'), { code: 'CANCELLED' }),
         isRouteSessionCancelledError: error => error.code === 'CANCELLED',
@@ -113,7 +116,10 @@ function fixture() {
     const window = { innerWidth: 100, innerHeight: 100, addEventListener: (key, fn) => listeners.set(key, fn),
         removeEventListener: key => listeners.delete(key) };
     let current = { grid: { isConnected: true }, section: {}, resizeViewportSignature: 'old' };
-    const owner = createResponsive({ window, ResizeObserver: class { constructor(fn) { callbacks.push(fn); } observe() {} disconnect() {} },
+    const owner = createResponsive({
+        acceptLayoutChange: (state, layout) => { state.layout = layout; },
+        acceptInitialPage: (state, page) => { state.initialPage = page; },
+        acceptViewportSignature: (state, signature) => { state.resizeViewportSignature = signature; }, window, ResizeObserver: class { constructor(fn) { callbacks.push(fn); } observe() {} disconnect() {} },
         readState: () => current, readSessionToken: () => 1, isRouteSessionActive: () => true,
         setTimeout: fn => { callbacks.push(fn); return callbacks.length; }, clearTimeout: () => {},
         hover: { cancel() {} }, log() {}, tLog: value => value });

@@ -43,6 +43,21 @@ test('grid publishes complete cards, releases startup material and exposes only 
     }
 });
 
+test('grid applies membership order and inserts at authoritative positions through its own registry', async () => {
+    const e = await fixture(), items = [e.item('1'), e.item('2'), e.item('3')];
+    const root = await e.publish(items);
+    const ordered = [items[2], items[0], items[1]];
+    e.grid.applyMembershipOrder({ ordered, index: 0 });
+    assert.deepEqual(root.children, ordered.map(item => e.grid.getCard(item).node));
+    const next = e.item('4');
+    e.grid.insertCard(next, { index: 1, ordered: true });
+    assert.equal(root.children[1], e.grid.getCard(next).node);
+    let checks = 0;
+    assert.throws(() => e.grid.applyMembershipOrder({ ordered: items, index: 0 }, () => {
+        if (++checks === 1) e.grid.dispose();
+    }), { code: 'GRID_FRAME_RETIRED' });
+});
+
 test('retirement accepts registry and correlation before cleanup and reports host cleanup failure', async () => {
     const e=await fixture(),item=e.item();await e.publish([item]);const handle=e.grid.getCard(item);let accepted=0;
     handle.node.remove=()=>{assert.equal(accepted,1);assert.equal(e.grid.getCard(item),null);

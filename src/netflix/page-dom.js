@@ -265,13 +265,15 @@ export function createNetflixPageDom({ document, Element, location, readGraphqlI
     function readEmptyContent(section) {
         const node = section?.querySelector?.(':scope > [data-uia="empty-carousel-section+content"]');
         if (!node) return null;
-        const message = String(node.querySelector('[data-uia="empty-carousel-section+message"]')?.textContent || '')
-            .replace(/[\u200b-\u200f\u2060\ufeff]/g, '').replace(/\s+/g, '').trim();
+        const message = normalizeTitle(node.querySelector('[data-uia="empty-carousel-section+message"]')?.textContent);
         return Object.freeze({ node, message });
     }
     function readEmptyShell() {
         return [...document.querySelectorAll('[data-uia="empty-carousel-section+content"]')]
             .find(node => !node.closest(`[${SECTION_ATTR}="true"]`)) || null;
+    }
+    function normalizeTitle(value) {
+        return String(value || '').replace(/[\u200b-\u200f\u2060\ufeff]/g, '').replace(/\s+/g, '').trim();
     }
     function readRowGap(section, viewportWidth) {
         const fallback = Math.max(20, Math.min(56, viewportWidth * 0.02));
@@ -302,5 +304,5 @@ export function createNetflixPageDom({ document, Element, location, readGraphqlI
         return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
     }
     return Object.freeze({ ...netflixDom, findMyListSection, readMyListAnchor, nativeCardIdentity, videoIdFromHref,
-        decodeTrackingContext, describeMembershipClick, describeToastActionClick, readHeadingTypography, readSyntheticPlacement, readEmptyContent, readEmptyShell, readRowGap });
+        decodeTrackingContext, describeMembershipClick, describeToastActionClick, readHeadingTypography, readSyntheticPlacement, readEmptyContent, readEmptyShell, readRowGap, normalizeTitle });
 }

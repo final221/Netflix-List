@@ -156,7 +156,7 @@ function environment(names, overrides = {}) {
         activeClone: null, activeVideoId: null, activePage: null, activeSourceSlot: null, activeGeometryProxy: null,
         activeNativeHover: null,
         orderMismatchDialogOpen: false, orderMismatchReinitializing: false, responsiveRefreshPromise: null,
-        routeSessionToken: 1, targetSessionActive: true,
+        routeSessionToken: 1, targetSessionActive: true, disposed: false, sessionCleanupFailures: 0,
         sourceState: null, initializationDeferral: null, responsiveDeferral: null,
         nativeInitializationFailure: null,
         imageResourceObserver: null, IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES: 4000,
@@ -180,6 +180,8 @@ function environment(names, overrides = {}) {
     c.fixtureResolveReady = overrides.resolveReadyHover;
     installHover(c);
     require('./helpers/responsive.cjs').install(c);
+    c.fixtureNormalizeTitle = createNetflixPageDom({ document: c.document, Element, HTMLElement: Element,
+        location: c.location, getComputedStyle: node => c.getComputedStyle(node) }).normalizeTitle;
     for (const name of ['resolveReadyHover','prepareHoverCard','popupSource','publishSourceState', 'bindViewingSession', 'ensurePageHints', 'pageForItem', 'setPageForItem', 'ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
         'beginRunningSession', 'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',

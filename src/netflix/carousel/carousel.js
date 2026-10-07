@@ -2148,6 +2148,26 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         return bindTargetDocumentObserver(host, host ? findMyListSection() : null);
     }
 
+    function captureFallbackItem(videoId) {
+        const wanted = String(videoId);
+        for (const card of document.querySelectorAll(NETFLIX_DOM_SELECTORS.standardCardWithHref)) {
+            if (card.closest(`#${GRID_ID}`)) continue;
+            const href = card.href || card.getAttribute('href') || '';
+            if (netflixDom.videoIdFromHref(href) !== wanted) continue;
+            const slot = card.closest(NETFLIX_DOM_SELECTORS.virtualSlot);
+            if (!slot) continue;
+            const item = cardMarkup.capture(slot, 0);
+            if (item?.videoId === wanted) return item;
+        }
+        return null;
+    }
+    function cardIdentity(node) {
+        const card = node?.matches?.(NETFLIX_DOM_SELECTORS.standardCard) ? node : node?.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
+        if (!card) return null;
+        const href = card.href || card.getAttribute('href') || '';
+        return Object.freeze({ href, videoId: netflixDom.videoIdFromHref(href) });
+    }
+
     return Object.freeze({ startDiscovery, stopDiscovery, refreshDiscovery, bind, clearBinding, borrowBinding, isBindingCurrent, assertBinding,
         currentBinding: () => acceptedBinding,
         createPageHints(options = {}) {
@@ -2167,12 +2187,20 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         },
         mountedBootstrap: collection.mountedBootstrap, anchorPageZero,
         resolveCard, mountedCard, isSourceCurrent, assertSource,
+        preferredPage({ record, hints, records = [], columns = 1 }) {
+            if (!record) return 0;
+            const hinted = hints?.get(record);
+            if (Number.isFinite(hinted)) return hinted;
+            if (Number.isFinite(record.page)) return record.page;
+            const index = records.indexOf(record);
+            return index >= 0 ? Math.floor(index / Math.max(1, columns || 1)) : 0;
+        },
         refreshMapping, isMappingCurrent, assertMapping,
         collect: options => options.mode === 'mounted-single-page' ? collection.collectMounted(options) : collection.collect(options),
         resetSource() { sourcePresentation.dispose(); clearBinding(); collection.resetDiagnostics(); models = new WeakMap(); nativeReadScope = null; },
         presentSource: sourcePresentation.present, cleanupArtifacts: sourcePresentation.cleanupArtifacts,
         prepareSource, acceptCollection, isPreparationCurrent, assertPreparation,
-        observeSource, pageCards, measureLayout, discoverSource, captureMountedItem, assertObservation, isObservationCurrent,
+        observeSource, pageCards, measureLayout, discoverSource, captureMountedItem, captureFallbackItem, cardIdentity, assertObservation, isObservationCurrent,
         sample: withNativeReadScope, invalidateReads: invalidateNativeReadScope, waitForSource: waitForNativeSource,
         diagnostics
     });

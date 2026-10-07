@@ -1,5 +1,5 @@
 export function createResponsive(options) {
-    const { window, ResizeObserver, performance, setTimeout, clearTimeout, nativeCarousel, gridView, hover, listMutations, readState, readSessionToken, isRouteSessionActive, assertRouteSession, createRouteSessionCancelledError, isRouteSessionCancelledError, nativeSourceObservation, nativeLayoutObservation, nativeSourceDiagnostics, ensureLiveNativeBinding, applyGridGeometry, layoutFrameStatus, updateStatus, formatHeaderParts, measureNativeCarouselGap, pageForItem, setPageForItem, itemKey, copyItemAttributes, currentGridGeometry, realignActiveSource, layoutSummary, collectRuntimeSnapshot, sleep, log, warn, trace, tLog, tUi, readOriginalVisibility, applyLegacyEmptyStateGeometry } = options;
+    const { acceptLayoutChange, acceptInitialPage, acceptViewportSignature, window, ResizeObserver, performance, setTimeout, clearTimeout, nativeCarousel, gridView, hover, listMutations, readState, readSessionToken, isRouteSessionActive, assertRouteSession, createRouteSessionCancelledError, isRouteSessionCancelledError, nativeSourceObservation, nativeLayoutObservation, nativeSourceDiagnostics, ensureLiveNativeBinding, applyGridGeometry, layoutFrameStatus, updateStatus, formatHeaderParts, measureNativeCarouselGap, pageForItem, setPageForItem, itemKey, copyItemAttributes, currentGridGeometry, realignActiveSource, layoutSummary, collectRuntimeSnapshot, sleep, log, warn, trace, tLog, tUi, readOriginalVisibility, applyLegacyEmptyStateGeometry } = options;
     let resizeObserver = null, responsiveRefreshTimer = null, responsiveRefreshPromise = null, responsiveRefreshing = false;
     let responsiveDeferral = null, activeResponsiveReason = "", lastResponsiveReason = "", lastResponsiveSignature = "", lastPageShape = "";
     let myListCountConvergencePending = false, responsiveSequence = 0, lifecycleRevision = 0, listeners = null;
@@ -148,7 +148,7 @@ export function createResponsive(options) {
                 assertPublication();
             });
             assertPublication();
-            state.initialPage = result.currentPage;
+            acceptInitialPage(state, result.currentPage);
             log(tLog('logicalPageModelSynchronizedAfterDelta'), {
                 reason, currentPage: result.currentPage, knownPageCount: result.knownPageCount,
                 pageCountFinalized: result.pageCountFinalized, pageMappingStale: result.pageMappingStale,
@@ -240,7 +240,7 @@ export function createResponsive(options) {
             const signature = responsiveSignature(liveLayout);
             const pageShape = responsivePageShape(liveLayout);
 
-            readState().layout = liveLayout;
+            acceptLayoutChange(state, liveLayout);
             updateResponsiveStatus(liveLayout, tUi('relayoutInProgress'));
 
             const pageShapeChanged = pageShape !== lastPageShape;
@@ -364,7 +364,7 @@ export function createResponsive(options) {
                         counters.unchanged++;
                         return;
                     }
-                    state.layout = layout;
+                    acceptLayoutChange(state, layout);
                     const geometry = applyGridGeometry(state.section, state.grid, layout);
                     layoutFrameStatus(state.status, geometry);
                     return;
@@ -404,7 +404,7 @@ export function createResponsive(options) {
                 if (!nativeCarousel.isObservationCurrent(sample.observed)) return;
                 if (sig === lastResponsiveSignature && geometryUnchanged && !logicalMappingStale) {
                     const previousScrollerHeight = state.layout.scrollerHeight;
-                    readState().layout = measured;
+                    acceptLayoutChange(state, measured);
                     realignActiveSource();
                     counters.unchanged++;
                     const hoverPreserved = Boolean(hover.hasInteraction());
@@ -442,7 +442,7 @@ export function createResponsive(options) {
 
                     if (pageCountOnlyChanged && geometryUnchanged && !logicalMappingStale) {
                         const previousSignature = lastResponsiveSignature;
-                        readState().layout = measured;
+                        acceptLayoutChange(state, measured);
                         lastResponsiveSignature = sig;
                         lastPageShape = responsivePageShape(measured);
                         realignActiveSource();
@@ -496,7 +496,7 @@ export function createResponsive(options) {
                 viewport: { width: window.innerWidth, height: window.innerHeight },
                 hoverCancelled: true
             });
-            readState().resizeViewportSignature = signature;
+            acceptViewportSignature(readState(), signature);
         }
         scheduleResponsiveRefresh(140, reason);
     }
@@ -565,7 +565,7 @@ export function createResponsive(options) {
                 const layout = { ...observed.layout, rowGap: measureNativeCarouselGap(state.section) };
                 nativeCarousel.assertObservation(observed);
                 if (readState() !== state || !nativeCarousel.isBindingCurrent(binding)) return;
-                state.layout = layout;
+                acceptLayoutChange(state, layout);
                 const geometry = applyGridGeometry(state.section, state.grid, layout);
                 if (readState() !== state || !nativeCarousel.isBindingCurrent(binding)) return;
                 layoutFrameStatus(state.status, geometry, mode === 'empty' && readOriginalVisibility() ? layout.rowGap || 0 : 0);
@@ -600,7 +600,7 @@ export function createResponsive(options) {
     }
     function acceptLayout(layout) {
         lastResponsiveSignature = responsiveSignature(layout); lastPageShape = responsivePageShape(layout);
-        if (readState()) readState().resizeViewportSignature = responsiveViewportSignature();
+        if (readState()) acceptViewportSignature(readState(), responsiveViewportSignature());
     }
     // Public capability: owns timers, observers, tickets and transaction admission.
     return Object.freeze({ start, observe, dispose, acceptLayout, requestCheck: scheduleResponsiveRefresh,

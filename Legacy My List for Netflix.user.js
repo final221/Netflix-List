@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.56
+// @version      1.4.57
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -19,7 +19,7 @@
 (() => {
   // src/app/responsive.js
   function createResponsive(options) {
-    const { window: window2, ResizeObserver, performance: performance2, setTimeout: setTimeout2, clearTimeout: clearTimeout2, nativeCarousel, gridView, hover, listMutations, readState, readSessionToken, isRouteSessionActive, assertRouteSession, createRouteSessionCancelledError, isRouteSessionCancelledError, nativeSourceObservation, nativeLayoutObservation, nativeSourceDiagnostics, ensureLiveNativeBinding, applyGridGeometry, layoutFrameStatus, updateStatus, formatHeaderParts, measureNativeCarouselGap, pageForItem, setPageForItem, itemKey, copyItemAttributes, currentGridGeometry, realignActiveSource, layoutSummary, collectRuntimeSnapshot, sleep, log, warn, trace, tLog, tUi, readOriginalVisibility, applyLegacyEmptyStateGeometry } = options;
+    const { acceptLayoutChange, acceptInitialPage, acceptViewportSignature, window, ResizeObserver, performance, setTimeout, clearTimeout, nativeCarousel, gridView, hover, listMutations, readState, readSessionToken, isRouteSessionActive, assertRouteSession, createRouteSessionCancelledError, isRouteSessionCancelledError, nativeSourceObservation, nativeLayoutObservation, nativeSourceDiagnostics, ensureLiveNativeBinding, applyGridGeometry, layoutFrameStatus, updateStatus, formatHeaderParts, measureNativeCarouselGap, pageForItem, setPageForItem, itemKey, copyItemAttributes, currentGridGeometry, realignActiveSource, layoutSummary, collectRuntimeSnapshot, sleep, log, warn, trace, tLog, tUi, readOriginalVisibility, applyLegacyEmptyStateGeometry } = options;
     let resizeObserver = null, responsiveRefreshTimer = null, responsiveRefreshPromise = null, responsiveRefreshing = false;
     let responsiveDeferral = null, activeResponsiveReason = "", lastResponsiveReason = "", lastResponsiveSignature = "", lastPageShape = "";
     let myListCountConvergencePending = false, responsiveSequence = 0, lifecycleRevision = 0, listeners = null;
@@ -43,7 +43,7 @@
       return signature;
     }
     function responsiveViewportSignature() {
-      const viewport = typeof window2 === "undefined" ? {} : window2;
+      const viewport = typeof window === "undefined" ? {} : window;
       const visual = viewport.visualViewport;
       return [
         viewport.innerWidth,
@@ -102,11 +102,11 @@
       const revision = lifecycleRevision;
       const state = readState();
       const { section, scroller, track } = state;
-      const start2 = performance2.now();
+      const start2 = performance.now();
       let previous = "";
       let stable = 0;
       let latest = readState().layout;
-      while (performance2.now() - start2 < timeout) {
+      while (performance.now() - start2 < timeout) {
         await sleep(80);
         assertRouteSession(sessionToken);
         if (revision !== lifecycleRevision || readState() !== state || state.section !== section || state.scroller !== scroller || state.track !== track || !section.isConnected || !scroller.isConnected || !track.isConnected || !state.grid?.isConnected) {
@@ -180,7 +180,7 @@
           assertPublication();
         });
         assertPublication();
-        state.initialPage = result.currentPage;
+        acceptInitialPage(state, result.currentPage);
         log(tLog("logicalPageModelSynchronizedAfterDelta"), {
           reason,
           currentPage: result.currentPage,
@@ -245,7 +245,7 @@
       const seq = ++responsiveSequence;
       const reason = lastResponsiveReason || "unspecified";
       activeResponsiveReason = reason;
-      const started = performance2.now();
+      const started = performance.now();
       const grid = state.grid;
       const assertOwner = () => {
         assertRouteSession(sessionToken);
@@ -269,7 +269,7 @@
         assertOwner();
         const signature = responsiveSignature(liveLayout);
         const pageShape = responsivePageShape(liveLayout);
-        readState().layout = liveLayout;
+        acceptLayoutChange(state, liveLayout);
         updateResponsiveStatus(liveLayout, tUi("relayoutInProgress"));
         const pageShapeChanged = pageShape !== lastPageShape;
         const sourceObservation = nativeSourceObservation(state);
@@ -322,7 +322,7 @@
           seq,
           reason,
           layout: layoutSummary(liveLayout),
-          elapsedMs: Math.round(performance2.now() - started),
+          elapsedMs: Math.round(performance.now() - started),
           selectedPage: nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null,
           finalSignature,
           finalPageShape
@@ -334,7 +334,7 @@
           seq,
           reason,
           error,
-          elapsedMs: Math.round(performance2.now() - started),
+          elapsedMs: Math.round(performance.now() - started),
           snapshot: collectRuntimeSnapshot()
         });
         updateResponsiveStatus(readState().layout, tUi("relayoutFailed"));
@@ -370,9 +370,9 @@
       if (!isRouteSessionActive(sessionToken) || !readState()?.grid?.isConnected) return;
       const state = readState();
       lastResponsiveReason = reason;
-      clearTimeout2(responsiveRefreshTimer);
+      clearTimeout(responsiveRefreshTimer);
       const revision = lifecycleRevision;
-      const check = setTimeout2(() => nativeCarousel.sample(() => {
+      const check = setTimeout(() => nativeCarousel.sample(() => {
         if (revision !== lifecycleRevision || responsiveRefreshTimer !== check) return;
         responsiveRefreshTimer = null;
         try {
@@ -387,7 +387,7 @@
               counters.unchanged++;
               return;
             }
-            state.layout = layout;
+            acceptLayoutChange(state, layout);
             const geometry = applyGridGeometry(state.section, state.grid, layout);
             layoutFrameStatus(state.status, geometry);
             return;
@@ -415,7 +415,7 @@
           if (!nativeCarousel.isObservationCurrent(sample.observed)) return;
           if (sig === lastResponsiveSignature && geometryUnchanged && !logicalMappingStale) {
             const previousScrollerHeight = state.layout.scrollerHeight;
-            readState().layout = measured;
+            acceptLayoutChange(state, measured);
             realignActiveSource();
             counters.unchanged++;
             const hoverPreserved = Boolean(hover.hasInteraction());
@@ -450,7 +450,7 @@
             const pageCountOnlyChanged = previousParts.length === 7 && currentParts.length === 7 && previousParts[1] !== currentParts[1] && previousParts.every((part, index) => index === 1 || part === currentParts[index]);
             if (pageCountOnlyChanged && geometryUnchanged && !logicalMappingStale) {
               const previousSignature = lastResponsiveSignature;
-              readState().layout = measured;
+              acceptLayoutChange(state, measured);
               lastResponsiveSignature = sig;
               lastPageShape = responsivePageShape(measured);
               realignActiveSource();
@@ -493,10 +493,10 @@
         log(tLog(reason === "window.resize" ? "windowResizeDetected" : "visualViewportResizeDetected"), {
           previousSignature: readState().resizeViewportSignature || "",
           signature,
-          viewport: { width: window2.innerWidth, height: window2.innerHeight },
+          viewport: { width: window.innerWidth, height: window.innerHeight },
           hoverCancelled: true
         });
-        readState().resizeViewportSignature = signature;
+        acceptViewportSignature(readState(), signature);
       }
       scheduleResponsiveRefresh(140, reason);
     }
@@ -534,8 +534,8 @@
         if (listeners && revision === lifecycleRevision) handleTargetResize(reason);
       };
       listeners = { window: resize("window.resize"), visual: resize("visualViewport.resize") };
-      window2.addEventListener("resize", listeners.window, { passive: true });
-      window2.visualViewport?.addEventListener("resize", listeners.visual, { passive: true });
+      window.addEventListener("resize", listeners.window, { passive: true });
+      window.visualViewport?.addEventListener("resize", listeners.visual, { passive: true });
     }
     function observe(mode = "populated") {
       resizeObserver?.disconnect();
@@ -561,7 +561,7 @@
             const layout = { ...observed.layout, rowGap: measureNativeCarouselGap(state.section) };
             nativeCarousel.assertObservation(observed);
             if (readState() !== state || !nativeCarousel.isBindingCurrent(binding)) return;
-            state.layout = layout;
+            acceptLayoutChange(state, layout);
             const geometry = applyGridGeometry(state.section, state.grid, layout);
             if (readState() !== state || !nativeCarousel.isBindingCurrent(binding)) return;
             layoutFrameStatus(state.status, geometry, mode === "empty" && readOriginalVisibility() ? layout.rowGap || 0 : 0);
@@ -581,12 +581,12 @@
       const previous = listeners;
       listeners = null;
       if (previous) {
-        window2.removeEventListener("resize", previous.window);
-        window2.visualViewport?.removeEventListener("resize", previous.visual);
+        window.removeEventListener("resize", previous.window);
+        window.visualViewport?.removeEventListener("resize", previous.visual);
       }
       const observer = resizeObserver;
       resizeObserver = null;
-      clearTimeout2(responsiveRefreshTimer);
+      clearTimeout(responsiveRefreshTimer);
       responsiveRefreshTimer = null;
       const deferral = responsiveDeferral;
       responsiveDeferral = null;
@@ -610,7 +610,7 @@
     function acceptLayout(layout) {
       lastResponsiveSignature = responsiveSignature(layout);
       lastPageShape = responsivePageShape(layout);
-      if (readState()) readState().resizeViewportSignature = responsiveViewportSignature();
+      if (readState()) acceptViewportSignature(readState(), responsiveViewportSignature());
     }
     return Object.freeze({
       start,
@@ -638,13 +638,106 @@
     });
   }
 
+  // src/app/session-scope.js
+  function createSessionScope({
+    isTargetPage,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+    requestTimeoutMs = 1e4,
+    nextToken = null
+  }) {
+    let token = 0;
+    let active = false;
+    const requests = /* @__PURE__ */ new Set();
+    const requestState = /* @__PURE__ */ new WeakMap();
+    function cancelledError() {
+      const error = new Error("Target route session cancelled");
+      error.code = "LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED";
+      return error;
+    }
+    function isCurrent(expectedToken) {
+      return expectedToken === token && active && isTargetPage();
+    }
+    function assertCurrent(expectedToken) {
+      if (expectedToken === null || expectedToken === void 0) return;
+      if (!isCurrent(expectedToken)) throw cancelledError();
+    }
+    function finishRequest(request) {
+      const state = requestState.get(request);
+      if (!state || state.finished) return false;
+      state.finished = true;
+      clearTimeout(state.timeout?.id);
+      state.timeout = null;
+      requests.delete(request);
+      request.controller.abort();
+      return true;
+    }
+    function abortObsoleteRequests() {
+      for (const request of requests.keys()) {
+        if (!isCurrent(request.sessionToken)) finishRequest(request);
+      }
+    }
+    function setRequestTimeout(request, delayMs) {
+      const state = requestState.get(request);
+      if (!state || state.finished) return false;
+      clearTimeout(state.timeout?.id);
+      const timeout = { id: null };
+      state.timeout = timeout;
+      timeout.id = setTimeout(() => {
+        if (state.finished || state.timeout !== timeout) return;
+        state.timeout = null;
+        request.controller.abort();
+      }, delayMs);
+      return true;
+    }
+    function beginRequest(expectedToken) {
+      assertCurrent(expectedToken);
+      const request = Object.freeze({ controller: new AbortController(), sessionToken: expectedToken });
+      requestState.set(request, { timeout: null, finished: false });
+      if (expectedToken !== null && expectedToken !== void 0) requests.add(request);
+      setRequestTimeout(request, requestTimeoutMs);
+      return request;
+    }
+    return Object.freeze({
+      get token() {
+        return token;
+      },
+      begin() {
+        token = nextToken ? nextToken() : token + 1;
+        active = true;
+        abortObsoleteRequests();
+        return token;
+      },
+      dispose() {
+        token = nextToken ? nextToken() : token + 1;
+        active = false;
+        abortObsoleteRequests();
+      },
+      isCurrent,
+      assertCurrent,
+      cancelledError,
+      isCancelled: (error) => error?.code === "LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED",
+      beginRequest,
+      setRequestTimeout,
+      finishRequest,
+      abortObsoleteRequests,
+      requestCount(expectedToken) {
+        if (expectedToken === void 0) return requests.size;
+        let count = 0;
+        for (const request of requests.keys()) if (request.sessionToken === expectedToken) count++;
+        return count;
+      }
+    });
+  }
+
   // src/hover/timing.js
   function createHoverTiming(options) {
     const {
-      performance: performance2,
-      document: document2,
-      requestAnimationFrame: requestAnimationFrame2,
-      cancelAnimationFrame: cancelAnimationFrame2,
+      performance,
+      document,
+      requestAnimationFrame,
+      cancelAnimationFrame,
       isRouteSessionActive,
       sessionScope,
       probeLimits
@@ -836,7 +929,7 @@
     }
     function recordHoverTiming(counters, phase, started) {
       if (performanceDiagnostics.hoverTiming !== counters) return;
-      const elapsed = Math.max(0, Math.round((performance2.now() - started) * 10) / 10);
+      const elapsed = Math.max(0, Math.round((performance.now() - started) * 10) / 10);
       counters[`${phase}Samples`]++;
       counters[`${phase}TotalMs`] = Math.round((counters[`${phase}TotalMs`] + elapsed) * 10) / 10;
       counters[`${phase}MaxMs`] = Math.max(counters[`${phase}MaxMs`], elapsed);
@@ -849,7 +942,7 @@
       owner.counters.active = false;
       owner.counters.stopReason = reason;
       try {
-        if (owner.frame !== null) cancelAnimationFrame2(owner.frame);
+        if (owner.frame !== null) cancelAnimationFrame(owner.frame);
       } catch (_) {
       }
     }
@@ -861,12 +954,12 @@
         if (hoverFrameDiagnosticOwner && hoverFrameDiagnosticOwner.counters !== counters) {
           stopHoverFrameDiagnostics("owner-replaced");
         }
-        counters.supported = typeof requestAnimationFrame2 === "function" && typeof cancelAnimationFrame2 === "function";
+        counters.supported = typeof requestAnimationFrame === "function" && typeof cancelAnimationFrame === "function";
         if (!counters.supported) {
           counters.stopReason = "unsupported";
           return;
         }
-        if (typeof document2 !== "undefined" && document2.visibilityState === "hidden") {
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") {
           stopHoverFrameDiagnostics("hidden");
           counters.stopReason = "hidden";
           return;
@@ -875,7 +968,7 @@
           counters.stopReason = "route-frame-limit";
           return;
         }
-        const now = performance2.now();
+        const now = performance.now();
         let owner = hoverFrameDiagnosticOwner;
         if (!owner) {
           owner = { counters, sessionToken: sessionScope.token, frame: null, previousAt: now, mixedPhase: false };
@@ -888,7 +981,7 @@
         counters.windows++;
         counters.active = true;
         counters.stopReason = "";
-        if (owner.frame === null) owner.frame = requestAnimationFrame2(() => sampleHoverFrameDiagnostics(owner));
+        if (owner.frame === null) owner.frame = requestAnimationFrame(() => sampleHoverFrameDiagnostics(owner));
       } catch (_) {
         stopHoverFrameDiagnostics("api-failed");
         counters.active = false;
@@ -903,11 +996,11 @@
           stopHoverFrameDiagnostics("owner-replaced");
           return;
         }
-        if (typeof document2 !== "undefined" && document2.visibilityState === "hidden") {
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") {
           stopHoverFrameDiagnostics("hidden");
           return;
         }
-        const now = performance2.now();
+        const now = performance.now();
         const gap = Math.max(0, Math.round((now - owner.previousAt) * 10) / 10);
         owner.previousAt = now;
         const counters = owner.counters;
@@ -934,7 +1027,7 @@
           stopHoverFrameDiagnostics("window-complete");
           return;
         }
-        owner.frame = requestAnimationFrame2(() => sampleHoverFrameDiagnostics(owner));
+        owner.frame = requestAnimationFrame(() => sampleHoverFrameDiagnostics(owner));
       } catch (_) {
         stopHoverFrameDiagnostics("api-failed");
       }
@@ -957,11 +1050,11 @@
   // src/hover/hover.js
   function createHover(options) {
     const {
-      document: document2,
-      Element: Element2,
-      performance: performance2,
-      setTimeout: setTimeout2,
-      clearTimeout: clearTimeout2,
+      document,
+      Element,
+      performance,
+      setTimeout,
+      clearTimeout,
       readEnvironment,
       resolveReady,
       prepare,
@@ -1069,7 +1162,7 @@
     function hoverPreparationCancelled(token) {
       return token !== null && token !== void 0 && token !== hoverToken;
     }
-    function hoverScrollElapsed(now = performance2.now()) {
+    function hoverScrollElapsed(now = performance.now()) {
       return Number.isFinite(lastTargetScrollAt) ? Math.max(0, Math.round(now - lastTargetScrollAt)) : null;
     }
     function recordHoverCancellation(counters, kind, reason) {
@@ -1086,7 +1179,7 @@
       const retiredWaits = [...retryWaits];
       retryWaits.clear();
       for (const [timer, resolve] of retiredWaits) {
-        clearTimeout2(timer);
+        clearTimeout(timer);
         resolve();
       }
       const owner = activeHoverPreparationDiagnostic;
@@ -1109,7 +1202,7 @@
           nextToken: token,
           group: owner.group,
           reason: knownReason,
-          elapsedMs: Math.round(performance2.now() - owner.started),
+          elapsedMs: Math.round(performance.now() - owner.started),
           sinceScrollMs: hoverScrollElapsed(),
           intent: owner.intent
         });
@@ -1126,7 +1219,7 @@
         quietRemainingAtQueueMs: owner.quietRemainingAtQueueMs,
         needsMovementAtQueue: owner.needsMovementAtQueue,
         scheduledDwellMs: owner.scheduledDwellMs,
-        actualDwellMs: Math.round(performance2.now() - owner.started),
+        actualDwellMs: Math.round(performance.now() - owner.started),
         sinceScrollAtActivationMs: hoverScrollElapsed()
       };
     }
@@ -1159,7 +1252,7 @@
           activeVideoMatches: activeVideoId === item.videoId,
           replacementHoveredAtInsertion: clone?.__tmHoverReplacementHovered ?? null,
           replacementPointerVerified: clone?.__tmHoverReplacementPointerVerified ?? null,
-          sinceScrollMs: Number.isFinite(lastTargetScrollAt) ? Math.round(performance2.now() - lastTargetScrollAt) : null
+          sinceScrollMs: Number.isFinite(lastTargetScrollAt) ? Math.round(performance.now() - lastTargetScrollAt) : null
         };
       } catch (_) {
         performanceDiagnostics.hoverInteraction.diagnosticFailures++;
@@ -1168,7 +1261,7 @@
     }
     function hoverLeaveDestinationDiagnostic(target) {
       const result = {
-        element: target instanceof Element2,
+        element: target instanceof Element,
         tag: "",
         inGrid: false,
         viewingControlHint: false,
@@ -1176,7 +1269,7 @@
         ancestorsExamined: 0,
         truncated: false
       };
-      let node = target instanceof Element2 ? target : target?.parentElement;
+      let node = target instanceof Element ? target : target?.parentElement;
       for (; node && result.ancestorsExamined < 6; node = node.parentElement) {
         result.ancestorsExamined++;
         if (!result.tag && /^[a-z][a-z0-9-]{0,15}$/i.test(node.localName || "")) result.tag = node.localName;
@@ -1197,7 +1290,7 @@
       try {
         const replay = nativePopup.replayFacts(clone);
         const afterReplay = Boolean(replay && replay.sessionToken === sessionScope.token);
-        const sinceReplayMs = afterReplay ? Math.max(0, Math.round(performance2.now() - replay.replayedAt)) : null;
+        const sinceReplayMs = afterReplay ? Math.max(0, Math.round(performance.now() - replay.replayedAt)) : null;
         const coordinatesKnown = Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY);
         const pointerDeltaPx = afterReplay && coordinatesKnown ? Math.round(Math.hypot(
           event.clientX - replay.coordinates.clientX,
@@ -1245,7 +1338,7 @@
       const admittedCard = gridView.getCard(item);
       if (!admittedCard || admittedCard.node !== clone || !gridView.isCardCurrent(admittedCard)) return;
       const seq = ++hoverSequence;
-      const started = performance2.now();
+      const started = performance.now();
       const timing2 = performanceDiagnostics.hoverTiming;
       const group = clone.parentElement?.getAttribute("data-tm-watch-grid") === "true" ? "watched" : "main";
       if (Boolean(readEnvironment().blockedReason)) {
@@ -1330,7 +1423,7 @@
               backedPage: resolution?.backedPage ?? null,
               targetPage: resolution?.targetPage ?? null,
               directPageDistance: resolution ? Math.abs(resolution.page - resolution.targetPage) : null,
-              elapsedMs: Math.round(performance2.now() - started)
+              elapsedMs: Math.round(performance.now() - started)
             });
             resolution?.assertCurrent?.();
             if (ready) replay = openPrepared(ready);
@@ -1353,7 +1446,7 @@
           replayDispatched: Boolean(fresh),
           activePage,
           activeVideoId,
-          elapsedMs: Math.round(performance2.now() - started)
+          elapsedMs: Math.round(performance.now() - started)
         });
       } catch (error) {
         if (!isRouteSessionCancelledError(error)) {
@@ -1376,14 +1469,14 @@
     }
     function waitRetry() {
       return new Promise((resolve) => {
-        const timer = setTimeout2(() => {
+        const timer = setTimeout(() => {
           if (retryWaits.delete(timer)) resolve();
         }, HOVER_RETRY_DELAY_MS);
         retryWaits.set(timer, resolve);
       });
     }
     function gridCloneFromPointerEvent(event, grid, includeViewingControls = false) {
-      let node = event.target instanceof Element2 ? event.target : event.target?.parentElement;
+      let node = event.target instanceof Element ? event.target : event.target?.parentElement;
       while (node && node !== grid) {
         if (!includeViewingControls && node.getAttribute("data-tm-viewing-actions") === "true") return null;
         if (node.__tmMyListItem && gridOwnsClone(node, grid)) return node;
@@ -1392,7 +1485,7 @@
       return null;
     }
     function gridHoverSuppressed() {
-      return hoverNeedsPointerMove || performance2.now() - lastTargetScrollAt < HOVER_SCROLL_QUIET_MS;
+      return hoverNeedsPointerMove || performance.now() - lastTargetScrollAt < HOVER_SCROLL_QUIET_MS;
     }
     function gridHoverReplacementUnderPointer(clone, triggerEvent) {
       if (clone.__tmHoverReplacementToken !== hoverToken || clone.getAttribute("data-tm-hover-token") !== String(hoverToken) || clone.getAttribute("data-tm-preparing") !== "true") return false;
@@ -1402,12 +1495,12 @@
       const x = current ? lastPointerX : triggerEvent?.clientX;
       const y = current ? lastPointerY : triggerEvent?.clientY;
       try {
-        if (!Number.isFinite(x) || !Number.isFinite(y) || typeof document2?.elementFromPoint !== "function") {
+        if (!Number.isFinite(x) || !Number.isFinite(y) || typeof document?.elementFromPoint !== "function") {
           counters.replacementPointerUnavailable++;
           clone.__tmHoverReplacementPointerVerified = null;
           return false;
         }
-        const target = document2.elementFromPoint(x, y);
+        const target = document.elementFromPoint(x, y);
         const matches = Boolean(target && gridCloneFromPointerEvent({ target }, readEnvironment().grid) === clone);
         clone.__tmHoverReplacementPointerVerified = matches;
         if (matches) counters.replacementPointerAccepted++;
@@ -1431,12 +1524,12 @@
       if (!clone) return;
       performanceDiagnostics.hoverInteraction.intentsCancelled++;
       clone.__tmHoverActivationGeneration = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
-      clearTimeout2(clone.__tmHoverActivationTimer);
+      clearTimeout(clone.__tmHoverActivationTimer);
       clone.__tmHoverActivationTimer = null;
       try {
         if (diagnostic && performanceDiagnostics.hoverScroll === diagnostic.counters) {
           const counters = diagnostic.counters;
-          const elapsed = Math.max(0, Math.round(performance2.now() - diagnostic.started));
+          const elapsed = Math.max(0, Math.round(performance.now() - diagnostic.started));
           counters.cancelledDwellTotalMs += elapsed;
           counters.cancelledDwellMaxMs = Math.max(counters.cancelledDwellMaxMs, elapsed);
           counters.lastIntentCancellationReason = recordHoverCancellation(counters, "intent", reason);
@@ -1452,7 +1545,7 @@
       if (gridHoverSuppressed() && !physicalMove) {
         const counters2 = performanceDiagnostics.hoverScroll;
         if (hoverNeedsPointerMove) counters2.boundarySuppressedMovement++;
-        if (performance2.now() - lastTargetScrollAt < HOVER_SCROLL_QUIET_MS) counters2.boundarySuppressedQuiet++;
+        if (performance.now() - lastTargetScrollAt < HOVER_SCROLL_QUIET_MS) counters2.boundarySuppressedQuiet++;
         return;
       }
       if (pendingGridHoverClone === clone || activeClone === clone) return;
@@ -1464,7 +1557,7 @@
       const pendingCard = gridView.getCard(item), pendingSession = sessionScope.token;
       performanceDiagnostics.hoverInteraction.intentsQueued++;
       startHoverFrameDiagnostics("intent");
-      const dwellStarted = performance2.now();
+      const dwellStarted = performance.now();
       const timing2 = performanceDiagnostics.hoverTiming;
       const counters = performanceDiagnostics.hoverScroll;
       const quietRemaining = Math.max(0, HOVER_SCROLL_QUIET_MS - (dwellStarted - lastTargetScrollAt));
@@ -1481,13 +1574,13 @@
       pendingGridHoverDiagnostic = diagnostic;
       if (quietRemaining > 0) counters.intentsDuringQuiet++;
       if (hoverNeedsPointerMove) counters.intentsAwaitingMovement++;
-      clone.__tmHoverActivationTimer = setTimeout2(() => {
+      clone.__tmHoverActivationTimer = setTimeout(() => {
         if (pendingGridHoverDiagnostic !== diagnostic || !isRouteSessionActive(pendingSession)) return;
         recordHoverTiming(timing2, "dwell", dwellStarted);
         clone.__tmHoverActivationTimer = null;
         if (pendingGridHoverClone === clone) pendingGridHoverClone = null;
         if (pendingGridHoverDiagnostic === diagnostic) pendingGridHoverDiagnostic = null;
-        if (physicalMove && readEnvironment().grid?.isConnected && clone.isConnected && gridOwnsClone(clone, readEnvironment().grid) && generation === clone.__tmHoverActivationGeneration && clone.matches(":hover") && performance2.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) {
+        if (physicalMove && readEnvironment().grid?.isConnected && clone.isConnected && gridOwnsClone(clone, readEnvironment().grid) && generation === clone.__tmHoverActivationGeneration && clone.matches(":hover") && performance.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) {
           if (hoverNeedsPointerMove && performanceDiagnostics.hoverScroll === counters) counters.dwellRearms++;
           hoverNeedsPointerMove = false;
         }
@@ -1508,7 +1601,7 @@
       if (pendingGridHoverClone === clone) cancelPendingGridHover(cancellationReason);
       clone.__tmHoverActivationGeneration = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
       if (clone.__tmHoverActivationTimer !== null && clone.__tmHoverActivationTimer !== void 0) {
-        clearTimeout2(clone.__tmHoverActivationTimer);
+        clearTimeout(clone.__tmHoverActivationTimer);
         clone.__tmHoverActivationTimer = null;
       }
       const cloneTokenText = clone.getAttribute("data-tm-hover-token");
@@ -1583,7 +1676,7 @@
         cancelPendingGridHover("preview");
         return;
       }
-      if (performance2.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) {
+      if (performance.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) {
         if (hoverNeedsPointerMove) performanceDiagnostics.hoverScroll.physicalRearms++;
         hoverNeedsPointerMove = false;
       }
@@ -1591,7 +1684,7 @@
       else cancelPendingGridHover("outside-grid");
     }
     function handleTargetScroll(event = null) {
-      const now = performance2.now();
+      const now = performance.now();
       const starting = now - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS;
       lastTargetScrollAt = now;
       const counters = performanceDiagnostics.hoverScroll;
@@ -1611,7 +1704,7 @@
       nativePopup.invalidate();
     }
     function handleHoverDiagnosticVisibilityChange() {
-      if (document2.visibilityState === "hidden") {
+      if (document.visibilityState === "hidden") {
         stopHoverFrameDiagnostics("hidden");
         nativePopup.finishProbe({ result: "hidden" });
       }
@@ -1637,14 +1730,14 @@
       ].map(([type, callback, capture]) => ({ type, capture, listener: (event) => {
         if (listenersActive && listenerRevision === revision && isRouteSessionActive(sessionToken)) callback(event);
       } }));
-      for (const entry of documentListeners) document2.addEventListener(entry.type, entry.listener, { passive: true, capture: entry.capture });
+      for (const entry of documentListeners) document.addEventListener(entry.type, entry.listener, { passive: true, capture: entry.capture });
     }
     function dispose() {
       listenersActive = false;
       listenerRevision++;
       const retiredListeners = documentListeners;
       documentListeners = [];
-      for (const entry of retiredListeners) document2.removeEventListener(entry.type, entry.listener, entry.capture);
+      for (const entry of retiredListeners) document.removeEventListener(entry.type, entry.listener, entry.capture);
       const retiredGrids = [...gridListeners];
       gridListeners.clear();
       for (const [grid, listeners] of retiredGrids) {
@@ -1674,6 +1767,18 @@
       isTargetCurrent: gridHoverTargetActive,
       protectedCards: () => Object.freeze([activeClone, pendingGridHoverClone].filter(Boolean)),
       hasInteraction: () => Boolean(activeClone || pendingGridHoverClone || activeHoverPreparationDiagnostic?.token === hoverToken),
+      observeReplacement(card) {
+        if (!gridView.isCardCurrent(card)) return null;
+        try {
+          const hovered = card.node.matches(":hover");
+          card.node.__tmHoverReplacementHovered = hovered;
+          if (!hovered) performanceDiagnostics.hoverInteraction.replacementNotHovered++;
+          return hovered;
+        } catch (_) {
+          performanceDiagnostics.hoverInteraction.diagnosticFailures++;
+          return null;
+        }
+      },
       resetDiagnostics() {
         timing.reset();
         performanceDiagnostics = timing.counters;
@@ -1703,10 +1808,10 @@
 
   // src/netflix/native-popup.js
   function createNativePopup(options = {}) {
-    const { Element: Element2, document: document2, PointerEvent, MouseEvent } = options;
-    const Node = options.Node || Element2;
-    const performance2 = options.performance || { now: () => 0 };
-    const { requestAnimationFrame: requestAnimationFrame2, cancelAnimationFrame: cancelAnimationFrame2, setTimeout: setTimeout2, clearTimeout: clearTimeout2 } = options;
+    const { Element, document, PointerEvent, MouseEvent } = options;
+    const Node = options.Node || Element;
+    const performance = options.performance || { now: () => 0 };
+    const { requestAnimationFrame, cancelAnimationFrame, setTimeout, clearTimeout } = options;
     const readIntent = options.readIntent || (() => ({}));
     const readEnvironment = options.readEnvironment || (() => ({}));
     const performanceDiagnostics = new Proxy({}, { get: (_, key) => options.readDiagnostics?.()[key] });
@@ -1769,6 +1874,7 @@
     let replayAdmission = null, replaySourceCurrent = null, replayGridCard = null;
     let interactionRevision = 0;
     let cleanupFailures = 0;
+    let alignmentRestores = 0, alignmentRestoreFailures = 0;
     const pendingFrames = /* @__PURE__ */ new Map();
     const graftHandles = /* @__PURE__ */ new WeakMap();
     const netflixReactHover = Object.freeze({
@@ -1850,7 +1956,7 @@
       const domMap = /* @__PURE__ */ new Map();
       const pairs = [];
       function walk(source, clone) {
-        if (!(source instanceof Element2) || !(clone instanceof Element2)) return;
+        if (!(source instanceof Element) || !(clone instanceof Element)) return;
         domMap.set(source, clone);
         pairs.push([source, clone]);
         const sourceChildren = source.children;
@@ -1913,9 +2019,14 @@
         }
       }
       if (activeGeometryProxy?.sourceSlot !== proxy.sourceSlot) proxy.sourceSlot.removeAttribute("data-tm-source-proxied");
-      performanceDiagnostics.nativeRecovery.alignmentRestores++;
+      alignmentRestores++;
+      alignmentRestoreFailures += failures;
+      try {
+        options.onAlignmentRestore?.(failures);
+      } catch (_) {
+        diagnosticFailure();
+      }
       if (failures) {
-        performanceDiagnostics.nativeRecovery.alignmentRestoreFailures += failures;
         warn(tLog("sourceAlignmentRestoreFailed"), { methods: failures, nodes: proxy.entries.length });
       }
     }
@@ -1957,7 +2068,7 @@
       finishNativePreviewDiagnostic(owner, { result: "released-before-check", reason });
       clearNativePreviewTransfer(owner, reason);
       const { counters, timing, card, coordinates } = owner;
-      const started = performance2.now();
+      const started = performance.now();
       counters.lastExitReason = reason;
       try {
         if (!nativeHoverSourceMatches(owner)) {
@@ -2008,7 +2119,7 @@
       observation.timer = null;
       observation.clone = null;
       try {
-        if (timer !== null) clearTimeout2(timer);
+        if (timer !== null) clearTimeout(timer);
         const counters = observation.counters;
         if (performanceDiagnostics.hoverPreview !== counters) return;
         counters.completed++;
@@ -2028,7 +2139,7 @@
         log(tLog("hoverPreviewPresence"), {
           seq: observation.seq,
           token: owner.token,
-          sinceReplayMs: Math.round(performance2.now() - owner.replayedAt),
+          sinceReplayMs: Math.round(performance.now() - owner.replayedAt),
           ...details
         });
       } catch (_) {
@@ -2046,20 +2157,20 @@
           finishNativePreviewDiagnostic(owner, { result: "owner-invalid" });
           return;
         }
-        if (document2.visibilityState === "hidden") {
+        if (document.visibilityState === "hidden") {
           finishNativePreviewDiagnostic(owner, { result: "hidden" });
           return;
         }
         counters.checks++;
-        checkStarted = performance2.now();
+        checkStarted = performance.now();
         const physicalKnown = Number.isFinite(readIntent().pointerX) && Number.isFinite(readIntent().pointerY) && readIntent().pointerX !== -1 && readIntent().pointerY !== -1;
         const x = physicalKnown ? readIntent().pointerX : owner.coordinates.clientX;
         const y = physicalKnown ? readIntent().pointerY : owner.coordinates.clientY;
         let hit = null;
         let pointerTarget = "unavailable";
-        if (Number.isFinite(x) && Number.isFinite(y) && typeof document2.elementFromPoint === "function") {
+        if (Number.isFinite(x) && Number.isFinite(y) && typeof document.elementFromPoint === "function") {
           counters.pointerChecks++;
-          hit = document2.elementFromPoint(x, y);
+          hit = document.elementFromPoint(x, y);
           if (gridCloneFromPointerEvent({ target: hit }, readEnvironment().grid) === clone) pointerTarget = "same-card";
           else if (gridCloneFromPointerEvent({ target: hit }, readEnvironment().grid, true) === clone) pointerTarget = "viewing-control";
           else if (hit && !readEnvironment().grid.contains(hit) && !readEnvironment().scroller?.contains(hit) && findNativeHoverPreview(hit, owner.videoId).root) pointerTarget = "matching-preview";
@@ -2071,7 +2182,7 @@
           return;
         }
         counters.rootSearches++;
-        const roots = document2.querySelectorAll(".previewModal--wrapper, .bob-container, .previewModal--container, .bob-card");
+        const roots = document.querySelectorAll(".previewModal--wrapper, .bob-container, .previewModal--container, .bob-card");
         const limit = Math.min(roots.length, HOVER_PREVIEW_DIAGNOSTIC_LIMITS.roots);
         details.truncated = roots.length > limit;
         for (let index = 0; index < limit; index++) {
@@ -2087,7 +2198,7 @@
         finishNativePreviewDiagnostic(owner, { result: "probe-failed" });
       } finally {
         if (checkStarted !== null && performanceDiagnostics.hoverPreview === counters) {
-          const elapsed = Math.max(0, Math.round((performance2.now() - checkStarted) * 10) / 10);
+          const elapsed = Math.max(0, Math.round((performance.now() - checkStarted) * 10) / 10);
           counters.checkTotalMs = Math.round((counters.checkTotalMs + elapsed) * 10) / 10;
           counters.checkMaxMs = Math.max(counters.checkMaxMs, elapsed);
         }
@@ -2102,12 +2213,12 @@
       }
       owner.previewDiagnostic = { counters, clone, timer: null, done: false, seq: ++counters.scheduled };
       try {
-        if (document2.visibilityState === "hidden") {
+        if (document.visibilityState === "hidden") {
           finishNativePreviewDiagnostic(owner, { result: "hidden" });
         } else if (owner.previewRoot) {
           finishNativePreviewDiagnostic(owner, { result: "matching-preview-transfer" });
         } else {
-          owner.previewDiagnostic.timer = setTimeout2(() => inspectNativePreviewDiagnostic(owner), HOVER_PREVIEW_DIAGNOSTIC_LIMITS.delayMs);
+          owner.previewDiagnostic.timer = setTimeout(() => inspectNativePreviewDiagnostic(owner), HOVER_PREVIEW_DIAGNOSTIC_LIMITS.delayMs);
         }
       } catch (_) {
         finishNativePreviewDiagnostic(owner, { result: "probe-failed" });
@@ -2126,7 +2237,7 @@
       return videoIdFromHref(href) || (/\/watch\/(\d+)(?:[/?#]|$)/.exec(href)?.[1] || "");
     }
     function findNativeHoverPreview(target, videoId) {
-      if (!(target instanceof Element2)) return { root: null, reason: "not-preview" };
+      if (!(target instanceof Element)) return { root: null, reason: "not-preview" };
       const root = target.closest(".previewModal--wrapper, .bob-container") || target.closest(".previewModal--container, .bob-card");
       if (!root?.isConnected) return { root: null, reason: "not-preview" };
       let node = target;
@@ -2159,7 +2270,7 @@
         if (owner.previewRoot === candidate.root) return true;
         owner.previewRoot = candidate.root;
         owner.previewClone = clone;
-        owner.previewEnteredAt = performance2.now();
+        owner.previewEnteredAt = performance.now();
         owner.counters.previewTransfers++;
         owner.counters.lastPreviewReason = candidate.reason;
         finishNativePreviewDiagnostic(owner, { result: "matching-preview-transfer" });
@@ -2171,7 +2282,7 @@
         try {
           log(tLog("hoverPreviewTransfer"), {
             reason: candidate.reason,
-            sinceReplayMs: Math.round(performance2.now() - owner.replayedAt)
+            sinceReplayMs: Math.round(performance.now() - owner.replayedAt)
           });
         } catch (_) {
           performanceDiagnostics.hoverInteraction.diagnosticFailures++;
@@ -2195,7 +2306,7 @@
         else owner.counters.previewReleases++;
         owner.counters.lastPreviewReason = reason;
         recordHoverTiming(owner.timing, "preview", owner.previewEnteredAt);
-        log(tLog("hoverPreviewReleased"), { reason, heldMs: Math.round(performance2.now() - owner.previewEnteredAt) });
+        log(tLog("hoverPreviewReleased"), { reason, heldMs: Math.round(performance.now() - owner.previewEnteredAt) });
       } catch (_) {
         performanceDiagnostics.hoverInteraction.diagnosticFailures++;
       }
@@ -2236,7 +2347,7 @@
       const { pairs } = pairDomTrees(sourceSlot, clone);
       const entries = [];
       for (const [source, target] of pairs) {
-        if (!(source instanceof Element2) || !(target instanceof Element2)) continue;
+        if (!(source instanceof Element) || !(target instanceof Element)) continue;
         const methods = geometryMethods.get(source) || {};
         geometryMethods.set(source, methods);
         const descriptors = Object.fromEntries(["getBoundingClientRect", "getClientRects"].map((method) => [method, methods[method] ? methods[method].baseline : Object.getOwnPropertyDescriptor(source, method) || null]));
@@ -2297,7 +2408,7 @@
         videoId: videoIdFromHref(card.href || card.getAttribute("href") || ""),
         counters: performanceDiagnostics.hoverLifecycle,
         timing: performanceDiagnostics.hoverTiming,
-        replayedAt: performance2.now(),
+        replayedAt: performance.now(),
         admission: replayAdmission,
         sourceCurrent: replaySourceCurrent,
         gridCard: replayGridCard
@@ -2340,7 +2451,7 @@
       const timing = performanceDiagnostics.hoverTiming;
       return new Promise((resolve) => {
         const pending = { resolve, frame: null, card: handles?.card };
-        const frame = requestAnimationFrame2(() => {
+        const frame = requestAnimationFrame(() => {
           if (!pendingFrames.delete(pending)) return;
           const finish = (success) => {
             try {
@@ -2369,7 +2480,7 @@
             const sourceVideoId = videoIdFromHref(card?.href || card?.getAttribute?.("href") || "");
             clearSourceAlignment();
             assertHandles();
-            const alignmentStarted = performance2.now();
+            const alignmentStarted = performance.now();
             let failureReason;
             try {
               failureReason = withNativeReadScope(() => {
@@ -2390,7 +2501,7 @@
               });
               return finish(false);
             }
-            const replayStarted = performance2.now();
+            const replayStarted = performance.now();
             let replayed;
             try {
               replayAdmission = isAdmitted;
@@ -2500,7 +2611,7 @@
         pendingFrames.clear();
         for (const entry of pending) {
           try {
-            cancelAnimationFrame2(entry.frame);
+            cancelAnimationFrame(entry.frame);
           } catch (_) {
             cleanupFailures++;
           }
@@ -2513,7 +2624,7 @@
         for (const [key, entry] of pendingFrames) if (entry.card === handle) {
           pendingFrames.delete(key);
           try {
-            cancelAnimationFrame2(entry.frame);
+            cancelAnimationFrame(entry.frame);
           } catch (_) {
             cleanupFailures++;
           }
@@ -2550,7 +2661,9 @@
         replayOwned: Boolean(activeNativeHover),
         previewOwned: Boolean(activeNativeHover?.previewRoot),
         pendingReplays: pendingFrames.size,
-        cleanupFailures
+        cleanupFailures,
+        alignmentRestores,
+        alignmentRestoreFailures
       }),
       describeActiveSource() {
         try {
@@ -2563,108 +2676,6 @@
         const owner = activeNativeHover;
         return owner && readIntent().clone === clone ? Object.freeze({ sessionToken: owner.sessionToken, replayedAt: owner.replayedAt, coordinates: Object.freeze({ ...owner.coordinates }) }) : null;
       }
-    });
-  }
-
-  // src/netflix/context.js
-  function createNetflixContext({ window: window2, document: document2, navigator: navigator2, location: location2 }) {
-    function getHtmlLanguage() {
-      return (document2.documentElement?.getAttribute("lang") || "").trim();
-    }
-    function getNetflixLanguage() {
-      return getHtmlLanguage() || navigator2.language || "";
-    }
-    function netflixModelData(name) {
-      const roots = [
-        window2,
-        window2?.wrappedJSObject,
-        document2.defaultView,
-        document2.defaultView?.wrappedJSObject
-      ];
-      for (const root of roots) {
-        try {
-          const appContext = root?.netflix?.appContext;
-          if (appContext && typeof appContext.getModelData === "function") {
-            const value = appContext.getModelData(name);
-            if (value != null) return value;
-          }
-        } catch (_) {
-        }
-        try {
-          const value = root?.netflix?.reactContext?.models?.[name]?.data;
-          if (value != null) return value;
-        } catch (_) {
-        }
-      }
-      return null;
-    }
-    function graphqlData() {
-      const candidates = [
-        window2,
-        window2?.wrappedJSObject,
-        document2.defaultView,
-        document2.defaultView?.wrappedJSObject
-      ];
-      for (const root of candidates) {
-        try {
-          const data = root?.netflix?.reactContext?.models?.graphql?.data;
-          if (data && typeof data === "object") return data;
-        } catch (_) {
-        }
-      }
-      return null;
-    }
-    function viewingRequestContext() {
-      const user = netflixModelData("userInfo");
-      const profileGuid = user?.userGuid;
-      const authURL = user?.authURL;
-      const services = netflixModelData("services");
-      const build = netflixModelData("serverDefs")?.BUILD_IDENTIFIER;
-      let base = services?.memberapi;
-      let endpointType = "string";
-      if (base == null || base === "") {
-        base = typeof build === "string" && build ? "/api/shakti/" + encodeURIComponent(build) : "";
-        endpointType = "build";
-      } else if (typeof base === "object") {
-        const { protocol, hostname, path } = base;
-        if (typeof protocol !== "string" || !/^https:?$/i.test(protocol) || typeof hostname !== "string" || !hostname || !Array.isArray(path) || !path.length || !path.every((part) => typeof part === "string" && part.length > 0)) return null;
-        base = protocol.replace(/:$/, "") + "://" + hostname + "/" + path.join("/").replace(/^\/+/, "");
-        endpointType = "descriptor";
-      }
-      if (typeof profileGuid !== "string" || !profileGuid || typeof authURL !== "string" || !authURL || typeof base !== "string" || !base) return null;
-      try {
-        const url = new URL(base, location2.origin);
-        if (url.origin !== location2.origin || url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname === "/") return null;
-        url.pathname = url.pathname.replace(/\/+$/, "") + "/pathEvaluator";
-        url.searchParams.set("falcor_server", "0.1.0");
-        url.searchParams.set("withSize", "false");
-        url.searchParams.set("materialize", "false");
-        url.searchParams.set("original_path", "/shakti/mre/pathEvaluator");
-        return { profileGuid, authURL, url: url.href, endpointType, endpointPath: url.pathname };
-      } catch (_) {
-        return null;
-      }
-    }
-    function activeProfile() {
-      return netflixModelData("userInfo")?.userGuid;
-    }
-    function pageDirection() {
-      return document2.querySelector('[data-uia="loc"]')?.getAttribute("dir") || document2.documentElement.dir || "ltr";
-    }
-    function listRequestContext() {
-      return {
-        appVersion: netflixModelData("serverDefs")?.BUILD_IDENTIFIER,
-        locale: netflixModelData("geo")?.locale?.id || document2.documentElement.lang
-      };
-    }
-    return Object.freeze({
-      getHtmlLanguage,
-      getNetflixLanguage,
-      activeProfile,
-      pageDirection,
-      viewingRequestContext,
-      readGraphqlBootstrap: graphqlData,
-      listRequestContext
     });
   }
 
@@ -2730,14 +2741,14 @@
     }
   }
   function createNetflixPageDom({
-    document: document2,
-    Element: Element2,
-    location: location2,
+    document,
+    Element,
+    location,
     readGraphqlIdentity = () => null,
-    getComputedStyle: getComputedStyle2 = () => ({}),
-    HTMLElement: HTMLElement2 = Element2
+    getComputedStyle = () => ({}),
+    HTMLElement = Element
   }) {
-    const videoIdFromHref = (href) => readVideoIdFromHref(href, location2.href);
+    const videoIdFromHref = (href) => readVideoIdFromHref(href, location.href);
     function nativeCardIdentity(slot) {
       const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS.standardCard);
       if (!card) return "";
@@ -2786,12 +2797,12 @@
       return "";
     }
     function findMyListSection() {
-      const host = document2.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
+      const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
       if (!host) return null;
       return netflixDom.findStructuralMyListSection(host) || netflixDom.findSectionByGraphqlIdentity(host, readGraphqlIdentity());
     }
     function describeMembershipClick(event, { activeVideoId = "" } = {}) {
-      const target = event.target instanceof Element2 ? event.target : null;
+      const target = event.target instanceof Element ? event.target : null;
       const button = target?.closest?.("button");
       if (!button) return null;
       const uia = button.getAttribute("data-uia") || "";
@@ -2806,7 +2817,7 @@
       return { button, videoId, uiaAction, uia, trackingContext };
     }
     function describeToastActionClick(event) {
-      const target = event.target instanceof Element2 ? event.target : null;
+      const target = event.target instanceof Element ? event.target : null;
       const button = target?.closest?.("button");
       const toast = button?.closest?.('#toastRoot [aria-label="toast"], #toastRoot [role="alert"]');
       if (!toast) return false;
@@ -2867,7 +2878,7 @@
       findSectionByGraphqlIdentity(host, graphqlIdentity) {
         if (!host || !graphqlIdentity) return null;
         const graphqlSectionId = graphqlIdentity.sectionId;
-        const byGraphqlId = graphqlSectionId ? document2.getElementById(graphqlSectionId) : null;
+        const byGraphqlId = graphqlSectionId ? document.getElementById(graphqlSectionId) : null;
         if (byGraphqlId?.matches?.("section") && byGraphqlId.parentElement === host && !this.isSyntheticSection(byGraphqlId)) {
           return byGraphqlId;
         }
@@ -2903,7 +2914,7 @@
       }
     });
     function readMyListAnchor() {
-      const host = document2.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
+      const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
       const section = host?.querySelector?.(`:scope > ${NETFLIX_DOM_SELECTORS.carouselRowOneSection}`) || null;
       let videoIds;
       return {
@@ -2914,9 +2925,9 @@
       };
     }
     function readHeadingTypography(section) {
-      const heading = section?.querySelector("h2") || document2.querySelector(`${NETFLIX_DOM_SELECTORS.browseSections} section h2`);
+      const heading = section?.querySelector("h2") || document.querySelector(`${NETFLIX_DOM_SELECTORS.browseSections} section h2`);
       if (!heading) return Object.freeze({});
-      const style = getComputedStyle2(heading), facts = {};
+      const style = getComputedStyle(heading), facts = {};
       for (const property of ["font-family", "font-size", "font-weight", "line-height", "letter-spacing"]) {
         const value = style.getPropertyValue(property);
         if (value) facts[property] = value;
@@ -2925,7 +2936,7 @@
       return Object.freeze(facts);
     }
     function readSyntheticPlacement() {
-      const host = document2.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
+      const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
       const native = host && [...host.querySelectorAll(":scope > section")].filter((node) => node.id !== SYNTHETIC_SECTION_ID);
       if (!native?.length) return null;
       const after = netflixDom.findContinueWatchingSection(host) || native[0];
@@ -2934,34 +2945,37 @@
     function readEmptyContent(section) {
       const node = section?.querySelector?.(':scope > [data-uia="empty-carousel-section+content"]');
       if (!node) return null;
-      const message = String(node.querySelector('[data-uia="empty-carousel-section+message"]')?.textContent || "").replace(/[\u200b-\u200f\u2060\ufeff]/g, "").replace(/\s+/g, "").trim();
+      const message = normalizeTitle(node.querySelector('[data-uia="empty-carousel-section+message"]')?.textContent);
       return Object.freeze({ node, message });
     }
     function readEmptyShell() {
-      return [...document2.querySelectorAll('[data-uia="empty-carousel-section+content"]')].find((node) => !node.closest(`[${SECTION_ATTR}="true"]`)) || null;
+      return [...document.querySelectorAll('[data-uia="empty-carousel-section+content"]')].find((node) => !node.closest(`[${SECTION_ATTR}="true"]`)) || null;
+    }
+    function normalizeTitle(value) {
+      return String(value || "").replace(/[\u200b-\u200f\u2060\ufeff]/g, "").replace(/\s+/g, "").trim();
     }
     function readRowGap(section, viewportWidth) {
       const fallback = Math.max(20, Math.min(56, viewportWidth * 0.02));
       if (!section) return fallback;
       const values = [], sectionRect = section.getBoundingClientRect();
       const children = [...section.parentElement?.children || []];
-      const siblings = children.filter((node) => node instanceof HTMLElement2 && node !== section && node.matches("section") && node.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller));
+      const siblings = children.filter((node) => node instanceof HTMLElement && node !== section && node.matches("section") && node.querySelector(NETFLIX_DOM_SELECTORS.carouselScroller));
       const index = children.indexOf(section);
       const previous = children.slice(0, index).reverse().find((node) => siblings.includes(node));
       const next = children.slice(index + 1).find((node) => siblings.includes(node));
       if (previous) {
         const gap = sectionRect.top - previous.getBoundingClientRect().bottom;
         if (gap >= 8 && gap <= 180) values.push(gap);
-        const margin = Number.parseFloat(getComputedStyle2(previous).marginBottom || "0");
+        const margin = Number.parseFloat(getComputedStyle(previous).marginBottom || "0");
         if (margin >= 8 && margin <= 180) values.push(margin);
       }
       if (next) {
         const gap = next.getBoundingClientRect().top - sectionRect.bottom;
         if (gap >= 8 && gap <= 180) values.push(gap);
-        const margin = Number.parseFloat(getComputedStyle2(next).marginTop || "0");
+        const margin = Number.parseFloat(getComputedStyle(next).marginTop || "0");
         if (margin >= 8 && margin <= 180) values.push(margin);
       }
-      const ownMargin = Number.parseFloat(getComputedStyle2(section).marginBottom || "0");
+      const ownMargin = Number.parseFloat(getComputedStyle(section).marginBottom || "0");
       if (ownMargin >= 8 && ownMargin <= 180) values.push(ownMargin);
       if (!values.length) return fallback;
       const nums = values.filter(Number.isFinite).sort((a, b) => a - b), mid = Math.floor(nums.length / 2);
@@ -2980,18 +2994,19 @@
       readSyntheticPlacement,
       readEmptyContent,
       readEmptyShell,
-      readRowGap
+      readRowGap,
+      normalizeTitle
     });
   }
 
   // src/grid/image-diagnostics.js
   function createImageDiagnostics(options) {
     const {
-      window: window2,
-      location: location2,
-      performance: performance2,
-      PerformanceObserver: PerformanceObserver2,
-      getComputedStyle: getComputedStyle2,
+      window,
+      location,
+      performance,
+      PerformanceObserver,
+      getComputedStyle,
       readState,
       readSessionToken,
       isRouteSessionActive,
@@ -3074,18 +3089,18 @@
       if (imageResourceObserver?.sessionToken === sessionToken && imageResourceObserver.counters === counters) return;
       if (counters.entriesExamined >= IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES) return;
       stopImageResourceDiagnostics("replaced");
-      if (typeof PerformanceObserver2 !== "function") {
+      if (typeof PerformanceObserver !== "function") {
         counters.stopReason = "unsupported";
         return;
       }
-      const owner = { sessionToken, counters, startedAt: performance2.now(), observer: null };
+      const owner = { sessionToken, counters, startedAt: performance.now(), observer: null };
       try {
-        const supportedTypes = PerformanceObserver2.supportedEntryTypes;
+        const supportedTypes = PerformanceObserver.supportedEntryTypes;
         if (Array.isArray(supportedTypes) && !supportedTypes.includes("resource")) {
           counters.stopReason = "unsupported";
           return;
         }
-        owner.observer = new PerformanceObserver2((list) => {
+        owner.observer = new PerformanceObserver((list) => {
           if (imageResourceObserver !== owner || !isRouteSessionActive(sessionToken) || resourceCounters !== counters) return;
           try {
             recordImageResourceEntries(owner, list.getEntries());
@@ -3107,7 +3122,7 @@
       const grid = state?.grid;
       const current = readState();
       if (!state || grid !== current?.grid || state.cloneMap !== current?.cloneMap || !grid?.isConnected || typeof state.cloneMap?.values !== "function" || !isRouteSessionActive(readSessionToken())) return { available: false, reason: "no-current-grid" };
-      const started = performance2.now();
+      const started = performance.now();
       const report = {
         available: true,
         scope: "first-image-per-owned-card",
@@ -3171,7 +3186,7 @@
           report.sourceSelection[current2 ? "current" : src ? "srcFallback" : "unresolved"]++;
           if (current2 || src) {
             try {
-              const url = new URL(current2 || src, location2.href);
+              const url = new URL(current2 || src, location.href);
               if (url.protocol === "https:" || url.protocol === "http:") urls.add(url.href);
             } catch (_) {
               report.sourceSelection.invalidUrl++;
@@ -3188,21 +3203,21 @@
           else report.visibility.otherHidden++;
         }
       } catch (_) {
-        return { ...report, available: false, reason: "card-read-failed", elapsedMs: Math.round(performance2.now() - started) };
+        return { ...report, available: false, reason: "card-read-failed", elapsedMs: Math.round(performance.now() - started) };
       }
       report.geometry = sampleThumbnailGeometry(eligible);
       report.resourceTiming = collectThumbnailResourceTiming(urls, state.initializationStartedAt);
-      report.elapsedMs = Math.round(performance2.now() - started);
+      report.elapsedMs = Math.round(performance.now() - started);
       return report;
     }
     function sampleThumbnailGeometry(records) {
       const positions = () => ({ images: 0, ready: 0, pending: 0, completeWithoutPixels: 0, noSource: 0 });
-      const viewport = window2.visualViewport;
+      const viewport = window.visualViewport;
       const bounds = {
         left: viewport?.offsetLeft || 0,
         top: viewport?.offsetTop || 0,
-        width: viewport?.width || window2.innerWidth,
-        height: viewport?.height || window2.innerHeight
+        width: viewport?.width || window.innerWidth,
+        height: viewport?.height || window.innerHeight
       };
       const report = {
         available: true,
@@ -3211,7 +3226,7 @@
         eligibleImages: records.length,
         sampleCount: 0,
         rectReads: 0,
-        styleAvailable: typeof getComputedStyle2 === "function",
+        styleAvailable: typeof getComputedStyle === "function",
         inViewport: positions(),
         aboveViewport: positions(),
         belowViewport: positions(),
@@ -3252,8 +3267,8 @@
             report[key].max = report[key].max === null ? value : Math.max(report[key].max, value);
           }
           if (report.styleAvailable) {
-            const imageStyle = getComputedStyle2(record.image);
-            const parentStyle = parent ? getComputedStyle2(parent) : null;
+            const imageStyle = getComputedStyle(record.image);
+            const parentStyle = parent ? getComputedStyle(parent) : null;
             if (imageStyle?.aspectRatio && imageStyle.aspectRatio !== "auto") report.imageAspectRatioHint++;
             if (parentStyle?.aspectRatio && parentStyle.aspectRatio !== "auto") report.parentAspectRatioHint++;
             if (parseFloat(parentStyle?.paddingTop) > 0 || parseFloat(parentStyle?.paddingBottom) > 0) report.parentBlockPadding++;
@@ -3289,9 +3304,9 @@
         imageDecodeMeasured: false,
         layoutShiftsMeasured: false
       };
-      if (typeof performance2.getEntriesByType !== "function") return { ...report, reason: "unsupported" };
+      if (typeof performance.getEntriesByType !== "function") return { ...report, reason: "unsupported" };
       try {
-        const entries = performance2.getEntriesByType("resource");
+        const entries = performance.getEntriesByType("resource");
         report.bufferedEntries = entries.length;
         report.truncated = entries.length > THUMBNAIL_DIAGNOSTIC_LIMITS.resourceEntries;
         const matched = /* @__PURE__ */ new Set();
@@ -3345,8 +3360,8 @@
   }
 
   // src/netflix/card-markup.js
-  function createCardMarkup({ location: location2, document: document2 }) {
-    const videoIdFromHref = (href) => readVideoIdFromHref(href, location2.href);
+  function createCardMarkup({ location, document }) {
+    const videoIdFromHref = (href) => readVideoIdFromHref(href, location.href);
     function capture(slot, page, captureSnapshot = true) {
       const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
       if (!card) return null;
@@ -3413,7 +3428,7 @@
         clone.querySelector('[data-uia="empty-carousel-section+pictogram"]')?.remove();
         let message = clone.querySelector('[data-uia="empty-carousel-section+message"]');
         if (!message) {
-          message = document2.createElement("p");
+          message = document.createElement("p");
           clone.appendChild(message);
         }
         message.textContent = provisionalMessage;
@@ -4116,24 +4131,24 @@
             }
 
         `;
-  function installStyles(document2) {
-    const current = document2.getElementById(STYLE_ID);
+  function installStyles(document) {
+    const current = document.getElementById(STYLE_ID);
     if (current) return current;
-    const style = document2.createElement("style");
+    const style = document.createElement("style");
     style.id = STYLE_ID;
     style.textContent = stylesheet;
-    document2.head.appendChild(style);
+    document.head.appendChild(style);
     return style;
   }
 
   // src/grid/frame.js
   function createFrame({
-    document: document2,
+    document,
     tLog,
     tUi,
     copyLogs,
-    setTimeout: setTimeout2,
-    clearTimeout: clearTimeout2,
+    setTimeout,
+    clearTimeout,
     isActive,
     createError,
     readEmptyContent,
@@ -4155,7 +4170,7 @@
     function clearFeedback() {
       const timer = feedbackTimer;
       feedbackTimer = null;
-      if (timer !== null) attemptRelease(() => clearTimeout2(timer));
+      if (timer !== null) attemptRelease(() => clearTimeout(timer));
     }
     function assertStatus(node) {
       if (!node || node !== status) throw createError("GRID_FRAME_RETIRED", "Status frame is no longer current");
@@ -4167,19 +4182,19 @@
       status = node;
     }
     function updateStatus(content) {
-      const node = status || document2.createElement("div");
+      const node = status || document.createElement("div");
       node.id = STATUS_ID;
       status = node;
       let text = node.querySelector(`.${STATUS_TEXT_CLASS}`);
       if (!text) {
-        text = document2.createElement("span");
+        text = document.createElement("span");
         text.className = STATUS_TEXT_CLASS;
         node.appendChild(text);
       }
       const writePart = (className, value) => {
         let part = text.querySelector(`.${className}`);
         if (!part) {
-          part = document2.createElement("span");
+          part = document.createElement("span");
           part.className = className;
           text.appendChild(part);
         }
@@ -4188,7 +4203,7 @@
       writePart(STATUS_LABEL_CLASS, content && typeof content === "object" ? content.label || "" : String(content ?? ""));
       writePart(STATUS_META_CLASS, content && typeof content === "object" ? content.meta || "" : "");
       if (!logLink) {
-        const link = document2.createElement("a");
+        const link = document.createElement("a");
         link.id = LOG_LINK_ID;
         link.href = "#";
         link.textContent = "CopyLogs";
@@ -4206,7 +4221,7 @@
             if (!current(sequence)) return;
             link.textContent = tLog("copied");
             link.title = tLog("copied");
-            const timer = setTimeout2(() => {
+            const timer = setTimeout(() => {
               if (feedbackTimer !== timer) return;
               feedbackTimer = null;
               if (!current(sequence)) return;
@@ -4289,19 +4304,19 @@
       dialog = null;
       releaseDialog(previous);
       guard();
-      const node = document2.createElement("div");
+      const node = document.createElement("div");
       node.id = ORDER_MISMATCH_DIALOG_ID;
       node.setAttribute("role", "alertdialog");
       node.setAttribute("aria-modal", "false");
       node.setAttribute("aria-label", message);
-      const text = document2.createElement("div");
+      const text = document.createElement("div");
       text.setAttribute("data-tm-order-message", "true");
       text.textContent = message;
-      const actions = document2.createElement("div");
+      const actions = document.createElement("div");
       actions.setAttribute("data-tm-order-actions", "true");
       const resource = { node, listeners: [], used: false };
       const button = (label, marker, action) => {
-        const control = document2.createElement("button");
+        const control = document.createElement("button");
         control.type = "button";
         control.textContent = label;
         control.setAttribute(marker, "true");
@@ -4332,7 +4347,7 @@
       node.append(text, actions);
       guard();
       dialog = resource;
-      (document2.body || document2.documentElement).appendChild(node);
+      (document.body || document.documentElement).appendChild(node);
       try {
         guard();
       } catch (error) {
@@ -4345,7 +4360,7 @@
     }) {
       const owner = generation;
       assertCurrent();
-      const acquired = style || installStyles(document2);
+      const acquired = style || installStyles(document);
       try {
         assertCurrent();
         if (generation !== owner) throw createError("GRID_FRAME_RETIRED", "Resource frame is no longer current");
@@ -4366,7 +4381,7 @@
       guard();
       for (const id of [...OLD_IDS, ...OLD_STYLE_IDS]) {
         guard();
-        document2.getElementById(id)?.remove();
+        document.getElementById(id)?.remove();
         guard();
       }
     }
@@ -4475,8 +4490,8 @@
             guard();
             if (!shell.isConnected || readEmptyShell() !== shell) throw createError("NATIVE_SOURCE_REPLACED", "Provisional empty shell changed");
           } else {
-            clone = document2.createElement("div");
-            const text = document2.createElement("p");
+            clone = document.createElement("div");
+            const text = document.createElement("p");
             text.textContent = emptyMessage || tUi("emptyMessage");
             clone.appendChild(text);
             sanitizeEmpty(clone, "provisional-fallback");
@@ -4520,7 +4535,7 @@
         }
       };
       guard();
-      const node = synthetic || document2.getElementById(SYNTHETIC_SECTION_ID) || document2.createElement("section");
+      const node = synthetic || document.getElementById(SYNTHETIC_SECTION_ID) || document.createElement("section");
       node.id = SYNTHETIC_SECTION_ID;
       node.setAttribute("data-tm-synthetic-mylist", "true");
       node.setAttribute(SECTION_ATTR, "true");
@@ -4545,7 +4560,7 @@
       attemptRelease(() => previous.remove());
     }
     function createRoot() {
-      const node = document2.createElement("div");
+      const node = document.createElement("div");
       node.id = GRID_ID;
       node.setAttribute("data-tm-purpose", "exact-items-and-live-react-hover");
       return node;
@@ -4590,7 +4605,7 @@
       placeStatus(status2, { section, anchor, assertCurrent: guard });
       layoutStatus(status2, geometry2, visible ? layout.rowGap || 0 : 0, guard);
       guard();
-      const previous = root || document2.getElementById(GRID_ID);
+      const previous = root || document.getElementById(GRID_ID);
       status2.insertAdjacentElement("afterend", node);
       try {
         guard();
@@ -4605,7 +4620,7 @@
       if (previous && previous !== root) attemptRelease(() => previous.remove());
     }
     function mount(options) {
-      const node = root || document2.getElementById(GRID_ID) || createRoot();
+      const node = root || document.getElementById(GRID_ID) || createRoot();
       if (!node.children.length) node.setAttribute("data-tm-empty", "true");
       const previous = publish(node, options);
       releaseReplacedRoot(previous);
@@ -4706,7 +4721,7 @@
 
   // src/grid/groups.js
   function createGroups({
-    document: document2,
+    document,
     tUi,
     readRoot,
     getCard,
@@ -4792,18 +4807,18 @@
         node.addEventListener(type, listener);
       };
       const filter = (group) => {
-        const node = document2.createElement("div");
+        const node = document.createElement("div");
         node.setAttribute("data-tm-type-filter", group);
         node.setAttribute("role", "group");
         node.setAttribute("aria-label", tUi(group === "main" ? "legacyMyList" : "watchedCaughtUp") + ": " + tUi("titleTypeFilter"));
         const buttons = /* @__PURE__ */ new Map();
         for (const [type, key] of [["movie", "filterFilms"], ["series", "filterSeries"], ["all", "filterAll"]]) {
-          const button = document2.createElement("button");
+          const button = document.createElement("button");
           button.type = "button";
           button.setAttribute("data-tm-filter-value", type);
-          const label = document2.createElement("span");
+          const label = document.createElement("span");
           label.textContent = tUi(key);
-          const count = document2.createElement("span");
+          const count = document.createElement("span");
           count.setAttribute("data-tm-type-count", "true");
           button.appendChild(label);
           button.appendChild(count);
@@ -4818,29 +4833,29 @@
         return { root: node, buttons };
       };
       try {
-        resource.details = document2.createElement("details");
+        resource.details = document.createElement("details");
         resource.details.setAttribute("data-tm-watch-section", "true");
         resource.details.open = expanded;
-        resource.summary = document2.createElement("summary");
+        resource.summary = document.createElement("summary");
         resource.details.appendChild(resource.summary);
-        resource.watchedGrid = document2.createElement("div");
+        resource.watchedGrid = document.createElement("div");
         resource.watchedGrid.setAttribute("data-tm-watch-grid", "true");
         resource.mainFilter = filter("main");
         resource.watchedFilter = filter("watched");
-        resource.watchedEmpty = document2.createElement("p");
+        resource.watchedEmpty = document.createElement("p");
         resource.watchedEmpty.setAttribute("data-tm-watch-empty", "true");
         resource.watchedEmpty.textContent = tUi("noMatchingTitles");
         resource.details.appendChild(resource.watchedFilter.root);
         resource.details.appendChild(resource.watchedEmpty);
         resource.details.appendChild(resource.watchedGrid);
-        resource.empty = document2.createElement("p");
+        resource.empty = document.createElement("p");
         resource.empty.setAttribute("data-tm-watch-empty", "true");
         resource.empty.textContent = tUi("caughtUpMessage");
-        resource.controls = document2.createElement("div");
+        resource.controls = document.createElement("div");
         resource.controls.setAttribute("data-tm-watch-controls", "true");
-        resource.note = document2.createElement("span");
+        resource.note = document.createElement("span");
         resource.note.setAttribute("role", "status");
-        resource.refresh = document2.createElement("button");
+        resource.refresh = document.createElement("button");
         resource.refresh.type = "button";
         resource.refresh.textContent = tUi("refreshViewingStatus");
         listen(resource.refresh, "click", () => {
@@ -4882,12 +4897,12 @@
         for (const child of [...node.children]) {
           if (child.getAttribute("data-tm-viewing-actions") === "true") child.remove();
         }
-        const root = document2.createElement("div");
+        const root = document.createElement("div");
         root.setAttribute("data-tm-viewing-actions", "true");
-        const toggle = document2.createElement("button");
+        const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.setAttribute("data-tm-viewing-action", "toggle");
-        const marker = document2.createElement("span");
+        const marker = document.createElement("span");
         marker.setAttribute("data-tm-manual-choice", "true");
         marker.setAttribute("role", "img");
         root.appendChild(toggle);
@@ -5306,8 +5321,8 @@
 
   // src/grid/grid.js
   function createGrid({
-    document: document2,
-    location: location2,
+    document,
+    location,
     runChunks,
     imageDiagnostics = {},
     createError = (code, message) => Object.assign(new Error(message), { code }),
@@ -5329,18 +5344,18 @@
     formatItemCount = String,
     readEmptyContent = () => null,
     readEmptyShell = () => null,
-    setTimeout: setTimeout2 = globalThis.setTimeout,
-    clearTimeout: clearTimeout2 = globalThis.clearTimeout
+    setTimeout = globalThis.setTimeout,
+    clearTimeout = globalThis.clearTimeout
   }) {
-    const markup = createCardMarkup({ location: location2, document: document2 });
+    const markup = createCardMarkup({ location, document });
     const frame = createFrame({
-      document: document2,
+      document,
       tLog,
       tUi,
       copyLogs,
       isActive,
-      setTimeout: setTimeout2,
-      clearTimeout: clearTimeout2,
+      setTimeout,
+      clearTimeout,
       createError,
       readEmptyContent,
       readEmptyShell,
@@ -5349,7 +5364,7 @@
     let buildGeneration = 0, materialReleaseFailures = 0;
     let cards;
     const groups = createGroups({
-      document: document2,
+      document,
       tUi,
       readRoot: () => frame.root,
       createError,
@@ -5464,6 +5479,21 @@
       frame.clearCards();
       cards.publish(/* @__PURE__ */ new Map());
     }
+    function applyMembershipOrder(change, assertCurrent = () => {
+    }) {
+      const root = frame.root;
+      for (let index = 0; index < change.ordered.length; index++) {
+        assertCurrent();
+        frame.assertParent(root);
+        const handle = cards.getCard(change.ordered[index]);
+        if (!handle) continue;
+        cards.assertCard(handle);
+        frame.assertParent(root);
+        const before = root.children[change.index + index] || null;
+        if (before !== handle.node) frame.moveCard(handle.node, root, before);
+        assertCurrent();
+      }
+    }
     return Object.freeze({
       publish,
       dispose,
@@ -5508,11 +5538,17 @@
         frame.setEmpty(cards.view.size === 0);
         return result;
       },
-      insertCard: (...args) => {
-        const result = cards.insertCard(...args);
+      insertCard: (record, options = {}) => {
+        if (options.ordered) {
+          options.assertCurrent?.();
+          frame.assertParent(frame.root);
+        }
+        const before = options.ordered ? frame.root.children[options.index] || null : options.before;
+        const result = cards.insertCard(record, { ...options, before });
         frame.setEmpty(false);
         return result;
       },
+      applyMembershipOrder,
       setEmpty: frame.setEmpty,
       updateCard: cards.updateCard,
       materialFor: cards.materialFor,
@@ -5548,8 +5584,8 @@
     now,
     readSession,
     isSessionActive,
-    setTimeout: setTimeout2,
-    clearTimeout: clearTimeout2,
+    setTimeout,
+    clearTimeout,
     ttl,
     hasRetained,
     releaseRetained,
@@ -5591,7 +5627,7 @@
     createCancelledError = () => createError("NATIVE_SOURCE_REPLACED", "Mutation publication was replaced"),
     findFallback = () => null,
     observeChanges = () => null,
-    queueMicrotask: queueMicrotask2 = () => {
+    queueMicrotask = () => {
     },
     mutationTimeout = 1800,
     onQueued = () => {
@@ -5607,6 +5643,11 @@
     let pending = /* @__PURE__ */ new Map(), sequence = 0;
     let publicationGeneration = 0;
     let deferralEpoch = 0, disposedToken = null, cleanupFailures = 0;
+    const undoWork = { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 };
+    function recordCounter(name, amount) {
+      undoWork[name] += amount;
+      onCounter(name, amount);
+    }
     function cleanup(operation) {
       try {
         operation();
@@ -5647,8 +5688,8 @@
       generation++;
       publicationGeneration++;
       disposedToken = readSession();
-      if (oldTimer) cleanup(() => clearTimeout2(oldTimer.id));
-      cleanup(() => onCounter("cleared", oldEntries.size));
+      if (oldTimer) cleanup(() => clearTimeout(oldTimer.id));
+      cleanup(() => recordCounter("cleared", oldEntries.size));
       for (const intent of oldPending.values()) releaseIntent(intent, oldEntries);
       for (const entry of oldEntries.values()) {
         const current = entries.get(entry.videoId), intent = readPending(entry.videoId);
@@ -5663,7 +5704,7 @@
       const phase = phases.get(intent), oldTimer = phase.timer, observer = phase.observer;
       phase.timer = null;
       phase.observer = null;
-      if (oldTimer) cleanup(() => clearTimeout2(oldTimer.id));
+      if (oldTimer) cleanup(() => clearTimeout(oldTimer.id));
       cleanup(() => observer?.disconnect());
       const next = readPending(intent.videoId);
       const transferred = next?.fallbackItem === intent.fallbackItem && next?.correlationId === intent.correlationId;
@@ -5781,9 +5822,9 @@
       const phase = phases.get(intent), old = phase.timer;
       const owner = { id: null };
       phase.timer = owner;
-      if (old) clearTimeout2(old.id);
+      if (old) clearTimeout(old.id);
       if (!isMutationCurrent(intent) || phase.timer !== owner) return;
-      owner.id = setTimeout2(() => {
+      owner.id = setTimeout(() => {
         if (!isMutationCurrent(intent) || phase.timer !== owner) return;
         phase.timer = null;
         const applied = reconcileMutation(intent, "observer-timeout");
@@ -5795,7 +5836,7 @@
         onTimeout({ seq: intent.seq, videoId: intent.videoId, action: intent.action, timeoutMs: mutationTimeout });
         disposeMutation(intent.videoId, intent);
       }, mutationTimeout);
-      if (!isMutationCurrent(intent) || phase.timer !== owner) clearTimeout2(owner.id);
+      if (!isMutationCurrent(intent) || phase.timer !== owner) clearTimeout(owner.id);
     }
     function retryMutations(reason) {
       if (isDeferred() || !isAdmitted(readSession())) return;
@@ -5866,7 +5907,7 @@
       }
       if (!isMutationCurrent(intent)) return null;
       onQueued(intent);
-      queueMicrotask2(() => reconcileMutation(intent, "post-click"));
+      queueMicrotask(() => reconcileMutation(intent, "post-click"));
       return intent;
     }
     function pendingDiagnostics() {
@@ -5881,7 +5922,7 @@
     function cancelExpiry() {
       const old = timer;
       timer = null;
-      if (old) clearTimeout2(old.id);
+      if (old) clearTimeout(old.id);
     }
     function scheduleExpiry() {
       let dueAt = Infinity;
@@ -5895,23 +5936,23 @@
       cancelExpiry();
       const owner = { id: null, token, dueAt };
       timer = owner;
-      onCounter("schedules", 1);
+      recordCounter("schedules", 1);
       if (timer !== owner) return;
-      owner.id = setTimeout2(() => {
+      owner.id = setTimeout(() => {
         if (timer !== owner) return;
         timer = null;
         if (!isAdmitted(owner.token)) return;
-        onCounter("expiryCallbacks", 1);
+        recordCounter("expiryCallbacks", 1);
         pruneUndo();
       }, Math.max(0, dueAt - now()));
-      if (timer !== owner) clearTimeout2(owner.id);
+      if (timer !== owner) clearTimeout(owner.id);
     }
     function clearUndo() {
       const old = entries;
       entries = /* @__PURE__ */ new Map();
       generation++;
       cancelExpiry();
-      onCounter("cleared", old.size);
+      recordCounter("cleared", old.size);
       for (const entry of old.values()) releaseRetained(entry.correlationId);
     }
     function forgetUndo(videoId) {
@@ -5919,7 +5960,7 @@
       if (!entries.delete(key)) return;
       generation++;
       releaseRetained(entry.correlationId);
-      onCounter("consumed", 1);
+      recordCounter("consumed", 1);
       scheduleExpiry();
     }
     function pruneUndo(at = now()) {
@@ -5942,7 +5983,7 @@
         }
       }
       const admitted = generation;
-      onCounter("expired", expired);
+      recordCounter("expired", expired);
       scheduleExpiry();
       if (expired) onExpired({ expired, remaining: entries.size, pendingFallbacksPreserved });
       return generation === admitted;
@@ -5964,7 +6005,7 @@
         removedAt
       }));
       generation++;
-      onCounter("remembered", 1);
+      recordCounter("remembered", 1);
       scheduleExpiry();
     }
     function correlationFor(item) {
@@ -6165,6 +6206,7 @@
       start,
       deferReconciliation,
       dispose,
+      workDiagnostics: () => ({ ...undoWork }),
       deferralDiagnostics: () => ({ cleanupFailures, active: [...deferrals.values()].filter((owner) => isAdmitted(owner.token)).map((owner) => owner.reason) }),
       observeMembership,
       observeClick,
@@ -6742,6 +6784,22 @@
       expectedCount = null;
       collected = 0;
     }
+    function positionDeviation(item, actualIndex) {
+      if (disposed || !item || !records.length) return null;
+      const expectedIndex = records.indexOf(item);
+      if (expectedIndex < 0 || !Number.isSafeInteger(actualIndex) || actualIndex < 0) return null;
+      const delta = actualIndex - expectedIndex;
+      return Object.freeze({ expectedIndex, actualIndex, delta, absoluteDelta: Math.abs(delta) });
+    }
+    function firstPositionMismatch(cards, threshold) {
+      if (disposed) return null;
+      for (const card of cards || []) {
+        const item = card.videoId ? map.get("v:" + card.videoId) : records.find((record) => record.href === card.href);
+        const deviation = positionDeviation(item, card.itemIndex);
+        if (deviation && deviation.absoluteDelta >= threshold) return Object.freeze({ item, deviation });
+      }
+      return null;
+    }
     return Object.freeze({
       preparePublication,
       publish,
@@ -6750,6 +6808,8 @@
       alignVisible,
       observeCount,
       dispose,
+      positionDeviation,
+      firstPositionMismatch,
       get records() {
         return records;
       },
@@ -6802,94 +6862,12 @@
     });
   }
 
-  // src/diagnostics/logger.js
-  var MAX_LOG_ENTRIES = 5e3;
-  function createLogger({ name, version, Element: Element2, console: console2, now = () => /* @__PURE__ */ new Date(), isTraceEnabled = () => false }) {
-    const LOG_PREFIX = `[${name} v${version}]`;
-    const investigationLog = [];
-    let investigationLogStart = 0;
-    function formatLogValue(value) {
-      if (value instanceof Error) {
-        return JSON.stringify({
-          name: value.name,
-          message: value.message,
-          stack: value.stack || ""
-        });
-      }
-      if (value instanceof Element2) {
-        const tag = value.tagName.toLowerCase();
-        const id = value.id ? `#${value.id}` : "";
-        const cls = value.classList?.length ? `.${[...value.classList].join(".")}` : "";
-        return `<${tag}${id}${cls}>`;
-      }
-      if (typeof value === "string") return value;
-      try {
-        const seen = /* @__PURE__ */ new WeakSet();
-        return JSON.stringify(value, (key, item) => {
-          if (item instanceof Element2) return formatLogValue(item);
-          if (item instanceof Error) {
-            return { name: item.name, message: item.message, stack: item.stack || "" };
-          }
-          if (item && typeof item === "object") {
-            if (seen.has(item)) return "[Circular]";
-            seen.add(item);
-          }
-          return item;
-        });
-      } catch (_) {
-        return String(value);
-      }
-    }
-    function formatSystemTimestamp(date = now()) {
-      const pad = (value, width = 2) => String(value).padStart(width, "0");
-      const offsetMinutes = -date.getTimezoneOffset();
-      const sign = offsetMinutes >= 0 ? "+" : "-";
-      const absoluteOffset = Math.abs(offsetMinutes);
-      const offsetHours = pad(Math.floor(absoluteOffset / 60));
-      const offsetMins = pad(absoluteOffset % 60);
-      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}${sign}${offsetHours}:${offsetMins}`;
-    }
-    function appendInvestigationLog(level, args) {
-      const body = args.map(formatLogValue).join(" ");
-      const entry = `[${formatSystemTimestamp()}] ${level.padEnd(5, " ")} ${body}`;
-      if (investigationLog.length < MAX_LOG_ENTRIES) {
-        investigationLog.push(entry);
-      } else {
-        investigationLog[investigationLogStart] = entry;
-        investigationLogStart = (investigationLogStart + 1) % MAX_LOG_ENTRIES;
-      }
-    }
-    function retainedInvestigationLog() {
-      return investigationLog.slice(investigationLogStart).concat(investigationLog.slice(0, investigationLogStart));
-    }
-    function trace(buildArgs) {
-      if (isTraceEnabled()) log(...buildArgs());
-    }
-    function log(...args) {
-      appendInvestigationLog("INFO", args);
-      console2.log(LOG_PREFIX, ...args);
-    }
-    function warn(...args) {
-      appendInvestigationLog("WARN", args);
-      console2.warn(LOG_PREFIX, ...args);
-    }
-    return Object.freeze({
-      log,
-      warn,
-      trace,
-      entries: retainedInvestigationLog,
-      size: () => investigationLog.length,
-      formatValue: formatLogValue,
-      formatTimestamp: formatSystemTimestamp
-    });
-  }
-
   // src/diagnostics/report.js
   function createReport({
     logger,
     version,
-    document: document2,
-    navigator: navigator2,
+    document,
+    navigator,
     tLog,
     readEnvironment,
     readRuntime,
@@ -6923,24 +6901,24 @@
       ].join("\n") + "\n";
     }
     async function copyTextToClipboard(text) {
-      if (navigator2.clipboard?.writeText) {
+      if (navigator.clipboard?.writeText) {
         try {
-          await navigator2.clipboard.writeText(text);
+          await navigator.clipboard.writeText(text);
           return "navigator.clipboard";
         } catch (error) {
           logger.warn(tLog("clipboardFallback"), error);
         }
       }
-      const textarea = document2.createElement("textarea");
+      const textarea = document.createElement("textarea");
       textarea.value = text;
       textarea.setAttribute("readonly", "");
       textarea.style.position = "fixed";
       textarea.style.left = "-100000px";
       textarea.style.top = "0";
-      document2.body.appendChild(textarea);
+      document.body.appendChild(textarea);
       try {
         textarea.select();
-        const ok = document2.execCommand("copy");
+        const ok = document.execCommand("copy");
         if (!ok) throw new Error(tLog("execCommandCopyFailed"));
         return "execCommand";
       } finally {
@@ -7013,7 +6991,7 @@
       ...Object.fromEntries(POPUP_FIELD_GROUPS.flatMap((field) => [[field + "Present", 0], [field + "Scalar", 0]]))
     };
   }
-  function createPopupInspection({ Element: Element2, now, isCurrentSession, readSessionToken, isSourceMounted, readSourceCard }) {
+  function createPopupInspection({ Element, now, isCurrentSession, readSessionToken, isSourceMounted, readSourceCard }) {
     let counters = createCounters();
     function currentSession(token) {
       try {
@@ -7112,7 +7090,7 @@
       };
       const seen = /* @__PURE__ */ new Set(), pending = [], fiberSeen = /* @__PURE__ */ new Set();
       const enqueue = (value, path, depth = 0) => {
-        if (!value || typeof value !== "object" || value instanceof Element2 || seen.has(value)) return;
+        if (!value || typeof value !== "object" || value instanceof Element || seen.has(value)) return;
         if (depth > limits.holderDepth || pending.length >= limits.holders) {
           result.truncated = true;
           return;
@@ -7243,913 +7221,13 @@
     });
   }
 
-  // src/i18n/ui-messages.js
-  var NETFLIX_PRIMARY_UI_LOCALES = /* @__PURE__ */ new Set([
-    "da",
-    "de",
-    "en",
-    "es",
-    "fil",
-    "fr",
-    "hr",
-    "id",
-    "it",
-    "hu",
-    "ms",
-    "nl",
-    "nb",
-    "pl",
-    "pt",
-    "ro",
-    "fi",
-    "sv",
-    "vi",
-    "tr",
-    "cs",
-    "el",
-    "ru",
-    "uk",
-    "he",
-    "ar",
-    "hi",
-    "th",
-    "zh",
-    "ja",
-    "ko"
-  ]);
-  var UI_MESSAGES = {
-    "da": {
-      legacyMyList: "Klassisk Min liste",
-      itemCount: { one: "{count} element", other: "{count} elementer" },
-      initializing: "Initialiserer...",
-      orderChangedPrompt: "R\xE6kkef\xF8lgen i Min liste er \xE6ndret. Initialiser igen.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Annuller",
-      initTime: "Init. {seconds}s",
-      showOriginalMyList: "Vis den oprindelige Min liste",
-      hideOriginalMyList: "Skjul den oprindelige Min liste",
-      emptyMessage: "Her finder du de film og serier, du har gemt.",
-      relayoutInProgress: "Omarrangerer...",
-      relayoutFailed: "Omarrangering mislykkedes",
-      initializationFailed: "Klassisk Min liste: fejl - {message}",
-      noNativeCards: "Kunne ikke hente de oprindelige Netflix-kort.",
-      errorCount: "Fejl-{count}"
-    },
-    "de": {
-      legacyMyList: "Klassische Meine Liste",
-      itemCount: { one: "{count} Eintrag", other: "{count} Eintr\xE4ge" },
-      initializing: "Wird initialisiert...",
-      orderChangedPrompt: "Die Reihenfolge von \u201EMeine Liste\u201C hat sich ge\xE4ndert. Bitte neu initialisieren.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Abbrechen",
-      initTime: "Init {seconds}s",
-      showOriginalMyList: "Originale Meine Liste anzeigen",
-      hideOriginalMyList: "Originale Meine Liste ausblenden",
-      emptyMessage: "Hier findest du die Filme und Serien, die du gespeichert hast.",
-      relayoutInProgress: "Layout wird neu angeordnet...",
-      relayoutFailed: "Neuanordnung fehlgeschlagen",
-      initializationFailed: "Klassische Meine Liste: Fehler - {message}",
-      noNativeCards: "Die urspr\xFCnglichen Netflix-Karten konnten nicht abgerufen werden.",
-      errorCount: "Fehler-{count}"
-    },
-    "en": {
-      legacyMyList: "Legacy My List",
-      itemCount: { one: "{count} item", other: "{count} items" },
-      initializing: "Initializing...",
-      orderChangedPrompt: "The order of My List has changed. Please initialize again.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Cancel",
-      initTime: "Init {seconds}s",
-      showOriginalMyList: "Show original My List",
-      hideOriginalMyList: "Hide original My List",
-      emptyMessage: "You can find the movies and TV shows you've saved here.",
-      relayoutInProgress: "Relayout in progress",
-      relayoutFailed: "Relayout failed",
-      initializationFailed: "Legacy My List: failed - {message}",
-      noNativeCards: "No native Netflix cards could be collected.",
-      errorCount: "Error-{count}"
-    },
-    "es": {
-      legacyMyList: "Mi lista cl\xE1sica",
-      itemCount: { one: "{count} elemento", other: "{count} elementos" },
-      initializing: "Inicializando...",
-      orderChangedPrompt: "El orden de Mi lista ha cambiado. Vuelve a inicializar.",
-      orderChangedOk: "Aceptar",
-      orderChangedCancel: "Cancelar",
-      initTime: "Inicio {seconds}s",
-      showOriginalMyList: "Mostrar Mi lista original",
-      hideOriginalMyList: "Ocultar Mi lista original",
-      emptyMessage: "Aqu\xED encontrar\xE1s las pel\xEDculas y series que hayas guardado.",
-      relayoutInProgress: "Reorganizando...",
-      relayoutFailed: "Error al reorganizar",
-      initializationFailed: "Mi lista cl\xE1sica: error - {message}",
-      noNativeCards: "No se pudieron obtener las tarjetas originales de Netflix.",
-      errorCount: "Error-{count}"
-    },
-    "fil": {
-      legacyMyList: "Lumang Aking Listahan",
-      itemCount: { one: "{count} item", other: "{count} mga item" },
-      initializing: "Nagsisimula...",
-      orderChangedPrompt: "Nagbago ang pagkakasunod-sunod ng My List. Paki-initialize muli.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Kanselahin",
-      initTime: "Simula {seconds}s",
-      showOriginalMyList: "Ipakita ang orihinal na Aking Listahan",
-      hideOriginalMyList: "Itago ang orihinal na Aking Listahan",
-      emptyMessage: "Makikita rito ang mga pelikula at palabas sa TV na na-save mo.",
-      relayoutInProgress: "Inaayos muli...",
-      relayoutFailed: "Nabigo ang muling pag-aayos",
-      initializationFailed: "Lumang Aking Listahan: nabigo - {message}",
-      noNativeCards: "Hindi makuha ang mga orihinal na card ng Netflix.",
-      errorCount: "Error-{count}"
-    },
-    "fr": {
-      legacyMyList: "Ma liste classique",
-      itemCount: { one: "{count} \xE9l\xE9ment", other: "{count} \xE9l\xE9ments" },
-      initializing: "Initialisation...",
-      orderChangedPrompt: "L\u2019ordre de Ma liste a chang\xE9. Veuillez r\xE9initialiser.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Annuler",
-      initTime: "Init. {seconds}s",
-      showOriginalMyList: "Afficher Ma liste d\u2019origine",
-      hideOriginalMyList: "Masquer Ma liste d\u2019origine",
-      emptyMessage: "Vous trouverez ici les films et s\xE9ries que vous avez enregistr\xE9s.",
-      relayoutInProgress: "R\xE9organisation en cours...",
-      relayoutFailed: "\xC9chec de la r\xE9organisation",
-      initializationFailed: "Ma liste classique : \xE9chec - {message}",
-      noNativeCards: "Impossible de r\xE9cup\xE9rer les cartes Netflix d\u2019origine.",
-      errorCount: "Erreur-{count}"
-    },
-    "hr": {
-      legacyMyList: "Klasi\u010Dni Moj popis",
-      itemCount: { one: "{count} stavka", few: "{count} stavke", other: "{count} stavki" },
-      initializing: "Pokretanje...",
-      orderChangedPrompt: "Redoslijed Mojeg popisa se promijenio. Ponovno pokrenite inicijalizaciju.",
-      orderChangedOk: "U redu",
-      orderChangedCancel: "Odustani",
-      initTime: "Pokretanje {seconds}s",
-      showOriginalMyList: "Prika\u017Ei izvorni Moj popis",
-      hideOriginalMyList: "Sakrij izvorni Moj popis",
-      emptyMessage: "Ovdje mo\u017Eete prona\u0107i filmove i serije koje ste spremili.",
-      relayoutInProgress: "Promjena rasporeda...",
-      relayoutFailed: "Promjena rasporeda nije uspjela",
-      initializationFailed: "Klasi\u010Dni Moj popis: pogre\u0161ka - {message}",
-      noNativeCards: "Nije mogu\u0107e dohvatiti izvorne Netflix kartice.",
-      errorCount: "Pogre\u0161ka-{count}"
-    },
-    "id": {
-      legacyMyList: "Daftar Saya Klasik",
-      itemCount: { other: "{count} item" },
-      initializing: "Menginisialisasi...",
-      orderChangedPrompt: "Urutan Daftar Saya telah berubah. Silakan inisialisasi ulang.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Batal",
-      initTime: "Init {seconds}s",
-      showOriginalMyList: "Tampilkan Daftar Saya asli",
-      hideOriginalMyList: "Sembunyikan Daftar Saya asli",
-      emptyMessage: "Film dan acara TV yang Anda simpan dapat ditemukan di sini.",
-      relayoutInProgress: "Menata ulang...",
-      relayoutFailed: "Penataan ulang gagal",
-      initializationFailed: "Daftar Saya Klasik: gagal - {message}",
-      noNativeCards: "Kartu Netflix asli tidak dapat diambil.",
-      errorCount: "Galat-{count}"
-    },
-    "it": {
-      legacyMyList: "La mia lista classica",
-      itemCount: { one: "{count} elemento", other: "{count} elementi" },
-      initializing: "Inizializzazione...",
-      orderChangedPrompt: "L'ordine de La mia lista \xE8 cambiato. Esegui di nuovo l'inizializzazione.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Annulla",
-      initTime: "Init {seconds}s",
-      showOriginalMyList: "Mostra La mia lista originale",
-      hideOriginalMyList: "Nascondi La mia lista originale",
-      emptyMessage: "Qui trovi i film e le serie TV che hai salvato.",
-      relayoutInProgress: "Riorganizzazione in corso...",
-      relayoutFailed: "Riorganizzazione non riuscita",
-      initializationFailed: "La mia lista classica: errore - {message}",
-      noNativeCards: "Impossibile recuperare le schede Netflix originali.",
-      errorCount: "Errore-{count}"
-    },
-    "hu": {
-      legacyMyList: "Klasszikus Saj\xE1t list\xE1m",
-      itemCount: { other: "{count} elem" },
-      initializing: "Inicializ\xE1l\xE1s...",
-      orderChangedPrompt: "A Saj\xE1t lista sorrendje megv\xE1ltozott. Inicializ\xE1lja \xFAjra.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "M\xE9gse",
-      initTime: "Ind\xEDt\xE1s {seconds}s",
-      showOriginalMyList: "Eredeti Saj\xE1t list\xE1m megjelen\xEDt\xE9se",
-      hideOriginalMyList: "Eredeti Saj\xE1t list\xE1m elrejt\xE9se",
-      emptyMessage: "Itt tal\xE1lod az elmentett filmeket \xE9s sorozatokat.",
-      relayoutInProgress: "\xDAjrarendez\xE9s...",
-      relayoutFailed: "Az \xFAjrarendez\xE9s sikertelen",
-      initializationFailed: "Klasszikus Saj\xE1t list\xE1m: hiba - {message}",
-      noNativeCards: "Nem siker\xFClt bet\xF6lteni az eredeti Netflix-k\xE1rty\xE1kat.",
-      errorCount: "Hiba-{count}"
-    },
-    "ms": {
-      legacyMyList: "Senarai Saya Klasik",
-      itemCount: { other: "{count} item" },
-      initializing: "Memulakan...",
-      orderChangedPrompt: "Susunan Senarai Saya telah berubah. Sila mulakan semula.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Batal",
-      initTime: "Mula {seconds}s",
-      showOriginalMyList: "Tunjukkan Senarai Saya asal",
-      hideOriginalMyList: "Sembunyikan Senarai Saya asal",
-      emptyMessage: "Filem dan rancangan TV yang anda simpan boleh didapati di sini.",
-      relayoutInProgress: "Menyusun semula...",
-      relayoutFailed: "Susun semula gagal",
-      initializationFailed: "Senarai Saya Klasik: gagal - {message}",
-      noNativeCards: "Kad Netflix asal tidak dapat diperoleh.",
-      errorCount: "Ralat-{count}"
-    },
-    "nl": {
-      legacyMyList: "Klassieke Mijn lijst",
-      itemCount: { one: "{count} item", other: "{count} items" },
-      initializing: "Initialiseren...",
-      orderChangedPrompt: "De volgorde van Mijn lijst is gewijzigd. Initialiseer opnieuw.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Annuleren",
-      initTime: "Init {seconds}s",
-      showOriginalMyList: "Originele Mijn lijst tonen",
-      hideOriginalMyList: "Originele Mijn lijst verbergen",
-      emptyMessage: "Hier vind je de films en series die je hebt opgeslagen.",
-      relayoutInProgress: "Opnieuw indelen...",
-      relayoutFailed: "Opnieuw indelen mislukt",
-      initializationFailed: "Klassieke Mijn lijst: mislukt - {message}",
-      noNativeCards: "De oorspronkelijke Netflix-kaarten konden niet worden opgehaald.",
-      errorCount: "Fout-{count}"
-    },
-    "nb": {
-      legacyMyList: "Klassisk Min liste",
-      itemCount: { one: "{count} element", other: "{count} elementer" },
-      initializing: "Initialiserer...",
-      orderChangedPrompt: "Rekkef\xF8lgen i Min liste er endret. Initialiser p\xE5 nytt.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Avbryt",
-      initTime: "Init {seconds}s",
-      showOriginalMyList: "Vis opprinnelig Min liste",
-      hideOriginalMyList: "Skjul opprinnelig Min liste",
-      emptyMessage: "Her finner du filmene og seriene du har lagret.",
-      relayoutInProgress: "Omorganiserer...",
-      relayoutFailed: "Omorganisering mislyktes",
-      initializationFailed: "Klassisk Min liste: feil - {message}",
-      noNativeCards: "Kunne ikke hente de opprinnelige Netflix-kortene.",
-      errorCount: "Feil-{count}"
-    },
-    "pl": {
-      legacyMyList: "Klasyczna Moja lista",
-      itemCount: { one: "{count} element", few: "{count} elementy", many: "{count} element\xF3w", other: "{count} elementu" },
-      initializing: "Inicjowanie...",
-      orderChangedPrompt: "Kolejno\u015B\u0107 w Mojej li\u015Bcie uleg\u0142a zmianie. Zainicjalizuj ponownie.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Anuluj",
-      initTime: "Start {seconds}s",
-      showOriginalMyList: "Poka\u017C oryginaln\u0105 Moj\u0105 list\u0119",
-      hideOriginalMyList: "Ukryj oryginaln\u0105 Moj\u0105 list\u0119",
-      emptyMessage: "Tutaj znajdziesz zapisane filmy i seriale.",
-      relayoutInProgress: "Ponowne rozmieszczanie...",
-      relayoutFailed: "Ponowne rozmieszczanie nie powiod\u0142o si\u0119",
-      initializationFailed: "Klasyczna Moja lista: b\u0142\u0105d - {message}",
-      noNativeCards: "Nie uda\u0142o si\u0119 pobra\u0107 oryginalnych kart Netflix.",
-      errorCount: "B\u0142\u0105d-{count}"
-    },
-    "pt": {
-      legacyMyList: "A minha lista cl\xE1ssica",
-      itemCount: { one: "{count} item", other: "{count} itens" },
-      initializing: "A inicializar...",
-      orderChangedPrompt: "A ordem da Minha lista mudou. Inicialize novamente.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Cancelar",
-      initTime: "In\xEDcio {seconds}s",
-      showOriginalMyList: "Mostrar A minha lista original",
-      hideOriginalMyList: "Ocultar A minha lista original",
-      emptyMessage: "Aqui encontra os filmes e s\xE9ries que guardou.",
-      relayoutInProgress: "A reorganizar...",
-      relayoutFailed: "Falha ao reorganizar",
-      initializationFailed: "A minha lista cl\xE1ssica: falha - {message}",
-      noNativeCards: "N\xE3o foi poss\xEDvel obter os cart\xF5es originais da Netflix.",
-      errorCount: "Erro-{count}"
-    },
-    "ro": {
-      legacyMyList: "Lista mea clasic\u0103",
-      itemCount: { one: "{count} element", few: "{count} elemente", other: "{count} elemente" },
-      initializing: "Se ini\u021Bializeaz\u0103...",
-      orderChangedPrompt: "Ordinea din Lista mea s-a schimbat. Reini\u021Bializeaz\u0103.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Anulare",
-      initTime: "Ini\u021Bializare {seconds}s",
-      showOriginalMyList: "Afi\u0219eaz\u0103 Lista mea original\u0103",
-      hideOriginalMyList: "Ascunde Lista mea original\u0103",
-      emptyMessage: "Aici g\u0103se\u0219ti filmele \u0219i serialele salvate.",
-      relayoutInProgress: "Se rearanjeaz\u0103...",
-      relayoutFailed: "Rearanjarea a e\u0219uat",
-      initializationFailed: "Lista mea clasic\u0103: eroare - {message}",
-      noNativeCards: "Nu s-au putut ob\u021Bine cardurile Netflix originale.",
-      errorCount: "Eroare-{count}"
-    },
-    "fi": {
-      legacyMyList: "Klassinen Oma lista",
-      itemCount: { one: "{count} kohde", other: "{count} kohdetta" },
-      initializing: "Alustetaan...",
-      orderChangedPrompt: "Oma lista -j\xE4rjestys on muuttunut. Alusta uudelleen.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Peruuta",
-      initTime: "Alustus {seconds}s",
-      showOriginalMyList: "N\xE4yt\xE4 alkuper\xE4inen Oma lista",
-      hideOriginalMyList: "Piilota alkuper\xE4inen Oma lista",
-      emptyMessage: "T\xE4\xE4lt\xE4 l\xF6yd\xE4t tallentamasi elokuvat ja TV-sarjat.",
-      relayoutInProgress: "J\xE4rjestell\xE4\xE4n uudelleen...",
-      relayoutFailed: "Uudelleenj\xE4rjestely ep\xE4onnistui",
-      initializationFailed: "Klassinen Oma lista: virhe - {message}",
-      noNativeCards: "Netflixin alkuper\xE4isi\xE4 kortteja ei voitu hakea.",
-      errorCount: "Virhe-{count}"
-    },
-    "sv": {
-      legacyMyList: "Klassiska Min lista",
-      itemCount: { other: "{count} objekt" },
-      initializing: "Initierar...",
-      orderChangedPrompt: "Ordningen i Min lista har \xE4ndrats. Initiera om.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Avbryt",
-      initTime: "Init {seconds}s",
-      showOriginalMyList: "Visa ursprungliga Min lista",
-      hideOriginalMyList: "D\xF6lj ursprungliga Min lista",
-      emptyMessage: "H\xE4r hittar du filmerna och serierna du har sparat.",
-      relayoutInProgress: "Ordnar om...",
-      relayoutFailed: "Omordningen misslyckades",
-      initializationFailed: "Klassiska Min lista: fel - {message}",
-      noNativeCards: "Det gick inte att h\xE4mta de ursprungliga Netflix-korten.",
-      errorCount: "Fel-{count}"
-    },
-    "vi": {
-      legacyMyList: "Danh s\xE1ch c\u1EE7a t\xF4i c\u1ED5 \u0111i\u1EC3n",
-      itemCount: { other: "{count} m\u1EE5c" },
-      initializing: "\u0110ang kh\u1EDFi t\u1EA1o...",
-      orderChangedPrompt: "Th\u1EE9 t\u1EF1 Danh s\xE1ch c\u1EE7a t\xF4i \u0111\xE3 thay \u0111\u1ED5i. Vui l\xF2ng kh\u1EDFi t\u1EA1o l\u1EA1i.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "H\u1EE7y",
-      initTime: "Kh\u1EDFi t\u1EA1o {seconds}s",
-      showOriginalMyList: "Hi\u1EC7n Danh s\xE1ch c\u1EE7a t\xF4i g\u1ED1c",
-      hideOriginalMyList: "\u1EA8n Danh s\xE1ch c\u1EE7a t\xF4i g\u1ED1c",
-      emptyMessage: "B\u1EA1n c\xF3 th\u1EC3 t\xECm th\u1EA5y c\xE1c phim v\xE0 ch\u01B0\u01A1ng tr\xECnh truy\u1EC1n h\xECnh \u0111\xE3 l\u01B0u \u1EDF \u0111\xE2y.",
-      relayoutInProgress: "\u0110ang s\u1EAFp x\u1EBFp l\u1EA1i...",
-      relayoutFailed: "S\u1EAFp x\u1EBFp l\u1EA1i th\u1EA5t b\u1EA1i",
-      initializationFailed: "Danh s\xE1ch c\u1EE7a t\xF4i c\u1ED5 \u0111i\u1EC3n: l\u1ED7i - {message}",
-      noNativeCards: "Kh\xF4ng th\u1EC3 l\u1EA5y c\xE1c th\u1EBB Netflix g\u1ED1c.",
-      errorCount: "L\u1ED7i-{count}"
-    },
-    "tr": {
-      legacyMyList: "Klasik Listem",
-      itemCount: { other: "{count} \xF6\u011Fe" },
-      initializing: "Ba\u015Flat\u0131l\u0131yor...",
-      orderChangedPrompt: "Listem'in s\u0131ras\u0131 de\u011Fi\u015Fti. L\xFCtfen yeniden ba\u015Flat\u0131n.",
-      orderChangedOk: "Tamam",
-      orderChangedCancel: "\u0130ptal",
-      initTime: "Ba\u015Flatma {seconds}s",
-      showOriginalMyList: "Orijinal Listem\u2019i g\xF6ster",
-      hideOriginalMyList: "Orijinal Listem\u2019i gizle",
-      emptyMessage: "Kaydetti\u011Finiz filmleri ve dizileri burada bulabilirsiniz.",
-      relayoutInProgress: "Yeniden d\xFCzenleniyor...",
-      relayoutFailed: "Yeniden d\xFCzenleme ba\u015Far\u0131s\u0131z",
-      initializationFailed: "Klasik Listem: hata - {message}",
-      noNativeCards: "Orijinal Netflix kartlar\u0131 al\u0131namad\u0131.",
-      errorCount: "Hata-{count}"
-    },
-    "cs": {
-      legacyMyList: "Klasick\xFD M\u016Fj seznam",
-      itemCount: { one: "{count} polo\u017Eka", few: "{count} polo\u017Eky", other: "{count} polo\u017Eek" },
-      initializing: "Inicializace...",
-      orderChangedPrompt: "Po\u0159ad\xED v M\xE9m seznamu se zm\u011Bnilo. Prove\u010Fte inicializaci znovu.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "Zru\u0161it",
-      initTime: "Inicializace {seconds}s",
-      showOriginalMyList: "Zobrazit p\u016Fvodn\xED M\u016Fj seznam",
-      hideOriginalMyList: "Skr\xFDt p\u016Fvodn\xED M\u016Fj seznam",
-      emptyMessage: "Zde najdete ulo\u017Een\xE9 filmy a seri\xE1ly.",
-      relayoutInProgress: "Prob\xEDh\xE1 nov\xE9 rozlo\u017Een\xED...",
-      relayoutFailed: "Nov\xE9 rozlo\u017Een\xED se nezda\u0159ilo",
-      initializationFailed: "Klasick\xFD M\u016Fj seznam: chyba - {message}",
-      noNativeCards: "P\u016Fvodn\xED karty Netflix se nepoda\u0159ilo na\u010D\xEDst.",
-      errorCount: "Chyba-{count}"
-    },
-    "el": {
-      legacyMyList: "\u039A\u03BB\u03B1\u03C3\u03B9\u03BA\u03AE \u03BB\u03AF\u03C3\u03C4\u03B1 \u03BC\u03BF\u03C5",
-      itemCount: { one: "{count} \u03C3\u03C4\u03BF\u03B9\u03C7\u03B5\u03AF\u03BF", other: "{count} \u03C3\u03C4\u03BF\u03B9\u03C7\u03B5\u03AF\u03B1" },
-      initializing: "\u0391\u03C1\u03C7\u03B9\u03BA\u03BF\u03C0\u03BF\u03AF\u03B7\u03C3\u03B7...",
-      orderChangedPrompt: "\u0397 \u03C3\u03B5\u03B9\u03C1\u03AC \u03C3\u03C4\u03B7 \u03BB\u03AF\u03C3\u03C4\u03B1 \u03BC\u03BF\u03C5 \u03AC\u03BB\u03BB\u03B1\u03BE\u03B5. \u0395\u03BA\u03C4\u03B5\u03BB\u03AD\u03C3\u03C4\u03B5 \u03BE\u03B1\u03BD\u03AC \u03B1\u03C1\u03C7\u03B9\u03BA\u03BF\u03C0\u03BF\u03AF\u03B7\u03C3\u03B7.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "\u0391\u03BA\u03CD\u03C1\u03C9\u03C3\u03B7",
-      initTime: "\u0388\u03BD\u03B1\u03C1\u03BE\u03B7 {seconds}s",
-      showOriginalMyList: "\u0395\u03BC\u03C6\u03AC\u03BD\u03B9\u03C3\u03B7 \u03B1\u03C1\u03C7\u03B9\u03BA\u03AE\u03C2 \u03BB\u03AF\u03C3\u03C4\u03B1\u03C2 \u03BC\u03BF\u03C5",
-      hideOriginalMyList: "\u0391\u03C0\u03CC\u03BA\u03C1\u03C5\u03C8\u03B7 \u03B1\u03C1\u03C7\u03B9\u03BA\u03AE\u03C2 \u03BB\u03AF\u03C3\u03C4\u03B1\u03C2 \u03BC\u03BF\u03C5",
-      emptyMessage: "\u0395\u03B4\u03CE \u03B8\u03B1 \u03B2\u03C1\u03B5\u03AF\u03C4\u03B5 \u03C4\u03B9\u03C2 \u03C4\u03B1\u03B9\u03BD\u03AF\u03B5\u03C2 \u03BA\u03B1\u03B9 \u03C4\u03B9\u03C2 \u03C3\u03B5\u03B9\u03C1\u03AD\u03C2 \u03C0\u03BF\u03C5 \u03AD\u03C7\u03B5\u03C4\u03B5 \u03B1\u03C0\u03BF\u03B8\u03B7\u03BA\u03B5\u03CD\u03C3\u03B5\u03B9.",
-      relayoutInProgress: "\u0391\u03BD\u03B1\u03B4\u03B9\u03AC\u03C4\u03B1\u03BE\u03B7...",
-      relayoutFailed: "\u0397 \u03B1\u03BD\u03B1\u03B4\u03B9\u03AC\u03C4\u03B1\u03BE\u03B7 \u03B1\u03C0\u03AD\u03C4\u03C5\u03C7\u03B5",
-      initializationFailed: "\u039A\u03BB\u03B1\u03C3\u03B9\u03BA\u03AE \u03BB\u03AF\u03C3\u03C4\u03B1 \u03BC\u03BF\u03C5: \u03C3\u03C6\u03AC\u03BB\u03BC\u03B1 - {message}",
-      noNativeCards: "\u0394\u03B5\u03BD \u03AE\u03C4\u03B1\u03BD \u03B4\u03C5\u03BD\u03B1\u03C4\u03AE \u03B7 \u03BB\u03AE\u03C8\u03B7 \u03C4\u03C9\u03BD \u03B1\u03C1\u03C7\u03B9\u03BA\u03CE\u03BD \u03BA\u03B1\u03C1\u03C4\u03CE\u03BD Netflix.",
-      errorCount: "\u03A3\u03C6\u03AC\u03BB\u03BC\u03B1-{count}"
-    },
-    "ru": {
-      legacyMyList: "\u041A\u043B\u0430\u0441\u0441\u0438\u0447\u0435\u0441\u043A\u0438\u0439 \xAB\u041C\u043E\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB",
-      itemCount: { one: "{count} \u044D\u043B\u0435\u043C\u0435\u043D\u0442", few: "{count} \u044D\u043B\u0435\u043C\u0435\u043D\u0442\u0430", many: "{count} \u044D\u043B\u0435\u043C\u0435\u043D\u0442\u043E\u0432", other: "{count} \u044D\u043B\u0435\u043C\u0435\u043D\u0442\u0430" },
-      initializing: "\u0418\u043D\u0438\u0446\u0438\u0430\u043B\u0438\u0437\u0430\u0446\u0438\u044F...",
-      orderChangedPrompt: "\u041F\u043E\u0440\u044F\u0434\u043E\u043A \u0432 \xAB\u041C\u043E\u0451\u043C \u0441\u043F\u0438\u0441\u043A\u0435\xBB \u0438\u0437\u043C\u0435\u043D\u0438\u043B\u0441\u044F. \u0412\u044B\u043F\u043E\u043B\u043D\u0438\u0442\u0435 \u0438\u043D\u0438\u0446\u0438\u0430\u043B\u0438\u0437\u0430\u0446\u0438\u044E \u0441\u043D\u043E\u0432\u0430.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "\u041E\u0442\u043C\u0435\u043D\u0430",
-      initTime: "\u0418\u043D\u0438\u0446\u0438\u0430\u043B\u0438\u0437\u0430\u0446\u0438\u044F {seconds}s",
-      showOriginalMyList: "\u041F\u043E\u043A\u0430\u0437\u0430\u0442\u044C \u0438\u0441\u0445\u043E\u0434\u043D\u044B\u0439 \xAB\u041C\u043E\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB",
-      hideOriginalMyList: "\u0421\u043A\u0440\u044B\u0442\u044C \u0438\u0441\u0445\u043E\u0434\u043D\u044B\u0439 \xAB\u041C\u043E\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB",
-      emptyMessage: "\u0417\u0434\u0435\u0441\u044C \u043D\u0430\u0445\u043E\u0434\u044F\u0442\u0441\u044F \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043D\u044B\u0435 \u0432\u0430\u043C\u0438 \u0444\u0438\u043B\u044C\u043C\u044B \u0438 \u0441\u0435\u0440\u0438\u0430\u043B\u044B.",
-      relayoutInProgress: "\u041F\u0435\u0440\u0435\u043A\u043E\u043C\u043F\u043E\u043D\u043E\u0432\u043A\u0430...",
-      relayoutFailed: "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0438\u0437\u043C\u0435\u043D\u0438\u0442\u044C \u043A\u043E\u043C\u043F\u043E\u043D\u043E\u0432\u043A\u0443",
-      initializationFailed: "\u041A\u043B\u0430\u0441\u0441\u0438\u0447\u0435\u0441\u043A\u0438\u0439 \xAB\u041C\u043E\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB: \u043E\u0448\u0438\u0431\u043A\u0430 - {message}",
-      noNativeCards: "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u043B\u0443\u0447\u0438\u0442\u044C \u0438\u0441\u0445\u043E\u0434\u043D\u044B\u0435 \u043A\u0430\u0440\u0442\u043E\u0447\u043A\u0438 Netflix.",
-      errorCount: "\u041E\u0448\u0438\u0431\u043A\u0430-{count}"
-    },
-    "uk": {
-      legacyMyList: "\u041A\u043B\u0430\u0441\u0438\u0447\u043D\u0438\u0439 \xAB\u041C\u0456\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB",
-      itemCount: { one: "{count} \u0435\u043B\u0435\u043C\u0435\u043D\u0442", few: "{count} \u0435\u043B\u0435\u043C\u0435\u043D\u0442\u0438", many: "{count} \u0435\u043B\u0435\u043C\u0435\u043D\u0442\u0456\u0432", other: "{count} \u0435\u043B\u0435\u043C\u0435\u043D\u0442\u0430" },
-      initializing: "\u0406\u043D\u0456\u0446\u0456\u0430\u043B\u0456\u0437\u0430\u0446\u0456\u044F...",
-      orderChangedPrompt: "\u041F\u043E\u0440\u044F\u0434\u043E\u043A \u0443 \xAB\u041C\u043E\u0454\u043C\u0443 \u0441\u043F\u0438\u0441\u043A\u0443\xBB \u0437\u043C\u0456\u043D\u0438\u0432\u0441\u044F. \u0412\u0438\u043A\u043E\u043D\u0430\u0439\u0442\u0435 \u0456\u043D\u0456\u0446\u0456\u0430\u043B\u0456\u0437\u0430\u0446\u0456\u044E \u0437\u043D\u043E\u0432\u0443.",
-      orderChangedOk: "OK",
-      orderChangedCancel: "\u0421\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438",
-      initTime: "\u0406\u043D\u0456\u0446\u0456\u0430\u043B\u0456\u0437\u0430\u0446\u0456\u044F {seconds}s",
-      showOriginalMyList: "\u041F\u043E\u043A\u0430\u0437\u0430\u0442\u0438 \u043E\u0440\u0438\u0433\u0456\u043D\u0430\u043B\u044C\u043D\u0438\u0439 \xAB\u041C\u0456\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB",
-      hideOriginalMyList: "\u0421\u0445\u043E\u0432\u0430\u0442\u0438 \u043E\u0440\u0438\u0433\u0456\u043D\u0430\u043B\u044C\u043D\u0438\u0439 \xAB\u041C\u0456\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB",
-      emptyMessage: "\u0422\u0443\u0442 \u0432\u0438 \u0437\u043D\u0430\u0439\u0434\u0435\u0442\u0435 \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u0456 \u0444\u0456\u043B\u044C\u043C\u0438 \u0442\u0430 \u0441\u0435\u0440\u0456\u0430\u043B\u0438.",
-      relayoutInProgress: "\u041F\u0435\u0440\u0435\u043A\u043E\u043C\u043F\u043E\u043D\u0443\u0432\u0430\u043D\u043D\u044F...",
-      relayoutFailed: "\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u043A\u043E\u043C\u043F\u043E\u043D\u0443\u0432\u0430\u043D\u043D\u044F",
-      initializationFailed: "\u041A\u043B\u0430\u0441\u0438\u0447\u043D\u0438\u0439 \xAB\u041C\u0456\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB: \u043F\u043E\u043C\u0438\u043B\u043A\u0430 - {message}",
-      noNativeCards: "\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043E\u0442\u0440\u0438\u043C\u0430\u0442\u0438 \u043E\u0440\u0438\u0433\u0456\u043D\u0430\u043B\u044C\u043D\u0456 \u043A\u0430\u0440\u0442\u043A\u0438 Netflix.",
-      errorCount: "\u041F\u043E\u043C\u0438\u043B\u043A\u0430-{count}"
-    },
-    "he": {
-      legacyMyList: "\u05D4\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05D9 \u05D4\u05E7\u05DC\u05D0\u05E1\u05D9\u05EA",
-      itemCount: { one: "{count} \u05E4\u05E8\u05D9\u05D8", two: "{count} \u05E4\u05E8\u05D9\u05D8\u05D9\u05DD", other: "{count} \u05E4\u05E8\u05D9\u05D8\u05D9\u05DD" },
-      initializing: "\u05DE\u05D0\u05EA\u05D7\u05DC...",
-      orderChangedPrompt: "\u05D4\u05E1\u05D3\u05E8 \u05D1\u05F4\u05D4\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05D9\u05F4 \u05D4\u05E9\u05EA\u05E0\u05D4. \u05D9\u05E9 \u05DC\u05D0\u05EA\u05D7\u05DC \u05DE\u05D7\u05D3\u05E9.",
-      orderChangedOk: "\u05D0\u05D9\u05E9\u05D5\u05E8",
-      orderChangedCancel: "\u05D1\u05D9\u05D8\u05D5\u05DC",
-      initTime: "\u05D0\u05EA\u05D7\u05D5\u05DC {seconds} \u05E9\u05E0\u05F3",
-      showOriginalMyList: "\u05D4\u05E6\u05D2 \u05D0\u05EA \u05D4\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05D9 \u05D4\u05DE\u05E7\u05D5\u05E8\u05D9\u05EA",
-      hideOriginalMyList: "\u05D4\u05E1\u05EA\u05E8 \u05D0\u05EA \u05D4\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05D9 \u05D4\u05DE\u05E7\u05D5\u05E8\u05D9\u05EA",
-      emptyMessage: "\u05DB\u05D0\u05DF \u05D0\u05E4\u05E9\u05E8 \u05DC\u05DE\u05E6\u05D5\u05D0 \u05D0\u05EA \u05D4\u05E1\u05E8\u05D8\u05D9\u05DD \u05D5\u05D4\u05E1\u05D3\u05E8\u05D5\u05EA \u05E9\u05E9\u05DE\u05E8\u05EA.",
-      relayoutInProgress: "\u05DE\u05E1\u05D3\u05E8 \u05DE\u05D7\u05D3\u05E9...",
-      relayoutFailed: "\u05D4\u05E1\u05D9\u05D3\u05D5\u05E8 \u05DE\u05D7\u05D3\u05E9 \u05E0\u05DB\u05E9\u05DC",
-      initializationFailed: "\u05D4\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05D9 \u05D4\u05E7\u05DC\u05D0\u05E1\u05D9\u05EA: \u05E9\u05D2\u05D9\u05D0\u05D4 - {message}",
-      noNativeCards: "\u05DC\u05D0 \u05E0\u05D9\u05EA\u05DF \u05D4\u05D9\u05D4 \u05DC\u05E7\u05D1\u05DC \u05D0\u05EA \u05DB\u05E8\u05D8\u05D9\u05E1\u05D9 Netflix \u05D4\u05DE\u05E7\u05D5\u05E8\u05D9\u05D9\u05DD.",
-      errorCount: "\u05E9\u05D2\u05D9\u05D0\u05D4-{count}"
-    },
-    "ar": {
-      legacyMyList: "\u0642\u0627\u0626\u0645\u062A\u064A \u0627\u0644\u0643\u0644\u0627\u0633\u064A\u0643\u064A\u0629",
-      itemCount: { zero: "{count} \u0639\u0646\u0635\u0631", one: "{count} \u0639\u0646\u0635\u0631", two: "{count} \u0639\u0646\u0635\u0631\u0627\u0646", few: "{count} \u0639\u0646\u0627\u0635\u0631", many: "{count} \u0639\u0646\u0635\u0631\u064B\u0627", other: "{count} \u0639\u0646\u0635\u0631" },
-      initializing: "\u062C\u0627\u0631\u064D \u0627\u0644\u062A\u0647\u064A\u0626\u0629...",
-      orderChangedPrompt: "\u062A\u063A\u064A\u0651\u0631 \u062A\u0631\u062A\u064A\u0628 \xAB\u0642\u0627\u0626\u0645\u062A\u064A\xBB. \u064A\u064F\u0631\u062C\u0649 \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u062A\u0647\u064A\u0626\u0629.",
-      orderChangedOk: "\u0645\u0648\u0627\u0641\u0642",
-      orderChangedCancel: "\u0625\u0644\u063A\u0627\u0621",
-      initTime: "\u062A\u0647\u064A\u0626\u0629 {seconds}\u062B",
-      showOriginalMyList: "\u0625\u0638\u0647\u0627\u0631 \u0642\u0627\u0626\u0645\u062A\u064A \u0627\u0644\u0623\u0635\u0644\u064A\u0629",
-      hideOriginalMyList: "\u0625\u062E\u0641\u0627\u0621 \u0642\u0627\u0626\u0645\u062A\u064A \u0627\u0644\u0623\u0635\u0644\u064A\u0629",
-      emptyMessage: "\u064A\u0645\u0643\u0646\u0643 \u0627\u0644\u0639\u062B\u0648\u0631 \u0647\u0646\u0627 \u0639\u0644\u0649 \u0627\u0644\u0623\u0641\u0644\u0627\u0645 \u0648\u0627\u0644\u0628\u0631\u0627\u0645\u062C \u0627\u0644\u062A\u0644\u0641\u0632\u064A\u0648\u0646\u064A\u0629 \u0627\u0644\u062A\u064A \u062D\u0641\u0638\u062A\u0647\u0627.",
-      relayoutInProgress: "\u062C\u0627\u0631\u064D \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u062A\u0631\u062A\u064A\u0628...",
-      relayoutFailed: "\u0641\u0634\u0644\u062A \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u062A\u0631\u062A\u064A\u0628",
-      initializationFailed: "\u0642\u0627\u0626\u0645\u062A\u064A \u0627\u0644\u0643\u0644\u0627\u0633\u064A\u0643\u064A\u0629: \u062E\u0637\u0623 - {message}",
-      noNativeCards: "\u062A\u0639\u0630\u0631 \u0627\u0644\u062D\u0635\u0648\u0644 \u0639\u0644\u0649 \u0628\u0637\u0627\u0642\u0627\u062A Netflix \u0627\u0644\u0623\u0635\u0644\u064A\u0629.",
-      errorCount: "\u062E\u0637\u0623-{count}"
-    },
-    "hi": {
-      legacyMyList: "\u0915\u094D\u0932\u093E\u0938\u093F\u0915 \u092E\u0947\u0930\u0940 \u0938\u0942\u091A\u0940",
-      itemCount: { other: "{count} \u0906\u0907\u091F\u092E" },
-      initializing: "\u0906\u0930\u0902\u092D \u0915\u093F\u092F\u093E \u091C\u093E \u0930\u0939\u093E \u0939\u0948...",
-      orderChangedPrompt: "\u092E\u0947\u0930\u0940 \u0938\u0942\u091A\u0940 \u0915\u093E \u0915\u094D\u0930\u092E \u092C\u0926\u0932 \u0917\u092F\u093E \u0939\u0948\u0964 \u0915\u0943\u092A\u092F\u093E \u092B\u093F\u0930 \u0938\u0947 \u0906\u0930\u0902\u092D \u0915\u0930\u0947\u0902\u0964",
-      orderChangedOk: "\u0920\u0940\u0915 \u0939\u0948",
-      orderChangedCancel: "\u0930\u0926\u094D\u0926 \u0915\u0930\u0947\u0902",
-      initTime: "\u0906\u0930\u0902\u092D {seconds}\u0938\u0947",
-      showOriginalMyList: "\u092E\u0942\u0932 \u092E\u0947\u0930\u0940 \u0938\u0942\u091A\u0940 \u0926\u093F\u0916\u093E\u090F\u0901",
-      hideOriginalMyList: "\u092E\u0942\u0932 \u092E\u0947\u0930\u0940 \u0938\u0942\u091A\u0940 \u091B\u093F\u092A\u093E\u090F\u0901",
-      emptyMessage: "\u0906\u092A\u0928\u0947 \u091C\u094B \u092B\u093C\u093F\u0932\u094D\u092E\u0947\u0902 \u0914\u0930 \u091F\u0940\u0935\u0940 \u0936\u094B \u0938\u0939\u0947\u091C\u0947 \u0939\u0948\u0902, \u0935\u0947 \u092F\u0939\u093E\u0901 \u092E\u093F\u0932\u0947\u0902\u0917\u0947\u0964",
-      relayoutInProgress: "\u092B\u093F\u0930 \u0938\u0947 \u0935\u094D\u092F\u0935\u0938\u094D\u0925\u093F\u0924 \u0915\u093F\u092F\u093E \u091C\u093E \u0930\u0939\u093E \u0939\u0948...",
-      relayoutFailed: "\u092A\u0941\u0928\u0930\u094D\u0935\u094D\u092F\u0935\u0938\u094D\u0925\u093E \u0935\u093F\u092B\u0932",
-      initializationFailed: "\u0915\u094D\u0932\u093E\u0938\u093F\u0915 \u092E\u0947\u0930\u0940 \u0938\u0942\u091A\u0940: \u0924\u094D\u0930\u0941\u091F\u093F - {message}",
-      noNativeCards: "\u092E\u0942\u0932 Netflix \u0915\u093E\u0930\u094D\u0921 \u092A\u094D\u0930\u093E\u092A\u094D\u0924 \u0928\u0939\u0940\u0902 \u0915\u093F\u090F \u091C\u093E \u0938\u0915\u0947\u0964",
-      errorCount: "\u0924\u094D\u0930\u0941\u091F\u093F-{count}"
-    },
-    "th": {
-      legacyMyList: "\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E02\u0E2D\u0E07\u0E09\u0E31\u0E19\u0E41\u0E1A\u0E1A\u0E04\u0E25\u0E32\u0E2A\u0E2A\u0E34\u0E01",
-      itemCount: { other: "{count} \u0E23\u0E32\u0E22\u0E01\u0E32\u0E23" },
-      initializing: "\u0E01\u0E33\u0E25\u0E31\u0E07\u0E40\u0E23\u0E34\u0E48\u0E21\u0E15\u0E49\u0E19...",
-      orderChangedPrompt: "\u0E25\u0E33\u0E14\u0E31\u0E1A\u0E43\u0E19\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E02\u0E2D\u0E07\u0E09\u0E31\u0E19\u0E40\u0E1B\u0E25\u0E35\u0E48\u0E22\u0E19\u0E44\u0E1B \u0E42\u0E1B\u0E23\u0E14\u0E40\u0E23\u0E34\u0E48\u0E21\u0E15\u0E49\u0E19\u0E43\u0E2B\u0E21\u0E48\u0E2D\u0E35\u0E01\u0E04\u0E23\u0E31\u0E49\u0E07",
-      orderChangedOk: "\u0E15\u0E01\u0E25\u0E07",
-      orderChangedCancel: "\u0E22\u0E01\u0E40\u0E25\u0E34\u0E01",
-      initTime: "\u0E40\u0E23\u0E34\u0E48\u0E21\u0E15\u0E49\u0E19 {seconds} \u0E27\u0E34\u0E19\u0E32\u0E17\u0E35",
-      showOriginalMyList: "\u0E41\u0E2A\u0E14\u0E07\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E02\u0E2D\u0E07\u0E09\u0E31\u0E19\u0E15\u0E49\u0E19\u0E09\u0E1A\u0E31\u0E1A",
-      hideOriginalMyList: "\u0E0B\u0E48\u0E2D\u0E19\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E02\u0E2D\u0E07\u0E09\u0E31\u0E19\u0E15\u0E49\u0E19\u0E09\u0E1A\u0E31\u0E1A",
-      emptyMessage: "\u0E04\u0E38\u0E13\u0E08\u0E30\u0E1E\u0E1A\u0E20\u0E32\u0E1E\u0E22\u0E19\u0E15\u0E23\u0E4C\u0E41\u0E25\u0E30\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E17\u0E35\u0E27\u0E35\u0E17\u0E35\u0E48\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E44\u0E27\u0E49\u0E44\u0E14\u0E49\u0E17\u0E35\u0E48\u0E19\u0E35\u0E48",
-      relayoutInProgress: "\u0E01\u0E33\u0E25\u0E31\u0E07\u0E08\u0E31\u0E14\u0E27\u0E32\u0E07\u0E43\u0E2B\u0E21\u0E48...",
-      relayoutFailed: "\u0E08\u0E31\u0E14\u0E27\u0E32\u0E07\u0E43\u0E2B\u0E21\u0E48\u0E44\u0E21\u0E48\u0E2A\u0E33\u0E40\u0E23\u0E47\u0E08",
-      initializationFailed: "\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E02\u0E2D\u0E07\u0E09\u0E31\u0E19\u0E41\u0E1A\u0E1A\u0E04\u0E25\u0E32\u0E2A\u0E2A\u0E34\u0E01: \u0E02\u0E49\u0E2D\u0E1C\u0E34\u0E14\u0E1E\u0E25\u0E32\u0E14 - {message}",
-      noNativeCards: "\u0E44\u0E21\u0E48\u0E2A\u0E32\u0E21\u0E32\u0E23\u0E16\u0E14\u0E36\u0E07\u0E01\u0E32\u0E23\u0E4C\u0E14 Netflix \u0E15\u0E49\u0E19\u0E09\u0E1A\u0E31\u0E1A\u0E44\u0E14\u0E49",
-      errorCount: "\u0E02\u0E49\u0E2D\u0E1C\u0E34\u0E14\u0E1E\u0E25\u0E32\u0E14-{count}"
-    },
-    "zh": {
-      legacyMyList: "\u65E7\u7248\u201C\u6211\u7684\u7247\u5355\u201D",
-      itemCount: { other: "{count}\u9879" },
-      initializing: "\u6B63\u5728\u521D\u59CB\u5316...",
-      orderChangedPrompt: "\u201C\u6211\u7684\u7247\u5355\u201D\u7684\u987A\u5E8F\u5DF2\u66F4\u6539\u3002\u8BF7\u91CD\u65B0\u521D\u59CB\u5316\u3002",
-      orderChangedOk: "\u786E\u5B9A",
-      orderChangedCancel: "\u53D6\u6D88",
-      initTime: "\u521D\u59CB\u5316 {seconds}\u79D2",
-      showOriginalMyList: "\u663E\u793A\u539F\u59CB\u201C\u6211\u7684\u7247\u5355\u201D",
-      hideOriginalMyList: "\u9690\u85CF\u539F\u59CB\u201C\u6211\u7684\u7247\u5355\u201D",
-      emptyMessage: "\u4F60\u4FDD\u5B58\u7684\u7535\u5F71\u548C\u7535\u89C6\u8282\u76EE\u4F1A\u663E\u793A\u5728\u8FD9\u91CC\u3002",
-      relayoutInProgress: "\u6B63\u5728\u91CD\u65B0\u5E03\u5C40...",
-      relayoutFailed: "\u91CD\u65B0\u5E03\u5C40\u5931\u8D25",
-      initializationFailed: "\u65E7\u7248\u201C\u6211\u7684\u7247\u5355\u201D\uFF1A\u5931\u8D25 - {message}",
-      noNativeCards: "\u65E0\u6CD5\u83B7\u53D6 Netflix \u539F\u59CB\u5361\u7247\u3002",
-      errorCount: "\u9519\u8BEF-{count}"
-    },
-    "ja": {
-      legacyMyList: "\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8",
-      itemCount: { other: "{count}\u4EF6" },
-      initializing: "\u521D\u671F\u5316\u4E2D...",
-      orderChangedPrompt: "\u30DE\u30A4\u30EA\u30B9\u30C8\u306E\u4E26\u3073\u9806\u304C\u5909\u308F\u308A\u307E\u3057\u305F\u3002\u521D\u671F\u5316\u3057\u3066\u304F\u3060\u3055\u3044\u3002",
-      orderChangedOk: "OK",
-      orderChangedCancel: "\u30AD\u30E3\u30F3\u30BB\u30EB",
-      initTime: "\u521D\u671F\u5316 {seconds}\u79D2",
-      showOriginalMyList: "\u30AA\u30EA\u30B8\u30CA\u30EB\u306E\u30DE\u30A4\u30EA\u30B9\u30C8\u3092\u8868\u793A\u3059\u308B",
-      hideOriginalMyList: "\u30AA\u30EA\u30B8\u30CA\u30EB\u306E\u30DE\u30A4\u30EA\u30B9\u30C8\u3092\u975E\u8868\u793A\u306B\u3059\u308B",
-      emptyMessage: "\u4FDD\u5B58\u3057\u305F\u6620\u753B\u3084\u30C9\u30E9\u30DE\u3092\u3053\u3061\u3089\u3067\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002",
-      relayoutInProgress: "\u518D\u914D\u7F6E\u4E2D",
-      relayoutFailed: "\u518D\u914D\u7F6E\u5931\u6557",
-      initializationFailed: "\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8: \u5931\u6557 - {message}",
-      noNativeCards: "Netflix\u7D14\u6B63\u30AB\u30FC\u30C9\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002",
-      errorCount: "Error-{count}"
-    },
-    "ko": {
-      legacyMyList: "\uC774\uC804 \uBC84\uC804 \uB098\uC758 \uBAA9\uB85D",
-      itemCount: { other: "{count}\uAC1C" },
-      initializing: "\uCD08\uAE30\uD654 \uC911...",
-      orderChangedPrompt: "\uB0B4 \uBAA9\uB85D\uC758 \uC21C\uC11C\uAC00 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uCD08\uAE30\uD654\uD574 \uC8FC\uC138\uC694.",
-      orderChangedOk: "\uD655\uC778",
-      orderChangedCancel: "\uCDE8\uC18C",
-      initTime: "\uCD08\uAE30\uD654 {seconds}\uCD08",
-      showOriginalMyList: "\uC6D0\uBCF8 \uB098\uC758 \uBAA9\uB85D \uD45C\uC2DC",
-      hideOriginalMyList: "\uC6D0\uBCF8 \uB098\uC758 \uBAA9\uB85D \uC228\uAE30\uAE30",
-      emptyMessage: "\uC800\uC7A5\uD55C \uC601\uD654\uC640 TV \uD504\uB85C\uADF8\uB7A8\uC744 \uC5EC\uAE30\uC5D0\uC11C \uD655\uC778\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.",
-      relayoutInProgress: "\uB808\uC774\uC544\uC6C3 \uC870\uC815 \uC911...",
-      relayoutFailed: "\uB808\uC774\uC544\uC6C3 \uC870\uC815 \uC2E4\uD328",
-      initializationFailed: "\uC774\uC804 \uBC84\uC804 \uB098\uC758 \uBAA9\uB85D: \uC2E4\uD328 - {message}",
-      noNativeCards: "Netflix \uC6D0\uBCF8 \uCE74\uB4DC\uB97C \uAC00\uC838\uC62C \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.",
-      errorCount: "\uC624\uB958-{count}"
-    }
-  };
-  var VIEWING_UI_MESSAGES = {
-    "en": ["Watched / Caught up", "Refresh viewing status", "Checking viewing status...", "Viewing status unavailable for {count} titles. They remain in the main list.", "You are caught up with everything in your list."],
-    "de": ["Gesehen / Auf dem neuesten Stand", "Sehstatus aktualisieren", "Sehstatus wird gepr\xFCft...", "Sehstatus f\xFCr {count} Titel nicht verf\xFCgbar. Sie bleiben in der Hauptliste.", "Du hast alle Titel in deiner Liste gesehen."],
-    "da": ["Set / Ajour", "Opdater visningsstatus", "Kontrollerer visningsstatus...", "Visningsstatus er ikke tilg\xE6ngelig for {count} titler. De bliver p\xE5 hovedlisten.", "Du har set alt p\xE5 din liste."],
-    "es": ["Visto / Al d\xEDa", "Actualizar estado de visualizaci\xF3n", "Comprobando el estado de visualizaci\xF3n...", "Estado no disponible para {count} t\xEDtulos. Permanecen en la lista principal.", "Has visto todo lo que hay en tu lista."],
-    "fil": ["Napanood / Updated", "I-refresh ang status ng panonood", "Sinusuri ang status ng panonood...", "Hindi available ang status ng {count} pamagat. Mananatili sila sa pangunahing listahan.", "Napanood mo na ang lahat sa iyong listahan."],
-    "fr": ["Vu / \xC0 jour", "Actualiser le statut de visionnage", "V\xE9rification du statut de visionnage...", "Statut indisponible pour {count} titres. Ils restent dans la liste principale.", "Vous avez tout vu dans votre liste."],
-    "hr": ["Pogledano / Sve pogledano", "Osvje\u017Ei status gledanja", "Provjera statusa gledanja...", "Status nije dostupan za {count} naslova. Ostaju na glavnom popisu.", "Pogledali ste sve na svom popisu."],
-    "id": ["Sudah ditonton / Sudah mengikuti semua episode", "Perbarui status tontonan", "Memeriksa status tontonan...", "Status tidak tersedia untuk {count} judul. Judul tetap ada di daftar utama.", "Kamu sudah menonton semua yang ada di daftar."],
-    "it": ["Visto / In pari", "Aggiorna lo stato di visione", "Verifica dello stato di visione...", "Stato non disponibile per {count} titoli. Rimangono nella lista principale.", "Hai visto tutto ci\xF2 che \xE8 nella tua lista."],
-    "hu": ["Megn\xE9zve / Naprak\xE9sz", "Megtekint\xE9si \xE1llapot friss\xEDt\xE9se", "Megtekint\xE9si \xE1llapot ellen\u0151rz\xE9se...", "{count} m\u0171sor \xE1llapota nem \xE9rhet\u0151 el. A f\u0151 list\xE1ban maradnak.", "Mindent megn\xE9zt\xE9l a list\xE1don."],
-    "ms": ["Sudah ditonton / Sudah mengikuti semua episod", "Kemas kini status tontonan", "Menyemak status tontonan...", "Status tidak tersedia untuk {count} tajuk. Tajuk kekal dalam senarai utama.", "Anda sudah menonton semua dalam senarai anda."],
-    "nl": ["Bekeken / Bij", "Kijkstatus vernieuwen", "Kijkstatus controleren...", "Kijkstatus niet beschikbaar voor {count} titels. Ze blijven in de hoofdlijst.", "Je hebt alles in je lijst bekeken."],
-    "nb": ["Sett / Ajour", "Oppdater visningsstatus", "Kontrollerer visningsstatus...", "Visningsstatus er utilgjengelig for {count} titler. De blir i hovedlisten.", "Du har sett alt p\xE5 listen din."],
-    "pl": ["Obejrzane / Na bie\u017C\u0105co", "Od\u015Bwie\u017C stan ogl\u0105dania", "Sprawdzanie stanu ogl\u0105dania...", "Stan {count} tytu\u0142\xF3w jest niedost\u0119pny. Pozostaj\u0105 na g\u0142\xF3wnej li\u015Bcie.", "Wszystko na Twojej li\u015Bcie jest obejrzane."],
-    "pt": ["Visto / Em dia", "Atualizar estado de visualiza\xE7\xE3o", "A verificar o estado de visualiza\xE7\xE3o...", "Estado indispon\xEDvel para {count} t\xEDtulos. Permanecem na lista principal.", "J\xE1 viu tudo na sua lista."],
-    "ro": ["Vizionat / La zi", "Actualizeaz\u0103 starea vizion\u0103rii", "Se verific\u0103 starea vizion\u0103rii...", "Starea nu este disponibil\u0103 pentru {count} titluri. R\u0103m\xE2n \xEEn lista principal\u0103.", "Ai vizionat tot ce este \xEEn lista ta."],
-    "fi": ["Katsottu / Ajan tasalla", "P\xE4ivit\xE4 katselutila", "Tarkistetaan katselutilaa...", "{count} nimikkeen katselutila ei ole saatavilla. Ne pysyv\xE4t p\xE4\xE4listassa.", "Olet katsonut kaiken listaltasi."],
-    "sv": ["Sett / Ikapp", "Uppdatera visningsstatus", "Kontrollerar visningsstatus...", "Visningsstatus saknas f\xF6r {count} titlar. De finns kvar i huvudlistan.", "Du har sett allt p\xE5 din lista."],
-    "vi": ["\u0110\xE3 xem / \u0110\xE3 xem h\u1EBFt c\xE1c t\u1EADp hi\u1EC7n c\xF3", "C\u1EADp nh\u1EADt tr\u1EA1ng th\xE1i xem", "\u0110ang ki\u1EC3m tra tr\u1EA1ng th\xE1i xem...", "Kh\xF4ng c\xF3 tr\u1EA1ng th\xE1i c\u1EE7a {count} t\u1EF1a phim. Ch\xFAng v\u1EABn \u1EDF danh s\xE1ch ch\xEDnh.", "B\u1EA1n \u0111\xE3 xem h\u1EBFt m\u1ECDi n\u1ED9i dung trong danh s\xE1ch."],
-    "tr": ["\u0130zlendi / G\xFCncel b\xF6l\xFCmler izlendi", "\u0130zleme durumunu yenile", "\u0130zleme durumu kontrol ediliyor...", "{count} i\xE7eri\u011Fin durumu kullan\u0131lam\u0131yor. Ana listede kal\u0131rlar.", "Listenizdeki t\xFCm i\xE7erikleri izlediniz."],
-    "cs": ["Zhl\xE9dnuto / V\u0161echny d\xEDly zhl\xE9dnuty", "Aktualizovat stav sledov\xE1n\xED", "Kontrola stavu sledov\xE1n\xED...", "Stav {count} titul\u016F nen\xED dostupn\xFD. Z\u016Fst\xE1vaj\xED v hlavn\xEDm seznamu.", "Zhl\xE9dli jste v\u0161e ve sv\xE9m seznamu."],
-    "el": ["\u03A0\u03C1\u03BF\u03B2\u03BB\u03AE\u03B8\u03B7\u03BA\u03B5 / \u038C\u03BB\u03B1 \u03C4\u03B1 \u03B4\u03B9\u03B1\u03B8\u03AD\u03C3\u03B9\u03BC\u03B1 \u03B5\u03C0\u03B5\u03B9\u03C3\u03CC\u03B4\u03B9\u03B1 \u03C0\u03C1\u03BF\u03B2\u03BB\u03AE\u03B8\u03B7\u03BA\u03B1\u03BD", "\u0391\u03BD\u03B1\u03BD\u03AD\u03C9\u03C3\u03B7 \u03BA\u03B1\u03C4\u03AC\u03C3\u03C4\u03B1\u03C3\u03B7\u03C2 \u03C0\u03C1\u03BF\u03B2\u03BF\u03BB\u03AE\u03C2", "\u0388\u03BB\u03B5\u03B3\u03C7\u03BF\u03C2 \u03BA\u03B1\u03C4\u03AC\u03C3\u03C4\u03B1\u03C3\u03B7\u03C2 \u03C0\u03C1\u03BF\u03B2\u03BF\u03BB\u03AE\u03C2...", "\u039C\u03B7 \u03B4\u03B9\u03B1\u03B8\u03AD\u03C3\u03B9\u03BC\u03B7 \u03BA\u03B1\u03C4\u03AC\u03C3\u03C4\u03B1\u03C3\u03B7 \u03B3\u03B9\u03B1 {count} \u03C4\u03AF\u03C4\u03BB\u03BF\u03C5\u03C2. \u03A0\u03B1\u03C1\u03B1\u03BC\u03AD\u03BD\u03BF\u03C5\u03BD \u03C3\u03C4\u03B7\u03BD \u03BA\u03CD\u03C1\u03B9\u03B1 \u03BB\u03AF\u03C3\u03C4\u03B1.", "\u0388\u03C7\u03B5\u03C4\u03B5 \u03B4\u03B5\u03B9 \u03C4\u03B1 \u03C0\u03AC\u03BD\u03C4\u03B1 \u03C3\u03C4\u03B7 \u03BB\u03AF\u03C3\u03C4\u03B1 \u03C3\u03B1\u03C2."],
-    "ru": ["\u041F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0435\u043D\u043E / \u0412\u0441\u0435 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B\u0435 \u0441\u0435\u0440\u0438\u0438 \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0435\u043D\u044B", "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u0441\u0442\u0430\u0442\u0443\u0441 \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0430", "\u041F\u0440\u043E\u0432\u0435\u0440\u043A\u0430 \u0441\u0442\u0430\u0442\u0443\u0441\u0430 \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0430...", "\u0421\u0442\u0430\u0442\u0443\u0441 {count} \u043D\u0430\u0438\u043C\u0435\u043D\u043E\u0432\u0430\u043D\u0438\u0439 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D. \u041E\u043D\u0438 \u043E\u0441\u0442\u0430\u044E\u0442\u0441\u044F \u0432 \u043E\u0441\u043D\u043E\u0432\u043D\u043E\u043C \u0441\u043F\u0438\u0441\u043A\u0435.", "\u0412\u044B \u043F\u043E\u0441\u043C\u043E\u0442\u0440\u0435\u043B\u0438 \u0432\u0441\u0451 \u0432 \u0441\u0432\u043E\u0451\u043C \u0441\u043F\u0438\u0441\u043A\u0435."],
-    "uk": ["\u041F\u0435\u0440\u0435\u0433\u043B\u044F\u043D\u0443\u0442\u043E / \u0423\u0441\u0456 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456 \u0441\u0435\u0440\u0456\u0457 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u043D\u0443\u0442\u043E", "\u041E\u043D\u043E\u0432\u0438\u0442\u0438 \u0441\u0442\u0430\u043D \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u0434\u0443", "\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430 \u0441\u0442\u0430\u043D\u0443 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u0434\u0443...", "\u0421\u0442\u0430\u043D {count} \u043D\u0430\u0439\u043C\u0435\u043D\u0443\u0432\u0430\u043D\u044C \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0438\u0439. \u0412\u043E\u043D\u0438 \u0437\u0430\u043B\u0438\u0448\u0430\u044E\u0442\u044C\u0441\u044F \u0432 \u043E\u0441\u043D\u043E\u0432\u043D\u043E\u043C\u0443 \u0441\u043F\u0438\u0441\u043A\u0443.", "\u0412\u0438 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u043D\u0443\u043B\u0438 \u0432\u0441\u0435 \u0443 \u0441\u0432\u043E\u0454\u043C\u0443 \u0441\u043F\u0438\u0441\u043A\u0443."],
-    "he": ["\u05E0\u05E6\u05E4\u05D4 / \u05DB\u05DC \u05D4\u05E4\u05E8\u05E7\u05D9\u05DD \u05D4\u05D6\u05DE\u05D9\u05E0\u05D9\u05DD \u05E0\u05E6\u05E4\u05D5", "\u05E8\u05E2\u05E0\u05D5\u05DF \u05DE\u05E6\u05D1 \u05E6\u05E4\u05D9\u05D9\u05D4", "\u05D1\u05D3\u05D9\u05E7\u05EA \u05DE\u05E6\u05D1 \u05E6\u05E4\u05D9\u05D9\u05D4...", "\u05DE\u05E6\u05D1 \u05D4\u05E6\u05E4\u05D9\u05D9\u05D4 \u05D0\u05D9\u05E0\u05D5 \u05D6\u05DE\u05D9\u05DF \u05E2\u05D1\u05D5\u05E8 {count} \u05DB\u05D5\u05EA\u05E8\u05D9\u05DD. \u05D4\u05DD \u05E0\u05E9\u05D0\u05E8\u05D9\u05DD \u05D1\u05E8\u05E9\u05D9\u05DE\u05D4 \u05D4\u05E8\u05D0\u05E9\u05D9\u05EA.", "\u05E6\u05E4\u05D9\u05EA \u05D1\u05DB\u05DC \u05DE\u05D4 \u05E9\u05D1\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05DA."],
-    "ar": ["\u062A\u0645\u062A \u0627\u0644\u0645\u0634\u0627\u0647\u062F\u0629 / \u062A\u0645\u062A \u0645\u0634\u0627\u0647\u062F\u0629 \u0643\u0644 \u0627\u0644\u062D\u0644\u0642\u0627\u062A \u0627\u0644\u0645\u062A\u0627\u062D\u0629", "\u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0627\u0644\u0645\u0634\u0627\u0647\u062F\u0629", "\u062C\u0627\u0631\u064D \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u062D\u0627\u0644\u0629 \u0627\u0644\u0645\u0634\u0627\u0647\u062F\u0629...", "\u062D\u0627\u0644\u0629 \u0627\u0644\u0645\u0634\u0627\u0647\u062F\u0629 \u063A\u064A\u0631 \u0645\u062A\u0627\u062D\u0629 \u0644\u0640 {count} \u0639\u0646\u0648\u0627\u0646\u064B\u0627. \u062A\u0628\u0642\u0649 \u0641\u064A \u0627\u0644\u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0631\u0626\u064A\u0633\u064A\u0629.", "\u0634\u0627\u0647\u062F\u062A \u0643\u0644 \u0645\u0627 \u0641\u064A \u0642\u0627\u0626\u0645\u062A\u0643."],
-    "hi": ["\u0926\u0947\u0916 \u0932\u093F\u092F\u093E / \u0938\u092D\u0940 \u0909\u092A\u0932\u092C\u094D\u0927 \u090F\u092A\u093F\u0938\u094B\u0921 \u0926\u0947\u0916 \u0932\u093F\u090F", "\u0926\u0947\u0916\u0928\u0947 \u0915\u0940 \u0938\u094D\u0925\u093F\u0924\u093F \u0930\u0940\u092B\u093C\u094D\u0930\u0947\u0936 \u0915\u0930\u0947\u0902", "\u0926\u0947\u0916\u0928\u0947 \u0915\u0940 \u0938\u094D\u0925\u093F\u0924\u093F \u091C\u093E\u0901\u091A\u0940 \u091C\u093E \u0930\u0939\u0940 \u0939\u0948...", "{count} \u091F\u093E\u0907\u091F\u0932 \u0915\u0940 \u0938\u094D\u0925\u093F\u0924\u093F \u0909\u092A\u0932\u092C\u094D\u0927 \u0928\u0939\u0940\u0902 \u0939\u0948\u0964 \u0935\u0947 \u092E\u0941\u0916\u094D\u092F \u0938\u0942\u091A\u0940 \u092E\u0947\u0902 \u0930\u0939\u0947\u0902\u0917\u0947\u0964", "\u0906\u092A\u0928\u0947 \u0905\u092A\u0928\u0940 \u0938\u0942\u091A\u0940 \u092E\u0947\u0902 \u0938\u092C \u0915\u0941\u091B \u0926\u0947\u0916 \u0932\u093F\u092F\u093E \u0939\u0948\u0964"],
-    "th": ["\u0E14\u0E39\u0E41\u0E25\u0E49\u0E27 / \u0E14\u0E39\u0E04\u0E23\u0E1A\u0E17\u0E38\u0E01\u0E15\u0E2D\u0E19\u0E17\u0E35\u0E48\u0E21\u0E35\u0E41\u0E25\u0E49\u0E27", "\u0E23\u0E35\u0E40\u0E1F\u0E23\u0E0A\u0E2A\u0E16\u0E32\u0E19\u0E30\u0E01\u0E32\u0E23\u0E23\u0E31\u0E1A\u0E0A\u0E21", "\u0E01\u0E33\u0E25\u0E31\u0E07\u0E15\u0E23\u0E27\u0E08\u0E2A\u0E2D\u0E1A\u0E2A\u0E16\u0E32\u0E19\u0E30\u0E01\u0E32\u0E23\u0E23\u0E31\u0E1A\u0E0A\u0E21...", "\u0E44\u0E21\u0E48\u0E21\u0E35\u0E2A\u0E16\u0E32\u0E19\u0E30\u0E01\u0E32\u0E23\u0E23\u0E31\u0E1A\u0E0A\u0E21\u0E2A\u0E33\u0E2B\u0E23\u0E31\u0E1A {count} \u0E40\u0E23\u0E37\u0E48\u0E2D\u0E07 \u0E08\u0E30\u0E41\u0E2A\u0E14\u0E07\u0E43\u0E19\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E2B\u0E25\u0E31\u0E01\u0E15\u0E48\u0E2D\u0E44\u0E1B", "\u0E04\u0E38\u0E13\u0E14\u0E39\u0E17\u0E38\u0E01\u0E40\u0E23\u0E37\u0E48\u0E2D\u0E07\u0E43\u0E19\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E04\u0E23\u0E1A\u0E41\u0E25\u0E49\u0E27"],
-    "zh": ["\u5DF2\u89C2\u770B / \u5DF2\u770B\u5B8C\u73B0\u6709\u5267\u96C6", "\u5237\u65B0\u89C2\u770B\u72B6\u6001", "\u6B63\u5728\u68C0\u67E5\u89C2\u770B\u72B6\u6001...", "{count} \u90E8\u4F5C\u54C1\u7684\u89C2\u770B\u72B6\u6001\u4E0D\u53EF\u7528\u3002\u5B83\u4EEC\u5C06\u4FDD\u7559\u5728\u4E3B\u5217\u8868\u4E2D\u3002", "\u4F60\u5DF2\u770B\u5B8C\u5217\u8868\u4E2D\u7684\u6240\u6709\u5185\u5BB9\u3002"],
-    "ja": ["\u8996\u8074\u6E08\u307F / \u914D\u4FE1\u4E2D\u306E\u5168\u8A71\u3092\u8996\u8074\u6E08\u307F", "\u8996\u8074\u72B6\u6CC1\u3092\u66F4\u65B0", "\u8996\u8074\u72B6\u6CC1\u3092\u78BA\u8A8D\u4E2D...", "{count}\u4F5C\u54C1\u306E\u8996\u8074\u72B6\u6CC1\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3002\u30E1\u30A4\u30F3\u30EA\u30B9\u30C8\u306B\u8868\u793A\u3057\u307E\u3059\u3002", "\u30EA\u30B9\u30C8\u5185\u306E\u3059\u3079\u3066\u306E\u4F5C\u54C1\u3092\u8996\u8074\u6E08\u307F\u3067\u3059\u3002"],
-    "ko": ["\uC2DC\uCCAD \uC644\uB8CC / \uACF5\uAC1C\uB41C \uBAA8\uB4E0 \uD68C\uCC28 \uC2DC\uCCAD \uC644\uB8CC", "\uC2DC\uCCAD \uC0C1\uD0DC \uC0C8\uB85C\uACE0\uCE68", "\uC2DC\uCCAD \uC0C1\uD0DC \uD655\uC778 \uC911...", "{count}\uAC1C \uC791\uD488\uC758 \uC2DC\uCCAD \uC0C1\uD0DC\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uAE30\uBCF8 \uBAA9\uB85D\uC5D0 \uACC4\uC18D \uD45C\uC2DC\uB429\uB2C8\uB2E4.", "\uBAA9\uB85D\uC758 \uBAA8\uB4E0 \uC791\uD488\uC744 \uC2DC\uCCAD\uD588\uC2B5\uB2C8\uB2E4."]
-  };
-  for (const [locale, values] of Object.entries(VIEWING_UI_MESSAGES)) {
-    const keys = ["watchedCaughtUp", "refreshViewingStatus", "checkingViewingStatus", "unknownViewingStatus", "caughtUpMessage"];
-    keys.forEach((key, index) => {
-      UI_MESSAGES[locale][key] = values[index];
-    });
-  }
-  var TYPE_FILTER_UI_MESSAGES = {
-    "da": ["Film", "Serier", "Alle", "Filtrer efter titeltype", "Ingen titler matcher dette filter.", "Ukendt titeltype: {count}. V\xE6lg Alle for at se dem."],
-    "de": ["Filme", "Serien", "Alle", "Nach Titeltyp filtern", "Keine Titel passen zu diesem Filter.", "Unbekannter Titeltyp: {count}. W\xE4hle Alle, um diese Titel zu sehen."],
-    "en": ["Films", "Series", "All", "Filter by title type", "No titles match this filter.", "Type unavailable for {count} titles. Choose All to see them."],
-    "es": ["Pel\xEDculas", "Series", "Todo", "Filtrar por tipo de t\xEDtulo", "Ning\xFAn t\xEDtulo coincide con este filtro.", "Tipo desconocido: {count}. Selecciona Todo para ver esos t\xEDtulos."],
-    "fil": ["Mga pelikula", "Mga serye", "Lahat", "I-filter ayon sa uri", "Walang pamagat na tumutugma sa filter na ito.", "Hindi alam ang uri ng {count} pamagat. Piliin ang Lahat para makita ang mga ito."],
-    "fr": ["Films", "S\xE9ries", "Tout", "Filtrer par type de titre", "Aucun titre ne correspond \xE0 ce filtre.", "Type inconnu pour {count} titres. S\xE9lectionnez Tout pour les voir."],
-    "hr": ["Filmovi", "Serije", "Sve", "Filtriraj prema vrsti naslova", "Nema naslova koji odgovaraju ovom filtru.", "Nepoznata vrsta za {count} naslova. Odaberi Sve za prikaz."],
-    "id": ["Film", "Serial", "Semua", "Filter menurut jenis judul", "Tidak ada judul yang cocok dengan filter ini.", "Jenis tidak diketahui untuk {count} judul. Pilih Semua untuk melihatnya."],
-    "it": ["Film", "Serie", "Tutti", "Filtra per tipo di titolo", "Nessun titolo corrisponde a questo filtro.", "Tipo sconosciuto per {count} titoli. Seleziona Tutti per vederli."],
-    "hu": ["Filmek", "Sorozatok", "\xD6sszes", "Sz\u0171r\xE9s t\xEDpus szerint", "Egyetlen c\xEDm sem felel meg ennek a sz\u0171r\u0151nek.", "Ismeretlen t\xEDpus: {count}. Megjelen\xEDt\xE9s\xFCkh\xF6z v\xE1laszd az \xD6sszes lehet\u0151s\xE9get."],
-    "ms": ["Filem", "Siri", "Semua", "Tapis mengikut jenis tajuk", "Tiada tajuk sepadan dengan penapis ini.", "Jenis tidak diketahui untuk {count} tajuk. Pilih Semua untuk melihatnya."],
-    "nl": ["Films", "Series", "Alles", "Filteren op titeltype", "Geen titels passen bij dit filter.", "Onbekend type voor {count} titels. Kies Alles om ze te zien."],
-    "nb": ["Filmer", "Serier", "Alle", "Filtrer etter titteltype", "Ingen titler passer til dette filteret.", "Ukjent type for {count} titler. Velg Alle for \xE5 se dem."],
-    "pl": ["Filmy", "Seriale", "Wszystko", "Filtruj wed\u0142ug typu", "\u017Baden tytu\u0142 nie pasuje do tego filtra.", "Nieznany typ: {count}. Wybierz Wszystko, aby zobaczy\u0107 te tytu\u0142y."],
-    "pt": ["Filmes", "S\xE9ries", "Tudo", "Filtrar por tipo de t\xEDtulo", "Nenhum t\xEDtulo corresponde a este filtro.", "Tipo desconhecido para {count} t\xEDtulos. Selecione Tudo para v\xEA-los."],
-    "ro": ["Filme", "Seriale", "Toate", "Filtreaz\u0103 dup\u0103 tip", "Niciun titlu nu corespunde acestui filtru.", "Tip necunoscut pentru {count} titluri. Selecteaz\u0103 Toate pentru a le vedea."],
-    "fi": ["Elokuvat", "Sarjat", "Kaikki", "Suodata nimikkeen tyypin mukaan", "Yksik\xE4\xE4n nimike ei vastaa t\xE4t\xE4 suodatinta.", "Tuntematon tyyppi: {count}. N\xE4et n\xE4m\xE4 nimikkeet valitsemalla Kaikki."],
-    "sv": ["Filmer", "Serier", "Alla", "Filtrera efter titeltyp", "Inga titlar matchar detta filter.", "Ok\xE4nd typ f\xF6r {count} titlar. V\xE4lj Alla f\xF6r att se dem."],
-    "vi": ["Phim", "Lo\u1EA1t phim", "T\u1EA5t c\u1EA3", "L\u1ECDc theo lo\u1EA1i n\u1ED9i dung", "Kh\xF4ng c\xF3 n\u1ED9i dung n\xE0o ph\xF9 h\u1EE3p v\u1EDBi b\u1ED9 l\u1ECDc n\xE0y.", "Kh\xF4ng r\xF5 lo\u1EA1i c\u1EE7a {count} n\u1ED9i dung. Ch\u1ECDn T\u1EA5t c\u1EA3 \u0111\u1EC3 xem."],
-    "tr": ["Filmler", "Diziler", "T\xFCm\xFC", "\u0130\xE7erik t\xFCr\xFCne g\xF6re filtrele", "Bu filtreye uygun i\xE7erik yok.", "T\xFCr\xFC bilinmeyen i\xE7erik: {count}. G\xF6rmek i\xE7in T\xFCm\xFC se\xE7ene\u011Fini se\xE7in."],
-    "cs": ["Filmy", "Seri\xE1ly", "V\u0161e", "Filtrovat podle typu", "Tomuto filtru neodpov\xEDd\xE1 \u017E\xE1dn\xFD titul.", "Nezn\xE1m\xFD typ: {count}. Pro zobrazen\xED t\u011Bchto titul\u016F vyberte V\u0161e."],
-    "el": ["\u03A4\u03B1\u03B9\u03BD\u03AF\u03B5\u03C2", "\u03A3\u03B5\u03B9\u03C1\u03AD\u03C2", "\u038C\u03BB\u03B1", "\u03A6\u03B9\u03BB\u03C4\u03C1\u03AC\u03C1\u03B9\u03C3\u03BC\u03B1 \u03B1\u03BD\u03AC \u03C4\u03CD\u03C0\u03BF \u03C4\u03AF\u03C4\u03BB\u03BF\u03C5", "\u039A\u03B1\u03BD\u03AD\u03BD\u03B1\u03C2 \u03C4\u03AF\u03C4\u03BB\u03BF\u03C2 \u03B4\u03B5\u03BD \u03B1\u03BD\u03C4\u03B9\u03C3\u03C4\u03BF\u03B9\u03C7\u03B5\u03AF \u03C3\u03B5 \u03B1\u03C5\u03C4\u03CC \u03C4\u03BF \u03C6\u03AF\u03BB\u03C4\u03C1\u03BF.", "\u0386\u03B3\u03BD\u03C9\u03C3\u03C4\u03BF\u03C2 \u03C4\u03CD\u03C0\u03BF\u03C2 \u03B3\u03B9\u03B1 {count} \u03C4\u03AF\u03C4\u03BB\u03BF\u03C5\u03C2. \u0395\u03C0\u03B9\u03BB\u03AD\u03BE\u03C4\u03B5 \u038C\u03BB\u03B1 \u03B3\u03B9\u03B1 \u03BD\u03B1 \u03C4\u03BF\u03C5\u03C2 \u03B4\u03B5\u03AF\u03C4\u03B5."],
-    "ru": ["\u0424\u0438\u043B\u044C\u043C\u044B", "\u0421\u0435\u0440\u0438\u0430\u043B\u044B", "\u0412\u0441\u0435", "\u0424\u0438\u043B\u044C\u0442\u0440 \u043F\u043E \u0442\u0438\u043F\u0443", "\u041D\u0435\u0442 \u043F\u0440\u043E\u0438\u0437\u0432\u0435\u0434\u0435\u043D\u0438\u0439, \u0441\u043E\u043E\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u044E\u0449\u0438\u0445 \u044D\u0442\u043E\u043C\u0443 \u0444\u0438\u043B\u044C\u0442\u0440\u0443.", "\u041D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u044B\u0439 \u0442\u0438\u043F: {count}. \u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0412\u0441\u0435, \u0447\u0442\u043E\u0431\u044B \u0438\u0445 \u0443\u0432\u0438\u0434\u0435\u0442\u044C."],
-    "uk": ["\u0424\u0456\u043B\u044C\u043C\u0438", "\u0421\u0435\u0440\u0456\u0430\u043B\u0438", "\u0423\u0441\u0456", "\u0424\u0456\u043B\u044C\u0442\u0440 \u0437\u0430 \u0442\u0438\u043F\u043E\u043C", "\u041D\u0435\u043C\u0430\u0454 \u043D\u0430\u0439\u043C\u0435\u043D\u0443\u0432\u0430\u043D\u044C, \u0449\u043E \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u044E\u0442\u044C \u0446\u044C\u043E\u043C\u0443 \u0444\u0456\u043B\u044C\u0442\u0440\u0443.", "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u0442\u0438\u043F: {count}. \u0412\u0438\u0431\u0435\u0440\u0456\u0442\u044C \u0423\u0441\u0456, \u0449\u043E\u0431 \u0457\u0445 \u043F\u043E\u0431\u0430\u0447\u0438\u0442\u0438."],
-    "he": ["\u05E1\u05E8\u05D8\u05D9\u05DD", "\u05E1\u05D3\u05E8\u05D5\u05EA", "\u05D4\u05DB\u05D5\u05DC", "\u05E1\u05D9\u05E0\u05D5\u05DF \u05DC\u05E4\u05D9 \u05E1\u05D5\u05D2 \u05DB\u05D5\u05EA\u05E8", "\u05D0\u05D9\u05DF \u05DB\u05D5\u05EA\u05E8\u05D9\u05DD \u05D4\u05EA\u05D5\u05D0\u05DE\u05D9\u05DD \u05DC\u05DE\u05E1\u05E0\u05DF \u05D4\u05D6\u05D4.", "\u05E1\u05D5\u05D2 \u05DC\u05D0 \u05D9\u05D3\u05D5\u05E2 \u05E2\u05D1\u05D5\u05E8 {count} \u05DB\u05D5\u05EA\u05E8\u05D9\u05DD. \u05D1\u05D7\u05E8\u05D5 \u05D4\u05DB\u05D5\u05DC \u05DB\u05D3\u05D9 \u05DC\u05E8\u05D0\u05D5\u05EA \u05D0\u05D5\u05EA\u05DD."],
-    "ar": ["\u0623\u0641\u0644\u0627\u0645", "\u0645\u0633\u0644\u0633\u0644\u0627\u062A", "\u0627\u0644\u0643\u0644", "\u062A\u0635\u0641\u064A\u0629 \u062D\u0633\u0628 \u0646\u0648\u0639 \u0627\u0644\u0639\u0646\u0648\u0627\u0646", "\u0644\u0627 \u062A\u0648\u062C\u062F \u0639\u0646\u0627\u0648\u064A\u0646 \u062A\u0637\u0627\u0628\u0642 \u0647\u0630\u0627 \u0627\u0644\u0641\u0644\u062A\u0631.", "\u0646\u0648\u0639 \u063A\u064A\u0631 \u0645\u0639\u0631\u0648\u0641 \u0644\u0640 {count} \u0639\u0646\u0648\u0627\u0646\u064B\u0627. \u0627\u062E\u062A\u0631 \u0627\u0644\u0643\u0644 \u0644\u0639\u0631\u0636\u0647\u0627."],
-    "hi": ["\u092B\u093C\u093F\u0932\u094D\u092E\u0947\u0902", "\u0938\u0940\u0930\u0940\u091C\u093C", "\u0938\u092D\u0940", "\u091F\u093E\u0907\u091F\u0932 \u0915\u0947 \u092A\u094D\u0930\u0915\u093E\u0930 \u0938\u0947 \u092B\u093C\u093F\u0932\u094D\u091F\u0930 \u0915\u0930\u0947\u0902", "\u0907\u0938 \u092B\u093C\u093F\u0932\u094D\u091F\u0930 \u0938\u0947 \u0915\u094B\u0908 \u091F\u093E\u0907\u091F\u0932 \u092E\u0947\u0932 \u0928\u0939\u0940\u0902 \u0916\u093E\u0924\u093E.", "{count} \u091F\u093E\u0907\u091F\u0932 \u0915\u093E \u092A\u094D\u0930\u0915\u093E\u0930 \u0909\u092A\u0932\u092C\u094D\u0927 \u0928\u0939\u0940\u0902 \u0939\u0948. \u0907\u0928\u094D\u0939\u0947\u0902 \u0926\u0947\u0916\u0928\u0947 \u0915\u0947 \u0932\u093F\u090F \u0938\u092D\u0940 \u091A\u0941\u0928\u0947\u0902."],
-    "th": ["\u0E20\u0E32\u0E1E\u0E22\u0E19\u0E15\u0E23\u0E4C", "\u0E0B\u0E35\u0E23\u0E35\u0E2A\u0E4C", "\u0E17\u0E31\u0E49\u0E07\u0E2B\u0E21\u0E14", "\u0E01\u0E23\u0E2D\u0E07\u0E15\u0E32\u0E21\u0E1B\u0E23\u0E30\u0E40\u0E20\u0E17\u0E40\u0E19\u0E37\u0E49\u0E2D\u0E2B\u0E32", "\u0E44\u0E21\u0E48\u0E21\u0E35\u0E40\u0E19\u0E37\u0E49\u0E2D\u0E2B\u0E32\u0E17\u0E35\u0E48\u0E15\u0E23\u0E07\u0E01\u0E31\u0E1A\u0E15\u0E31\u0E27\u0E01\u0E23\u0E2D\u0E07\u0E19\u0E35\u0E49", "\u0E44\u0E21\u0E48\u0E17\u0E23\u0E32\u0E1A\u0E1B\u0E23\u0E30\u0E40\u0E20\u0E17\u0E02\u0E2D\u0E07\u0E40\u0E19\u0E37\u0E49\u0E2D\u0E2B\u0E32 {count} \u0E40\u0E23\u0E37\u0E48\u0E2D\u0E07 \u0E40\u0E25\u0E37\u0E2D\u0E01\u0E17\u0E31\u0E49\u0E07\u0E2B\u0E21\u0E14\u0E40\u0E1E\u0E37\u0E48\u0E2D\u0E14\u0E39"],
-    "zh": ["\u7535\u5F71", "\u5267\u96C6", "\u5168\u90E8", "\u6309\u4F5C\u54C1\u7C7B\u578B\u7B5B\u9009", "\u6CA1\u6709\u7B26\u5408\u6B64\u7B5B\u9009\u6761\u4EF6\u7684\u4F5C\u54C1\u3002", "{count} \u90E8\u4F5C\u54C1\u7684\u7C7B\u578B\u4E0D\u660E\u3002\u9009\u62E9\u5168\u90E8\u4EE5\u67E5\u770B\u3002"],
-    "ja": ["\u6620\u753B", "\u30B7\u30EA\u30FC\u30BA", "\u3059\u3079\u3066", "\u4F5C\u54C1\u306E\u7A2E\u985E\u3067\u7D5E\u308A\u8FBC\u3080", "\u3053\u306E\u6761\u4EF6\u306B\u5408\u3046\u4F5C\u54C1\u306F\u3042\u308A\u307E\u305B\u3093\u3002", "{count}\u4F5C\u54C1\u306E\u7A2E\u985E\u304C\u4E0D\u660E\u3067\u3059\u3002\u3059\u3079\u3066\u3092\u9078\u629E\u3059\u308B\u3068\u8868\u793A\u3067\u304D\u307E\u3059\u3002"],
-    "ko": ["\uC601\uD654", "\uC2DC\uB9AC\uC988", "\uC804\uCCB4", "\uC791\uD488 \uC720\uD615\uBCC4 \uD544\uD130", "\uC774 \uD544\uD130\uC5D0 \uB9DE\uB294 \uC791\uD488\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.", "\uC720\uD615\uC744 \uC54C \uC218 \uC5C6\uB294 \uC791\uD488\uC774 {count}\uAC1C \uC788\uC2B5\uB2C8\uB2E4. \uC804\uCCB4\uB97C \uC120\uD0DD\uD558\uBA74 \uBCFC \uC218 \uC788\uC2B5\uB2C8\uB2E4."]
-  };
-  for (const [locale, values] of Object.entries(TYPE_FILTER_UI_MESSAGES)) {
-    const keys = ["filterFilms", "filterSeries", "filterAll", "titleTypeFilter", "noMatchingTitles", "unknownTitleTypes"];
-    keys.forEach((key, index) => {
-      UI_MESSAGES[locale][key] = values[index];
-    });
-  }
-  var MANUAL_VIEWING_UI_MESSAGES = {
-    "da": ["Mark\xE9r som set", "Mark\xE9r som ajour", "Tilbage til Min liste", "Manuel", "Kunne ikke gemme visningsvalg. Genindl\xE6s og pr\xF8v igen.", "Placeret her af dig"],
-    "de": ["Als gesehen markieren", "Als aufgeholt markieren", "Zur\xFCck zu Meine Liste", "Manuell", "Auswahl konnte nicht gespeichert werden. Neu laden und erneut versuchen.", "Von dir hier eingeordnet"],
-    "en": ["Mark watched", "Mark caught up", "Move back to My List", "Manual", "Could not save viewing choices. Reload and try again.", "Placed here by you"],
-    "es": ["Marcar como visto", "Marcar como al d\xEDa", "Volver a Mi lista", "Manual", "No se pudieron guardar tus cambios. Recarga e int\xE9ntalo de nuevo.", "Colocado aqu\xED por ti"],
-    "fil": ["Markahang napanood", "Markahang napapanahon", "Ibalik sa Listahan Ko", "Manu-mano", "Hindi ma-save ang mga pagbabago. I-reload at subukan muli.", "Ikaw ang naglagay dito"],
-    "fr": ["Marquer comme vu", "Marquer comme \xE0 jour", "Remettre dans Ma liste", "Manuel", "Impossible d\u2019enregistrer les choix. Rechargez et r\xE9essayez.", "Plac\xE9 ici par vous"],
-    "hr": ["Ozna\u010Di kao pogledano", "Ozna\u010Di sve kao pogledano", "Vrati na Moj popis", "Ru\u010Dno", "Nije mogu\u0107e spremiti odabire. Ponovno u\u010Ditaj i poku\u0161aj.", "Vi ste ovo ovdje premjestili"],
-    "id": ["Tandai sudah ditonton", "Tandai sudah mengikuti", "Kembali ke Daftar Saya", "Manual", "Pilihan tidak dapat disimpan. Muat ulang dan coba lagi.", "Ditempatkan di sini oleh Anda"],
-    "it": ["Segna come visto", "Segna come in pari", "Riporta in La mia lista", "Manuale", "Impossibile salvare le scelte. Ricarica e riprova.", "Spostato qui da te"],
-    "hu": ["Megn\xE9zettnek jel\xF6l\xE9s", "Naprak\xE9sznek jel\xF6l\xE9s", "Vissza a Saj\xE1t list\xE1mra", "K\xE9zi", "A v\xE1laszt\xE1sok ment\xE9se sikertelen. T\xF6ltsd \xFAjra \xE9s pr\xF3b\xE1ld meg ism\xE9t.", "Te helyezted ide"],
-    "ms": ["Tandakan sudah ditonton", "Tandakan sudah mengikuti", "Kembali ke Senarai Saya", "Manual", "Pilihan tidak dapat disimpan. Muat semula dan cuba lagi.", "Diletakkan di sini oleh anda"],
-    "nl": ["Markeer als bekeken", "Markeer als bijgewerkt", "Terug naar Mijn lijst", "Handmatig", "Keuzes konden niet worden opgeslagen. Herlaad en probeer opnieuw.", "Door jou hier geplaatst"],
-    "nb": ["Merk som sett", "Merk som \xE0 jour", "Tilbake til Min liste", "Manuelt", "Kunne ikke lagre valgene. Last inn p\xE5 nytt og pr\xF8v igjen.", "Plassert her av deg"],
-    "pl": ["Oznacz jako obejrzane", "Oznacz jako na bie\u017C\u0105co", "Przenie\u015B do Mojej listy", "R\u0119cznie", "Nie uda\u0142o si\u0119 zapisa\u0107 wybor\xF3w. Od\u015Bwie\u017C i spr\xF3buj ponownie.", "Umieszczone tutaj przez Ciebie"],
-    "pt": ["Marcar como visto", "Marcar como atualizado", "Voltar para Minha lista", "Manual", "N\xE3o foi poss\xEDvel salvar as escolhas. Recarregue e tente novamente.", "Colocado aqui por voc\xEA"],
-    "ro": ["Marcheaz\u0103 ca vizionat", "Marcheaz\u0103 ca la zi", "\xCEnapoi \xEEn Lista mea", "Manual", "Nu s-au putut salva alegerile. Re\xEEncarc\u0103 \u0219i \xEEncearc\u0103 din nou.", "Plasat aici de tine"],
-    "fi": ["Merkitse katsotuksi", "Merkitse ajan tasalla olevaksi", "Takaisin Omaan listaan", "K\xE4sin", "Valintoja ei voitu tallentaa. Lataa uudelleen ja yrit\xE4 uudestaan.", "Sin\xE4 sijoitit t\xE4m\xE4n t\xE4nne"],
-    "sv": ["Markera som sedd", "Markera som ikapp", "Tillbaka till Min lista", "Manuellt", "Kunde inte spara valen. Ladda om och f\xF6rs\xF6k igen.", "Placerad h\xE4r av dig"],
-    "vi": ["\u0110\xE1nh d\u1EA5u \u0111\xE3 xem", "\u0110\xE1nh d\u1EA5u \u0111\xE3 xem h\u1EBFt", "Tr\u1EDF l\u1EA1i Danh s\xE1ch c\u1EE7a t\xF4i", "Th\u1EE7 c\xF4ng", "Kh\xF4ng th\u1EC3 l\u01B0u l\u1EF1a ch\u1ECDn. T\u1EA3i l\u1EA1i v\xE0 th\u1EED l\u1EA1i.", "B\u1EA1n \u0111\xE3 chuy\u1EC3n n\u1ED9i dung n\xE0y v\xE0o \u0111\xE2y"],
-    "tr": ["\u0130zlendi olarak i\u015Faretle", "G\xFCncel olarak i\u015Faretle", "Listeme geri ta\u015F\u0131", "Manuel", "Se\xE7imler kaydedilemedi. Yeniden y\xFCkleyip tekrar dene.", "Buraya sen yerle\u015Ftirdin"],
-    "cs": ["Ozna\u010Dit jako zhl\xE9dnut\xE9", "Ozna\u010Dit jako dokoukan\xE9", "Zp\u011Bt do M\xE9ho seznamu", "Ru\u010Dn\u011B", "Volby nelze ulo\u017Eit. Na\u010Dti str\xE1nku znovu a zkus to znovu.", "Sem jste titul p\u0159esunuli vy"],
-    "el": ["\u03A3\u03AE\u03BC\u03B1\u03BD\u03C3\u03B7 \u03C9\u03C2 \u03C0\u03C1\u03BF\u03B2\u03BB\u03B7\u03B8\u03AD\u03BD", "\u03A3\u03AE\u03BC\u03B1\u03BD\u03C3\u03B7 \u03C9\u03C2 \u03B5\u03BD\u03B7\u03BC\u03B5\u03C1\u03C9\u03BC\u03AD\u03BD\u03BF", "\u0395\u03C0\u03B9\u03C3\u03C4\u03C1\u03BF\u03C6\u03AE \u03C3\u03C4\u03B7 \u039B\u03AF\u03C3\u03C4\u03B1 \u03BC\u03BF\u03C5", "\u03A7\u03B5\u03B9\u03C1\u03BF\u03BA\u03AF\u03BD\u03B7\u03C4\u03B1", "\u0394\u03B5\u03BD \u03B1\u03C0\u03BF\u03B8\u03B7\u03BA\u03B5\u03CD\u03C4\u03B7\u03BA\u03B1\u03BD \u03BF\u03B9 \u03B5\u03C0\u03B9\u03BB\u03BF\u03B3\u03AD\u03C2. \u0391\u03BD\u03B1\u03BD\u03B5\u03CE\u03C3\u03C4\u03B5 \u03BA\u03B1\u03B9 \u03B4\u03BF\u03BA\u03B9\u03BC\u03AC\u03C3\u03C4\u03B5 \u03BE\u03B1\u03BD\u03AC.", "\u03A4\u03BF\u03C0\u03BF\u03B8\u03B5\u03C4\u03AE\u03B8\u03B7\u03BA\u03B5 \u03B5\u03B4\u03CE \u03B1\u03C0\u03CC \u03B5\u03C3\u03AC\u03C2"],
-    "ru": ["\u041E\u0442\u043C\u0435\u0442\u0438\u0442\u044C \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0435\u043D\u043D\u044B\u043C", "\u041E\u0442\u043C\u0435\u0442\u0438\u0442\u044C \u0432\u0441\u0435 \u0441\u0435\u0440\u0438\u0438 \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0435\u043D\u043D\u044B\u043C\u0438", "\u0412\u0435\u0440\u043D\u0443\u0442\u044C \u0432 \u041C\u043E\u0439 \u0441\u043F\u0438\u0441\u043E\u043A", "\u0412\u0440\u0443\u0447\u043D\u0443\u044E", "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u0432\u044B\u0431\u043E\u0440. \u041F\u0435\u0440\u0435\u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u0435 \u0441\u0442\u0440\u0430\u043D\u0438\u0446\u0443 \u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435.", "\u0412\u044B \u043F\u043E\u043C\u0435\u0441\u0442\u0438\u043B\u0438 \u044D\u0442\u043E \u0441\u044E\u0434\u0430"],
-    "uk": ["\u041F\u043E\u0437\u043D\u0430\u0447\u0438\u0442\u0438 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u043D\u0443\u0442\u0438\u043C", "\u041F\u043E\u0437\u043D\u0430\u0447\u0438\u0442\u0438 \u0432\u0441\u0456 \u0441\u0435\u0440\u0456\u0457 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u043D\u0443\u0442\u0438\u043C\u0438", "\u041F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u0438 \u0434\u043E \u041C\u043E\u0433\u043E \u0441\u043F\u0438\u0441\u043A\u0443", "\u0412\u0440\u0443\u0447\u043D\u0443", "\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438 \u0432\u0438\u0431\u0456\u0440. \u041F\u0435\u0440\u0435\u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0442\u0435 \u0439 \u043F\u043E\u0432\u0442\u043E\u0440\u0456\u0442\u044C.", "\u0412\u0438 \u043F\u043E\u043C\u0456\u0441\u0442\u0438\u043B\u0438 \u0446\u0435 \u0441\u044E\u0434\u0438"],
-    "he": ["\u05E1\u05D9\u05DE\u05D5\u05DF \u05DB\u05E0\u05E6\u05E4\u05D4", "\u05E1\u05D9\u05DE\u05D5\u05DF \u05DB\u05DC \u05D4\u05E4\u05E8\u05E7\u05D9\u05DD \u05DB\u05E0\u05E6\u05E4\u05D5", "\u05D7\u05D6\u05E8\u05D4 \u05DC\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05D9", "\u05D9\u05D3\u05E0\u05D9", "\u05DC\u05D0 \u05E0\u05D9\u05EA\u05DF \u05DC\u05E9\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D4\u05D1\u05D7\u05D9\u05E8\u05D5\u05EA. \u05D9\u05E9 \u05DC\u05D8\u05E2\u05D5\u05DF \u05DE\u05D7\u05D3\u05E9 \u05D5\u05DC\u05E0\u05E1\u05D5\u05EA \u05E9\u05D5\u05D1.", "\u05D4\u05D5\u05E2\u05D1\u05E8 \u05DC\u05DB\u05D0\u05DF \u05E2\u05DC \u05D9\u05D3\u05DA"],
-    "ar": ["\u062A\u062D\u062F\u064A\u062F \u0643\u0645\u064F\u0634\u0627\u0647\u062F", "\u062A\u062D\u062F\u064A\u062F \u0643\u0645\u064F\u062A\u0627\u0628\u064E\u0639 \u0628\u0627\u0644\u0643\u0627\u0645\u0644", "\u0625\u0639\u0627\u062F\u0629 \u0625\u0644\u0649 \u0642\u0627\u0626\u0645\u062A\u064A", "\u064A\u062F\u0648\u064A", "\u062A\u0639\u0630\u0631 \u062D\u0641\u0638 \u0627\u0644\u0627\u062E\u062A\u064A\u0627\u0631\u0627\u062A. \u0623\u0639\u062F \u0627\u0644\u062A\u062D\u0645\u064A\u0644 \u0648\u062D\u0627\u0648\u0644 \u0645\u062C\u062F\u062F\u064B\u0627.", "\u0648\u0636\u0639\u062A \u0647\u0630\u0627 \u0627\u0644\u0639\u0646\u0648\u0627\u0646 \u0647\u0646\u0627"],
-    "hi": ["\u0926\u0947\u0916\u093E \u0939\u0941\u0906 \u091A\u093F\u0939\u094D\u0928\u093F\u0924 \u0915\u0930\u0947\u0902", "\u0938\u092D\u0940 \u0909\u092A\u0932\u092C\u094D\u0927 \u090F\u092A\u093F\u0938\u094B\u0921 \u0926\u0947\u0916\u0947 \u091A\u093F\u0939\u094D\u0928\u093F\u0924 \u0915\u0930\u0947\u0902", "\u092E\u0947\u0930\u0940 \u0932\u093F\u0938\u094D\u091F \u092E\u0947\u0902 \u0935\u093E\u092A\u0938 \u0930\u0916\u0947\u0902", "\u092E\u0948\u0928\u094D\u092F\u0941\u0905\u0932", "\u091A\u0941\u0928\u093E\u0935 \u0938\u0939\u0947\u091C\u0947 \u0928\u0939\u0940\u0902 \u091C\u093E \u0938\u0915\u0947\u0964 \u092B\u093F\u0930 \u0938\u0947 \u0932\u094B\u0921 \u0915\u0930\u0915\u0947 \u092A\u094D\u0930\u092F\u093E\u0938 \u0915\u0930\u0947\u0902\u0964", "\u0906\u092A\u0928\u0947 \u0907\u0938\u0947 \u092F\u0939\u093E\u0901 \u0930\u0916\u093E \u0939\u0948"],
-    "th": ["\u0E17\u0E33\u0E40\u0E04\u0E23\u0E37\u0E48\u0E2D\u0E07\u0E2B\u0E21\u0E32\u0E22\u0E27\u0E48\u0E32\u0E14\u0E39\u0E41\u0E25\u0E49\u0E27", "\u0E17\u0E33\u0E40\u0E04\u0E23\u0E37\u0E48\u0E2D\u0E07\u0E2B\u0E21\u0E32\u0E22\u0E27\u0E48\u0E32\u0E14\u0E39\u0E04\u0E23\u0E1A\u0E41\u0E25\u0E49\u0E27", "\u0E22\u0E49\u0E32\u0E22\u0E01\u0E25\u0E31\u0E1A\u0E44\u0E1B\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E02\u0E2D\u0E07\u0E09\u0E31\u0E19", "\u0E01\u0E33\u0E2B\u0E19\u0E14\u0E40\u0E2D\u0E07", "\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E15\u0E31\u0E27\u0E40\u0E25\u0E37\u0E2D\u0E01\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49 \u0E42\u0E2B\u0E25\u0E14\u0E43\u0E2B\u0E21\u0E48\u0E41\u0E25\u0E49\u0E27\u0E25\u0E2D\u0E07\u0E2D\u0E35\u0E01\u0E04\u0E23\u0E31\u0E49\u0E07", "\u0E04\u0E38\u0E13\u0E22\u0E49\u0E32\u0E22\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E19\u0E35\u0E49\u0E21\u0E32\u0E44\u0E27\u0E49\u0E17\u0E35\u0E48\u0E19\u0E35\u0E48"],
-    "zh": ["\u6807\u8BB0\u4E3A\u5DF2\u89C2\u770B", "\u6807\u8BB0\u4E3A\u5DF2\u770B\u5B8C\u73B0\u6709\u5267\u96C6", "\u79FB\u56DE\u6211\u7684\u7247\u5355", "\u624B\u52A8", "\u65E0\u6CD5\u4FDD\u5B58\u9009\u62E9\u3002\u8BF7\u91CD\u65B0\u52A0\u8F7D\u540E\u518D\u8BD5\u3002", "\u7531\u4F60\u79FB\u5230\u6B64\u5904"],
-    "ja": ["\u8996\u8074\u6E08\u307F\u306B\u3059\u308B", "\u914D\u4FE1\u4E2D\u306E\u5168\u8A71\u3092\u8996\u8074\u6E08\u307F\u306B\u3059\u308B", "\u30DE\u30A4\u30EA\u30B9\u30C8\u306B\u623B\u3059", "\u624B\u52D5", "\u9078\u629E\u3092\u4FDD\u5B58\u3067\u304D\u307E\u305B\u3093\u3002\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002", "\u3042\u306A\u305F\u304C\u3053\u3053\u306B\u79FB\u52D5\u3057\u307E\u3057\u305F"],
-    "ko": ["\uC2DC\uCCAD \uC644\uB8CC\uB85C \uD45C\uC2DC", "\uACF5\uAC1C\uB41C \uBAA8\uB4E0 \uD68C\uCC28 \uC2DC\uCCAD \uC644\uB8CC\uB85C \uD45C\uC2DC", "\uB0B4\uAC00 \uCC1C\uD55C \uB9AC\uC2A4\uD2B8\uB85C \uC774\uB3D9", "\uC218\uB3D9", "\uC120\uD0DD\uC744 \uC800\uC7A5\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uC0C8\uB85C\uACE0\uCE68 \uD6C4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.", "\uC9C1\uC811 \uC774 \uBAA9\uB85D\uC73C\uB85C \uC774\uB3D9\uD55C \uC791\uD488"]
-  };
-  for (const [locale, values] of Object.entries(MANUAL_VIEWING_UI_MESSAGES)) {
-    const keys = [
-      "markWatched",
-      "markCaughtUp",
-      "moveBackToMyList",
-      "manualViewingChoice",
-      "viewingChoiceStorageFailed",
-      "manualViewingChoiceDescription"
-    ];
-    keys.forEach((key, index) => {
-      UI_MESSAGES[locale][key] = values[index];
-    });
-  }
-
-  // src/i18n/log-messages.js
-  var LOG_MESSAGES = {
-    viewingStatusStarted: { en: "Viewing status collection started", ja: "\u8996\u8074\u72B6\u6CC1\u306E\u53D6\u5F97\u958B\u59CB" },
-    viewingStatusCompleted: { en: "Viewing status collection completed", ja: "\u8996\u8074\u72B6\u6CC1\u306E\u53D6\u5F97\u5B8C\u4E86" },
-    viewingStatusUnavailable: { en: "Viewing status unavailable; uncertain titles stay visible", ja: "\u8996\u8074\u72B6\u6CC1\u4E0D\u660E\u306E\u4F5C\u54C1\u306F\u8868\u793A\u3092\u7D99\u7D9A" },
-    undoEntriesExpired: { en: "Expired Undo entries released", ja: "\u671F\u9650\u5207\u308C\u306EUndo\u9805\u76EE\u3092\u89E3\u653E" },
-    targetSessionSuspended: { en: "Target session suspended", ja: "\u5BFE\u8C61\u30BB\u30C3\u30B7\u30E7\u30F3\u4E2D\u65AD" },
-    targetSessionStarted: { en: "Target session started", ja: "\u5BFE\u8C61\u30BB\u30C3\u30B7\u30E7\u30F3\u958B\u59CB" },
-    routeChangeDetected: { en: "Route change detected", ja: "\u30DA\u30FC\u30B8\u9077\u79FB\u691C\u51FA" },
-    clipboardFallback: { en: "Clipboard API failed; using fallback", ja: "\u30AF\u30EA\u30C3\u30D7\u30DC\u30FC\u30C9API\u306B\u5931\u6557\u3002fallback\u3078\u79FB\u884C" },
-    execCommandCopyFailed: { en: "execCommand(copy) failed.", ja: "execCommand(copy) \u304C\u5931\u6557\u3057\u307E\u3057\u305F\u3002" },
-    copyLogsTooltip: { en: "Copy the My List for Netflix log to the clipboard", ja: "\u30AF\u30EA\u30C3\u30D7\u30DC\u30FC\u30C9\u306BMy List for Netflix\u306E\u30ED\u30B0\u3092\u30B3\u30D4\u30FC\u3057\u307E\u3059" },
-    copied: { en: "Copied.", ja: "\u30B3\u30D4\u30FC\u3057\u307E\u3057\u305F\u3002" },
-    copyLogsRequested: { en: "CopyLogs requested", ja: "CopyLogs\u8981\u6C42" },
-    copyLogsCompleted: { en: "CopyLogs completed", ja: "CopyLogs\u5B8C\u4E86" },
-    copyLogsFailed: { en: "CopyLogs failed", ja: "CopyLogs\u5931\u6557" },
-    viewingChoiceApplied: { en: "Manual viewing choice applied", ja: "\u624B\u52D5\u306E\u8996\u8074\u72B6\u614B\u3092\u9069\u7528" },
-    nativeInitializationRecovered: { en: "Retrying initialization with a verified native-source replacement", ja: "\u7D14\u6B63\u30BD\u30FC\u30B9\u306E\u7F6E\u63DB\u3092\u78BA\u8A8D\u3057\u521D\u671F\u5316\u3092\u518D\u8A66\u884C" },
-    nativeInitializationRecoveryExhausted: { en: "Native initialization replacement recovery exhausted", ja: "\u7D14\u6B63\u30BD\u30FC\u30B9\u7F6E\u63DB\u306E\u521D\u671F\u5316\u518D\u8A66\u884C\u4E0A\u9650" },
-    sourceAlignmentRestoreFailed: { en: "Native source geometry restoration failed", ja: "\u7D14\u6B63\u30BD\u30FC\u30B9\u5EA7\u6A19\u306E\u5FA9\u5143\u306B\u5931\u6557" },
-    emptyLegacyListFinalized: { en: "Empty legacy list finalized", ja: "\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8 0\u4EF6\u3092\u78BA\u5B9A" },
-    totalCountDetected: { en: "totalCount detected", ja: "totalCount\u53D6\u5F97" },
-    legacyFrameMovedToEmptyAnchor: { en: "Legacy frame moved to empty anchor", ja: "\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8\u3092\u7A7A\u30A2\u30F3\u30AB\u30FC\u3078\u79FB\u52D5" },
-    nativeMyListSourceAdoptedWithoutRescan: { en: "Native My List source adopted without rescan", ja: "\u7D14\u6B63\u30DE\u30A4\u30EA\u30B9\u30C8\u5143\u3092\u518D\u8D70\u67FB\u306A\u3057\u3067\u63A1\u7528" },
-    populatedNativeMyListDetectedAfterEmpty: { en: "Populated native My List detected after empty finalization; restarting initialization", ja: "\u7A7A\u78BA\u5B9A\u5F8C\u306B\u4F5C\u54C1\u3042\u308A\u306E\u7D14\u6B63\u30DE\u30A4\u30EA\u30B9\u30C8\u3092\u691C\u51FA\u3002\u521D\u671F\u5316\u3092\u518D\u958B" },
-    nativeEmptyMyListSectionAdopted: { en: "Native empty My List section adopted", ja: "\u7A7A\u306E\u7D14\u6B63\u30DE\u30A4\u30EA\u30B9\u30C8\u4F4D\u7F6E\u3092\u63A1\u7528" },
-    legacyItemRemovedByDifferentialUpdate: { en: "Legacy item removed by differential update", ja: "\u5DEE\u5206\u66F4\u65B0\u3067\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8\u304B\u3089\u524A\u9664" },
-    legacyItemAddedByDifferentialUpdate: { en: "Legacy item added by differential update", ja: "\u5DEE\u5206\u66F4\u65B0\u3067\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8\u3078\u8FFD\u52A0" },
-    legacyVisibleOrderAligned: { en: "Legacy visible order aligned", ja: "\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8\u306E\u8868\u793A\u4E2D\u9806\u5E8F\u3092\u540C\u671F" },
-    nativeMyListBindingRefreshed: { en: "Native My List binding refreshed", ja: "\u7D14\u6B63\u30DE\u30A4\u30EA\u30B9\u30C8DOM\u53C2\u7167\u3092\u518D\u7D50\u5408" },
-    differentialUpdateTimedOutWaitingForAUsableCardSnapshot: { en: "Differential update timed out waiting for a usable card snapshot", ja: "\u5DEE\u5206\u66F4\u65B0\u3067\u5229\u7528\u53EF\u80FD\u306A\u30AB\u30FC\u30C9\u60C5\u5831\u3092\u5F85\u3064\u9593\u306B\u30BF\u30A4\u30E0\u30A2\u30A6\u30C8\u3057\u307E\u3057\u305F" },
-    myListMutationQueued: { en: "My List mutation queued", ja: "\u30DE\u30A4\u30EA\u30B9\u30C8\u5909\u66F4\u3092\u5DEE\u5206\u30AD\u30E5\u30FC\u3078\u767B\u9332" },
-    carouselMoveCancelledBeforeStart: { en: "Carousel move cancelled before start", ja: "\u30AB\u30EB\u30FC\u30BB\u30EB\u79FB\u52D5\u3092\u958B\u59CB\u524D\u306B\u4E2D\u6B62" },
-    carouselMoveControlNotFound: { en: "Carousel move control not found", ja: "\u30AB\u30EB\u30FC\u30BB\u30EB\u79FB\u52D5\u30B3\u30F3\u30C8\u30ED\u30FC\u30EB\u306A\u3057" },
-    carouselDomProfileDetected: { en: "Native carousel DOM profile detected", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EBDOM\u4E16\u4EE3\u691C\u51FA" },
-    logicalCarouselEdgeDetected: { en: "Logical carousel edge detected", ja: "\u8AD6\u7406\u30AB\u30EB\u30FC\u30BB\u30EB\u7AEF\u3092\u691C\u51FA" },
-    logicalCarouselPagesFinalized: { en: "Logical carousel pages finalized", ja: "\u8AD6\u7406\u30AB\u30EB\u30FC\u30BB\u30EB\u30DA\u30FC\u30B8\u78BA\u5B9A" },
-    logicalCarouselCycleDetected: { en: "Logical carousel cycle detected", ja: "\u8AD6\u7406\u30AB\u30EB\u30FC\u30BB\u30EB\u5FAA\u74B0\u691C\u51FA" },
-    logicalPageModelSynchronizedAfterDelta: { en: "Logical page model synchronized after My List delta", ja: "\u30DE\u30A4\u30EA\u30B9\u30C8\u5DEE\u5206\u5F8C\u306E\u8AD6\u7406\u30DA\u30FC\u30B8\u30E2\u30C7\u30EB\u540C\u671F" },
-    operationTimedOut: { en: "Operation timed out", ja: "\u51E6\u7406\u304C\u30BF\u30A4\u30E0\u30A2\u30A6\u30C8" },
-    fullCollectionIncomplete: { en: "Full collection did not complete", ja: "\u5168\u4EF6\u53D6\u5F97\u304C\u5B8C\u4E86\u3057\u307E\u305B\u3093\u3067\u3057\u305F" },
-    carouselMoveStarted: { en: "Carousel move started", ja: "\u30AB\u30EB\u30FC\u30BB\u30EB\u79FB\u52D5\u958B\u59CB" },
-    carouselMoveCompleted: { en: "Carousel move completed", ja: "\u30AB\u30EB\u30FC\u30BB\u30EB\u79FB\u52D5\u5B8C\u4E86" },
-    pageMoveRequested: { en: "Page move requested", ja: "\u30DA\u30FC\u30B8\u79FB\u52D5\u8981\u6C42" },
-    pageMoveResult: { en: "Page move result", ja: "\u30DA\u30FC\u30B8\u79FB\u52D5\u7D50\u679C" },
-    waitingForNativeCarouselInitialization: { en: "Waiting for native carousel initialization", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EB\u521D\u671F\u5316\u5F85\u3061\u958B\u59CB" },
-    nativeCarouselInitializationReady: { en: "Native carousel initialization ready", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EB\u521D\u671F\u5316\u5B8C\u4E86" },
-    nativeCarouselInitializationIsStillIncompleteInitializationDeferred: { en: "Native carousel initialization is still incomplete; initialization deferred", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EB\u521D\u671F\u5316\u304C\u672A\u5B8C\u4E86\u306E\u305F\u3081\u521D\u671F\u5316\u3092\u4FDD\u7559" },
-    nativePageByPageRestorationStarted: { en: "Native page-by-page restoration started", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6BB5\u968E\u5FA9\u5E30\u958B\u59CB" },
-    nativePageRestorationMoveFailed: { en: "Native page restoration move failed", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u5FA9\u5E30\u79FB\u52D5\u5931\u6557" },
-    nativeRestorationPageStabilized: { en: "Native restoration page stabilized", ja: "\u7D14\u6B63\u5FA9\u5E30\u30DA\u30FC\u30B8\u5B89\u5B9A" },
-    nativeRestorationStoppedBecauseTheTargetPageDidNotFullyMount: { en: "Native restoration stopped because the target page did not fully mount", ja: "\u5BFE\u8C61\u30DA\u30FC\u30B8\u304C\u5B8C\u5168\u306B\u30DE\u30A6\u30F3\u30C8\u3055\u308C\u306A\u3044\u305F\u3081\u7D14\u6B63\u5FA9\u5E30\u3092\u4E2D\u6B62" },
-    nativePageByPageRestorationCompleted: { en: "Native page-by-page restoration completed", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6BB5\u968E\u5FA9\u5E30\u5B8C\u4E86" },
-    nativeFastRestorationPhaseRepairStarted: { en: "Native fast restoration phase repair started", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u306E\u4F4D\u76F8\u88DC\u6B63\u958B\u59CB" },
-    nativeFastRestorationPhaseRepairMoveFailed: { en: "Native fast restoration phase repair move failed", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u306E\u4F4D\u76F8\u88DC\u6B63\u79FB\u52D5\u5931\u6557" },
-    nativeFastRestorationPhaseRepairAdjacentPageVerified: { en: "Native fast restoration phase repair adjacent page verified", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u306E\u4F4D\u76F8\u88DC\u6B63\u96A3\u63A5\u30DA\u30FC\u30B8\u691C\u8A3C" },
-    nativeFastRestorationPhaseRepairAdjacentPageDidNotStabilize: { en: "Native fast restoration phase repair adjacent page did not stabilize", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u306E\u4F4D\u76F8\u88DC\u6B63\u3067\u96A3\u63A5\u30DA\u30FC\u30B8\u304C\u5B89\u5B9A\u3057\u307E\u305B\u3093\u3067\u3057\u305F" },
-    nativeFastRestorationPhaseRepairCompleted: { en: "Native fast restoration phase repair completed", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u306E\u4F4D\u76F8\u88DC\u6B63\u5B8C\u4E86" },
-    nativeFastRestorationStarted: { en: "Native fast restoration started", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u958B\u59CB" },
-    nativeFastRestorationMoveFailed: { en: "Native fast restoration move failed", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u79FB\u52D5\u5931\u6557" },
-    nativeFastRestorationPhaseDiagnosis: { en: "Native fast restoration phase diagnosis", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u306E\u4F4D\u76F8\u8A3A\u65AD" },
-    nativeFastRestorationCompleted: { en: "Native fast restoration completed", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u5B8C\u4E86" },
-    fastRestorationVerificationFailedUsingV49PageByPageFallback: { en: "Fast restoration verification failed; using v4.9 page-by-page fallback", ja: "\u9AD8\u901F\u5FA9\u5E30\u306E\u691C\u8A3C\u306B\u5931\u6557\u3057\u305F\u305F\u3081v4.9\u65B9\u5F0F\u306E\u6BB5\u968E\u5FA9\u5E30\u3092\u4F7F\u7528" },
-    fullCollectionStarted: { en: "Full collection started", ja: "\u5168\u4EF6\u53D6\u5F97\u958B\u59CB" },
-    collectionPageStabilized: { en: "Collection page stabilized", ja: "\u53D6\u5F97\u30DA\u30FC\u30B8\u5B89\u5B9A" },
-    collectionStoppedBecauseThePageNeverReachedTheExpectedStableState: { en: "Collection stopped because the page never reached the expected stable state", ja: "\u30DA\u30FC\u30B8\u304C\u671F\u5F85\u3059\u308B\u5B89\u5B9A\u72B6\u614B\u306B\u9054\u3057\u306A\u3044\u305F\u3081\u53D6\u5F97\u3092\u4E2D\u6B62" },
-    collectionPageResult: { en: "Collection page result", ja: "\u53D6\u5F97\u30DA\u30FC\u30B8\u7D50\u679C" },
-    couldNotAdvanceDuringFullCollection: { en: "Could not advance during full collection", ja: "\u5168\u4EF6\u53D6\u5F97\u4E2D\u306B\u6B21\u30DA\u30FC\u30B8\u3078\u9032\u3081\u307E\u305B\u3093" },
-    nativeRestorationBaselineCaptured: { en: "Native restoration baseline captured", ja: "\u7D14\u6B63\u5FA9\u5E30\u306E\u57FA\u6E96\u72B6\u614B" },
-    nativeRestorationResult: { en: "Native restoration result", ja: "\u7D14\u6B63\u5FA9\u5E30\u7D50\u679C" },
-    fullCollectionCompleted: { en: "Full collection completed", ja: "\u5168\u4EF6\u53D6\u5F97\u5B8C\u4E86" },
-    fiberGraftFailed: { en: "Fiber graft failed", ja: "Fiber\u79FB\u690D\u5931\u6557" },
-    propsGraftFailed: { en: "Props graft failed", ja: "Props\u79FB\u690D\u5931\u6557" },
-    hoverSourceSearchStarted: { en: "Hover source search started", ja: "\u30DB\u30D0\u30FC\u5143\u63A2\u7D22\u958B\u59CB" },
-    hoverSourceSearchPage: { en: "Hover source search page", ja: "\u30DB\u30D0\u30FC\u5143\u63A2\u7D22\u30DA\u30FC\u30B8" },
-    hoverSourceSearchCancelled: { en: "Hover source search cancelled", ja: "\u30DB\u30D0\u30FC\u5143\u63A2\u7D22\u4E2D\u6B62" },
-    itemPageMappingCorrected: { en: "Item page mapping corrected", ja: "\u4F5C\u54C1\u30DA\u30FC\u30B8\u88DC\u6B63" },
-    hoverSourceFound: { en: "Hover source found", ja: "\u30DB\u30D0\u30FC\u5143\u63A2\u7D22\u6210\u529F" },
-    hoverSourceSearchFailed: { en: "Hover source search failed", ja: "\u30DB\u30D0\u30FC\u5143\u63A2\u7D22\u5931\u6557" },
-    hoverExpectedPageMatch: { en: "Hover target found within expected native page", ja: "\u30DB\u30D0\u30FC\u5BFE\u8C61\u3092\u7D14\u6B63\u306E\u60F3\u5B9A\u30DA\u30FC\u30B8\u5185\u3067\u78BA\u8A8D" },
-    hoverExpectedPageMismatch: { en: "Hover target not found within expected native page", ja: "\u30DB\u30D0\u30FC\u5BFE\u8C61\u304C\u7D14\u6B63\u306E\u60F3\u5B9A\u30DA\u30FC\u30B8\u5185\u306B\u5B58\u5728\u3057\u307E\u305B\u3093" },
-    hoverExpectedPageUnknown: { en: "Hover expected-page check was inconclusive", ja: "\u30DB\u30D0\u30FC\u306E\u60F3\u5B9A\u30DA\u30FC\u30B8\u78BA\u8A8D\u306F\u5224\u5B9A\u4FDD\u7559" },
-    orderMismatchPromptShown: { en: "My List order-change prompt shown", ja: "\u30DE\u30A4\u30EA\u30B9\u30C8\u9806\u5E8F\u5909\u66F4\u30C0\u30A4\u30A2\u30ED\u30B0\u3092\u8868\u793A" },
-    orderMismatchPromptAccepted: { en: "My List order-change prompt accepted", ja: "\u30DE\u30A4\u30EA\u30B9\u30C8\u9806\u5E8F\u5909\u66F4\u30C0\u30A4\u30A2\u30ED\u30B0\u3067OK" },
-    orderMismatchPromptCancelled: { en: "My List order-change prompt cancelled", ja: "\u30DE\u30A4\u30EA\u30B9\u30C8\u9806\u5E8F\u5909\u66F4\u30C0\u30A4\u30A2\u30ED\u30B0\u3092\u30AD\u30E3\u30F3\u30BB\u30EB" },
-    manualReinitializationRequested: { en: "Manual reinitialization requested after My List order change", ja: "\u30DE\u30A4\u30EA\u30B9\u30C8\u9806\u5E8F\u5909\u66F4\u306B\u3088\u308A\u30E6\u30FC\u30B6\u30FC\u64CD\u4F5C\u3067\u518D\u521D\u671F\u5316" },
-    nativeHoverReplayCancelled: { en: "Native hover replay cancelled", ja: "\u7D14\u6B63\u30DB\u30D0\u30FC\u518D\u9001\u3092\u4E2D\u6B62" },
-    nativeHoverReplayedFromLiveSource: { en: "Native hover replayed from live source", ja: "\u751F\u304D\u3066\u3044\u308B\u7D14\u6B63\u30AB\u30FC\u30C9\u304B\u3089\u30DB\u30D0\u30FC\u518D\u9001" },
-    nativePagePreparationFailed: { en: "Native page preparation failed", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u5931\u6557" },
-    nativePagePreparationStarted: { en: "Native page preparation started", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u958B\u59CB" },
-    nativePagePreparationCancelled: { en: "Native page preparation cancelled", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u4E2D\u6B62" },
-    nativePagePreparationPositionResolved: { en: "Native page preparation position resolved", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u4F4D\u7F6E\u78BA\u5B9A" },
-    nativePageClonesUpdated: { en: "Native page clones updated", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u8907\u88FD\u66F4\u65B0" },
-    hoverCoordinatesProxied: { en: "Hover coordinates proxied", ja: "\u30DB\u30D0\u30FC\u5EA7\u6A19\u4EE3\u7406" },
-    nativePagePreparationCompleted: { en: "Native page preparation completed", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u5B8C\u4E86" },
-    hoverWaitingResponsiveRefreshInProgress: { en: "Hover waiting: responsive refresh in progress", ja: "\u30DB\u30D0\u30FC\u5F85\u6A5F: \u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u66F4\u65B0\u4E2D" },
-    hoverCancelled: { en: "Hover cancelled", ja: "\u30DB\u30D0\u30FC\u4E2D\u6B62" },
-    hoverReusedImmediately: { en: "Hover reused immediately", ja: "\u30DB\u30D0\u30FC\u5373\u6642\u518D\u5229\u7528" },
-    hoverRequestedNativePagePreparation: { en: "Hover requested native page preparation", ja: "\u30DB\u30D0\u30FC\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u8981\u6C42" },
-    hoverNativePagePreparationResult: { en: "Hover native page preparation result", ja: "\u30DB\u30D0\u30FC\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u7D50\u679C" },
-    liveClonePreparationFailed: { en: "Live clone preparation failed", ja: "live\u8907\u88FD\u6E96\u5099\u5931\u6557" },
-    legacyCardHoverInput: { en: "Legacy card hover input", ja: "\u65E7\u30AB\u30FC\u30C9\u30DB\u30D0\u30FC\u5165\u529B" },
-    legacyCardHoverReusedMountedNativeSource: { en: "Legacy card hover reused mounted native source", ja: "\u65E7\u30AB\u30FC\u30C9\u30DB\u30D0\u30FC\u65E2\u5B58\u7D14\u6B63\u5229\u7528" },
-    pendingHoverCancelledOnLeave: { en: "Pending hover cancelled on leave", ja: "\u30DE\u30A6\u30B9\u96E2\u8131\u3067\u5F85\u6A5F\u4E2D\u30DB\u30D0\u30FC\u3092\u4E2D\u6B62" },
-    hoverCoordinateProxyReleased: { en: "Hover coordinate proxy released", ja: "\u30DB\u30D0\u30FC\u5EA7\u6A19\u4EE3\u7406\u89E3\u9664" },
-    hoverReplayGuardRejected: { en: "Hover replay guard rejected target", ja: "\u30DB\u30D0\u30FC\u518D\u9001\u6761\u4EF6\u304C\u5BFE\u8C61\u3092\u62D2\u5426" },
-    hoverPointerLeaveObserved: { en: "Hover pointer leave observed", ja: "\u30DB\u30D0\u30FC\u4E2D\u306E\u30DD\u30A4\u30F3\u30BF\u96E2\u8131\u3092\u8A18\u9332" },
-    hoverPreviewTransfer: { en: "Hover positioning retained for matching preview", ja: "\u5BFE\u5FDC\u3059\u308B\u30D7\u30EC\u30D3\u30E5\u30FC\u306E\u30DB\u30D0\u30FC\u4F4D\u7F6E\u3092\u4FDD\u6301" },
-    hoverPreviewTransferRejected: { en: "Hover preview transfer rejected", ja: "\u30DB\u30D0\u30FC\u306E\u30D7\u30EC\u30D3\u30E5\u30FC\u79FB\u884C\u3092\u62D2\u5426" },
-    hoverPreviewReleased: { en: "Hover preview positioning released", ja: "\u30DB\u30D0\u30FC\u306E\u30D7\u30EC\u30D3\u30E5\u30FC\u4F4D\u7F6E\u3092\u89E3\u9664" },
-    hoverPreviewPresence: { en: "Hover preview presence observation", ja: "\u30DB\u30D0\u30FC\u30D7\u30EC\u30D3\u30E5\u30FC\u306E\u5B58\u5728\u3092\u89B3\u6E2C" },
-    legacyGridBuilt: { en: "Legacy grid built", ja: "\u30B0\u30EA\u30C3\u30C9\u751F\u6210\u5B8C\u4E86" },
-    responsiveStatusNote: { en: "Responsive status note", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u72B6\u614B\u30E1\u30E2" },
-    responsiveItemPageMappingRecalculatedWithoutNativeCarouselScan: { en: "Responsive item-page mapping rebuilt from native first-page anchor", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u4F5C\u54C1\u30DA\u30FC\u30B8\u5BFE\u5FDC\u3092\u7D14\u6B63\u5148\u982D\u30A2\u30F3\u30AB\u30FC\u57FA\u6E96\u3067\u518D\u69CB\u6210" },
-    responsiveRefreshStarted: { en: "Responsive refresh started", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u66F4\u65B0\u958B\u59CB" },
-    responsiveMeasurementResolved: { en: "Responsive measurement resolved", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u5B9F\u6E2C\u78BA\u5B9A" },
-    responsivePageMappingUpdatedWithoutNativeCarouselMovement: { en: "Responsive page mapping rebuilt after native anchor synchronization", ja: "\u7D14\u6B63\u30A2\u30F3\u30AB\u30FC\u540C\u671F\u5F8C\u306B\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u30DA\u30FC\u30B8\u5BFE\u5FDC\u3092\u518D\u69CB\u6210" },
-    responsiveRefreshCompleted: { en: "Responsive refresh completed", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u66F4\u65B0\u5B8C\u4E86" },
-    responsiveRelayoutFailed: { en: "Responsive relayout failed", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u518D\u914D\u7F6E\u5931\u6557" },
-    responsiveRemeasurementNoShapeChange: { en: "Responsive remeasurement: no shape change", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u518D\u6E2C\u5B9A\u30FB\u5F62\u72B6\u5909\u66F4\u306A\u3057" },
-    windowResizeDetected: { en: "window resize detected", ja: "window resize\u691C\u51FA" },
-    visualViewportResizeDetected: { en: "visualViewport resize detected", ja: "visualViewport resize\u691C\u51FA" },
-    nativeSourceWaitFailed: { en: "Native source wait failed", ja: "\u7D14\u6B63\u30BD\u30FC\u30B9\u5F85\u3061\u5931\u6557" },
-    nativeCarouselReadinessCheckFailed: { en: "Native carousel readiness check failed", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EB\u521D\u671F\u5316\u78BA\u8A8D\u5931\u6557" },
-    initializationStarted: { en: "Initialization started", ja: "\u521D\u671F\u5316\u958B\u59CB" },
-    initialLayoutMeasured: { en: "Initial layout measured", ja: "\u521D\u671F\u30EC\u30A4\u30A2\u30A6\u30C8\u5B9F\u6E2C" },
-    nativeCarouselScanModeStarted: { en: "Native carousel scan mode started", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EB\u53D6\u5F97\u30E2\u30FC\u30C9\u958B\u59CB" },
-    noNativeNetflixCardsCouldBeCollected: { en: "No native Netflix cards could be collected.", ja: "Netflix\u7D14\u6B63\u30AB\u30FC\u30C9\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002" },
-    fullCollectionResultFinalized: { en: "Full collection result finalized", ja: "\u5168\u4EF6\u53D6\u5F97\u7D50\u679C\u78BA\u5B9A" },
-    nativeCarouselStandbyMode: { en: "Native carousel standby mode", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EB\u5F85\u6A5F\u30E2\u30FC\u30C9" },
-    initialHoverPreparationDeferred: { en: "Initial hover preparation deferred", ja: "\u521D\u671F\u30DB\u30D0\u30FC\u6E96\u5099\u3092\u9045\u5EF6" },
-    collectedCountDoesNotMatchTotalCount: { en: "Collected count does not match totalCount", ja: "\u53D6\u5F97\u4EF6\u6570\u304C\u5B9F\u6570\u3068\u4E00\u81F4\u3057\u307E\u305B\u3093" },
-    initializationCompleted: { en: "Initialization completed", ja: "\u521D\u671F\u5316\u5B8C\u4E86" },
-    initializationCancelledByRouteChange: { en: "Initialization cancelled by route change", ja: "\u30DA\u30FC\u30B8\u9077\u79FB\u306B\u3088\u308A\u521D\u671F\u5316\u4E2D\u6B62" },
-    initializationFailed: { en: "Initialization failed", ja: "\u521D\u671F\u5316\u5931\u6557" },
-    scriptStarted: { en: "Script started", ja: "\u30B9\u30AF\u30EA\u30D7\u30C8\u958B\u59CB" },
-    originalMyListVisibilityChanged: { en: "Original My List visibility changed", ja: "\u7D14\u6B63\u30DE\u30A4\u30EA\u30B9\u30C8\u8868\u793A\u72B6\u614B\u5909\u66F4" },
-    copyFailed: { en: "Copy failed: {message}", ja: "\u30B3\u30D4\u30FC\u5931\u6557: {message}" }
-  };
-
-  // src/i18n/i18n.js
-  function createI18n({ readLanguage }) {
-    if (typeof readLanguage !== "function") throw new TypeError("readLanguage must be a function");
-    function getBaseLanguage(value) {
-      const raw = String(value || "").trim().replace(/_/g, "-");
-      const match = raw.match(/^([A-Za-z]{2,3})(?:-|$)/);
-      return match ? match[1].toLowerCase() : "";
-    }
-    function getUiLocale() {
-      const language = getBaseLanguage(readLanguage());
-      return NETFLIX_PRIMARY_UI_LOCALES.has(language) ? language : "en";
-    }
-    function getLogLocale() {
-      return getUiLocale() === "ja" ? "ja" : "en";
-    }
-    function formatMessage(template, params = {}) {
-      return String(template || "").replace(
-        /\{([A-Za-z0-9_]+)\}/g,
-        (_, key) => Object.prototype.hasOwnProperty.call(params, key) ? String(params[key]) : `{${key}}`
-      );
-    }
-    function tUi(key, params = {}) {
-      const locale = getUiLocale();
-      const localizedValue = UI_MESSAGES[locale]?.[key];
-      const fallbackValue = UI_MESSAGES.en?.[key];
-      const template = typeof localizedValue === "string" ? localizedValue : fallbackValue;
-      return formatMessage(template, params);
-    }
-    function tUiPlural(key, count, params = {}) {
-      const locale = getUiLocale();
-      const localizedForms = UI_MESSAGES[locale]?.[key];
-      const fallbackForms = UI_MESSAGES.en?.[key];
-      if (!localizedForms || typeof localizedForms !== "object") return tUi(key, params);
-      let category = "other";
-      try {
-        category = new Intl.PluralRules(locale).select(count);
-      } catch (_) {
-      }
-      const template = localizedForms[category] || localizedForms.other || fallbackForms?.[category] || fallbackForms?.other || String(count);
-      return formatMessage(template, { count, ...params });
-    }
-    function tLog(key, params = {}) {
-      const entry = LOG_MESSAGES[key];
-      if (!entry) return key;
-      const template = entry[getLogLocale()] || entry.en || key;
-      return formatMessage(template, params);
-    }
-    function formatUiNumber(value, fractionDigits = 0) {
-      try {
-        return new Intl.NumberFormat(getUiLocale(), {
-          minimumFractionDigits: fractionDigits,
-          maximumFractionDigits: fractionDigits
-        }).format(value);
-      } catch (_) {
-        return Number(value).toFixed(fractionDigits);
-      }
-    }
-    function formatItemCount(current, total, finalized = false) {
-      const maximum = Number.isFinite(total) ? total : current;
-      const base = tUiPlural("itemCount", maximum, { count: formatUiNumber(maximum) });
-      if (!finalized || !Number.isFinite(total)) return base;
-      const missing = Math.max(0, total - current);
-      return missing > 0 ? `${base}  ${tUi("errorCount", { count: formatUiNumber(missing) })}` : base;
-    }
-    function formatInitializationTime(elapsedMs) {
-      if (!Number.isFinite(elapsedMs)) return tUi("initializing");
-      const seconds = elapsedMs / 1e3;
-      return tUi("initTime", { seconds: formatUiNumber(seconds, 2) });
-    }
-    return Object.freeze({ getUiLocale, getLogLocale, tUi, tUiPlural, tLog, formatUiNumber, formatItemCount, formatInitializationTime });
-  }
-
   // src/netflix/list-data.js
   function createListData({
     context,
     pageDom,
-    location: location2,
-    fetch: fetch2,
-    performance: performance2,
+    location,
+    fetch,
+    performance,
     now = () => Date.now(),
     assertCurrent,
     isCancelled,
@@ -8419,7 +7497,7 @@
     async function fetchMyListCarouselPage(request, cursor, signal, sessionToken) {
       assertCurrent(sessionToken);
       const body = { ...request.body, variables: { ...request.body.variables, carouselAfterCursor: cursor } };
-      const response = await fetch2("https://web.prod.cloud.netflix.com/graphql", {
+      const response = await fetch("https://web.prod.cloud.netflix.com/graphql", {
         method: "POST",
         credentials: "include",
         cache: "no-store",
@@ -8522,14 +7600,14 @@
           "content-type": "application/json",
           "x-netflix.context.ui-flavor": "akira",
           "x-netflix.context.operation-name": "CarouselPage",
-          "X-Netflix.Request.Originating.Url": location2.href
+          "X-Netflix.Request.Originating.Url": location.href
         }
       };
       const { appVersion, locale } = context.listRequestContext();
       if (appVersion) request.headers["x-netflix.context.app-version"] = String(appVersion);
       if (locale) request.headers["x-netflix.context.locales"] = String(locale).toLowerCase();
       const fetchState = beginRequest(sessionToken);
-      const started = performance2.now();
+      const started = performance.now();
       try {
         const page = await fetchMyListCarouselPage(request, null, fetchState.controller.signal, sessionToken);
         assertCurrent(sessionToken);
@@ -8548,7 +7626,7 @@
           graphqlKey: entry?.key || null,
           responseUrl: page.responseUrl,
           responseBytes: page.responseBytes,
-          elapsedMs: Math.round(performance2.now() - started),
+          elapsedMs: Math.round(performance.now() - started),
           operationName: "CarouselPage",
           carouselPageSize: GRAPHQL_COLLECTION_PAGE_SIZE,
           graphqlPageCount: 1,
@@ -8566,7 +7644,7 @@
       assertCurrent(sessionToken);
       if (!bootstrap?.graphqlHasNextPage) return bootstrap;
       const fetchState = beginRequest(sessionToken);
-      const started = performance2.now();
+      const started = performance.now();
       try {
         const edges = [...bootstrap.graphqlEdges];
         const seenCursors = /* @__PURE__ */ new Set();
@@ -8611,7 +7689,7 @@
           totalCount: bootstrap.totalCount,
           graphqlPageCount,
           graphqlEdgeCount: edges.length,
-          elapsedMs: Math.round(performance2.now() - started)
+          elapsedMs: Math.round(performance.now() - started)
         });
         return {
           ...bootstrap,
@@ -8629,12 +7707,12 @@
     }
     async function fetchFreshMyListBootstrapViaPage(sessionToken = null) {
       assertCurrent(sessionToken);
-      const requestUrl = new URL("/browse/my-list", location2.origin);
+      const requestUrl = new URL("/browse/my-list", location.origin);
       requestUrl.searchParams.set("_tm_legacy_mylist_refresh", `${now()}-${sessionToken ?? 0}`);
       const fetchState = beginRequest(sessionToken);
-      const started = performance2.now();
+      const started = performance.now();
       try {
-        const response = await fetch2(requestUrl.href, {
+        const response = await fetch(requestUrl.href, {
           method: "GET",
           credentials: "include",
           cache: "no-store",
@@ -8669,7 +7747,7 @@
           firstVideoId: fresh.firstVideoId || null,
           responseUrl: response.url,
           responseBytes: html.length,
-          elapsedMs: Math.round(performance2.now() - started),
+          elapsedMs: Math.round(performance.now() - started),
           cacheMode: "no-store",
           fallback: true
         });
@@ -8772,7 +7850,7 @@
         const videoId = videoIdFromGraphqlNode(node);
         if (!videoId || seen.has(videoId)) return;
         records.push({
-          href: location2.origin + "/browse?jbv=" + encodeURIComponent(videoId),
+          href: location.origin + "/browse?jbv=" + encodeURIComponent(videoId),
           videoId,
           ariaLabel: firstGraphqlText(node?.displayString) || firstGraphqlText(node) || "Netflix " + videoId,
           imageUrl: firstGraphqlImageUrl(node?.contextualArtwork) || firstGraphqlImageUrl(node)
@@ -8821,7 +7899,7 @@
   }
 
   // src/netflix/viewing-data.js
-  function createViewingData({ context, fetch: fetch2, createCancelledError }) {
+  function createViewingData({ context, fetch, createCancelledError }) {
     const limits = Object.freeze({ titleBatch: 50, episodeBatch: 200, seasons: 40, episodes: 500 });
     const VIEWING_MAX_SEASONS = limits.seasons, VIEWING_MAX_EPISODES = limits.episodes;
     const credentials = /* @__PURE__ */ new WeakMap();
@@ -8849,7 +7927,7 @@
       for (const path of paths) body.append("path", JSON.stringify(path));
       body.set("authURL", request.authURL);
       try {
-        const response = await fetch2(request.url, {
+        const response = await fetch(request.url, {
           method: "POST",
           credentials: "same-origin",
           cache: "no-store",
@@ -10224,98 +9302,6 @@
     });
   }
 
-  // src/app/session-scope.js
-  function createSessionScope({
-    isTargetPage,
-    AbortController: AbortController2,
-    setTimeout: setTimeout2,
-    clearTimeout: clearTimeout2,
-    requestTimeoutMs = 1e4
-  }) {
-    let token = 0;
-    let active = false;
-    const requests = /* @__PURE__ */ new Set();
-    const requestState = /* @__PURE__ */ new WeakMap();
-    function cancelledError() {
-      const error = new Error("Target route session cancelled");
-      error.code = "LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED";
-      return error;
-    }
-    function isCurrent(expectedToken) {
-      return expectedToken === token && active && isTargetPage();
-    }
-    function assertCurrent(expectedToken) {
-      if (expectedToken === null || expectedToken === void 0) return;
-      if (!isCurrent(expectedToken)) throw cancelledError();
-    }
-    function finishRequest(request) {
-      const state = requestState.get(request);
-      if (!state || state.finished) return false;
-      state.finished = true;
-      clearTimeout2(state.timeout?.id);
-      state.timeout = null;
-      requests.delete(request);
-      request.controller.abort();
-      return true;
-    }
-    function abortObsoleteRequests() {
-      for (const request of requests.keys()) {
-        if (!isCurrent(request.sessionToken)) finishRequest(request);
-      }
-    }
-    function setRequestTimeout(request, delayMs) {
-      const state = requestState.get(request);
-      if (!state || state.finished) return false;
-      clearTimeout2(state.timeout?.id);
-      const timeout = { id: null };
-      state.timeout = timeout;
-      timeout.id = setTimeout2(() => {
-        if (state.finished || state.timeout !== timeout) return;
-        state.timeout = null;
-        request.controller.abort();
-      }, delayMs);
-      return true;
-    }
-    function beginRequest(expectedToken) {
-      assertCurrent(expectedToken);
-      const request = Object.freeze({ controller: new AbortController2(), sessionToken: expectedToken });
-      requestState.set(request, { timeout: null, finished: false });
-      if (expectedToken !== null && expectedToken !== void 0) requests.add(request);
-      setRequestTimeout(request, requestTimeoutMs);
-      return request;
-    }
-    return Object.freeze({
-      get token() {
-        return token;
-      },
-      begin() {
-        token++;
-        active = true;
-        abortObsoleteRequests();
-        return token;
-      },
-      dispose() {
-        token++;
-        active = false;
-        abortObsoleteRequests();
-      },
-      isCurrent,
-      assertCurrent,
-      cancelledError,
-      isCancelled: (error) => error?.code === "LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED",
-      beginRequest,
-      setRequestTimeout,
-      finishRequest,
-      abortObsoleteRequests,
-      requestCount(expectedToken) {
-        if (expectedToken === void 0) return requests.size;
-        let count = 0;
-        for (const request of requests.keys()) if (request.sessionToken === expectedToken) count++;
-        return count;
-      }
-    });
-  }
-
   // src/netflix/carousel/page-model.js
   function createPageModel(profile) {
     const state = {
@@ -10638,13 +9624,13 @@
     fastMoveClass,
     native = {},
     scope,
-    performance: performance2,
-    getComputedStyle: getComputedStyle2,
-    setTimeout: setTimeout2,
-    clearTimeout: clearTimeout2,
-    requestAnimationFrame: requestAnimationFrame2,
-    cancelAnimationFrame: cancelAnimationFrame2,
-    MutationObserver: MutationObserver2,
+    performance,
+    getComputedStyle,
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame,
+    cancelAnimationFrame,
+    MutationObserver,
     cardSelector,
     videoIdFromHref,
     isHoverCancelled = () => false,
@@ -10686,7 +9672,7 @@
       "Timeout at " + stage + " after " + timeoutMs + " ms",
       { timeoutMs, ...details }
     );
-    const sleep = (ms) => scheduledWait((close) => setTimeout2(close, ms), clearTimeout2);
+    const sleep = (ms) => scheduledWait((close) => setTimeout(close, ms), clearTimeout);
     const itemKey = (item) => item.videoId ? "v:" + item.videoId : "h:" + item.href;
     const itemKeyFromCard = (card) => {
       const href = card?.href || card?.getAttribute?.("href") || "";
@@ -10874,7 +9860,7 @@
     function createLogicalMoveSignal(scroller, token, sessionToken, bindingOwner = bindingForSource(scroller, null)) {
       const diagnostic = diagnosticSink(token);
       const bump = diagnostic.bump;
-      if (typeof MutationObserver2 !== "function") {
+      if (typeof MutationObserver !== "function") {
         bump("logicalMoveObserverUnsupported");
         return null;
       }
@@ -10888,12 +9874,12 @@
         const resolve = pending;
         pending = null;
         try {
-          if (oldTimer !== null) clearTimeout2(oldTimer);
+          if (oldTimer !== null) clearTimeout(oldTimer);
         } catch (_) {
           bump("logicalMoveObserverFailures");
         }
         try {
-          if (oldFrame !== null) cancelAnimationFrame2(oldFrame);
+          if (oldFrame !== null) cancelAnimationFrame(oldFrame);
         } catch (_) {
           bump("logicalMoveObserverFailures");
         }
@@ -10921,7 +9907,7 @@
         }
         if (closed || !pending || frame !== null || hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken)) return;
         try {
-          frame = requestAnimationFrame2(() => {
+          frame = requestAnimationFrame(() => {
             frame = null;
             if (closed) return;
             bump("logicalMoveSignalFrames");
@@ -10933,7 +9919,7 @@
         }
       };
       try {
-        observer = new MutationObserver2(() => {
+        observer = new MutationObserver(() => {
           if (closed) return;
           bump("logicalMoveNotifications");
           dirty = true;
@@ -10952,7 +9938,7 @@
             return;
           }
           pending = resolve;
-          timer = setTimeout2(() => {
+          timer = setTimeout(() => {
             if (closed) return;
             bump("logicalMoveFallbackWakes");
             wake(true);
@@ -10970,13 +9956,13 @@
       const bindingOwner = borrowBinding(section, scroller, track);
       assertBinding(bindingOwner);
       const runtime = getCarouselDomRuntime(section);
-      const started = performance2.now();
+      const started = performance.now();
       let lastTransform = beforeTransform;
       let lastSignature = beforeSignature;
       const diagnostic = diagnosticSink(token);
       let signal = token === null || hoverPreparationCancelled(token) ? null : createLogicalMoveSignal(scroller, token, sessionToken, bindingOwner);
       try {
-        while (performance2.now() - started < timeout) {
+        while (performance.now() - started < timeout) {
           if (hoverPreparationCancelled(token)) {
             signal?.close();
             signal = null;
@@ -10993,13 +9979,13 @@
             if (!signalled) {
               signal?.close();
               signal = null;
-              await scheduledWait(requestAnimationFrame2, cancelAnimationFrame2);
+              await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
             }
           }
           assertRouteSession(sessionToken);
           assertBinding(bindingOwner);
           if (token !== null) diagnostic.bump("logicalMoveReads");
-          const transform = track.style.getPropertyValue("transform") || getComputedStyle2(track).transform;
+          const transform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
           const signature = visibleSignature(currentPageSlots(scroller, track));
           const signatureChanged = Boolean(signature) && signature !== beforeSignature;
           lastTransform = transform;
@@ -11047,8 +10033,8 @@
       const bindingOwner = borrowBinding(section);
       assertRouteSession(sessionToken);
       assertBinding(bindingOwner);
-      const start = performance2.now();
-      while (performance2.now() - start < timeout) {
+      const start = performance.now();
+      while (performance.now() - start < timeout) {
         await sleep(hoverPreparationCancelled(token) ? CANCELLED_MOVE_POLL_MS : 12);
         assertRouteSession(sessionToken);
         assertBinding(bindingOwner);
@@ -11066,10 +10052,10 @@
       const immediate = selectedPage(section);
       if (immediate !== before) return immediate;
       if (timeout <= 0) return immediate;
-      if (typeof MutationObserver2 !== "function") {
+      if (typeof MutationObserver !== "function") {
         return waitPageByPolling(section, before, timeout, sessionToken, token);
       }
-      const started = performance2.now();
+      const started = performance.now();
       const observerBudget = Math.min(timeout, PAGE_CHANGE_OBSERVER_PRIMARY_MS);
       const observedPage = await new Promise((resolve, reject) => {
         let observer = null;
@@ -11080,7 +10066,7 @@
           finished = true;
           waits.delete(close);
           try {
-            if (timer !== null) clearTimeout2(timer);
+            if (timer !== null) clearTimeout(timer);
           } catch (_) {
           }
           try {
@@ -11104,7 +10090,7 @@
           if (now !== before) finish(now);
         };
         try {
-          observer = new MutationObserver2(check);
+          observer = new MutationObserver(check);
           observer.observe(section, {
             subtree: true,
             childList: true,
@@ -11112,7 +10098,7 @@
             attributeFilter: ["data-indicator-selected"]
           });
           check();
-          if (!finished) timer = setTimeout2(() => finish(null), observerBudget);
+          if (!finished) timer = setTimeout(() => finish(null), observerBudget);
         } catch (error) {
           reject(error);
           close();
@@ -11121,7 +10107,7 @@
       assertRouteSession(sessionToken);
       assertBinding(bindingOwner);
       if (observedPage !== null) return observedPage;
-      const elapsed = performance2.now() - started;
+      const elapsed = performance.now() - started;
       const remaining = Math.max(0, timeout - elapsed);
       return waitPageByPolling(section, before, remaining, sessionToken, token);
     }
@@ -11129,17 +10115,17 @@
       const bindingOwner = bindingForSource(scroller, track);
       assertRouteSession(sessionToken);
       assertBinding(bindingOwner);
-      const started = performance2.now();
-      let currentTransform = track.style.getPropertyValue("transform") || getComputedStyle2(track).transform;
+      const started = performance.now();
+      let currentTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
       let currentSignature = visibleSignature(currentPageSlots(scroller, track));
       let observedChange = currentTransform !== beforeTransform || Boolean(beforeSignature) && Boolean(currentSignature) && currentSignature !== beforeSignature;
       let stableFrames = 0;
       let previousSignature = currentSignature;
-      while (performance2.now() - started < timeout) {
-        await scheduledWait(requestAnimationFrame2, cancelAnimationFrame2);
+      while (performance.now() - started < timeout) {
+        await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
         assertRouteSession(sessionToken);
         assertBinding(bindingOwner);
-        currentTransform = track.style.getPropertyValue("transform") || getComputedStyle2(track).transform;
+        currentTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
         currentSignature = visibleSignature(currentPageSlots(scroller, track));
         if (currentTransform !== beforeTransform || Boolean(beforeSignature) && Boolean(currentSignature) && currentSignature !== beforeSignature) {
           observedChange = true;
@@ -11152,7 +10138,7 @@
         }
         previousSignature = currentSignature;
       }
-      await scheduledWait(requestAnimationFrame2, cancelAnimationFrame2);
+      await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
       assertRouteSession(sessionToken);
       assertBinding(bindingOwner);
       return {
@@ -11165,7 +10151,7 @@
     }) {
       assertOperation();
       const hoverTiming = diagnosticSink(token).record;
-      const queueStarted = hoverTiming ? performance2.now() : 0;
+      const queueStarted = hoverTiming ? performance.now() : 0;
       let moveStarted = null;
       const moveOwner = begin(section, scroller);
       try {
@@ -11202,9 +10188,9 @@
         if (profile.pageMode === "logical" && carouselMoveButtonDisabled(button)) {
           return before;
         }
-        const started = performance2.now();
+        const started = performance.now();
         moveStarted = started;
-        const beforeTransform = track.style.getPropertyValue("transform") || getComputedStyle2(track).transform;
+        const beforeTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
         const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
         const sharedFastMode = section.classList.contains(FAST_MOVE_CLASS2);
         const nativeTransition = sharedFastMode ? "suppressed-by-scan" : track.style.getPropertyValue("transition");
@@ -11234,7 +10220,7 @@
           button.click();
           moveOwner.assertCurrent();
           assertOperation();
-          const acknowledgementStarted = hoverTiming ? performance2.now() : 0;
+          const acknowledgementStarted = hoverTiming ? performance.now() : 0;
           try {
             if (profile.pageMode === "logical") {
               const logicalMove = await waitLogicalPageChange(
@@ -11262,16 +10248,16 @@
           assertRouteSession(sessionToken);
           moveOwner.assertCurrent();
           assertOperation();
-          const settlementStarted = hoverTiming ? performance2.now() : 0;
+          const settlementStarted = hoverTiming ? performance.now() : 0;
           try {
             if (sharedFastMode) {
               if (profile.pageMode !== "logical") {
-                await scheduledWait(requestAnimationFrame2, cancelAnimationFrame2);
+                await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
                 assertRouteSession(sessionToken);
               }
               moveOwner.assertCurrent();
               assertOperation();
-              afterTransform = track.style.getPropertyValue("transform") || getComputedStyle2(track).transform;
+              afterTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
               afterSignature = visibleSignature(currentPageSlots(scroller, track));
               settleObservedChange = settleObservedChange || after !== before;
             } else {
@@ -11302,7 +10288,7 @@
           sharedFastMode,
           beforeTransform,
           afterTransform,
-          elapsedMs: Math.round(performance2.now() - started),
+          elapsedMs: Math.round(performance.now() - started),
           ...hoverTiming ? { acknowledgementMs, settlementMs } : {},
           animationRestored: sharedFastMode ? false : Boolean(motionLease?.restored()),
           token
@@ -11454,7 +10440,7 @@
       assertBinding(bindingOwner);
       assertOperation();
       if (hoverPreparationCancelled(token)) return [];
-      const start = performance2.now();
+      const start = performance.now();
       let lastSignature = "";
       let stableFrames = 0;
       let best = [];
@@ -11489,8 +10475,8 @@
         }
         return keys.size;
       };
-      while (performance2.now() - start < timeout) {
-        await scheduledWait(requestAnimationFrame2, cancelAnimationFrame2);
+      while (performance.now() - start < timeout) {
+        await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
         assertRouteSession(sessionToken);
         assertBinding(bindingOwner);
         assertOperation();
@@ -11550,7 +10536,7 @@
     }
     function trackTransformValue(track) {
       if (!track) return "";
-      return track.style.getPropertyValue("transform") || getComputedStyle2(track).transform || "";
+      return track.style.getPropertyValue("transform") || getComputedStyle(track).transform || "";
     }
     function immediateRestoredPageState(scroller, track, items, targetPage) {
       const requiredPageKeys = pageItemKeys(items, targetPage);
@@ -11569,7 +10555,7 @@
       assertRouteSession(sessionToken);
       assertBinding(bindingOwner);
       const requiredPageKeys = pageItemKeys(items, targetPage);
-      const started = performance2.now();
+      const started = performance.now();
       const restoredSlots = await waitStableCurrentPage(scroller, track, {
         previousSignature,
         minimumSlots: Math.min(expectedPageSlots, Math.max(1, requiredPageKeys.size)),
@@ -11589,14 +10575,14 @@
         mountedKeys: requiredPageKeys.size - missingKeys.length,
         slots: restoredSlots.length,
         missingKeys,
-        elapsedMs: Math.round(performance2.now() - started)
+        elapsedMs: Math.round(performance.now() - started)
       };
     }
     async function restoreNativePageByPage(section, scroller, track, items, expectedPageSlots, targetPage, sessionToken = null) {
       const bindingOwner = borrowBinding(section, scroller, track);
       assertRouteSession(sessionToken);
       assertBinding(bindingOwner);
-      const started = performance2.now();
+      const started = performance.now();
       let currentRestorePage = selectedPage(section);
       let restorationComplete = true;
       if (currentRestorePage === targetPage) {
@@ -11621,11 +10607,11 @@
           assertRouteSession(sessionToken);
           assertBinding(bindingOwner);
           if (moved !== targetPage + repairDirection) {
-            return { complete: false, elapsedMs: Math.round(performance2.now() - started) };
+            return { complete: false, elapsedMs: Math.round(performance.now() - started) };
           }
           currentRestorePage = moved;
         } else {
-          return { complete: false, elapsedMs: Math.round(performance2.now() - started) };
+          return { complete: false, elapsedMs: Math.round(performance.now() - started) };
         }
       }
       const direction = targetPage < currentRestorePage ? -1 : 1;
@@ -11639,7 +10625,7 @@
         assertBinding(bindingOwner);
         const nextPage = currentRestorePage + direction;
         const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
-        const stepStarted = performance2.now();
+        const stepStarted = performance.now();
         const movedPage = await moveOnePage(section, scroller, direction, null, sessionToken);
         assertRouteSession(sessionToken);
         assertBinding(bindingOwner);
@@ -11672,7 +10658,7 @@
           mountedKeys: verification.mountedKeys,
           slots: verification.slots,
           missingKeys: verification.missingKeys,
-          elapsedMs: Math.round(performance2.now() - stepStarted)
+          elapsedMs: Math.round(performance.now() - stepStarted)
         });
         if (!verification.ok) {
           restorationComplete = false;
@@ -11691,22 +10677,22 @@
         target: targetPage,
         selectedPage: selectedPage(section),
         complete,
-        elapsedMs: Math.round(performance2.now() - started)
+        elapsedMs: Math.round(performance.now() - started)
       });
-      return { complete, elapsedMs: Math.round(performance2.now() - started) };
+      return { complete, elapsedMs: Math.round(performance.now() - started) };
     }
     async function repairFastRestoredPage(section, scroller, track, items, expectedPageSlots, targetPage, canonicalTargetTransform = "", reason = "verification-failed", sessionToken = null) {
       const bindingOwner = borrowBinding(section, scroller, track);
       assertRouteSession(sessionToken);
       assertBinding(bindingOwner);
-      const started = performance2.now();
+      const started = performance.now();
       const total = pageCount(section);
       const repairDirection = targetPage < total - 1 ? 1 : targetPage > 0 ? -1 : 0;
       if (repairDirection === 0) {
         return {
           complete: false,
           verification: null,
-          elapsedMs: Math.round(performance2.now() - started)
+          elapsedMs: Math.round(performance.now() - started)
         };
       }
       const adjacentPage = targetPage + repairDirection;
@@ -11740,7 +10726,7 @@
         return {
           complete: false,
           verification: null,
-          elapsedMs: Math.round(performance2.now() - started)
+          elapsedMs: Math.round(performance.now() - started)
         };
       }
       const adjacentVerification = await verifyRestoredPage(
@@ -11779,7 +10765,7 @@
         return {
           complete: false,
           verification: adjacentVerification,
-          elapsedMs: Math.round(performance2.now() - started)
+          elapsedMs: Math.round(performance.now() - started)
         };
       }
       const returnSignature = visibleSignature(currentPageSlots(scroller, track));
@@ -11797,7 +10783,7 @@
         return {
           complete: false,
           verification: null,
-          elapsedMs: Math.round(performance2.now() - started)
+          elapsedMs: Math.round(performance.now() - started)
         };
       }
       const targetVerification = await verifyRestoredPage(
@@ -11828,19 +10814,19 @@
         transformMatchesCanonical: Boolean(canonicalTargetTransform) && finalTransform === canonicalTargetTransform,
         adjacentVerificationElapsedMs: adjacentVerification.elapsedMs,
         targetVerificationElapsedMs: targetVerification.elapsedMs,
-        elapsedMs: Math.round(performance2.now() - started)
+        elapsedMs: Math.round(performance.now() - started)
       });
       return {
         complete,
         verification: targetVerification,
-        elapsedMs: Math.round(performance2.now() - started)
+        elapsedMs: Math.round(performance.now() - started)
       };
     }
     async function restoreNativePageFast(section, scroller, track, items, expectedPageSlots, targetPage, canonicalTargetTransform = "", sessionToken = null) {
       const bindingOwner = borrowBinding(section, scroller, track);
       assertRouteSession(sessionToken);
       assertBinding(bindingOwner);
-      const started = performance2.now();
+      const started = performance.now();
       const originalFromPage = selectedPage(section);
       const pages = pageCount(section);
       const adjacentDirection = targetPage < originalFromPage ? -1 : 1;
@@ -11954,7 +10940,7 @@
         currentPage = nextPage;
       }
       if (fastComplete && selectedPage(section) === targetPage) {
-        const diagnosisStarted = performance2.now();
+        const diagnosisStarted = performance.now();
         const immediateState = immediateRestoredPageState(scroller, track, items, targetPage);
         const arrivalTransform = trackTransformValue(track);
         const hasCanonicalTransform = Boolean(canonicalTargetTransform);
@@ -11975,7 +10961,7 @@
           mountedKeys: immediateState.mountedKeys,
           missingKeys: immediateState.missingKeys,
           phaseMismatchDetected,
-          diagnosisElapsedMs: Math.round(performance2.now() - diagnosisStarted)
+          diagnosisElapsedMs: Math.round(performance.now() - diagnosisStarted)
         });
         if (phaseMismatchDetected) {
           initialVerificationWaitSkipped = true;
@@ -12048,7 +11034,7 @@
         canonicalTargetTransform,
         finalTransform,
         transformMatchesCanonical: Boolean(canonicalTargetTransform) && finalTransform === canonicalTargetTransform,
-        elapsedMs: Math.round(performance2.now() - started)
+        elapsedMs: Math.round(performance.now() - started)
       });
       if (fastComplete) return true;
       warn(tLog("fastRestorationVerificationFailedUsingV49PageByPageFallback"), {
@@ -12109,9 +11095,9 @@
     native,
     navigation,
     scope,
-    performance: performance2,
-    requestAnimationFrame: requestAnimationFrame2,
-    cancelAnimationFrame: cancelAnimationFrame2,
+    performance,
+    requestAnimationFrame,
+    cancelAnimationFrame,
     captureItem,
     videoIdFromHref,
     cardSelector,
@@ -12215,14 +11201,14 @@
           closed = true;
           frames.delete(close);
           try {
-            if (frame !== null) cancelAnimationFrame2(frame);
+            if (frame !== null) cancelAnimationFrame(frame);
           } catch (_) {
           }
           resolve();
         };
         frames.add(close);
         try {
-          frame = requestAnimationFrame2(close);
+          frame = requestAnimationFrame(close);
         } catch (error) {
           reject(error);
           close();
@@ -12255,7 +11241,7 @@
       assertOperation(operation);
       operations.add(operation);
       try {
-        const started = performance2.now();
+        const started = performance.now();
         let previousSignature = "";
         for (let sample = 0; sample < 2; sample++) {
           assertOperation(operation);
@@ -12267,7 +11253,7 @@
               totalCount,
               firstVideoId: videoIds[0] || null,
               source: "mounted-single-page-fast-path",
-              elapsedMs: Math.round(performance2.now() - started)
+              elapsedMs: Math.round(performance.now() - started)
             });
             assertOperation(operation);
             mountedProofs.set(result, { binding: operation.binding, section, scroller, track, signature });
@@ -12384,14 +11370,14 @@
       const visitedSignatures = /* @__PURE__ */ new Set();
       const responsiveColumns = operation.columns || currentPageSlots(scroller, track).length || 1;
       const estimatedPages = Math.max(1, Math.ceil(totalCount / Math.max(1, responsiveColumns)));
-      const started = performance2.now();
+      const started = performance.now();
       const stablePageTransforms = /* @__PURE__ */ new Map();
       let initialPage = null;
       let endingPage = 0;
       let completionReason = "";
       const collectedCount = () => itemsByLogicalIndex.size;
       const ensureCollectionTime = (stage) => {
-        const elapsedMs = performance2.now() - started;
+        const elapsedMs = performance.now() - started;
         if (elapsedMs < LOGICAL_COLLECTION_TIMEOUT_MS) return;
         const details = {
           stage,
@@ -12441,7 +11427,7 @@
           const beforeCount = collectedCount();
           const remaining = Math.max(0, goal - beforeCount);
           const expectedSlots = Math.max(1, Math.min(responsiveColumns, remaining));
-          const stabilizeStarted = performance2.now();
+          const stabilizeStarted = performance.now();
           const slots = await waitStableCurrentPage(scroller, track, {
             previousSignature: previousPageSignature,
             minimumSlots: expectedSlots,
@@ -12551,7 +11537,7 @@
             transform: stabilizedTransform,
             itemIndices: pageState.itemIndices,
             logicalIndices: pageState.logicalIndices,
-            stabilizeElapsedMs: Math.round(performance2.now() - stabilizeStarted),
+            stabilizeElapsedMs: Math.round(performance.now() - stabilizeStarted),
             pageMode: "logical"
           });
           if (pageState.slots.length < expectedSlots || newKeys.size < 1 || !stabilizedSignature) {
@@ -12705,7 +11691,7 @@
           indexCoverage: `${itemsByLogicalIndex.size}/${totalCount}`
         });
         if (endingPage !== initialPage) {
-          const restorationStarted = performance2.now();
+          const restorationStarted = performance.now();
           const canonicalTargetTransform = stablePageTransforms.get(initialPage) || "";
           const restorationComplete = await restoreNativePageFast(
             section,
@@ -12724,7 +11710,7 @@
             target: initialPage,
             selectedPage: selectedPage(section),
             complete: restorationComplete && selectedPage(section) === initialPage,
-            elapsedMs: Math.round(performance2.now() - restorationStarted),
+            elapsedMs: Math.round(performance.now() - restorationStarted),
             pageMode: "logical"
           });
           if (!restorationComplete || selectedPage(section) !== initialPage) {
@@ -12743,7 +11729,7 @@
           goal,
           completionReason,
           cycleDetected: runtime.cycleDetected,
-          elapsedMs: Math.round(performance2.now() - started),
+          elapsedMs: Math.round(performance.now() - started),
           endingPage,
           restoredPage: selectedPage(section),
           initialPage,
@@ -12781,7 +11767,7 @@
           Number.isFinite(totalCount) ? totalCount : responsiveColumns
         )
       );
-      const started = performance2.now();
+      const started = performance.now();
       const initialPage = selectedPage(section);
       operation.initialPage = initialPage;
       publish(operation, { initialPage });
@@ -12811,7 +11797,7 @@
           const singlePageList = pages === 1;
           const minimumNewItems = singlePageList ? expectedPageSlots : page < pages - 1 ? Math.min(expectedPageSlots, remaining) : Number.isFinite(remaining) ? Math.min(expectedPageSlots, remaining) : 1;
           const minimumSlots = singlePageList ? expectedPageSlots : page < pages - 1 ? expectedPageSlots : Number.isFinite(remaining) ? Math.min(expectedPageSlots, Math.max(1, remaining)) : expectedPageSlots;
-          const stabilizeStarted = performance2.now();
+          const stabilizeStarted = performance.now();
           const slots = await waitStableCurrentPage(scroller, track, {
             previousSignature: previousPageSignature,
             minimumSlots,
@@ -12839,7 +11825,7 @@
             minimumNewItems,
             signature: stabilizedSignature,
             transform: stabilizedTransform,
-            stabilizeElapsedMs: Math.round(performance2.now() - stabilizeStarted)
+            stabilizeElapsedMs: Math.round(performance.now() - stabilizeStarted)
           });
           if (slots.length < minimumSlots || newKeys.size < minimumNewItems) {
             warn(tLog("collectionStoppedBecauseThePageNeverReachedTheExpectedStableState"), {
@@ -12897,7 +11883,7 @@
         }
         endingPage = selectedPage(section);
         if (endingPage !== initialPage) {
-          const restorationStarted = performance2.now();
+          const restorationStarted = performance.now();
           const canonicalTargetTransform = stablePageTransforms.get(initialPage) || "";
           log(tLog("nativeRestorationBaselineCaptured"), {
             from: endingPage,
@@ -12925,7 +11911,7 @@
             target: initialPage,
             selectedPage: selectedPage(section),
             complete: restorationComplete && selectedPage(section) === initialPage,
-            elapsedMs: Math.round(performance2.now() - restorationStarted)
+            elapsedMs: Math.round(performance.now() - restorationStarted)
           });
           if (restorationComplete && selectedPage(section) === initialPage) {
             await nextFrame(operation);
@@ -12945,7 +11931,7 @@
         collected: items.length,
         totalCount,
         goal,
-        elapsedMs: Math.round(performance2.now() - started),
+        elapsedMs: Math.round(performance.now() - started),
         endingPage,
         restoredPage: selectedPage(section),
         initialPage,
@@ -13048,7 +12034,7 @@
   }
 
   // src/netflix/carousel/source-presentation.js
-  function createSourcePresentation({ document: document2, pageDom, scope, generation, invalidateReads, createError, warn }) {
+  function createSourcePresentation({ document, pageDom, scope, generation, invalidateReads, createError, warn }) {
     const owners = /* @__PURE__ */ new Map(), properties = /* @__PURE__ */ new WeakMap();
     let restoreFailures = 0;
     const replaced = () => createError("NATIVE_SOURCE_REPLACED", "native-presentation", "Native presentation admission changed");
@@ -13227,7 +12213,7 @@
         if (generation() !== admittedGeneration) throw replaced();
       };
       guard();
-      for (const section of document2.querySelectorAll("[data-tm-mylist-v14], [data-tm-mylist-100-demo], [data-tm-mylist-clone-demo]")) {
+      for (const section of document.querySelectorAll("[data-tm-mylist-v14], [data-tm-mylist-100-demo], [data-tm-mylist-clone-demo]")) {
         guard();
         for (const name of ["data-tm-mylist-v14", "data-tm-mylist-100-demo", "data-tm-mylist-clone-demo"]) {
           guard();
@@ -13236,7 +12222,7 @@
         guard();
         section.style.removeProperty("--tm-source-width");
       }
-      for (const scroller of document2.querySelectorAll(".tm-netflix-mylist-v14-source, .tm-netflix-mylist-100-demo-source, .tm-netflix-mylist-100-demo-source-parked")) {
+      for (const scroller of document.querySelectorAll(".tm-netflix-mylist-v14-source, .tm-netflix-mylist-100-demo-source, .tm-netflix-mylist-100-demo-source-parked")) {
         guard();
         scroller.classList.remove("tm-netflix-mylist-v14-source", "tm-netflix-mylist-100-demo-source", "tm-netflix-mylist-100-demo-source-parked");
         for (const name of ["--tm-source-width", "--slot-width", "--sp-slot-width"]) {
@@ -13244,7 +12230,7 @@
           scroller.style.removeProperty(name);
         }
       }
-      for (const slot of document2.querySelectorAll("[data-tm-source-aligned], [data-tm-source-proxied]")) {
+      for (const slot of document.querySelectorAll("[data-tm-source-aligned], [data-tm-source-proxied]")) {
         for (const name of ["transform", "transform-origin", "z-index"]) {
           guard();
           slot.style.removeProperty(name);
@@ -13271,15 +12257,15 @@
   function createCarousel({
     pageDom: netflixDom,
     scope,
-    document: document2,
-    window: window2,
-    Element: Element2,
-    getComputedStyle: getComputedStyle2,
-    performance: performance2,
-    setTimeout: setTimeout2,
-    clearTimeout: clearTimeout2,
-    requestAnimationFrame: requestAnimationFrame2,
-    cancelAnimationFrame: cancelAnimationFrame2,
+    document,
+    window,
+    Element,
+    getComputedStyle,
+    performance,
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame,
+    cancelAnimationFrame,
     readListShape = () => null,
     readGraphqlCount = () => null,
     createError: initializationError,
@@ -13293,7 +12279,7 @@
     logTimeout: logOperationTimeout = () => {
     },
     ownedUi = {},
-    MutationObserver: MutationObserver2,
+    MutationObserver,
     checkRoute = () => {
     },
     onMutationDelivery = () => {
@@ -13320,7 +12306,7 @@
     const assertRouteSession = (token) => scope.assertCurrent(token);
     const NATIVE_READY_TIMEOUT_MS = 3e3, NATIVE_SINGLE_PAGE_STABLE_MS = 700, NATIVE_EMPTY_STABLE_MS = 1200;
     const NATIVE_READY_POLL_MS = 25, NATIVE_LOGICAL_STABLE_MS = 120;
-    const sleep = (ms) => new Promise((resolve) => setTimeout2(resolve, ms));
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     let nativeReadScope = null;
     let models = /* @__PURE__ */ new WeakMap();
     let acceptedBinding = null;
@@ -13334,7 +12320,7 @@
     let mappingSequence = 0;
     const mountedWaits = /* @__PURE__ */ new Set();
     const sourcePresentation = createSourcePresentation({
-      document: document2,
+      document,
       pageDom: netflixDom,
       scope,
       generation: () => bindingGeneration,
@@ -13352,13 +12338,13 @@
       bindingForSource: (scroller, track) => borrowBinding(acceptedBinding?.section || null, scroller, track),
       fastMoveClass: ownedUi.fastMove || FAST_MOVE_CLASS,
       scope,
-      performance: performance2,
-      getComputedStyle: getComputedStyle2,
-      setTimeout: setTimeout2,
-      clearTimeout: clearTimeout2,
-      requestAnimationFrame: requestAnimationFrame2,
-      cancelAnimationFrame: cancelAnimationFrame2,
-      MutationObserver: MutationObserver2,
+      performance,
+      getComputedStyle,
+      setTimeout,
+      clearTimeout,
+      requestAnimationFrame,
+      cancelAnimationFrame,
+      MutationObserver,
       cardSelector: NETFLIX_DOM_SELECTORS2.standardCard,
       videoIdFromHref: (href) => netflixDom.videoIdFromHref(href),
       isHoverCancelled,
@@ -13384,9 +12370,9 @@
     });
     const collection = createCollection2({
       scope,
-      performance: performance2,
-      requestAnimationFrame: requestAnimationFrame2,
-      cancelAnimationFrame: cancelAnimationFrame2,
+      performance,
+      requestAnimationFrame,
+      cancelAnimationFrame,
       navigation,
       captureItem: (...args) => cardMarkup.capture(...args),
       videoIdFromHref: (href) => netflixDom.videoIdFromHref(href),
@@ -13644,12 +12630,12 @@
         const ticket = { close() {
           if (closed) return;
           closed = true;
-          clearTimeout2(timer);
+          clearTimeout(timer);
           mountedWaits.delete(ticket);
           resolve();
         } };
         mountedWaits.add(ticket);
-        timer = setTimeout2(ticket.close, 10);
+        timer = setTimeout(ticket.close, 10);
       });
     }
     function resetMountedWaits() {
@@ -13662,13 +12648,13 @@
       if (!options.section?.isConnected || !options.scroller?.isConnected || !options.track?.isConnected) {
         return Object.freeze({ status: "unknown", reason: "native-binding-unavailable" });
       }
-      const start = performance2.now(), timeout = Number.isFinite(options.timeout) ? Math.max(0, options.timeout) : 500;
+      const start = performance.now(), timeout = Number.isFinite(options.timeout) ? Math.max(0, options.timeout) : 500;
       let operation;
       let source = withNativeReadScope(() => {
         operation = mountedOperation(options, assertOperation);
         return lookupMountedCard(operation);
       });
-      while (!source && performance2.now() - start < timeout) {
+      while (!source && performance.now() - start < timeout) {
         await mountedTick();
         assertRouteSession(operation.sessionToken);
         if (isHoverCancelled(operation.hoverToken)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
@@ -14423,7 +13409,7 @@
           const layout = kind === "bounds" ? null : kind === "visible" ? measureVisibleLayout(section, scroller, track) : measureEmptyLayout(section);
           const facts2 = {
             bounds,
-            viewportWidth: window2.innerWidth,
+            viewportWidth: window.innerWidth,
             ...layout ? { layout: Object.freeze({ ...layout }) } : {}
           };
           entries.push({ scroller, track, kind, facts: facts2 });
@@ -14433,7 +13419,7 @@
         const same = (left, right) => Boolean(left && right && Object.keys(left).length === Object.keys(right).length && Object.keys(left).every((key) => Object.is(left[key], right[key])));
         return observationResult({ binding: { section }, guard }, { ...facts }, () => {
           const current = read();
-          if (window2.innerWidth !== facts.viewportWidth || !same(current.bounds, facts.bounds) || facts.layout && !same(current.layout, facts.layout)) {
+          if (window.innerWidth !== facts.viewportWidth || !same(current.bounds, facts.bounds) || facts.layout && !same(current.layout, facts.layout)) {
             throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Observed native layout changed");
           }
         });
@@ -14946,25 +13932,25 @@
     async function waitForNativeSource(section, timeout = NATIVE_READY_TIMEOUT_MS, sessionToken = null) {
       assertRouteSession(sessionToken);
       const bindingOwner = borrowBinding(section);
-      const started = performance2.now();
-      while (performance2.now() - started < timeout) {
+      const started = performance.now();
+      while (performance.now() - started < timeout) {
         assertRouteSession(sessionToken);
         if (!isBindingCurrent(bindingOwner)) return {
           found: false,
           empty: false,
           reason: "detached",
           stage: "native-source",
-          elapsedMs: Math.round(performance2.now() - started)
+          elapsedMs: Math.round(performance.now() - started)
         };
         if (section.id === SYNTHETIC_SECTION_ID) {
           const nativeSection = findMyListSection();
           if (nativeSection && nativeSection !== section) {
-            return { found: false, nativeSection, elapsedMs: Math.round(performance2.now() - started) };
+            return { found: false, nativeSection, elapsedMs: Math.round(performance.now() - started) };
           }
         }
         const scroller = section.querySelector(NETFLIX_DOM_SELECTORS2.carouselScroller);
         const track = scroller && netflixDom.findTrack(scroller);
-        if (scroller && track) return { found: true, scroller, track, elapsedMs: Math.round(performance2.now() - started) };
+        if (scroller && track) return { found: true, scroller, track, elapsedMs: Math.round(performance.now() - started) };
         await sleep(NATIVE_READY_POLL_MS);
       }
       assertRouteSession(sessionToken);
@@ -14973,7 +13959,7 @@
         empty: false,
         reason: "detached",
         stage: "native-source",
-        elapsedMs: Math.round(performance2.now() - started)
+        elapsedMs: Math.round(performance.now() - started)
       };
       return {
         found: false,
@@ -14981,7 +13967,7 @@
         reason: "timeout",
         stage: "native-source",
         timeoutMs: timeout,
-        elapsedMs: Math.round(performance2.now() - started)
+        elapsedMs: Math.round(performance.now() - started)
       };
     }
     async function waitForNativeCarouselReady(section, scroller, track, sessionToken = null, options = {}) {
@@ -14990,7 +13976,7 @@
       assertAdmission();
       assertRouteSession(sessionToken);
       const bindingOwner = borrowBinding(section, scroller, track);
-      const started = performance2.now();
+      const started = performance.now();
       const fastSinglePageTotalCount = Number.isSafeInteger(options.fastSinglePageTotalCount) ? options.fastSinglePageTotalCount : null;
       let lastSignature = "";
       let stableSince = started;
@@ -15010,21 +13996,21 @@
         capabilities: lastState.capabilities
       });
       assertAdmission();
-      while (performance2.now() - started < NATIVE_READY_TIMEOUT_MS) {
+      while (performance.now() - started < NATIVE_READY_TIMEOUT_MS) {
         assertAdmission();
         assertRouteSession(sessionToken);
         if (!isBindingCurrent(bindingOwner)) return {
           ready: false,
           reason: "detached",
-          elapsedMs: Math.round(performance2.now() - started),
+          elapsedMs: Math.round(performance.now() - started),
           state: { ...lastState, connected: false }
         };
         const state = nativeCarouselReadiness(section, scroller, track);
         lastState = state;
         if (!state.connected) {
-          return { ready: false, reason: "detached", elapsedMs: Math.round(performance2.now() - started), state };
+          return { ready: false, reason: "detached", elapsedMs: Math.round(performance.now() - started), state };
         }
-        const now = performance2.now();
+        const now = performance.now();
         if (state.signature !== lastSignature) {
           lastSignature = state.signature;
           stableSince = now;
@@ -15040,21 +14026,21 @@
             ready: true,
             empty: true,
             reason: "stable-empty-page",
-            elapsedMs: Math.round(performance2.now() - started),
+            elapsedMs: Math.round(performance.now() - started),
             state
           };
         }
         if (logicalCarouselReady || multiPageReady || singlePageReady) {
-          await new Promise((resolve) => requestAnimationFrame2(resolve));
+          await new Promise((resolve) => requestAnimationFrame(resolve));
           assertAdmission();
           assertRouteSession(sessionToken);
-          await new Promise((resolve) => requestAnimationFrame2(resolve));
+          await new Promise((resolve) => requestAnimationFrame(resolve));
           assertAdmission();
           assertRouteSession(sessionToken);
           if (!isBindingCurrent(bindingOwner)) return {
             ready: false,
             reason: "detached",
-            elapsedMs: Math.round(performance2.now() - started),
+            elapsedMs: Math.round(performance.now() - started),
             state: { ...lastState, connected: false }
           };
           const confirmed = nativeCarouselReadiness(section, scroller, track);
@@ -15062,7 +14048,7 @@
             const result2 = {
               ready: true,
               reason: logicalCarouselReady ? "logical-carousel" : multiPageReady ? "multi-page" : fastSinglePageReady ? "fast-single-page" : "stable-single-page",
-              elapsedMs: Math.round(performance2.now() - started),
+              elapsedMs: Math.round(performance.now() - started),
               state: confirmed
             };
             log(tLog("nativeCarouselInitializationReady"), result2);
@@ -15070,7 +14056,7 @@
             return result2;
           }
           lastSignature = confirmed.signature;
-          stableSince = performance2.now();
+          stableSince = performance.now();
           lastState = confirmed;
         }
         await sleep(NATIVE_READY_POLL_MS);
@@ -15081,7 +14067,7 @@
       if (!isBindingCurrent(bindingOwner)) return {
         ready: false,
         reason: "detached",
-        elapsedMs: Math.round(performance2.now() - started),
+        elapsedMs: Math.round(performance.now() - started),
         state: { ...lastState, connected: false }
       };
       const finalState = nativeCarouselReadiness(section, scroller, track);
@@ -15090,7 +14076,7 @@
         reason: "timeout",
         stage: "native-carousel-readiness",
         timeoutMs: NATIVE_READY_TIMEOUT_MS,
-        elapsedMs: Math.round(performance2.now() - started),
+        elapsedMs: Math.round(performance.now() - started),
         state: finalState
       };
       logOperationTimeout(result.stage, result.timeoutMs, {
@@ -15111,7 +14097,7 @@
       const subtractPx = Number(match[1]);
       const columns = Number(match[2]);
       if (!Number.isFinite(subtractPx) || !Number.isFinite(columns) || columns < 1) return null;
-      const computedTrack = getComputedStyle2(track);
+      const computedTrack = getComputedStyle(track);
       const gap = Number.parseFloat(computedTrack.columnGap || computedTrack.gap || "8") || 8;
       const paddingLeft = Math.max(0, Number.parseFloat(computedTrack.paddingLeft || "0") || 0);
       const paddingRight = Math.max(0, Number.parseFloat(computedTrack.paddingRight || "0") || 0);
@@ -15205,10 +14191,10 @@
         sidePaddingRight = 0;
       } else {
         let fallbackPadding;
-        if (window2.innerWidth >= 2560) fallbackPadding = 72;
-        else if (window2.innerWidth >= 1600) fallbackPadding = 60;
-        else if (window2.innerWidth >= 1280) fallbackPadding = 48;
-        else if (window2.innerWidth >= 600) fallbackPadding = 36;
+        if (window.innerWidth >= 2560) fallbackPadding = 72;
+        else if (window.innerWidth >= 1600) fallbackPadding = 60;
+        else if (window.innerWidth >= 1280) fallbackPadding = 48;
+        else if (window.innerWidth >= 600) fallbackPadding = 36;
         else fallbackPadding = 24;
         sidePaddingLeft = fallbackPadding;
         sidePaddingRight = fallbackPadding;
@@ -15414,8 +14400,8 @@
           key: current.key ?? null,
           alternateKey: current.alternate?.key ?? null,
           typeName: netflixReactCarousel.typeName(current),
-          stateNodeName: stateNode instanceof Element2 ? stateNode.tagName.toLowerCase() : "",
-          stateVirtualSlot: stateNode instanceof Element2 ? stateNode.getAttribute("data-virtual-slot") || "" : "",
+          stateNodeName: stateNode instanceof Element ? stateNode.tagName.toLowerCase() : "",
+          stateVirtualSlot: stateNode instanceof Element ? stateNode.getAttribute("data-virtual-slot") || "" : "",
           memoizedProps: diagnosticPrimitiveProps(current.memoizedProps),
           pendingProps: diagnosticPrimitiveProps(current.pendingProps)
         });
@@ -15425,7 +14411,7 @@
       return chain;
     }
     function diagnosticReactNode(node, label) {
-      if (!(node instanceof Element2)) return { label, available: false };
+      if (!(node instanceof Element)) return { label, available: false };
       const ownKeys = Object.getOwnPropertyNames(node);
       return {
         label,
@@ -15482,8 +14468,8 @@
       targetObservedAncestors = [];
       targetDocumentDiscoveryActive = false;
       if (!host) {
-        if (document2.documentElement) {
-          targetDocumentObserver.observe(document2.documentElement, { childList: true, subtree: true });
+        if (document.documentElement) {
+          targetDocumentObserver.observe(document.documentElement, { childList: true, subtree: true });
           targetDocumentDiscoveryActive = true;
         }
         return true;
@@ -15536,7 +14522,7 @@
       if (!mutations.length) return;
       let relevantMutation = false;
       if (targetDocumentDiscoveryActive) {
-        const host = document2.querySelector?.(NETFLIX_DOM_SELECTORS2.browseSections);
+        const host = document.querySelector?.(NETFLIX_DOM_SELECTORS2.browseSections);
         if (!host) return;
         const section = findMyListSection();
         relevantMutation = bindTargetDocumentObserver(host, section);
@@ -15548,12 +14534,12 @@
           (mutation) => targetObservedMyListSection && targetObservedMyListSection.contains(mutation.target)
         );
         if (ancestorChanged || hostChanged) {
-          const host = document2.querySelector?.(NETFLIX_DOM_SELECTORS2.browseSections);
+          const host = document.querySelector?.(NETFLIX_DOM_SELECTORS2.browseSections);
           const section = host ? findMyListSection() : null;
           const bindingChanged = bindTargetDocumentObserver(host, section);
           relevantMutation = bindingChanged || hostChanged || sectionChanged;
         } else if (hostDiscoveryChanged) {
-          const host = document2.querySelector?.(NETFLIX_DOM_SELECTORS2.browseSections);
+          const host = document.querySelector?.(NETFLIX_DOM_SELECTORS2.browseSections);
           const section = host ? findMyListSection() : null;
           relevantMutation = bindTargetDocumentObserver(host, section) || hostDiscoveryChanged;
         } else {
@@ -15572,7 +14558,7 @@
       if (targetMutationFrame !== null) return;
       const frame = { id: null, owner };
       targetMutationFrame = frame;
-      frame.id = requestAnimationFrame2(() => {
+      frame.id = requestAnimationFrame(() => {
         if (targetMutationFrame !== frame) return;
         targetMutationFrame = null;
         if (discoveryOwner !== owner || !scope.isCurrent(owner.sessionToken)) return;
@@ -15580,7 +14566,7 @@
       });
     }
     function stopDiscovery() {
-      if (targetMutationFrame !== null) cancelAnimationFrame2(targetMutationFrame.id);
+      if (targetMutationFrame !== null) cancelAnimationFrame(targetMutationFrame.id);
       targetMutationFrame = null;
       discoveryOwner = null;
       targetDocumentObserver?.disconnect();
@@ -15594,15 +14580,34 @@
       if (targetDocumentObserver) return false;
       const owner = { sessionToken: scope.token };
       discoveryOwner = owner;
-      targetDocumentObserver = new MutationObserver2((mutations) => {
+      targetDocumentObserver = new MutationObserver((mutations) => {
         if (discoveryOwner === owner) handleTargetDocumentMutation(mutations);
       });
       refreshDiscovery();
       return true;
     }
     function refreshDiscovery() {
-      const host = document2.querySelector?.(NETFLIX_DOM_SELECTORS2.browseSections);
+      const host = document.querySelector?.(NETFLIX_DOM_SELECTORS2.browseSections);
       return bindTargetDocumentObserver(host, host ? findMyListSection() : null);
+    }
+    function captureFallbackItem(videoId) {
+      const wanted = String(videoId);
+      for (const card of document.querySelectorAll(NETFLIX_DOM_SELECTORS2.standardCardWithHref)) {
+        if (card.closest(`#${GRID_ID2}`)) continue;
+        const href = card.href || card.getAttribute("href") || "";
+        if (netflixDom.videoIdFromHref(href) !== wanted) continue;
+        const slot = card.closest(NETFLIX_DOM_SELECTORS2.virtualSlot);
+        if (!slot) continue;
+        const item = cardMarkup.capture(slot, 0);
+        if (item?.videoId === wanted) return item;
+      }
+      return null;
+    }
+    function cardIdentity(node) {
+      const card = node?.matches?.(NETFLIX_DOM_SELECTORS2.standardCard) ? node : node?.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+      if (!card) return null;
+      const href = card.href || card.getAttribute("href") || "";
+      return Object.freeze({ href, videoId: netflixDom.videoIdFromHref(href) });
     }
     return Object.freeze({
       startDiscovery,
@@ -15645,6 +14650,14 @@
       mountedCard,
       isSourceCurrent,
       assertSource,
+      preferredPage({ record, hints, records = [], columns = 1 }) {
+        if (!record) return 0;
+        const hinted = hints?.get(record);
+        if (Number.isFinite(hinted)) return hinted;
+        if (Number.isFinite(record.page)) return record.page;
+        const index = records.indexOf(record);
+        return index >= 0 ? Math.floor(index / Math.max(1, columns || 1)) : 0;
+      },
       refreshMapping,
       isMappingCurrent,
       assertMapping,
@@ -15667,6 +14680,8 @@
       measureLayout,
       discoverSource,
       captureMountedItem,
+      captureFallbackItem,
+      cardIdentity,
       assertObservation,
       isObservationCurrent,
       sample: withNativeReadScope,
@@ -15676,10 +14691,40 @@
     });
   }
 
-  // src/legacy.js
-  function startLegacy() {
-    "use strict";
-    const netflixContext = createNetflixContext({ window, document, navigator, location });
+  // src/app/my-list-session.js
+  function createMyListSession({
+    environment = globalThis,
+    version,
+    context: netflixContext,
+    i18n,
+    logger,
+    settings,
+    userscript = {},
+    nextSessionToken,
+    onNavigation = () => {
+    }
+  }) {
+    const {
+      window,
+      document,
+      navigator,
+      location,
+      Element,
+      HTMLElement,
+      getComputedStyle,
+      performance,
+      setTimeout,
+      clearTimeout,
+      requestAnimationFrame,
+      cancelAnimationFrame,
+      MutationObserver,
+      fetch,
+      AbortController,
+      queueMicrotask,
+      console
+    } = environment;
+    const { getValue: GM_getValue2, setValue: GM_setValue2 } = userscript;
+    let started = false, disposed = false, sessionCleanupFailures = 0;
     const { getHtmlLanguage, getNetflixLanguage } = netflixContext;
     const viewingData = createViewingData({
       context: netflixContext,
@@ -15699,8 +14744,8 @@
       createCancelledError: createRouteSessionCancelledError,
       log: (key, detail) => log(tLog(key), detail),
       warn: (key, detail) => warn(tLog(key), detail),
-      getValue: typeof GM_getValue === "function" ? (...args) => GM_getValue(...args) : void 0,
-      setValue: typeof GM_setValue === "function" ? (...args) => GM_setValue(...args) : void 0
+      getValue: typeof GM_getValue2 === "function" ? (...args) => GM_getValue2(...args) : void 0,
+      setValue: typeof GM_setValue2 === "function" ? (...args) => GM_setValue2(...args) : void 0
     });
     const netflixDom = createNetflixPageDom({
       document,
@@ -15721,7 +14766,7 @@
       formatUiNumber,
       formatItemCount,
       formatInitializationTime
-    } = createI18n({ readLanguage: getNetflixLanguage });
+    } = i18n;
     const TARGET_PATH = "/browse/my-list";
     const NATIVE_READY_TIMEOUT_MS = 3e3;
     const NATIVE_EMPTY_STABLE_MS = 1200;
@@ -15736,7 +14781,8 @@
       AbortController,
       setTimeout,
       clearTimeout,
-      requestTimeoutMs: FRESH_MY_LIST_FETCH_TIMEOUT_MS
+      requestTimeoutMs: FRESH_MY_LIST_FETCH_TIMEOUT_MS,
+      nextToken: nextSessionToken
     });
     const gridView = createGrid({
       document,
@@ -15745,7 +14791,7 @@
         window,
         location,
         performance,
-        PerformanceObserver: typeof PerformanceObserver === "function" ? PerformanceObserver : void 0,
+        PerformanceObserver: environment.PerformanceObserver,
         getComputedStyle,
         readInitializationStartedAt: () => sourceState?.initializationStartedAt,
         readSessionToken: () => sessionScope.token,
@@ -15854,24 +14900,12 @@
         hasFallbackSnapshot: Boolean(gridView.materialFor(intent.fallbackItem, intent.correlationId))
       }),
       normalizeTitle: normalizeNetflixUiText,
-      onCounter: (name, amount) => {
-        performanceDiagnostics.undoRetention[name] += amount;
-      },
       onExpired: (detail) => log(tLog("undoEntriesExpired"), detail)
     });
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.56";
-    const VERBOSE_INTERACTION_LOGS = false;
-    const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
-    const logger = createLogger({
-      name: SCRIPT_NAME,
-      version: SCRIPT_VERSION,
-      Element,
-      console,
-      isTraceEnabled: () => VERBOSE_INTERACTION_LOGS
-    });
+    const SCRIPT_VERSION2 = version;
     const { log, warn, trace } = logger;
     const popupInspection = createPopupInspection({
       Element,
@@ -15883,7 +14917,7 @@
     });
     const diagnosticReport = createReport({
       logger,
-      version: SCRIPT_VERSION,
+      version: SCRIPT_VERSION2,
       document,
       navigator,
       tLog,
@@ -15949,9 +14983,7 @@
       isHoverCancelled: (token) => hover.isCancelled(token),
       readHoverToken: () => hover.intent().token,
       navigationDiagnostics: createNavigationDiagnosticSink,
-      checkRoute: () => {
-        if (location.href !== lastObservedUrl) handleRouteChange("MutationObserver-url");
-      },
+      checkRoute: () => onNavigation("MutationObserver-url"),
       onMutationDelivery: () => nativePopup.checkDetached(),
       isInitializationBlocked: () => initializationBlockedSessionToken === sessionScope.token,
       onBlockedMutation: (token) => recoverNativeInitialization(token, "document-mutation"),
@@ -15986,10 +15018,10 @@
       createPopup: (policy) => {
         return nativePopup = createNativePopup({
           Element,
-          Node: globalThis.Node,
+          Node: environment.Node,
           document,
-          PointerEvent: globalThis.PointerEvent,
-          MouseEvent: globalThis.MouseEvent,
+          PointerEvent: environment.PointerEvent,
+          MouseEvent: environment.MouseEvent,
           performance,
           requestAnimationFrame,
           cancelAnimationFrame,
@@ -16000,7 +15032,6 @@
           pageDom: netflixDom,
           selectors: NETFLIX_DOM_SELECTORS,
           ...policy,
-          readDiagnostics: () => ({ ...policy.readDiagnostics(), nativeRecovery: performanceDiagnostics.nativeRecovery }),
           readEnvironment: () => ({ grid: sourceState?.grid, scroller: sourceState?.scroller }),
           isSessionCurrent: isRouteSessionActive,
           itemForSource: findItemForSourceSlot,
@@ -16016,9 +15047,41 @@
         });
       }
     });
+    let responsiveParent = null, responsiveView = null;
+    const responsiveParents = /* @__PURE__ */ new WeakMap();
+    function readResponsiveState() {
+      if (!sourceState) return null;
+      if (responsiveParent !== sourceState) {
+        responsiveParent = sourceState;
+        const parent = sourceState;
+        responsiveView = Object.freeze(Object.defineProperties({}, Object.fromEntries([
+          "section",
+          "scroller",
+          "track",
+          "grid",
+          "status",
+          "layout",
+          "items",
+          "itemMap",
+          "cloneMap",
+          "totalCount",
+          "empty",
+          "resizeViewportSignature",
+          "initializationElapsedMs",
+          "initialPage"
+        ].map((key) => [key, { enumerable: true, get: () => parent[key] }]))));
+        responsiveParents.set(responsiveView, parent);
+      }
+      return responsiveView;
+    }
+    function responsiveParentFor(view) {
+      const parent = responsiveParents.get(view);
+      if (!parent || sourceState !== parent) throw createRouteSessionCancelledError();
+      return parent;
+    }
     const responsive = createResponsive({
       window,
-      ResizeObserver: globalThis.ResizeObserver,
+      ResizeObserver: environment.ResizeObserver,
       performance,
       setTimeout,
       clearTimeout,
@@ -16026,14 +15089,23 @@
       gridView,
       hover,
       listMutations,
-      readState: () => sourceState,
+      readState: readResponsiveState,
       readSessionToken: () => sessionScope.token,
+      acceptLayoutChange: (view, layout) => {
+        responsiveParentFor(view).layout = layout;
+      },
+      acceptInitialPage: (view, page) => {
+        responsiveParentFor(view).initialPage = page;
+      },
+      acceptViewportSignature: (view, signature) => {
+        responsiveParentFor(view).resizeViewportSignature = signature;
+      },
       isRouteSessionActive,
       assertRouteSession,
       createRouteSessionCancelledError,
       isRouteSessionCancelledError,
-      nativeSourceObservation,
-      nativeLayoutObservation,
+      nativeSourceObservation: (view, options) => nativeSourceObservation(responsiveParentFor(view), options),
+      nativeLayoutObservation: (section, scroller, track, mode, view) => nativeLayoutObservation(section, scroller, track, mode, responsiveParentFor(view)),
       nativeSourceDiagnostics,
       ensureLiveNativeBinding,
       applyGridGeometry,
@@ -16042,7 +15114,7 @@
       formatHeaderParts,
       measureNativeCarouselGap,
       pageForItem,
-      setPageForItem,
+      setPageForItem: (item, page, view, admission) => setPageForItem(item, page, responsiveParentFor(view), admission),
       itemKey,
       copyItemAttributes,
       currentGridGeometry,
@@ -16055,7 +15127,7 @@
       trace,
       tLog,
       tUi,
-      readOriginalVisibility: () => viewOriginalMyList,
+      readOriginalVisibility: () => settings.preferences().viewOriginalMyList,
       applyLegacyEmptyStateGeometry
     });
     function resolveReadyHover(item, card) {
@@ -16127,12 +15199,12 @@
       return hints;
     }
     function pageForItem(item) {
-      if (!item) return 0;
-      const hinted = sourceState ? ensurePageHints(sourceState).get(item) : void 0;
-      if (Number.isFinite(hinted)) return hinted;
-      if (Number.isFinite(item.page)) return item.page;
-      const index = sourceState?.items?.indexOf(item) ?? -1;
-      return index >= 0 ? Math.floor(index / Math.max(1, sourceState.layout?.columns || 1)) : 0;
+      return nativeCarousel.preferredPage({
+        record: item,
+        hints: sourceState ? ensurePageHints(sourceState) : null,
+        records: sourceState?.items || [],
+        columns: sourceState?.layout?.columns || 1
+      });
     }
     function setPageForItem(item, page, state = sourceState, admission = {}) {
       ensurePageHints(state).set(item, page, admission);
@@ -16200,14 +15272,10 @@
     let orderMismatchDialogOpen = false;
     let orderMismatchReinitializing = false;
     let mutationSourceRecoveryPending = false;
-    let lastObservedUrl = location.href;
-    let routeChangeSequence = 0;
     let targetSessionActive = false;
     let targetSessionEntryKind = "initial";
     let targetSessionReason = "route:initial";
     let targetListenersActive = false;
-    let viewOriginalMyList = true;
-    let viewOriginalMenuId = null;
     let missingSectionSince = 0;
     let waitingForNativeEmpty = false;
     let initializationBlockedSessionToken = null;
@@ -16215,8 +15283,7 @@
     let performanceDiagnostics = createPerformanceDiagnostics();
     function createPerformanceDiagnostics() {
       return {
-        nativeRecovery: { attempts: 0, completed: 0, exhausted: 0, alignmentRestores: 0, alignmentRestoreFailures: 0 },
-        undoRetention: { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 }
+        nativeRecovery: { attempts: 0, completed: 0, exhausted: 0 }
       };
     }
     function collectPerformanceDiagnostics() {
@@ -16226,6 +15293,12 @@
         hoverPreparation: hover.diagnostics().hoverPreparation,
         popupInvestigation: popupInspection.diagnostics(),
         ...snapshots,
+        nativeRecovery: {
+          ...snapshots.nativeRecovery,
+          alignmentRestores: nativePopup.diagnostics().alignmentRestores,
+          alignmentRestoreFailures: nativePopup.diagnostics().alignmentRestoreFailures
+        },
+        undoRetention: listMutations.workDiagnostics(),
         resize: responsive.diagnostics().resize,
         imageResources: gridView.images.diagnostics(),
         ...hover.diagnostics(),
@@ -16247,7 +15320,7 @@
       return location.origin === "https://www.netflix.com" && location.pathname === TARGET_PATH;
     }
     function isRouteSessionActive(sessionToken) {
-      return sessionScope.isCurrent(sessionToken);
+      return !disposed && sessionScope.isCurrent(sessionToken);
     }
     function createRouteSessionCancelledError() {
       return sessionScope.cancelledError();
@@ -16311,18 +15384,33 @@
       waitingForNativeEmpty = false;
     }
     function cleanupTargetSessionDom() {
-      viewing.dispose(sourceState?.watchStatus);
-      sourceState?.listMembership?.dispose();
-      sourceState?.nativePageHints?.dispose();
-      restoreActiveCarouselStyles();
-      clearSourceAlignment();
-      nativePopup.invalidate();
-      gridView.dispose();
+      const release = (operation) => {
+        try {
+          operation();
+        } catch (_) {
+          sessionCleanupFailures++;
+        }
+      };
+      release(() => viewing.dispose(sourceState?.watchStatus));
+      release(() => sourceState?.listMembership?.dispose());
+      release(() => sourceState?.nativePageHints?.dispose());
+      release(restoreActiveCarouselStyles);
+      release(clearSourceAlignment);
+      release(() => nativePopup.invalidate());
+      release(() => gridView.dispose());
       orderMismatchDialogOpen = false;
-      nativePresentationLease?.release();
+      const lease = nativePresentationLease;
       nativePresentationLease = null;
+      release(() => lease?.release());
     }
     function suspendTargetSession(reason = "route-leave") {
+      const release = (operation) => {
+        try {
+          operation();
+        } catch (_) {
+          sessionCleanupFailures++;
+        }
+      };
       const hadSession = targetSessionActive || running || sourceState || completedSection || scheduled;
       const previousToken = sessionScope.token;
       listMutations.dispose();
@@ -16339,10 +15427,10 @@
       scheduled = false;
       scheduledSessionToken = null;
       scheduledRunDueAt = 0;
-      cleanupTargetSessionDom();
-      stopTargetEventListeners();
-      responsive.dispose();
-      nativeCarousel.resetSource();
+      release(cleanupTargetSessionDom);
+      release(stopTargetEventListeners);
+      release(() => responsive.dispose());
+      release(() => nativeCarousel.resetSource());
       running = false;
       runningSessionToken = null;
       completedSection = null;
@@ -16388,45 +15476,6 @@
         url: location.href
       });
       scheduleRun(0, sessionToken);
-    }
-    function handleRouteChange(source = "unknown") {
-      const currentUrl = location.href;
-      const changed = currentUrl !== lastObservedUrl;
-      if (!changed && source !== "initial") return;
-      const previousUrl = lastObservedUrl;
-      lastObservedUrl = currentUrl;
-      const seq = ++routeChangeSequence;
-      const target = isTargetPage();
-      log(tLog("routeChangeDetected"), {
-        seq,
-        source,
-        previousUrl,
-        currentUrl,
-        target
-      });
-      if (!target) {
-        suspendTargetSession(`route:${source}`);
-        return;
-      }
-      if (!targetSessionActive) {
-        startTargetSession(`route:${source}`);
-        return;
-      }
-      resetDetachedTargetState();
-      scheduleRun(0, sessionScope.token);
-    }
-    function installSpaNavigationHooks() {
-      for (const methodName of ["pushState", "replaceState"]) {
-        const original = history[methodName];
-        if (typeof original !== "function") continue;
-        history[methodName] = function(...args) {
-          const result = original.apply(this, args);
-          queueMicrotask(() => handleRouteChange(`history.${methodName}`));
-          return result;
-        };
-      }
-      window.addEventListener("popstate", () => handleRouteChange("popstate"), true);
-      window.addEventListener("hashchange", () => handleRouteChange("hashchange"), true);
     }
     function initializationError(code, stage, message, details = {}) {
       const error = new Error(message || code || "Initialization failed");
@@ -16537,7 +15586,7 @@
         nativeHoverOwned: nativePopup.diagnostics().replayOwned,
         nativePreviewOwned: nativePopup.diagnostics().previewOwned,
         nativeInteraction: nativePopup.diagnostics(),
-        viewOriginalMyList,
+        viewOriginalMyList: settings.preferences().viewOriginalMyList,
         myListSyncMode: "event-driven",
         pendingMyListMutations: listMutations.pendingDiagnostics(),
         layout: layoutSummary(sourceState?.layout),
@@ -16570,41 +15619,6 @@
         throw error;
       }
     }
-    function loadSettings() {
-      try {
-        const parsed = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) || "{}");
-        if (typeof parsed.viewOriginalMyList === "boolean") viewOriginalMyList = parsed.viewOriginalMyList;
-        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ viewOriginalMyList }));
-      } catch (_) {
-      }
-    }
-    function saveSettings() {
-      try {
-        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ viewOriginalMyList }));
-      } catch (_) {
-      }
-    }
-    function unregisterMenuCommandSafe(id) {
-      if (id === null || id === void 0) return;
-      try {
-        if (typeof GM_unregisterMenuCommand === "function") GM_unregisterMenuCommand(id);
-      } catch (_) {
-      }
-    }
-    function refreshMenuCommands() {
-      if (typeof GM_registerMenuCommand !== "function") return;
-      unregisterMenuCommandSafe(viewOriginalMenuId);
-      viewOriginalMenuId = GM_registerMenuCommand(
-        viewOriginalMyList ? tUi("hideOriginalMyList") : tUi("showOriginalMyList"),
-        () => {
-          viewOriginalMyList = !viewOriginalMyList;
-          saveSettings();
-          refreshMenuCommands();
-          applyOriginalMyListVisibility();
-          log(tLog("originalMyListVisibilityChanged"), { enabled: viewOriginalMyList });
-        }
-      );
-    }
     function nativeSourcePresentation(section = sourceState?.section, scroller, track, options = {}) {
       const state = sourceState, sessionToken = sessionScope.token;
       const ownerSection = state?.section, ownerScroller = state?.scroller, ownerTrack = state?.track;
@@ -16628,9 +15642,9 @@
     }
     function applyOriginalMyListVisibility() {
       if (!sourceState?.section && !isTargetPage()) return;
-      if (!nativeSourcePresentation(void 0, void 0, void 0, { visible: viewOriginalMyList })) return;
+      if (!nativeSourcePresentation(void 0, void 0, void 0, { visible: settings.preferences().viewOriginalMyList })) return;
       if (sourceState?.status) {
-        layoutFrameStatus(sourceState.status, null, viewOriginalMyList ? sourceState.layout?.rowGap || 0 : 0);
+        layoutFrameStatus(sourceState.status, null, settings.preferences().viewOriginalMyList ? sourceState.layout?.rowGap || 0 : 0);
       }
     }
     function sleep(ms) {
@@ -16678,7 +15692,7 @@
         status,
         geometry,
         layout,
-        visible: viewOriginalMyList,
+        visible: settings.preferences().viewOriginalMyList,
         assertCurrent() {
           assertRouteSession(sessionToken);
           if (sourceState !== state) throw initializationError("NATIVE_SOURCE_REPLACED", "grid-frame", "Frame caller changed");
@@ -16776,9 +15790,6 @@
         completed: gridView.presentation().completedCount,
         work: Object.fromEntries(Object.entries(gridView.groupDiagnostics()).filter(([, value]) => typeof value === "number").map(([key, value]) => [key, value - beforeWork[key]]))
       });
-    }
-    function gridOwnsClone(clone, grid) {
-      return gridView.isCardVisible(clone, grid);
     }
     function cancelGroupHover() {
       hover.cancel("group");
@@ -16901,7 +15912,7 @@
       } });
     }
     function normalizeNetflixUiText(value) {
-      return String(value || "").replace(/[\u200b-\u200f\u2060\ufeff]/g, "").replace(/\s+/g, "").trim();
+      return netflixDom.normalizeTitle(value);
     }
     function installEmptyFrameResizeObserver() {
       responsive.observe("empty");
@@ -16990,7 +16001,7 @@
         status,
         geometry,
         layout,
-        visible: viewOriginalMyList,
+        visible: settings.preferences().viewOriginalMyList,
         assertCurrent: () => nativeCarousel.assertObservation(observed)
       });
       if (sourceState !== state) throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Incoming layout parent was replaced");
@@ -17041,7 +16052,7 @@
         status,
         geometry,
         layout,
-        visible: viewOriginalMyList,
+        visible: settings.preferences().viewOriginalMyList,
         assertCurrent: () => nativeCarousel.assertObservation(observed)
       });
       if (sourceState !== state) throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Incoming empty layout parent was replaced");
@@ -17061,7 +16072,7 @@
       installEmptyFrameResizeObserver(live.section);
       log(tLog("nativeEmptyMyListSectionAdopted"), {
         layout: layoutSummary(layout),
-        originalVisible: viewOriginalMyList
+        originalVisible: settings.preferences().viewOriginalMyList
       });
       invalidateNativeReadScope();
       return true;
@@ -17179,8 +16190,7 @@
       const { parent, index, assertCurrent } = options;
       assertCurrent();
       const grid = parent.grid || document.getElementById(GRID_ID);
-      const before = parent.watchStatus ? null : grid.children[index] || null;
-      return gridView.insertCard(record, { ...options, before });
+      return gridView.insertCard(record, { ...options, ordered: !parent.watchStatus });
     }
     function updateMutationCard(record, index, { parent, assertCurrent }) {
       assertCurrent();
@@ -17190,15 +16200,7 @@
     }
     function presentListOrder(change, { parent, assertCurrent }) {
       assertCurrent();
-      const grid = parent.grid;
-      if (grid && !parent.watchStatus) for (let index = 0; index < change.ordered.length; index++) {
-        assertCurrent();
-        const record = change.ordered[index], clone = parent.cloneMap?.get(itemKey(record));
-        if (!clone) continue;
-        const before = grid.children[change.index + index] || null;
-        if (before !== clone) gridView.moveCard(gridView.getCard(record), grid, before);
-        assertCurrent();
-      }
+      if (parent.grid && !parent.watchStatus) gridView.applyMembershipOrder(change, assertCurrent);
     }
     function presentListChange({ count, empty, logical }, { parent, assertCurrent }) {
       assertCurrent();
@@ -17223,7 +16225,7 @@
       assertCurrent();
       parent.status = status;
       if (status && parent.layout) {
-        layoutFrameStatus(status, null, viewOriginalMyList && !empty ? parent.layout.rowGap || 0 : 0);
+        layoutFrameStatus(status, null, settings.preferences().viewOriginalMyList && !empty ? parent.layout.rowGap || 0 : 0);
         assertCurrent();
       }
     }
@@ -17251,17 +16253,7 @@
       return nativeCarousel.captureMountedItem({ discovery, videoId });
     }
     function findAnyStandardCardItemByVideoId(videoId) {
-      const wanted = String(videoId);
-      for (const card of document.querySelectorAll(NETFLIX_DOM_SELECTORS.standardCardWithHref)) {
-        if (card.closest(`#${GRID_ID}`)) continue;
-        const href = card.href || card.getAttribute("href") || "";
-        if (videoIdFromHref(href) !== wanted) continue;
-        const slot = card.closest(NETFLIX_DOM_SELECTORS.virtualSlot);
-        if (!slot) continue;
-        const item = itemFromSlot(slot, 0);
-        if (item?.videoId === wanted) return item;
-      }
-      return null;
+      return nativeCarousel.captureFallbackItem(videoId);
     }
     function restartInitializationForPopulatedNativeMyList(live, reason = "late-populated-source") {
       if (!sourceState?.empty || !live?.section || !live?.scroller || !live?.track) return false;
@@ -17594,12 +16586,6 @@
     function itemKey(item) {
       return item.videoId ? `v:${item.videoId}` : `h:${item.href}`;
     }
-    function itemKeyFromCard(card) {
-      const href = card?.href || card?.getAttribute?.("href") || "";
-      if (!href) return "";
-      const videoId = videoIdFromHref(href);
-      return videoId ? `v:${videoId}` : `h:${href}`;
-    }
     function pageItemKeys(items, page) {
       return new Set(items.filter((item) => pageForItem(item) === page).map(itemKey).filter(Boolean));
     }
@@ -17632,9 +16618,6 @@
         }
       });
       return result.items;
-    }
-    function normalizeClone(slot) {
-      gridView.normalizeCard(slot);
     }
     function currentGridGeometry(section, layout) {
       return withNativeReadScope(() => {
@@ -17712,31 +16695,10 @@
     function nativePositionDeviation(item, source) {
       if (!item || !source || !sourceState?.items?.length) return null;
       nativeCarousel.assertSource(source);
-      const expectedIndex = sourceState.items.indexOf(item);
-      const actualIndex = source.itemIndex;
-      if (!Number.isSafeInteger(expectedIndex) || expectedIndex < 0 || !Number.isSafeInteger(actualIndex) || actualIndex < 0) {
-        return null;
-      }
-      return {
-        expectedIndex,
-        actualIndex,
-        delta: actualIndex - expectedIndex,
-        absoluteDelta: Math.abs(actualIndex - expectedIndex)
-      };
+      return ensureListMembership(sourceState).positionDeviation(item, source.itemIndex);
     }
     function firstVisibleNativePositionMismatch(cards) {
-      for (const card of cards || []) {
-        const visibleItem = sourceState?.items?.find((item) => card.videoId ? String(item.videoId) === card.videoId : item.href === card.href);
-        if (!visibleItem) continue;
-        const expectedIndex = sourceState.items.indexOf(visibleItem);
-        const actualIndex = card.itemIndex;
-        if (!Number.isSafeInteger(actualIndex) || actualIndex < 0) continue;
-        const delta = actualIndex - expectedIndex;
-        const deviation = { expectedIndex, actualIndex, delta, absoluteDelta: Math.abs(delta) };
-        if (deviation.absoluteDelta < ORDER_MISMATCH_POSITION_THRESHOLD) continue;
-        return { item: visibleItem, deviation };
-      }
-      return null;
+      return sourceState ? ensureListMembership(sourceState).firstPositionMismatch(cards, ORDER_MISMATCH_POSITION_THRESHOLD) : null;
     }
     function rejectLargeNativePositionDeviation(item, source, expectedPage, visibleIds = []) {
       const state = sourceState;
@@ -17845,9 +16807,8 @@
       return state;
     }
     function findItemForSourceSlot(slot) {
-      const card = slot?.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-      if (!card || !sourceState?.itemMap) return null;
-      return sourceState.itemMap.get(itemKeyFromCard(card)) || null;
+      const identity = nativeCarousel.cardIdentity(slot);
+      return identity && sourceState?.itemMap ? sourceState.itemMap.get(itemKey(identity)) || null : null;
     }
     async function prepareMountedPage(page, targetItem = null, triggerEvent = null, token = null, sessionToken = null) {
       assertRouteSession(sessionToken);
@@ -17886,7 +16847,7 @@
       });
       const beforeSignature = beforeView?.signature || "";
       if (beforeView) nativeCarousel.assertObservation(beforeView);
-      const started = performance.now();
+      const started2 = performance.now();
       log(tLog("nativePagePreparationStarted"), {
         requestedPage: page,
         targetItem: itemSummary(targetItem),
@@ -18133,12 +17094,7 @@
           propsAssignments += stats?.propsAssignments || 0;
           nativeCarousel.assertObservation(pageView);
           if (targetItem && itemKey(pageItem) === itemKey(targetItem)) {
-            try {
-              fresh.__tmHoverReplacementHovered = fresh.matches(":hover");
-              if (!fresh.__tmHoverReplacementHovered) hover.count("hoverInteraction", "replacementNotHovered");
-            } catch (_) {
-              hover.count("hoverInteraction", "diagnosticFailures");
-            }
+            hover.observeReplacement(handle);
             freshTarget = fresh;
             targetSourceSlot = sourceSlot;
           }
@@ -18174,7 +17130,7 @@
         actualPage,
         targetItem: itemSummary(targetItem),
         targetReady: Boolean(freshTarget),
-        elapsedMs: Math.round(performance.now() - started)
+        elapsedMs: Math.round(performance.now() - started2)
       });
       nativeCarousel.assertObservation(pageView);
       return freshTarget ? { card: targetCard, source: popupSource(targetSourceSlot, targetItem), page: actualPage } : null;
@@ -18217,7 +17173,7 @@
           status,
           geometry,
           layout,
-          visible: viewOriginalMyList,
+          visible: settings.preferences().viewOriginalMyList,
           assertCurrent: assertBuildActive,
           onAccepted(root) {
             publication.commit();
@@ -18739,7 +17695,7 @@
       }
       const initializationNative = nativeSourceDiagnostics(section, scroller, track);
       log(tLog("initializationStarted"), {
-        version: SCRIPT_VERSION,
+        version: SCRIPT_VERSION2,
         browserLanguage: navigator.language || "",
         htmlLanguage: getHtmlLanguage(),
         netflixLanguage: getNetflixLanguage(),
@@ -18956,7 +17912,8 @@
       scheduled = true;
       scheduledSessionToken = sessionToken;
       scheduledRunDueAt = dueAt;
-      scheduledRunTimer = setTimeout(() => {
+      const timer = setTimeout(() => {
+        if (scheduledRunTimer !== timer || disposed) return;
         scheduledRunTimer = null;
         if (scheduledSessionToken === sessionToken) {
           scheduled = false;
@@ -18966,25 +17923,1330 @@
         if (!isRouteSessionActive(sessionToken)) return;
         runScript(sessionToken);
       }, normalizedDelay);
+      scheduledRunTimer = timer;
     }
-    loadSettings();
-    refreshMenuCommands();
-    installSpaNavigationHooks();
-    log(tLog("scriptStarted"), {
-      version: SCRIPT_VERSION,
-      url: location.href,
-      userAgent: navigator.userAgent,
-      browserLanguage: navigator.language || "",
-      htmlLanguage: getHtmlLanguage(),
-      netflixLanguage: getNetflixLanguage(),
-      displayLanguage: getUiLocale(),
-      logLanguage: getLogLocale(),
-      viewport: { width: window.innerWidth, height: window.innerHeight },
-      devicePixelRatio: window.devicePixelRatio
+    function start(reason = "route:initial") {
+      if (started || disposed) return;
+      started = true;
+      startTargetSession(reason);
+    }
+    function dispose(reason = "route-leave") {
+      if (disposed) return;
+      disposed = true;
+      suspendTargetSession(reason);
+    }
+    return Object.freeze({
+      start,
+      dispose,
+      check() {
+        if (!started || disposed) return;
+        resetDetachedTargetState();
+        scheduleRun(0, sessionScope.token);
+      },
+      preferencesChanged() {
+        if (started && !disposed) applyOriginalMyListVisibility();
+      },
+      diagnostics: () => Object.freeze({
+        active: targetSessionActive,
+        token: sessionScope.token,
+        running,
+        completed: Boolean(completedSection),
+        blocked: initializationBlockedSessionToken === sessionScope.token,
+        cleanupFailures: sessionCleanupFailures
+      })
     });
-    handleRouteChange("initial");
+  }
+
+  // src/app/settings.js
+  function createSettings({ storage, registerMenu, unregisterMenu, tUi = (key) => key, onChange = () => {
+  } }) {
+    const storageKey = "legacyMyListForNetflix.settings.v3";
+    let visible = true, active = false, menu = null, menuRevision = 0;
+    const preferences = () => Object.freeze({ viewOriginalMyList: visible });
+    function save() {
+      try {
+        storage?.setItem(storageKey, JSON.stringify(preferences()));
+      } catch (_) {
+      }
+    }
+    function releaseMenu() {
+      const previous = menu;
+      menu = null;
+      ++menuRevision;
+      if (previous !== null && previous !== void 0) {
+        try {
+          unregisterMenu?.(previous);
+        } catch (_) {
+        }
+      }
+    }
+    function refresh() {
+      releaseMenu();
+      if (!active || typeof registerMenu !== "function") return;
+      const revision = menuRevision;
+      menu = registerMenu(tUi(visible ? "hideOriginalMyList" : "showOriginalMyList"), () => {
+        if (!active || revision !== menuRevision) return;
+        visible = !visible;
+        save();
+        refresh();
+        onChange(preferences());
+      });
+    }
+    function start() {
+      if (active) return;
+      active = true;
+      try {
+        const parsed = JSON.parse(storage?.getItem(storageKey) || "{}");
+        if (typeof parsed.viewOriginalMyList === "boolean") visible = parsed.viewOriginalMyList;
+        save();
+      } catch (_) {
+      }
+      refresh();
+    }
+    function dispose() {
+      active = false;
+      releaseMenu();
+    }
+    return Object.freeze({ start, dispose, preferences, refresh });
+  }
+
+  // src/netflix/context.js
+  function createNetflixContext({ window, document, navigator, location }) {
+    function getHtmlLanguage() {
+      return (document.documentElement?.getAttribute("lang") || "").trim();
+    }
+    function getNetflixLanguage() {
+      return getHtmlLanguage() || navigator.language || "";
+    }
+    function netflixModelData(name) {
+      const roots = [
+        window,
+        window?.wrappedJSObject,
+        document.defaultView,
+        document.defaultView?.wrappedJSObject
+      ];
+      for (const root of roots) {
+        try {
+          const appContext = root?.netflix?.appContext;
+          if (appContext && typeof appContext.getModelData === "function") {
+            const value = appContext.getModelData(name);
+            if (value != null) return value;
+          }
+        } catch (_) {
+        }
+        try {
+          const value = root?.netflix?.reactContext?.models?.[name]?.data;
+          if (value != null) return value;
+        } catch (_) {
+        }
+      }
+      return null;
+    }
+    function graphqlData() {
+      const candidates = [
+        window,
+        window?.wrappedJSObject,
+        document.defaultView,
+        document.defaultView?.wrappedJSObject
+      ];
+      for (const root of candidates) {
+        try {
+          const data = root?.netflix?.reactContext?.models?.graphql?.data;
+          if (data && typeof data === "object") return data;
+        } catch (_) {
+        }
+      }
+      return null;
+    }
+    function viewingRequestContext() {
+      const user = netflixModelData("userInfo");
+      const profileGuid = user?.userGuid;
+      const authURL = user?.authURL;
+      const services = netflixModelData("services");
+      const build = netflixModelData("serverDefs")?.BUILD_IDENTIFIER;
+      let base = services?.memberapi;
+      let endpointType = "string";
+      if (base == null || base === "") {
+        base = typeof build === "string" && build ? "/api/shakti/" + encodeURIComponent(build) : "";
+        endpointType = "build";
+      } else if (typeof base === "object") {
+        const { protocol, hostname, path } = base;
+        if (typeof protocol !== "string" || !/^https:?$/i.test(protocol) || typeof hostname !== "string" || !hostname || !Array.isArray(path) || !path.length || !path.every((part) => typeof part === "string" && part.length > 0)) return null;
+        base = protocol.replace(/:$/, "") + "://" + hostname + "/" + path.join("/").replace(/^\/+/, "");
+        endpointType = "descriptor";
+      }
+      if (typeof profileGuid !== "string" || !profileGuid || typeof authURL !== "string" || !authURL || typeof base !== "string" || !base) return null;
+      try {
+        const url = new URL(base, location.origin);
+        if (url.origin !== location.origin || url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname === "/") return null;
+        url.pathname = url.pathname.replace(/\/+$/, "") + "/pathEvaluator";
+        url.searchParams.set("falcor_server", "0.1.0");
+        url.searchParams.set("withSize", "false");
+        url.searchParams.set("materialize", "false");
+        url.searchParams.set("original_path", "/shakti/mre/pathEvaluator");
+        return { profileGuid, authURL, url: url.href, endpointType, endpointPath: url.pathname };
+      } catch (_) {
+        return null;
+      }
+    }
+    function activeProfile() {
+      return netflixModelData("userInfo")?.userGuid;
+    }
+    function pageDirection() {
+      return document.querySelector('[data-uia="loc"]')?.getAttribute("dir") || document.documentElement.dir || "ltr";
+    }
+    function listRequestContext() {
+      return {
+        appVersion: netflixModelData("serverDefs")?.BUILD_IDENTIFIER,
+        locale: netflixModelData("geo")?.locale?.id || document.documentElement.lang
+      };
+    }
+    return Object.freeze({
+      getHtmlLanguage,
+      getNetflixLanguage,
+      activeProfile,
+      pageDirection,
+      viewingRequestContext,
+      readGraphqlBootstrap: graphqlData,
+      listRequestContext
+    });
+  }
+
+  // src/i18n/ui-messages.js
+  var NETFLIX_PRIMARY_UI_LOCALES = /* @__PURE__ */ new Set([
+    "da",
+    "de",
+    "en",
+    "es",
+    "fil",
+    "fr",
+    "hr",
+    "id",
+    "it",
+    "hu",
+    "ms",
+    "nl",
+    "nb",
+    "pl",
+    "pt",
+    "ro",
+    "fi",
+    "sv",
+    "vi",
+    "tr",
+    "cs",
+    "el",
+    "ru",
+    "uk",
+    "he",
+    "ar",
+    "hi",
+    "th",
+    "zh",
+    "ja",
+    "ko"
+  ]);
+  var UI_MESSAGES = {
+    "da": {
+      legacyMyList: "Klassisk Min liste",
+      itemCount: { one: "{count} element", other: "{count} elementer" },
+      initializing: "Initialiserer...",
+      orderChangedPrompt: "R\xE6kkef\xF8lgen i Min liste er \xE6ndret. Initialiser igen.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Annuller",
+      initTime: "Init. {seconds}s",
+      showOriginalMyList: "Vis den oprindelige Min liste",
+      hideOriginalMyList: "Skjul den oprindelige Min liste",
+      emptyMessage: "Her finder du de film og serier, du har gemt.",
+      relayoutInProgress: "Omarrangerer...",
+      relayoutFailed: "Omarrangering mislykkedes",
+      initializationFailed: "Klassisk Min liste: fejl - {message}",
+      noNativeCards: "Kunne ikke hente de oprindelige Netflix-kort.",
+      errorCount: "Fejl-{count}"
+    },
+    "de": {
+      legacyMyList: "Klassische Meine Liste",
+      itemCount: { one: "{count} Eintrag", other: "{count} Eintr\xE4ge" },
+      initializing: "Wird initialisiert...",
+      orderChangedPrompt: "Die Reihenfolge von \u201EMeine Liste\u201C hat sich ge\xE4ndert. Bitte neu initialisieren.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Abbrechen",
+      initTime: "Init {seconds}s",
+      showOriginalMyList: "Originale Meine Liste anzeigen",
+      hideOriginalMyList: "Originale Meine Liste ausblenden",
+      emptyMessage: "Hier findest du die Filme und Serien, die du gespeichert hast.",
+      relayoutInProgress: "Layout wird neu angeordnet...",
+      relayoutFailed: "Neuanordnung fehlgeschlagen",
+      initializationFailed: "Klassische Meine Liste: Fehler - {message}",
+      noNativeCards: "Die urspr\xFCnglichen Netflix-Karten konnten nicht abgerufen werden.",
+      errorCount: "Fehler-{count}"
+    },
+    "en": {
+      legacyMyList: "Legacy My List",
+      itemCount: { one: "{count} item", other: "{count} items" },
+      initializing: "Initializing...",
+      orderChangedPrompt: "The order of My List has changed. Please initialize again.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Cancel",
+      initTime: "Init {seconds}s",
+      showOriginalMyList: "Show original My List",
+      hideOriginalMyList: "Hide original My List",
+      emptyMessage: "You can find the movies and TV shows you've saved here.",
+      relayoutInProgress: "Relayout in progress",
+      relayoutFailed: "Relayout failed",
+      initializationFailed: "Legacy My List: failed - {message}",
+      noNativeCards: "No native Netflix cards could be collected.",
+      errorCount: "Error-{count}"
+    },
+    "es": {
+      legacyMyList: "Mi lista cl\xE1sica",
+      itemCount: { one: "{count} elemento", other: "{count} elementos" },
+      initializing: "Inicializando...",
+      orderChangedPrompt: "El orden de Mi lista ha cambiado. Vuelve a inicializar.",
+      orderChangedOk: "Aceptar",
+      orderChangedCancel: "Cancelar",
+      initTime: "Inicio {seconds}s",
+      showOriginalMyList: "Mostrar Mi lista original",
+      hideOriginalMyList: "Ocultar Mi lista original",
+      emptyMessage: "Aqu\xED encontrar\xE1s las pel\xEDculas y series que hayas guardado.",
+      relayoutInProgress: "Reorganizando...",
+      relayoutFailed: "Error al reorganizar",
+      initializationFailed: "Mi lista cl\xE1sica: error - {message}",
+      noNativeCards: "No se pudieron obtener las tarjetas originales de Netflix.",
+      errorCount: "Error-{count}"
+    },
+    "fil": {
+      legacyMyList: "Lumang Aking Listahan",
+      itemCount: { one: "{count} item", other: "{count} mga item" },
+      initializing: "Nagsisimula...",
+      orderChangedPrompt: "Nagbago ang pagkakasunod-sunod ng My List. Paki-initialize muli.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Kanselahin",
+      initTime: "Simula {seconds}s",
+      showOriginalMyList: "Ipakita ang orihinal na Aking Listahan",
+      hideOriginalMyList: "Itago ang orihinal na Aking Listahan",
+      emptyMessage: "Makikita rito ang mga pelikula at palabas sa TV na na-save mo.",
+      relayoutInProgress: "Inaayos muli...",
+      relayoutFailed: "Nabigo ang muling pag-aayos",
+      initializationFailed: "Lumang Aking Listahan: nabigo - {message}",
+      noNativeCards: "Hindi makuha ang mga orihinal na card ng Netflix.",
+      errorCount: "Error-{count}"
+    },
+    "fr": {
+      legacyMyList: "Ma liste classique",
+      itemCount: { one: "{count} \xE9l\xE9ment", other: "{count} \xE9l\xE9ments" },
+      initializing: "Initialisation...",
+      orderChangedPrompt: "L\u2019ordre de Ma liste a chang\xE9. Veuillez r\xE9initialiser.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Annuler",
+      initTime: "Init. {seconds}s",
+      showOriginalMyList: "Afficher Ma liste d\u2019origine",
+      hideOriginalMyList: "Masquer Ma liste d\u2019origine",
+      emptyMessage: "Vous trouverez ici les films et s\xE9ries que vous avez enregistr\xE9s.",
+      relayoutInProgress: "R\xE9organisation en cours...",
+      relayoutFailed: "\xC9chec de la r\xE9organisation",
+      initializationFailed: "Ma liste classique : \xE9chec - {message}",
+      noNativeCards: "Impossible de r\xE9cup\xE9rer les cartes Netflix d\u2019origine.",
+      errorCount: "Erreur-{count}"
+    },
+    "hr": {
+      legacyMyList: "Klasi\u010Dni Moj popis",
+      itemCount: { one: "{count} stavka", few: "{count} stavke", other: "{count} stavki" },
+      initializing: "Pokretanje...",
+      orderChangedPrompt: "Redoslijed Mojeg popisa se promijenio. Ponovno pokrenite inicijalizaciju.",
+      orderChangedOk: "U redu",
+      orderChangedCancel: "Odustani",
+      initTime: "Pokretanje {seconds}s",
+      showOriginalMyList: "Prika\u017Ei izvorni Moj popis",
+      hideOriginalMyList: "Sakrij izvorni Moj popis",
+      emptyMessage: "Ovdje mo\u017Eete prona\u0107i filmove i serije koje ste spremili.",
+      relayoutInProgress: "Promjena rasporeda...",
+      relayoutFailed: "Promjena rasporeda nije uspjela",
+      initializationFailed: "Klasi\u010Dni Moj popis: pogre\u0161ka - {message}",
+      noNativeCards: "Nije mogu\u0107e dohvatiti izvorne Netflix kartice.",
+      errorCount: "Pogre\u0161ka-{count}"
+    },
+    "id": {
+      legacyMyList: "Daftar Saya Klasik",
+      itemCount: { other: "{count} item" },
+      initializing: "Menginisialisasi...",
+      orderChangedPrompt: "Urutan Daftar Saya telah berubah. Silakan inisialisasi ulang.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Batal",
+      initTime: "Init {seconds}s",
+      showOriginalMyList: "Tampilkan Daftar Saya asli",
+      hideOriginalMyList: "Sembunyikan Daftar Saya asli",
+      emptyMessage: "Film dan acara TV yang Anda simpan dapat ditemukan di sini.",
+      relayoutInProgress: "Menata ulang...",
+      relayoutFailed: "Penataan ulang gagal",
+      initializationFailed: "Daftar Saya Klasik: gagal - {message}",
+      noNativeCards: "Kartu Netflix asli tidak dapat diambil.",
+      errorCount: "Galat-{count}"
+    },
+    "it": {
+      legacyMyList: "La mia lista classica",
+      itemCount: { one: "{count} elemento", other: "{count} elementi" },
+      initializing: "Inizializzazione...",
+      orderChangedPrompt: "L'ordine de La mia lista \xE8 cambiato. Esegui di nuovo l'inizializzazione.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Annulla",
+      initTime: "Init {seconds}s",
+      showOriginalMyList: "Mostra La mia lista originale",
+      hideOriginalMyList: "Nascondi La mia lista originale",
+      emptyMessage: "Qui trovi i film e le serie TV che hai salvato.",
+      relayoutInProgress: "Riorganizzazione in corso...",
+      relayoutFailed: "Riorganizzazione non riuscita",
+      initializationFailed: "La mia lista classica: errore - {message}",
+      noNativeCards: "Impossibile recuperare le schede Netflix originali.",
+      errorCount: "Errore-{count}"
+    },
+    "hu": {
+      legacyMyList: "Klasszikus Saj\xE1t list\xE1m",
+      itemCount: { other: "{count} elem" },
+      initializing: "Inicializ\xE1l\xE1s...",
+      orderChangedPrompt: "A Saj\xE1t lista sorrendje megv\xE1ltozott. Inicializ\xE1lja \xFAjra.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "M\xE9gse",
+      initTime: "Ind\xEDt\xE1s {seconds}s",
+      showOriginalMyList: "Eredeti Saj\xE1t list\xE1m megjelen\xEDt\xE9se",
+      hideOriginalMyList: "Eredeti Saj\xE1t list\xE1m elrejt\xE9se",
+      emptyMessage: "Itt tal\xE1lod az elmentett filmeket \xE9s sorozatokat.",
+      relayoutInProgress: "\xDAjrarendez\xE9s...",
+      relayoutFailed: "Az \xFAjrarendez\xE9s sikertelen",
+      initializationFailed: "Klasszikus Saj\xE1t list\xE1m: hiba - {message}",
+      noNativeCards: "Nem siker\xFClt bet\xF6lteni az eredeti Netflix-k\xE1rty\xE1kat.",
+      errorCount: "Hiba-{count}"
+    },
+    "ms": {
+      legacyMyList: "Senarai Saya Klasik",
+      itemCount: { other: "{count} item" },
+      initializing: "Memulakan...",
+      orderChangedPrompt: "Susunan Senarai Saya telah berubah. Sila mulakan semula.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Batal",
+      initTime: "Mula {seconds}s",
+      showOriginalMyList: "Tunjukkan Senarai Saya asal",
+      hideOriginalMyList: "Sembunyikan Senarai Saya asal",
+      emptyMessage: "Filem dan rancangan TV yang anda simpan boleh didapati di sini.",
+      relayoutInProgress: "Menyusun semula...",
+      relayoutFailed: "Susun semula gagal",
+      initializationFailed: "Senarai Saya Klasik: gagal - {message}",
+      noNativeCards: "Kad Netflix asal tidak dapat diperoleh.",
+      errorCount: "Ralat-{count}"
+    },
+    "nl": {
+      legacyMyList: "Klassieke Mijn lijst",
+      itemCount: { one: "{count} item", other: "{count} items" },
+      initializing: "Initialiseren...",
+      orderChangedPrompt: "De volgorde van Mijn lijst is gewijzigd. Initialiseer opnieuw.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Annuleren",
+      initTime: "Init {seconds}s",
+      showOriginalMyList: "Originele Mijn lijst tonen",
+      hideOriginalMyList: "Originele Mijn lijst verbergen",
+      emptyMessage: "Hier vind je de films en series die je hebt opgeslagen.",
+      relayoutInProgress: "Opnieuw indelen...",
+      relayoutFailed: "Opnieuw indelen mislukt",
+      initializationFailed: "Klassieke Mijn lijst: mislukt - {message}",
+      noNativeCards: "De oorspronkelijke Netflix-kaarten konden niet worden opgehaald.",
+      errorCount: "Fout-{count}"
+    },
+    "nb": {
+      legacyMyList: "Klassisk Min liste",
+      itemCount: { one: "{count} element", other: "{count} elementer" },
+      initializing: "Initialiserer...",
+      orderChangedPrompt: "Rekkef\xF8lgen i Min liste er endret. Initialiser p\xE5 nytt.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Avbryt",
+      initTime: "Init {seconds}s",
+      showOriginalMyList: "Vis opprinnelig Min liste",
+      hideOriginalMyList: "Skjul opprinnelig Min liste",
+      emptyMessage: "Her finner du filmene og seriene du har lagret.",
+      relayoutInProgress: "Omorganiserer...",
+      relayoutFailed: "Omorganisering mislyktes",
+      initializationFailed: "Klassisk Min liste: feil - {message}",
+      noNativeCards: "Kunne ikke hente de opprinnelige Netflix-kortene.",
+      errorCount: "Feil-{count}"
+    },
+    "pl": {
+      legacyMyList: "Klasyczna Moja lista",
+      itemCount: { one: "{count} element", few: "{count} elementy", many: "{count} element\xF3w", other: "{count} elementu" },
+      initializing: "Inicjowanie...",
+      orderChangedPrompt: "Kolejno\u015B\u0107 w Mojej li\u015Bcie uleg\u0142a zmianie. Zainicjalizuj ponownie.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Anuluj",
+      initTime: "Start {seconds}s",
+      showOriginalMyList: "Poka\u017C oryginaln\u0105 Moj\u0105 list\u0119",
+      hideOriginalMyList: "Ukryj oryginaln\u0105 Moj\u0105 list\u0119",
+      emptyMessage: "Tutaj znajdziesz zapisane filmy i seriale.",
+      relayoutInProgress: "Ponowne rozmieszczanie...",
+      relayoutFailed: "Ponowne rozmieszczanie nie powiod\u0142o si\u0119",
+      initializationFailed: "Klasyczna Moja lista: b\u0142\u0105d - {message}",
+      noNativeCards: "Nie uda\u0142o si\u0119 pobra\u0107 oryginalnych kart Netflix.",
+      errorCount: "B\u0142\u0105d-{count}"
+    },
+    "pt": {
+      legacyMyList: "A minha lista cl\xE1ssica",
+      itemCount: { one: "{count} item", other: "{count} itens" },
+      initializing: "A inicializar...",
+      orderChangedPrompt: "A ordem da Minha lista mudou. Inicialize novamente.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Cancelar",
+      initTime: "In\xEDcio {seconds}s",
+      showOriginalMyList: "Mostrar A minha lista original",
+      hideOriginalMyList: "Ocultar A minha lista original",
+      emptyMessage: "Aqui encontra os filmes e s\xE9ries que guardou.",
+      relayoutInProgress: "A reorganizar...",
+      relayoutFailed: "Falha ao reorganizar",
+      initializationFailed: "A minha lista cl\xE1ssica: falha - {message}",
+      noNativeCards: "N\xE3o foi poss\xEDvel obter os cart\xF5es originais da Netflix.",
+      errorCount: "Erro-{count}"
+    },
+    "ro": {
+      legacyMyList: "Lista mea clasic\u0103",
+      itemCount: { one: "{count} element", few: "{count} elemente", other: "{count} elemente" },
+      initializing: "Se ini\u021Bializeaz\u0103...",
+      orderChangedPrompt: "Ordinea din Lista mea s-a schimbat. Reini\u021Bializeaz\u0103.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Anulare",
+      initTime: "Ini\u021Bializare {seconds}s",
+      showOriginalMyList: "Afi\u0219eaz\u0103 Lista mea original\u0103",
+      hideOriginalMyList: "Ascunde Lista mea original\u0103",
+      emptyMessage: "Aici g\u0103se\u0219ti filmele \u0219i serialele salvate.",
+      relayoutInProgress: "Se rearanjeaz\u0103...",
+      relayoutFailed: "Rearanjarea a e\u0219uat",
+      initializationFailed: "Lista mea clasic\u0103: eroare - {message}",
+      noNativeCards: "Nu s-au putut ob\u021Bine cardurile Netflix originale.",
+      errorCount: "Eroare-{count}"
+    },
+    "fi": {
+      legacyMyList: "Klassinen Oma lista",
+      itemCount: { one: "{count} kohde", other: "{count} kohdetta" },
+      initializing: "Alustetaan...",
+      orderChangedPrompt: "Oma lista -j\xE4rjestys on muuttunut. Alusta uudelleen.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Peruuta",
+      initTime: "Alustus {seconds}s",
+      showOriginalMyList: "N\xE4yt\xE4 alkuper\xE4inen Oma lista",
+      hideOriginalMyList: "Piilota alkuper\xE4inen Oma lista",
+      emptyMessage: "T\xE4\xE4lt\xE4 l\xF6yd\xE4t tallentamasi elokuvat ja TV-sarjat.",
+      relayoutInProgress: "J\xE4rjestell\xE4\xE4n uudelleen...",
+      relayoutFailed: "Uudelleenj\xE4rjestely ep\xE4onnistui",
+      initializationFailed: "Klassinen Oma lista: virhe - {message}",
+      noNativeCards: "Netflixin alkuper\xE4isi\xE4 kortteja ei voitu hakea.",
+      errorCount: "Virhe-{count}"
+    },
+    "sv": {
+      legacyMyList: "Klassiska Min lista",
+      itemCount: { other: "{count} objekt" },
+      initializing: "Initierar...",
+      orderChangedPrompt: "Ordningen i Min lista har \xE4ndrats. Initiera om.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Avbryt",
+      initTime: "Init {seconds}s",
+      showOriginalMyList: "Visa ursprungliga Min lista",
+      hideOriginalMyList: "D\xF6lj ursprungliga Min lista",
+      emptyMessage: "H\xE4r hittar du filmerna och serierna du har sparat.",
+      relayoutInProgress: "Ordnar om...",
+      relayoutFailed: "Omordningen misslyckades",
+      initializationFailed: "Klassiska Min lista: fel - {message}",
+      noNativeCards: "Det gick inte att h\xE4mta de ursprungliga Netflix-korten.",
+      errorCount: "Fel-{count}"
+    },
+    "vi": {
+      legacyMyList: "Danh s\xE1ch c\u1EE7a t\xF4i c\u1ED5 \u0111i\u1EC3n",
+      itemCount: { other: "{count} m\u1EE5c" },
+      initializing: "\u0110ang kh\u1EDFi t\u1EA1o...",
+      orderChangedPrompt: "Th\u1EE9 t\u1EF1 Danh s\xE1ch c\u1EE7a t\xF4i \u0111\xE3 thay \u0111\u1ED5i. Vui l\xF2ng kh\u1EDFi t\u1EA1o l\u1EA1i.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "H\u1EE7y",
+      initTime: "Kh\u1EDFi t\u1EA1o {seconds}s",
+      showOriginalMyList: "Hi\u1EC7n Danh s\xE1ch c\u1EE7a t\xF4i g\u1ED1c",
+      hideOriginalMyList: "\u1EA8n Danh s\xE1ch c\u1EE7a t\xF4i g\u1ED1c",
+      emptyMessage: "B\u1EA1n c\xF3 th\u1EC3 t\xECm th\u1EA5y c\xE1c phim v\xE0 ch\u01B0\u01A1ng tr\xECnh truy\u1EC1n h\xECnh \u0111\xE3 l\u01B0u \u1EDF \u0111\xE2y.",
+      relayoutInProgress: "\u0110ang s\u1EAFp x\u1EBFp l\u1EA1i...",
+      relayoutFailed: "S\u1EAFp x\u1EBFp l\u1EA1i th\u1EA5t b\u1EA1i",
+      initializationFailed: "Danh s\xE1ch c\u1EE7a t\xF4i c\u1ED5 \u0111i\u1EC3n: l\u1ED7i - {message}",
+      noNativeCards: "Kh\xF4ng th\u1EC3 l\u1EA5y c\xE1c th\u1EBB Netflix g\u1ED1c.",
+      errorCount: "L\u1ED7i-{count}"
+    },
+    "tr": {
+      legacyMyList: "Klasik Listem",
+      itemCount: { other: "{count} \xF6\u011Fe" },
+      initializing: "Ba\u015Flat\u0131l\u0131yor...",
+      orderChangedPrompt: "Listem'in s\u0131ras\u0131 de\u011Fi\u015Fti. L\xFCtfen yeniden ba\u015Flat\u0131n.",
+      orderChangedOk: "Tamam",
+      orderChangedCancel: "\u0130ptal",
+      initTime: "Ba\u015Flatma {seconds}s",
+      showOriginalMyList: "Orijinal Listem\u2019i g\xF6ster",
+      hideOriginalMyList: "Orijinal Listem\u2019i gizle",
+      emptyMessage: "Kaydetti\u011Finiz filmleri ve dizileri burada bulabilirsiniz.",
+      relayoutInProgress: "Yeniden d\xFCzenleniyor...",
+      relayoutFailed: "Yeniden d\xFCzenleme ba\u015Far\u0131s\u0131z",
+      initializationFailed: "Klasik Listem: hata - {message}",
+      noNativeCards: "Orijinal Netflix kartlar\u0131 al\u0131namad\u0131.",
+      errorCount: "Hata-{count}"
+    },
+    "cs": {
+      legacyMyList: "Klasick\xFD M\u016Fj seznam",
+      itemCount: { one: "{count} polo\u017Eka", few: "{count} polo\u017Eky", other: "{count} polo\u017Eek" },
+      initializing: "Inicializace...",
+      orderChangedPrompt: "Po\u0159ad\xED v M\xE9m seznamu se zm\u011Bnilo. Prove\u010Fte inicializaci znovu.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "Zru\u0161it",
+      initTime: "Inicializace {seconds}s",
+      showOriginalMyList: "Zobrazit p\u016Fvodn\xED M\u016Fj seznam",
+      hideOriginalMyList: "Skr\xFDt p\u016Fvodn\xED M\u016Fj seznam",
+      emptyMessage: "Zde najdete ulo\u017Een\xE9 filmy a seri\xE1ly.",
+      relayoutInProgress: "Prob\xEDh\xE1 nov\xE9 rozlo\u017Een\xED...",
+      relayoutFailed: "Nov\xE9 rozlo\u017Een\xED se nezda\u0159ilo",
+      initializationFailed: "Klasick\xFD M\u016Fj seznam: chyba - {message}",
+      noNativeCards: "P\u016Fvodn\xED karty Netflix se nepoda\u0159ilo na\u010D\xEDst.",
+      errorCount: "Chyba-{count}"
+    },
+    "el": {
+      legacyMyList: "\u039A\u03BB\u03B1\u03C3\u03B9\u03BA\u03AE \u03BB\u03AF\u03C3\u03C4\u03B1 \u03BC\u03BF\u03C5",
+      itemCount: { one: "{count} \u03C3\u03C4\u03BF\u03B9\u03C7\u03B5\u03AF\u03BF", other: "{count} \u03C3\u03C4\u03BF\u03B9\u03C7\u03B5\u03AF\u03B1" },
+      initializing: "\u0391\u03C1\u03C7\u03B9\u03BA\u03BF\u03C0\u03BF\u03AF\u03B7\u03C3\u03B7...",
+      orderChangedPrompt: "\u0397 \u03C3\u03B5\u03B9\u03C1\u03AC \u03C3\u03C4\u03B7 \u03BB\u03AF\u03C3\u03C4\u03B1 \u03BC\u03BF\u03C5 \u03AC\u03BB\u03BB\u03B1\u03BE\u03B5. \u0395\u03BA\u03C4\u03B5\u03BB\u03AD\u03C3\u03C4\u03B5 \u03BE\u03B1\u03BD\u03AC \u03B1\u03C1\u03C7\u03B9\u03BA\u03BF\u03C0\u03BF\u03AF\u03B7\u03C3\u03B7.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "\u0391\u03BA\u03CD\u03C1\u03C9\u03C3\u03B7",
+      initTime: "\u0388\u03BD\u03B1\u03C1\u03BE\u03B7 {seconds}s",
+      showOriginalMyList: "\u0395\u03BC\u03C6\u03AC\u03BD\u03B9\u03C3\u03B7 \u03B1\u03C1\u03C7\u03B9\u03BA\u03AE\u03C2 \u03BB\u03AF\u03C3\u03C4\u03B1\u03C2 \u03BC\u03BF\u03C5",
+      hideOriginalMyList: "\u0391\u03C0\u03CC\u03BA\u03C1\u03C5\u03C8\u03B7 \u03B1\u03C1\u03C7\u03B9\u03BA\u03AE\u03C2 \u03BB\u03AF\u03C3\u03C4\u03B1\u03C2 \u03BC\u03BF\u03C5",
+      emptyMessage: "\u0395\u03B4\u03CE \u03B8\u03B1 \u03B2\u03C1\u03B5\u03AF\u03C4\u03B5 \u03C4\u03B9\u03C2 \u03C4\u03B1\u03B9\u03BD\u03AF\u03B5\u03C2 \u03BA\u03B1\u03B9 \u03C4\u03B9\u03C2 \u03C3\u03B5\u03B9\u03C1\u03AD\u03C2 \u03C0\u03BF\u03C5 \u03AD\u03C7\u03B5\u03C4\u03B5 \u03B1\u03C0\u03BF\u03B8\u03B7\u03BA\u03B5\u03CD\u03C3\u03B5\u03B9.",
+      relayoutInProgress: "\u0391\u03BD\u03B1\u03B4\u03B9\u03AC\u03C4\u03B1\u03BE\u03B7...",
+      relayoutFailed: "\u0397 \u03B1\u03BD\u03B1\u03B4\u03B9\u03AC\u03C4\u03B1\u03BE\u03B7 \u03B1\u03C0\u03AD\u03C4\u03C5\u03C7\u03B5",
+      initializationFailed: "\u039A\u03BB\u03B1\u03C3\u03B9\u03BA\u03AE \u03BB\u03AF\u03C3\u03C4\u03B1 \u03BC\u03BF\u03C5: \u03C3\u03C6\u03AC\u03BB\u03BC\u03B1 - {message}",
+      noNativeCards: "\u0394\u03B5\u03BD \u03AE\u03C4\u03B1\u03BD \u03B4\u03C5\u03BD\u03B1\u03C4\u03AE \u03B7 \u03BB\u03AE\u03C8\u03B7 \u03C4\u03C9\u03BD \u03B1\u03C1\u03C7\u03B9\u03BA\u03CE\u03BD \u03BA\u03B1\u03C1\u03C4\u03CE\u03BD Netflix.",
+      errorCount: "\u03A3\u03C6\u03AC\u03BB\u03BC\u03B1-{count}"
+    },
+    "ru": {
+      legacyMyList: "\u041A\u043B\u0430\u0441\u0441\u0438\u0447\u0435\u0441\u043A\u0438\u0439 \xAB\u041C\u043E\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB",
+      itemCount: { one: "{count} \u044D\u043B\u0435\u043C\u0435\u043D\u0442", few: "{count} \u044D\u043B\u0435\u043C\u0435\u043D\u0442\u0430", many: "{count} \u044D\u043B\u0435\u043C\u0435\u043D\u0442\u043E\u0432", other: "{count} \u044D\u043B\u0435\u043C\u0435\u043D\u0442\u0430" },
+      initializing: "\u0418\u043D\u0438\u0446\u0438\u0430\u043B\u0438\u0437\u0430\u0446\u0438\u044F...",
+      orderChangedPrompt: "\u041F\u043E\u0440\u044F\u0434\u043E\u043A \u0432 \xAB\u041C\u043E\u0451\u043C \u0441\u043F\u0438\u0441\u043A\u0435\xBB \u0438\u0437\u043C\u0435\u043D\u0438\u043B\u0441\u044F. \u0412\u044B\u043F\u043E\u043B\u043D\u0438\u0442\u0435 \u0438\u043D\u0438\u0446\u0438\u0430\u043B\u0438\u0437\u0430\u0446\u0438\u044E \u0441\u043D\u043E\u0432\u0430.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "\u041E\u0442\u043C\u0435\u043D\u0430",
+      initTime: "\u0418\u043D\u0438\u0446\u0438\u0430\u043B\u0438\u0437\u0430\u0446\u0438\u044F {seconds}s",
+      showOriginalMyList: "\u041F\u043E\u043A\u0430\u0437\u0430\u0442\u044C \u0438\u0441\u0445\u043E\u0434\u043D\u044B\u0439 \xAB\u041C\u043E\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB",
+      hideOriginalMyList: "\u0421\u043A\u0440\u044B\u0442\u044C \u0438\u0441\u0445\u043E\u0434\u043D\u044B\u0439 \xAB\u041C\u043E\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB",
+      emptyMessage: "\u0417\u0434\u0435\u0441\u044C \u043D\u0430\u0445\u043E\u0434\u044F\u0442\u0441\u044F \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043D\u044B\u0435 \u0432\u0430\u043C\u0438 \u0444\u0438\u043B\u044C\u043C\u044B \u0438 \u0441\u0435\u0440\u0438\u0430\u043B\u044B.",
+      relayoutInProgress: "\u041F\u0435\u0440\u0435\u043A\u043E\u043C\u043F\u043E\u043D\u043E\u0432\u043A\u0430...",
+      relayoutFailed: "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0438\u0437\u043C\u0435\u043D\u0438\u0442\u044C \u043A\u043E\u043C\u043F\u043E\u043D\u043E\u0432\u043A\u0443",
+      initializationFailed: "\u041A\u043B\u0430\u0441\u0441\u0438\u0447\u0435\u0441\u043A\u0438\u0439 \xAB\u041C\u043E\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB: \u043E\u0448\u0438\u0431\u043A\u0430 - {message}",
+      noNativeCards: "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u043B\u0443\u0447\u0438\u0442\u044C \u0438\u0441\u0445\u043E\u0434\u043D\u044B\u0435 \u043A\u0430\u0440\u0442\u043E\u0447\u043A\u0438 Netflix.",
+      errorCount: "\u041E\u0448\u0438\u0431\u043A\u0430-{count}"
+    },
+    "uk": {
+      legacyMyList: "\u041A\u043B\u0430\u0441\u0438\u0447\u043D\u0438\u0439 \xAB\u041C\u0456\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB",
+      itemCount: { one: "{count} \u0435\u043B\u0435\u043C\u0435\u043D\u0442", few: "{count} \u0435\u043B\u0435\u043C\u0435\u043D\u0442\u0438", many: "{count} \u0435\u043B\u0435\u043C\u0435\u043D\u0442\u0456\u0432", other: "{count} \u0435\u043B\u0435\u043C\u0435\u043D\u0442\u0430" },
+      initializing: "\u0406\u043D\u0456\u0446\u0456\u0430\u043B\u0456\u0437\u0430\u0446\u0456\u044F...",
+      orderChangedPrompt: "\u041F\u043E\u0440\u044F\u0434\u043E\u043A \u0443 \xAB\u041C\u043E\u0454\u043C\u0443 \u0441\u043F\u0438\u0441\u043A\u0443\xBB \u0437\u043C\u0456\u043D\u0438\u0432\u0441\u044F. \u0412\u0438\u043A\u043E\u043D\u0430\u0439\u0442\u0435 \u0456\u043D\u0456\u0446\u0456\u0430\u043B\u0456\u0437\u0430\u0446\u0456\u044E \u0437\u043D\u043E\u0432\u0443.",
+      orderChangedOk: "OK",
+      orderChangedCancel: "\u0421\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438",
+      initTime: "\u0406\u043D\u0456\u0446\u0456\u0430\u043B\u0456\u0437\u0430\u0446\u0456\u044F {seconds}s",
+      showOriginalMyList: "\u041F\u043E\u043A\u0430\u0437\u0430\u0442\u0438 \u043E\u0440\u0438\u0433\u0456\u043D\u0430\u043B\u044C\u043D\u0438\u0439 \xAB\u041C\u0456\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB",
+      hideOriginalMyList: "\u0421\u0445\u043E\u0432\u0430\u0442\u0438 \u043E\u0440\u0438\u0433\u0456\u043D\u0430\u043B\u044C\u043D\u0438\u0439 \xAB\u041C\u0456\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB",
+      emptyMessage: "\u0422\u0443\u0442 \u0432\u0438 \u0437\u043D\u0430\u0439\u0434\u0435\u0442\u0435 \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u0456 \u0444\u0456\u043B\u044C\u043C\u0438 \u0442\u0430 \u0441\u0435\u0440\u0456\u0430\u043B\u0438.",
+      relayoutInProgress: "\u041F\u0435\u0440\u0435\u043A\u043E\u043C\u043F\u043E\u043D\u0443\u0432\u0430\u043D\u043D\u044F...",
+      relayoutFailed: "\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0437\u043C\u0456\u043D\u0438\u0442\u0438 \u043A\u043E\u043C\u043F\u043E\u043D\u0443\u0432\u0430\u043D\u043D\u044F",
+      initializationFailed: "\u041A\u043B\u0430\u0441\u0438\u0447\u043D\u0438\u0439 \xAB\u041C\u0456\u0439 \u0441\u043F\u0438\u0441\u043E\u043A\xBB: \u043F\u043E\u043C\u0438\u043B\u043A\u0430 - {message}",
+      noNativeCards: "\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u043E\u0442\u0440\u0438\u043C\u0430\u0442\u0438 \u043E\u0440\u0438\u0433\u0456\u043D\u0430\u043B\u044C\u043D\u0456 \u043A\u0430\u0440\u0442\u043A\u0438 Netflix.",
+      errorCount: "\u041F\u043E\u043C\u0438\u043B\u043A\u0430-{count}"
+    },
+    "he": {
+      legacyMyList: "\u05D4\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05D9 \u05D4\u05E7\u05DC\u05D0\u05E1\u05D9\u05EA",
+      itemCount: { one: "{count} \u05E4\u05E8\u05D9\u05D8", two: "{count} \u05E4\u05E8\u05D9\u05D8\u05D9\u05DD", other: "{count} \u05E4\u05E8\u05D9\u05D8\u05D9\u05DD" },
+      initializing: "\u05DE\u05D0\u05EA\u05D7\u05DC...",
+      orderChangedPrompt: "\u05D4\u05E1\u05D3\u05E8 \u05D1\u05F4\u05D4\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05D9\u05F4 \u05D4\u05E9\u05EA\u05E0\u05D4. \u05D9\u05E9 \u05DC\u05D0\u05EA\u05D7\u05DC \u05DE\u05D7\u05D3\u05E9.",
+      orderChangedOk: "\u05D0\u05D9\u05E9\u05D5\u05E8",
+      orderChangedCancel: "\u05D1\u05D9\u05D8\u05D5\u05DC",
+      initTime: "\u05D0\u05EA\u05D7\u05D5\u05DC {seconds} \u05E9\u05E0\u05F3",
+      showOriginalMyList: "\u05D4\u05E6\u05D2 \u05D0\u05EA \u05D4\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05D9 \u05D4\u05DE\u05E7\u05D5\u05E8\u05D9\u05EA",
+      hideOriginalMyList: "\u05D4\u05E1\u05EA\u05E8 \u05D0\u05EA \u05D4\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05D9 \u05D4\u05DE\u05E7\u05D5\u05E8\u05D9\u05EA",
+      emptyMessage: "\u05DB\u05D0\u05DF \u05D0\u05E4\u05E9\u05E8 \u05DC\u05DE\u05E6\u05D5\u05D0 \u05D0\u05EA \u05D4\u05E1\u05E8\u05D8\u05D9\u05DD \u05D5\u05D4\u05E1\u05D3\u05E8\u05D5\u05EA \u05E9\u05E9\u05DE\u05E8\u05EA.",
+      relayoutInProgress: "\u05DE\u05E1\u05D3\u05E8 \u05DE\u05D7\u05D3\u05E9...",
+      relayoutFailed: "\u05D4\u05E1\u05D9\u05D3\u05D5\u05E8 \u05DE\u05D7\u05D3\u05E9 \u05E0\u05DB\u05E9\u05DC",
+      initializationFailed: "\u05D4\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05D9 \u05D4\u05E7\u05DC\u05D0\u05E1\u05D9\u05EA: \u05E9\u05D2\u05D9\u05D0\u05D4 - {message}",
+      noNativeCards: "\u05DC\u05D0 \u05E0\u05D9\u05EA\u05DF \u05D4\u05D9\u05D4 \u05DC\u05E7\u05D1\u05DC \u05D0\u05EA \u05DB\u05E8\u05D8\u05D9\u05E1\u05D9 Netflix \u05D4\u05DE\u05E7\u05D5\u05E8\u05D9\u05D9\u05DD.",
+      errorCount: "\u05E9\u05D2\u05D9\u05D0\u05D4-{count}"
+    },
+    "ar": {
+      legacyMyList: "\u0642\u0627\u0626\u0645\u062A\u064A \u0627\u0644\u0643\u0644\u0627\u0633\u064A\u0643\u064A\u0629",
+      itemCount: { zero: "{count} \u0639\u0646\u0635\u0631", one: "{count} \u0639\u0646\u0635\u0631", two: "{count} \u0639\u0646\u0635\u0631\u0627\u0646", few: "{count} \u0639\u0646\u0627\u0635\u0631", many: "{count} \u0639\u0646\u0635\u0631\u064B\u0627", other: "{count} \u0639\u0646\u0635\u0631" },
+      initializing: "\u062C\u0627\u0631\u064D \u0627\u0644\u062A\u0647\u064A\u0626\u0629...",
+      orderChangedPrompt: "\u062A\u063A\u064A\u0651\u0631 \u062A\u0631\u062A\u064A\u0628 \xAB\u0642\u0627\u0626\u0645\u062A\u064A\xBB. \u064A\u064F\u0631\u062C\u0649 \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u062A\u0647\u064A\u0626\u0629.",
+      orderChangedOk: "\u0645\u0648\u0627\u0641\u0642",
+      orderChangedCancel: "\u0625\u0644\u063A\u0627\u0621",
+      initTime: "\u062A\u0647\u064A\u0626\u0629 {seconds}\u062B",
+      showOriginalMyList: "\u0625\u0638\u0647\u0627\u0631 \u0642\u0627\u0626\u0645\u062A\u064A \u0627\u0644\u0623\u0635\u0644\u064A\u0629",
+      hideOriginalMyList: "\u0625\u062E\u0641\u0627\u0621 \u0642\u0627\u0626\u0645\u062A\u064A \u0627\u0644\u0623\u0635\u0644\u064A\u0629",
+      emptyMessage: "\u064A\u0645\u0643\u0646\u0643 \u0627\u0644\u0639\u062B\u0648\u0631 \u0647\u0646\u0627 \u0639\u0644\u0649 \u0627\u0644\u0623\u0641\u0644\u0627\u0645 \u0648\u0627\u0644\u0628\u0631\u0627\u0645\u062C \u0627\u0644\u062A\u0644\u0641\u0632\u064A\u0648\u0646\u064A\u0629 \u0627\u0644\u062A\u064A \u062D\u0641\u0638\u062A\u0647\u0627.",
+      relayoutInProgress: "\u062C\u0627\u0631\u064D \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u062A\u0631\u062A\u064A\u0628...",
+      relayoutFailed: "\u0641\u0634\u0644\u062A \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u062A\u0631\u062A\u064A\u0628",
+      initializationFailed: "\u0642\u0627\u0626\u0645\u062A\u064A \u0627\u0644\u0643\u0644\u0627\u0633\u064A\u0643\u064A\u0629: \u062E\u0637\u0623 - {message}",
+      noNativeCards: "\u062A\u0639\u0630\u0631 \u0627\u0644\u062D\u0635\u0648\u0644 \u0639\u0644\u0649 \u0628\u0637\u0627\u0642\u0627\u062A Netflix \u0627\u0644\u0623\u0635\u0644\u064A\u0629.",
+      errorCount: "\u062E\u0637\u0623-{count}"
+    },
+    "hi": {
+      legacyMyList: "\u0915\u094D\u0932\u093E\u0938\u093F\u0915 \u092E\u0947\u0930\u0940 \u0938\u0942\u091A\u0940",
+      itemCount: { other: "{count} \u0906\u0907\u091F\u092E" },
+      initializing: "\u0906\u0930\u0902\u092D \u0915\u093F\u092F\u093E \u091C\u093E \u0930\u0939\u093E \u0939\u0948...",
+      orderChangedPrompt: "\u092E\u0947\u0930\u0940 \u0938\u0942\u091A\u0940 \u0915\u093E \u0915\u094D\u0930\u092E \u092C\u0926\u0932 \u0917\u092F\u093E \u0939\u0948\u0964 \u0915\u0943\u092A\u092F\u093E \u092B\u093F\u0930 \u0938\u0947 \u0906\u0930\u0902\u092D \u0915\u0930\u0947\u0902\u0964",
+      orderChangedOk: "\u0920\u0940\u0915 \u0939\u0948",
+      orderChangedCancel: "\u0930\u0926\u094D\u0926 \u0915\u0930\u0947\u0902",
+      initTime: "\u0906\u0930\u0902\u092D {seconds}\u0938\u0947",
+      showOriginalMyList: "\u092E\u0942\u0932 \u092E\u0947\u0930\u0940 \u0938\u0942\u091A\u0940 \u0926\u093F\u0916\u093E\u090F\u0901",
+      hideOriginalMyList: "\u092E\u0942\u0932 \u092E\u0947\u0930\u0940 \u0938\u0942\u091A\u0940 \u091B\u093F\u092A\u093E\u090F\u0901",
+      emptyMessage: "\u0906\u092A\u0928\u0947 \u091C\u094B \u092B\u093C\u093F\u0932\u094D\u092E\u0947\u0902 \u0914\u0930 \u091F\u0940\u0935\u0940 \u0936\u094B \u0938\u0939\u0947\u091C\u0947 \u0939\u0948\u0902, \u0935\u0947 \u092F\u0939\u093E\u0901 \u092E\u093F\u0932\u0947\u0902\u0917\u0947\u0964",
+      relayoutInProgress: "\u092B\u093F\u0930 \u0938\u0947 \u0935\u094D\u092F\u0935\u0938\u094D\u0925\u093F\u0924 \u0915\u093F\u092F\u093E \u091C\u093E \u0930\u0939\u093E \u0939\u0948...",
+      relayoutFailed: "\u092A\u0941\u0928\u0930\u094D\u0935\u094D\u092F\u0935\u0938\u094D\u0925\u093E \u0935\u093F\u092B\u0932",
+      initializationFailed: "\u0915\u094D\u0932\u093E\u0938\u093F\u0915 \u092E\u0947\u0930\u0940 \u0938\u0942\u091A\u0940: \u0924\u094D\u0930\u0941\u091F\u093F - {message}",
+      noNativeCards: "\u092E\u0942\u0932 Netflix \u0915\u093E\u0930\u094D\u0921 \u092A\u094D\u0930\u093E\u092A\u094D\u0924 \u0928\u0939\u0940\u0902 \u0915\u093F\u090F \u091C\u093E \u0938\u0915\u0947\u0964",
+      errorCount: "\u0924\u094D\u0930\u0941\u091F\u093F-{count}"
+    },
+    "th": {
+      legacyMyList: "\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E02\u0E2D\u0E07\u0E09\u0E31\u0E19\u0E41\u0E1A\u0E1A\u0E04\u0E25\u0E32\u0E2A\u0E2A\u0E34\u0E01",
+      itemCount: { other: "{count} \u0E23\u0E32\u0E22\u0E01\u0E32\u0E23" },
+      initializing: "\u0E01\u0E33\u0E25\u0E31\u0E07\u0E40\u0E23\u0E34\u0E48\u0E21\u0E15\u0E49\u0E19...",
+      orderChangedPrompt: "\u0E25\u0E33\u0E14\u0E31\u0E1A\u0E43\u0E19\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E02\u0E2D\u0E07\u0E09\u0E31\u0E19\u0E40\u0E1B\u0E25\u0E35\u0E48\u0E22\u0E19\u0E44\u0E1B \u0E42\u0E1B\u0E23\u0E14\u0E40\u0E23\u0E34\u0E48\u0E21\u0E15\u0E49\u0E19\u0E43\u0E2B\u0E21\u0E48\u0E2D\u0E35\u0E01\u0E04\u0E23\u0E31\u0E49\u0E07",
+      orderChangedOk: "\u0E15\u0E01\u0E25\u0E07",
+      orderChangedCancel: "\u0E22\u0E01\u0E40\u0E25\u0E34\u0E01",
+      initTime: "\u0E40\u0E23\u0E34\u0E48\u0E21\u0E15\u0E49\u0E19 {seconds} \u0E27\u0E34\u0E19\u0E32\u0E17\u0E35",
+      showOriginalMyList: "\u0E41\u0E2A\u0E14\u0E07\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E02\u0E2D\u0E07\u0E09\u0E31\u0E19\u0E15\u0E49\u0E19\u0E09\u0E1A\u0E31\u0E1A",
+      hideOriginalMyList: "\u0E0B\u0E48\u0E2D\u0E19\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E02\u0E2D\u0E07\u0E09\u0E31\u0E19\u0E15\u0E49\u0E19\u0E09\u0E1A\u0E31\u0E1A",
+      emptyMessage: "\u0E04\u0E38\u0E13\u0E08\u0E30\u0E1E\u0E1A\u0E20\u0E32\u0E1E\u0E22\u0E19\u0E15\u0E23\u0E4C\u0E41\u0E25\u0E30\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E17\u0E35\u0E27\u0E35\u0E17\u0E35\u0E48\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E44\u0E27\u0E49\u0E44\u0E14\u0E49\u0E17\u0E35\u0E48\u0E19\u0E35\u0E48",
+      relayoutInProgress: "\u0E01\u0E33\u0E25\u0E31\u0E07\u0E08\u0E31\u0E14\u0E27\u0E32\u0E07\u0E43\u0E2B\u0E21\u0E48...",
+      relayoutFailed: "\u0E08\u0E31\u0E14\u0E27\u0E32\u0E07\u0E43\u0E2B\u0E21\u0E48\u0E44\u0E21\u0E48\u0E2A\u0E33\u0E40\u0E23\u0E47\u0E08",
+      initializationFailed: "\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E02\u0E2D\u0E07\u0E09\u0E31\u0E19\u0E41\u0E1A\u0E1A\u0E04\u0E25\u0E32\u0E2A\u0E2A\u0E34\u0E01: \u0E02\u0E49\u0E2D\u0E1C\u0E34\u0E14\u0E1E\u0E25\u0E32\u0E14 - {message}",
+      noNativeCards: "\u0E44\u0E21\u0E48\u0E2A\u0E32\u0E21\u0E32\u0E23\u0E16\u0E14\u0E36\u0E07\u0E01\u0E32\u0E23\u0E4C\u0E14 Netflix \u0E15\u0E49\u0E19\u0E09\u0E1A\u0E31\u0E1A\u0E44\u0E14\u0E49",
+      errorCount: "\u0E02\u0E49\u0E2D\u0E1C\u0E34\u0E14\u0E1E\u0E25\u0E32\u0E14-{count}"
+    },
+    "zh": {
+      legacyMyList: "\u65E7\u7248\u201C\u6211\u7684\u7247\u5355\u201D",
+      itemCount: { other: "{count}\u9879" },
+      initializing: "\u6B63\u5728\u521D\u59CB\u5316...",
+      orderChangedPrompt: "\u201C\u6211\u7684\u7247\u5355\u201D\u7684\u987A\u5E8F\u5DF2\u66F4\u6539\u3002\u8BF7\u91CD\u65B0\u521D\u59CB\u5316\u3002",
+      orderChangedOk: "\u786E\u5B9A",
+      orderChangedCancel: "\u53D6\u6D88",
+      initTime: "\u521D\u59CB\u5316 {seconds}\u79D2",
+      showOriginalMyList: "\u663E\u793A\u539F\u59CB\u201C\u6211\u7684\u7247\u5355\u201D",
+      hideOriginalMyList: "\u9690\u85CF\u539F\u59CB\u201C\u6211\u7684\u7247\u5355\u201D",
+      emptyMessage: "\u4F60\u4FDD\u5B58\u7684\u7535\u5F71\u548C\u7535\u89C6\u8282\u76EE\u4F1A\u663E\u793A\u5728\u8FD9\u91CC\u3002",
+      relayoutInProgress: "\u6B63\u5728\u91CD\u65B0\u5E03\u5C40...",
+      relayoutFailed: "\u91CD\u65B0\u5E03\u5C40\u5931\u8D25",
+      initializationFailed: "\u65E7\u7248\u201C\u6211\u7684\u7247\u5355\u201D\uFF1A\u5931\u8D25 - {message}",
+      noNativeCards: "\u65E0\u6CD5\u83B7\u53D6 Netflix \u539F\u59CB\u5361\u7247\u3002",
+      errorCount: "\u9519\u8BEF-{count}"
+    },
+    "ja": {
+      legacyMyList: "\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8",
+      itemCount: { other: "{count}\u4EF6" },
+      initializing: "\u521D\u671F\u5316\u4E2D...",
+      orderChangedPrompt: "\u30DE\u30A4\u30EA\u30B9\u30C8\u306E\u4E26\u3073\u9806\u304C\u5909\u308F\u308A\u307E\u3057\u305F\u3002\u521D\u671F\u5316\u3057\u3066\u304F\u3060\u3055\u3044\u3002",
+      orderChangedOk: "OK",
+      orderChangedCancel: "\u30AD\u30E3\u30F3\u30BB\u30EB",
+      initTime: "\u521D\u671F\u5316 {seconds}\u79D2",
+      showOriginalMyList: "\u30AA\u30EA\u30B8\u30CA\u30EB\u306E\u30DE\u30A4\u30EA\u30B9\u30C8\u3092\u8868\u793A\u3059\u308B",
+      hideOriginalMyList: "\u30AA\u30EA\u30B8\u30CA\u30EB\u306E\u30DE\u30A4\u30EA\u30B9\u30C8\u3092\u975E\u8868\u793A\u306B\u3059\u308B",
+      emptyMessage: "\u4FDD\u5B58\u3057\u305F\u6620\u753B\u3084\u30C9\u30E9\u30DE\u3092\u3053\u3061\u3089\u3067\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002",
+      relayoutInProgress: "\u518D\u914D\u7F6E\u4E2D",
+      relayoutFailed: "\u518D\u914D\u7F6E\u5931\u6557",
+      initializationFailed: "\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8: \u5931\u6557 - {message}",
+      noNativeCards: "Netflix\u7D14\u6B63\u30AB\u30FC\u30C9\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002",
+      errorCount: "Error-{count}"
+    },
+    "ko": {
+      legacyMyList: "\uC774\uC804 \uBC84\uC804 \uB098\uC758 \uBAA9\uB85D",
+      itemCount: { other: "{count}\uAC1C" },
+      initializing: "\uCD08\uAE30\uD654 \uC911...",
+      orderChangedPrompt: "\uB0B4 \uBAA9\uB85D\uC758 \uC21C\uC11C\uAC00 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uCD08\uAE30\uD654\uD574 \uC8FC\uC138\uC694.",
+      orderChangedOk: "\uD655\uC778",
+      orderChangedCancel: "\uCDE8\uC18C",
+      initTime: "\uCD08\uAE30\uD654 {seconds}\uCD08",
+      showOriginalMyList: "\uC6D0\uBCF8 \uB098\uC758 \uBAA9\uB85D \uD45C\uC2DC",
+      hideOriginalMyList: "\uC6D0\uBCF8 \uB098\uC758 \uBAA9\uB85D \uC228\uAE30\uAE30",
+      emptyMessage: "\uC800\uC7A5\uD55C \uC601\uD654\uC640 TV \uD504\uB85C\uADF8\uB7A8\uC744 \uC5EC\uAE30\uC5D0\uC11C \uD655\uC778\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.",
+      relayoutInProgress: "\uB808\uC774\uC544\uC6C3 \uC870\uC815 \uC911...",
+      relayoutFailed: "\uB808\uC774\uC544\uC6C3 \uC870\uC815 \uC2E4\uD328",
+      initializationFailed: "\uC774\uC804 \uBC84\uC804 \uB098\uC758 \uBAA9\uB85D: \uC2E4\uD328 - {message}",
+      noNativeCards: "Netflix \uC6D0\uBCF8 \uCE74\uB4DC\uB97C \uAC00\uC838\uC62C \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.",
+      errorCount: "\uC624\uB958-{count}"
+    }
+  };
+  var VIEWING_UI_MESSAGES = {
+    "en": ["Watched / Caught up", "Refresh viewing status", "Checking viewing status...", "Viewing status unavailable for {count} titles. They remain in the main list.", "You are caught up with everything in your list."],
+    "de": ["Gesehen / Auf dem neuesten Stand", "Sehstatus aktualisieren", "Sehstatus wird gepr\xFCft...", "Sehstatus f\xFCr {count} Titel nicht verf\xFCgbar. Sie bleiben in der Hauptliste.", "Du hast alle Titel in deiner Liste gesehen."],
+    "da": ["Set / Ajour", "Opdater visningsstatus", "Kontrollerer visningsstatus...", "Visningsstatus er ikke tilg\xE6ngelig for {count} titler. De bliver p\xE5 hovedlisten.", "Du har set alt p\xE5 din liste."],
+    "es": ["Visto / Al d\xEDa", "Actualizar estado de visualizaci\xF3n", "Comprobando el estado de visualizaci\xF3n...", "Estado no disponible para {count} t\xEDtulos. Permanecen en la lista principal.", "Has visto todo lo que hay en tu lista."],
+    "fil": ["Napanood / Updated", "I-refresh ang status ng panonood", "Sinusuri ang status ng panonood...", "Hindi available ang status ng {count} pamagat. Mananatili sila sa pangunahing listahan.", "Napanood mo na ang lahat sa iyong listahan."],
+    "fr": ["Vu / \xC0 jour", "Actualiser le statut de visionnage", "V\xE9rification du statut de visionnage...", "Statut indisponible pour {count} titres. Ils restent dans la liste principale.", "Vous avez tout vu dans votre liste."],
+    "hr": ["Pogledano / Sve pogledano", "Osvje\u017Ei status gledanja", "Provjera statusa gledanja...", "Status nije dostupan za {count} naslova. Ostaju na glavnom popisu.", "Pogledali ste sve na svom popisu."],
+    "id": ["Sudah ditonton / Sudah mengikuti semua episode", "Perbarui status tontonan", "Memeriksa status tontonan...", "Status tidak tersedia untuk {count} judul. Judul tetap ada di daftar utama.", "Kamu sudah menonton semua yang ada di daftar."],
+    "it": ["Visto / In pari", "Aggiorna lo stato di visione", "Verifica dello stato di visione...", "Stato non disponibile per {count} titoli. Rimangono nella lista principale.", "Hai visto tutto ci\xF2 che \xE8 nella tua lista."],
+    "hu": ["Megn\xE9zve / Naprak\xE9sz", "Megtekint\xE9si \xE1llapot friss\xEDt\xE9se", "Megtekint\xE9si \xE1llapot ellen\u0151rz\xE9se...", "{count} m\u0171sor \xE1llapota nem \xE9rhet\u0151 el. A f\u0151 list\xE1ban maradnak.", "Mindent megn\xE9zt\xE9l a list\xE1don."],
+    "ms": ["Sudah ditonton / Sudah mengikuti semua episod", "Kemas kini status tontonan", "Menyemak status tontonan...", "Status tidak tersedia untuk {count} tajuk. Tajuk kekal dalam senarai utama.", "Anda sudah menonton semua dalam senarai anda."],
+    "nl": ["Bekeken / Bij", "Kijkstatus vernieuwen", "Kijkstatus controleren...", "Kijkstatus niet beschikbaar voor {count} titels. Ze blijven in de hoofdlijst.", "Je hebt alles in je lijst bekeken."],
+    "nb": ["Sett / Ajour", "Oppdater visningsstatus", "Kontrollerer visningsstatus...", "Visningsstatus er utilgjengelig for {count} titler. De blir i hovedlisten.", "Du har sett alt p\xE5 listen din."],
+    "pl": ["Obejrzane / Na bie\u017C\u0105co", "Od\u015Bwie\u017C stan ogl\u0105dania", "Sprawdzanie stanu ogl\u0105dania...", "Stan {count} tytu\u0142\xF3w jest niedost\u0119pny. Pozostaj\u0105 na g\u0142\xF3wnej li\u015Bcie.", "Wszystko na Twojej li\u015Bcie jest obejrzane."],
+    "pt": ["Visto / Em dia", "Atualizar estado de visualiza\xE7\xE3o", "A verificar o estado de visualiza\xE7\xE3o...", "Estado indispon\xEDvel para {count} t\xEDtulos. Permanecem na lista principal.", "J\xE1 viu tudo na sua lista."],
+    "ro": ["Vizionat / La zi", "Actualizeaz\u0103 starea vizion\u0103rii", "Se verific\u0103 starea vizion\u0103rii...", "Starea nu este disponibil\u0103 pentru {count} titluri. R\u0103m\xE2n \xEEn lista principal\u0103.", "Ai vizionat tot ce este \xEEn lista ta."],
+    "fi": ["Katsottu / Ajan tasalla", "P\xE4ivit\xE4 katselutila", "Tarkistetaan katselutilaa...", "{count} nimikkeen katselutila ei ole saatavilla. Ne pysyv\xE4t p\xE4\xE4listassa.", "Olet katsonut kaiken listaltasi."],
+    "sv": ["Sett / Ikapp", "Uppdatera visningsstatus", "Kontrollerar visningsstatus...", "Visningsstatus saknas f\xF6r {count} titlar. De finns kvar i huvudlistan.", "Du har sett allt p\xE5 din lista."],
+    "vi": ["\u0110\xE3 xem / \u0110\xE3 xem h\u1EBFt c\xE1c t\u1EADp hi\u1EC7n c\xF3", "C\u1EADp nh\u1EADt tr\u1EA1ng th\xE1i xem", "\u0110ang ki\u1EC3m tra tr\u1EA1ng th\xE1i xem...", "Kh\xF4ng c\xF3 tr\u1EA1ng th\xE1i c\u1EE7a {count} t\u1EF1a phim. Ch\xFAng v\u1EABn \u1EDF danh s\xE1ch ch\xEDnh.", "B\u1EA1n \u0111\xE3 xem h\u1EBFt m\u1ECDi n\u1ED9i dung trong danh s\xE1ch."],
+    "tr": ["\u0130zlendi / G\xFCncel b\xF6l\xFCmler izlendi", "\u0130zleme durumunu yenile", "\u0130zleme durumu kontrol ediliyor...", "{count} i\xE7eri\u011Fin durumu kullan\u0131lam\u0131yor. Ana listede kal\u0131rlar.", "Listenizdeki t\xFCm i\xE7erikleri izlediniz."],
+    "cs": ["Zhl\xE9dnuto / V\u0161echny d\xEDly zhl\xE9dnuty", "Aktualizovat stav sledov\xE1n\xED", "Kontrola stavu sledov\xE1n\xED...", "Stav {count} titul\u016F nen\xED dostupn\xFD. Z\u016Fst\xE1vaj\xED v hlavn\xEDm seznamu.", "Zhl\xE9dli jste v\u0161e ve sv\xE9m seznamu."],
+    "el": ["\u03A0\u03C1\u03BF\u03B2\u03BB\u03AE\u03B8\u03B7\u03BA\u03B5 / \u038C\u03BB\u03B1 \u03C4\u03B1 \u03B4\u03B9\u03B1\u03B8\u03AD\u03C3\u03B9\u03BC\u03B1 \u03B5\u03C0\u03B5\u03B9\u03C3\u03CC\u03B4\u03B9\u03B1 \u03C0\u03C1\u03BF\u03B2\u03BB\u03AE\u03B8\u03B7\u03BA\u03B1\u03BD", "\u0391\u03BD\u03B1\u03BD\u03AD\u03C9\u03C3\u03B7 \u03BA\u03B1\u03C4\u03AC\u03C3\u03C4\u03B1\u03C3\u03B7\u03C2 \u03C0\u03C1\u03BF\u03B2\u03BF\u03BB\u03AE\u03C2", "\u0388\u03BB\u03B5\u03B3\u03C7\u03BF\u03C2 \u03BA\u03B1\u03C4\u03AC\u03C3\u03C4\u03B1\u03C3\u03B7\u03C2 \u03C0\u03C1\u03BF\u03B2\u03BF\u03BB\u03AE\u03C2...", "\u039C\u03B7 \u03B4\u03B9\u03B1\u03B8\u03AD\u03C3\u03B9\u03BC\u03B7 \u03BA\u03B1\u03C4\u03AC\u03C3\u03C4\u03B1\u03C3\u03B7 \u03B3\u03B9\u03B1 {count} \u03C4\u03AF\u03C4\u03BB\u03BF\u03C5\u03C2. \u03A0\u03B1\u03C1\u03B1\u03BC\u03AD\u03BD\u03BF\u03C5\u03BD \u03C3\u03C4\u03B7\u03BD \u03BA\u03CD\u03C1\u03B9\u03B1 \u03BB\u03AF\u03C3\u03C4\u03B1.", "\u0388\u03C7\u03B5\u03C4\u03B5 \u03B4\u03B5\u03B9 \u03C4\u03B1 \u03C0\u03AC\u03BD\u03C4\u03B1 \u03C3\u03C4\u03B7 \u03BB\u03AF\u03C3\u03C4\u03B1 \u03C3\u03B1\u03C2."],
+    "ru": ["\u041F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0435\u043D\u043E / \u0412\u0441\u0435 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B\u0435 \u0441\u0435\u0440\u0438\u0438 \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0435\u043D\u044B", "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u0441\u0442\u0430\u0442\u0443\u0441 \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0430", "\u041F\u0440\u043E\u0432\u0435\u0440\u043A\u0430 \u0441\u0442\u0430\u0442\u0443\u0441\u0430 \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0430...", "\u0421\u0442\u0430\u0442\u0443\u0441 {count} \u043D\u0430\u0438\u043C\u0435\u043D\u043E\u0432\u0430\u043D\u0438\u0439 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D. \u041E\u043D\u0438 \u043E\u0441\u0442\u0430\u044E\u0442\u0441\u044F \u0432 \u043E\u0441\u043D\u043E\u0432\u043D\u043E\u043C \u0441\u043F\u0438\u0441\u043A\u0435.", "\u0412\u044B \u043F\u043E\u0441\u043C\u043E\u0442\u0440\u0435\u043B\u0438 \u0432\u0441\u0451 \u0432 \u0441\u0432\u043E\u0451\u043C \u0441\u043F\u0438\u0441\u043A\u0435."],
+    "uk": ["\u041F\u0435\u0440\u0435\u0433\u043B\u044F\u043D\u0443\u0442\u043E / \u0423\u0441\u0456 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456 \u0441\u0435\u0440\u0456\u0457 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u043D\u0443\u0442\u043E", "\u041E\u043D\u043E\u0432\u0438\u0442\u0438 \u0441\u0442\u0430\u043D \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u0434\u0443", "\u041F\u0435\u0440\u0435\u0432\u0456\u0440\u043A\u0430 \u0441\u0442\u0430\u043D\u0443 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u0434\u0443...", "\u0421\u0442\u0430\u043D {count} \u043D\u0430\u0439\u043C\u0435\u043D\u0443\u0432\u0430\u043D\u044C \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0438\u0439. \u0412\u043E\u043D\u0438 \u0437\u0430\u043B\u0438\u0448\u0430\u044E\u0442\u044C\u0441\u044F \u0432 \u043E\u0441\u043D\u043E\u0432\u043D\u043E\u043C\u0443 \u0441\u043F\u0438\u0441\u043A\u0443.", "\u0412\u0438 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u043D\u0443\u043B\u0438 \u0432\u0441\u0435 \u0443 \u0441\u0432\u043E\u0454\u043C\u0443 \u0441\u043F\u0438\u0441\u043A\u0443."],
+    "he": ["\u05E0\u05E6\u05E4\u05D4 / \u05DB\u05DC \u05D4\u05E4\u05E8\u05E7\u05D9\u05DD \u05D4\u05D6\u05DE\u05D9\u05E0\u05D9\u05DD \u05E0\u05E6\u05E4\u05D5", "\u05E8\u05E2\u05E0\u05D5\u05DF \u05DE\u05E6\u05D1 \u05E6\u05E4\u05D9\u05D9\u05D4", "\u05D1\u05D3\u05D9\u05E7\u05EA \u05DE\u05E6\u05D1 \u05E6\u05E4\u05D9\u05D9\u05D4...", "\u05DE\u05E6\u05D1 \u05D4\u05E6\u05E4\u05D9\u05D9\u05D4 \u05D0\u05D9\u05E0\u05D5 \u05D6\u05DE\u05D9\u05DF \u05E2\u05D1\u05D5\u05E8 {count} \u05DB\u05D5\u05EA\u05E8\u05D9\u05DD. \u05D4\u05DD \u05E0\u05E9\u05D0\u05E8\u05D9\u05DD \u05D1\u05E8\u05E9\u05D9\u05DE\u05D4 \u05D4\u05E8\u05D0\u05E9\u05D9\u05EA.", "\u05E6\u05E4\u05D9\u05EA \u05D1\u05DB\u05DC \u05DE\u05D4 \u05E9\u05D1\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05DA."],
+    "ar": ["\u062A\u0645\u062A \u0627\u0644\u0645\u0634\u0627\u0647\u062F\u0629 / \u062A\u0645\u062A \u0645\u0634\u0627\u0647\u062F\u0629 \u0643\u0644 \u0627\u0644\u062D\u0644\u0642\u0627\u062A \u0627\u0644\u0645\u062A\u0627\u062D\u0629", "\u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0627\u0644\u0645\u0634\u0627\u0647\u062F\u0629", "\u062C\u0627\u0631\u064D \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u062D\u0627\u0644\u0629 \u0627\u0644\u0645\u0634\u0627\u0647\u062F\u0629...", "\u062D\u0627\u0644\u0629 \u0627\u0644\u0645\u0634\u0627\u0647\u062F\u0629 \u063A\u064A\u0631 \u0645\u062A\u0627\u062D\u0629 \u0644\u0640 {count} \u0639\u0646\u0648\u0627\u0646\u064B\u0627. \u062A\u0628\u0642\u0649 \u0641\u064A \u0627\u0644\u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0631\u0626\u064A\u0633\u064A\u0629.", "\u0634\u0627\u0647\u062F\u062A \u0643\u0644 \u0645\u0627 \u0641\u064A \u0642\u0627\u0626\u0645\u062A\u0643."],
+    "hi": ["\u0926\u0947\u0916 \u0932\u093F\u092F\u093E / \u0938\u092D\u0940 \u0909\u092A\u0932\u092C\u094D\u0927 \u090F\u092A\u093F\u0938\u094B\u0921 \u0926\u0947\u0916 \u0932\u093F\u090F", "\u0926\u0947\u0916\u0928\u0947 \u0915\u0940 \u0938\u094D\u0925\u093F\u0924\u093F \u0930\u0940\u092B\u093C\u094D\u0930\u0947\u0936 \u0915\u0930\u0947\u0902", "\u0926\u0947\u0916\u0928\u0947 \u0915\u0940 \u0938\u094D\u0925\u093F\u0924\u093F \u091C\u093E\u0901\u091A\u0940 \u091C\u093E \u0930\u0939\u0940 \u0939\u0948...", "{count} \u091F\u093E\u0907\u091F\u0932 \u0915\u0940 \u0938\u094D\u0925\u093F\u0924\u093F \u0909\u092A\u0932\u092C\u094D\u0927 \u0928\u0939\u0940\u0902 \u0939\u0948\u0964 \u0935\u0947 \u092E\u0941\u0916\u094D\u092F \u0938\u0942\u091A\u0940 \u092E\u0947\u0902 \u0930\u0939\u0947\u0902\u0917\u0947\u0964", "\u0906\u092A\u0928\u0947 \u0905\u092A\u0928\u0940 \u0938\u0942\u091A\u0940 \u092E\u0947\u0902 \u0938\u092C \u0915\u0941\u091B \u0926\u0947\u0916 \u0932\u093F\u092F\u093E \u0939\u0948\u0964"],
+    "th": ["\u0E14\u0E39\u0E41\u0E25\u0E49\u0E27 / \u0E14\u0E39\u0E04\u0E23\u0E1A\u0E17\u0E38\u0E01\u0E15\u0E2D\u0E19\u0E17\u0E35\u0E48\u0E21\u0E35\u0E41\u0E25\u0E49\u0E27", "\u0E23\u0E35\u0E40\u0E1F\u0E23\u0E0A\u0E2A\u0E16\u0E32\u0E19\u0E30\u0E01\u0E32\u0E23\u0E23\u0E31\u0E1A\u0E0A\u0E21", "\u0E01\u0E33\u0E25\u0E31\u0E07\u0E15\u0E23\u0E27\u0E08\u0E2A\u0E2D\u0E1A\u0E2A\u0E16\u0E32\u0E19\u0E30\u0E01\u0E32\u0E23\u0E23\u0E31\u0E1A\u0E0A\u0E21...", "\u0E44\u0E21\u0E48\u0E21\u0E35\u0E2A\u0E16\u0E32\u0E19\u0E30\u0E01\u0E32\u0E23\u0E23\u0E31\u0E1A\u0E0A\u0E21\u0E2A\u0E33\u0E2B\u0E23\u0E31\u0E1A {count} \u0E40\u0E23\u0E37\u0E48\u0E2D\u0E07 \u0E08\u0E30\u0E41\u0E2A\u0E14\u0E07\u0E43\u0E19\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E2B\u0E25\u0E31\u0E01\u0E15\u0E48\u0E2D\u0E44\u0E1B", "\u0E04\u0E38\u0E13\u0E14\u0E39\u0E17\u0E38\u0E01\u0E40\u0E23\u0E37\u0E48\u0E2D\u0E07\u0E43\u0E19\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E04\u0E23\u0E1A\u0E41\u0E25\u0E49\u0E27"],
+    "zh": ["\u5DF2\u89C2\u770B / \u5DF2\u770B\u5B8C\u73B0\u6709\u5267\u96C6", "\u5237\u65B0\u89C2\u770B\u72B6\u6001", "\u6B63\u5728\u68C0\u67E5\u89C2\u770B\u72B6\u6001...", "{count} \u90E8\u4F5C\u54C1\u7684\u89C2\u770B\u72B6\u6001\u4E0D\u53EF\u7528\u3002\u5B83\u4EEC\u5C06\u4FDD\u7559\u5728\u4E3B\u5217\u8868\u4E2D\u3002", "\u4F60\u5DF2\u770B\u5B8C\u5217\u8868\u4E2D\u7684\u6240\u6709\u5185\u5BB9\u3002"],
+    "ja": ["\u8996\u8074\u6E08\u307F / \u914D\u4FE1\u4E2D\u306E\u5168\u8A71\u3092\u8996\u8074\u6E08\u307F", "\u8996\u8074\u72B6\u6CC1\u3092\u66F4\u65B0", "\u8996\u8074\u72B6\u6CC1\u3092\u78BA\u8A8D\u4E2D...", "{count}\u4F5C\u54C1\u306E\u8996\u8074\u72B6\u6CC1\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3002\u30E1\u30A4\u30F3\u30EA\u30B9\u30C8\u306B\u8868\u793A\u3057\u307E\u3059\u3002", "\u30EA\u30B9\u30C8\u5185\u306E\u3059\u3079\u3066\u306E\u4F5C\u54C1\u3092\u8996\u8074\u6E08\u307F\u3067\u3059\u3002"],
+    "ko": ["\uC2DC\uCCAD \uC644\uB8CC / \uACF5\uAC1C\uB41C \uBAA8\uB4E0 \uD68C\uCC28 \uC2DC\uCCAD \uC644\uB8CC", "\uC2DC\uCCAD \uC0C1\uD0DC \uC0C8\uB85C\uACE0\uCE68", "\uC2DC\uCCAD \uC0C1\uD0DC \uD655\uC778 \uC911...", "{count}\uAC1C \uC791\uD488\uC758 \uC2DC\uCCAD \uC0C1\uD0DC\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uAE30\uBCF8 \uBAA9\uB85D\uC5D0 \uACC4\uC18D \uD45C\uC2DC\uB429\uB2C8\uB2E4.", "\uBAA9\uB85D\uC758 \uBAA8\uB4E0 \uC791\uD488\uC744 \uC2DC\uCCAD\uD588\uC2B5\uB2C8\uB2E4."]
+  };
+  for (const [locale, values] of Object.entries(VIEWING_UI_MESSAGES)) {
+    const keys = ["watchedCaughtUp", "refreshViewingStatus", "checkingViewingStatus", "unknownViewingStatus", "caughtUpMessage"];
+    keys.forEach((key, index) => {
+      UI_MESSAGES[locale][key] = values[index];
+    });
+  }
+  var TYPE_FILTER_UI_MESSAGES = {
+    "da": ["Film", "Serier", "Alle", "Filtrer efter titeltype", "Ingen titler matcher dette filter.", "Ukendt titeltype: {count}. V\xE6lg Alle for at se dem."],
+    "de": ["Filme", "Serien", "Alle", "Nach Titeltyp filtern", "Keine Titel passen zu diesem Filter.", "Unbekannter Titeltyp: {count}. W\xE4hle Alle, um diese Titel zu sehen."],
+    "en": ["Films", "Series", "All", "Filter by title type", "No titles match this filter.", "Type unavailable for {count} titles. Choose All to see them."],
+    "es": ["Pel\xEDculas", "Series", "Todo", "Filtrar por tipo de t\xEDtulo", "Ning\xFAn t\xEDtulo coincide con este filtro.", "Tipo desconocido: {count}. Selecciona Todo para ver esos t\xEDtulos."],
+    "fil": ["Mga pelikula", "Mga serye", "Lahat", "I-filter ayon sa uri", "Walang pamagat na tumutugma sa filter na ito.", "Hindi alam ang uri ng {count} pamagat. Piliin ang Lahat para makita ang mga ito."],
+    "fr": ["Films", "S\xE9ries", "Tout", "Filtrer par type de titre", "Aucun titre ne correspond \xE0 ce filtre.", "Type inconnu pour {count} titres. S\xE9lectionnez Tout pour les voir."],
+    "hr": ["Filmovi", "Serije", "Sve", "Filtriraj prema vrsti naslova", "Nema naslova koji odgovaraju ovom filtru.", "Nepoznata vrsta za {count} naslova. Odaberi Sve za prikaz."],
+    "id": ["Film", "Serial", "Semua", "Filter menurut jenis judul", "Tidak ada judul yang cocok dengan filter ini.", "Jenis tidak diketahui untuk {count} judul. Pilih Semua untuk melihatnya."],
+    "it": ["Film", "Serie", "Tutti", "Filtra per tipo di titolo", "Nessun titolo corrisponde a questo filtro.", "Tipo sconosciuto per {count} titoli. Seleziona Tutti per vederli."],
+    "hu": ["Filmek", "Sorozatok", "\xD6sszes", "Sz\u0171r\xE9s t\xEDpus szerint", "Egyetlen c\xEDm sem felel meg ennek a sz\u0171r\u0151nek.", "Ismeretlen t\xEDpus: {count}. Megjelen\xEDt\xE9s\xFCkh\xF6z v\xE1laszd az \xD6sszes lehet\u0151s\xE9get."],
+    "ms": ["Filem", "Siri", "Semua", "Tapis mengikut jenis tajuk", "Tiada tajuk sepadan dengan penapis ini.", "Jenis tidak diketahui untuk {count} tajuk. Pilih Semua untuk melihatnya."],
+    "nl": ["Films", "Series", "Alles", "Filteren op titeltype", "Geen titels passen bij dit filter.", "Onbekend type voor {count} titels. Kies Alles om ze te zien."],
+    "nb": ["Filmer", "Serier", "Alle", "Filtrer etter titteltype", "Ingen titler passer til dette filteret.", "Ukjent type for {count} titler. Velg Alle for \xE5 se dem."],
+    "pl": ["Filmy", "Seriale", "Wszystko", "Filtruj wed\u0142ug typu", "\u017Baden tytu\u0142 nie pasuje do tego filtra.", "Nieznany typ: {count}. Wybierz Wszystko, aby zobaczy\u0107 te tytu\u0142y."],
+    "pt": ["Filmes", "S\xE9ries", "Tudo", "Filtrar por tipo de t\xEDtulo", "Nenhum t\xEDtulo corresponde a este filtro.", "Tipo desconhecido para {count} t\xEDtulos. Selecione Tudo para v\xEA-los."],
+    "ro": ["Filme", "Seriale", "Toate", "Filtreaz\u0103 dup\u0103 tip", "Niciun titlu nu corespunde acestui filtru.", "Tip necunoscut pentru {count} titluri. Selecteaz\u0103 Toate pentru a le vedea."],
+    "fi": ["Elokuvat", "Sarjat", "Kaikki", "Suodata nimikkeen tyypin mukaan", "Yksik\xE4\xE4n nimike ei vastaa t\xE4t\xE4 suodatinta.", "Tuntematon tyyppi: {count}. N\xE4et n\xE4m\xE4 nimikkeet valitsemalla Kaikki."],
+    "sv": ["Filmer", "Serier", "Alla", "Filtrera efter titeltyp", "Inga titlar matchar detta filter.", "Ok\xE4nd typ f\xF6r {count} titlar. V\xE4lj Alla f\xF6r att se dem."],
+    "vi": ["Phim", "Lo\u1EA1t phim", "T\u1EA5t c\u1EA3", "L\u1ECDc theo lo\u1EA1i n\u1ED9i dung", "Kh\xF4ng c\xF3 n\u1ED9i dung n\xE0o ph\xF9 h\u1EE3p v\u1EDBi b\u1ED9 l\u1ECDc n\xE0y.", "Kh\xF4ng r\xF5 lo\u1EA1i c\u1EE7a {count} n\u1ED9i dung. Ch\u1ECDn T\u1EA5t c\u1EA3 \u0111\u1EC3 xem."],
+    "tr": ["Filmler", "Diziler", "T\xFCm\xFC", "\u0130\xE7erik t\xFCr\xFCne g\xF6re filtrele", "Bu filtreye uygun i\xE7erik yok.", "T\xFCr\xFC bilinmeyen i\xE7erik: {count}. G\xF6rmek i\xE7in T\xFCm\xFC se\xE7ene\u011Fini se\xE7in."],
+    "cs": ["Filmy", "Seri\xE1ly", "V\u0161e", "Filtrovat podle typu", "Tomuto filtru neodpov\xEDd\xE1 \u017E\xE1dn\xFD titul.", "Nezn\xE1m\xFD typ: {count}. Pro zobrazen\xED t\u011Bchto titul\u016F vyberte V\u0161e."],
+    "el": ["\u03A4\u03B1\u03B9\u03BD\u03AF\u03B5\u03C2", "\u03A3\u03B5\u03B9\u03C1\u03AD\u03C2", "\u038C\u03BB\u03B1", "\u03A6\u03B9\u03BB\u03C4\u03C1\u03AC\u03C1\u03B9\u03C3\u03BC\u03B1 \u03B1\u03BD\u03AC \u03C4\u03CD\u03C0\u03BF \u03C4\u03AF\u03C4\u03BB\u03BF\u03C5", "\u039A\u03B1\u03BD\u03AD\u03BD\u03B1\u03C2 \u03C4\u03AF\u03C4\u03BB\u03BF\u03C2 \u03B4\u03B5\u03BD \u03B1\u03BD\u03C4\u03B9\u03C3\u03C4\u03BF\u03B9\u03C7\u03B5\u03AF \u03C3\u03B5 \u03B1\u03C5\u03C4\u03CC \u03C4\u03BF \u03C6\u03AF\u03BB\u03C4\u03C1\u03BF.", "\u0386\u03B3\u03BD\u03C9\u03C3\u03C4\u03BF\u03C2 \u03C4\u03CD\u03C0\u03BF\u03C2 \u03B3\u03B9\u03B1 {count} \u03C4\u03AF\u03C4\u03BB\u03BF\u03C5\u03C2. \u0395\u03C0\u03B9\u03BB\u03AD\u03BE\u03C4\u03B5 \u038C\u03BB\u03B1 \u03B3\u03B9\u03B1 \u03BD\u03B1 \u03C4\u03BF\u03C5\u03C2 \u03B4\u03B5\u03AF\u03C4\u03B5."],
+    "ru": ["\u0424\u0438\u043B\u044C\u043C\u044B", "\u0421\u0435\u0440\u0438\u0430\u043B\u044B", "\u0412\u0441\u0435", "\u0424\u0438\u043B\u044C\u0442\u0440 \u043F\u043E \u0442\u0438\u043F\u0443", "\u041D\u0435\u0442 \u043F\u0440\u043E\u0438\u0437\u0432\u0435\u0434\u0435\u043D\u0438\u0439, \u0441\u043E\u043E\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u044E\u0449\u0438\u0445 \u044D\u0442\u043E\u043C\u0443 \u0444\u0438\u043B\u044C\u0442\u0440\u0443.", "\u041D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u044B\u0439 \u0442\u0438\u043F: {count}. \u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0412\u0441\u0435, \u0447\u0442\u043E\u0431\u044B \u0438\u0445 \u0443\u0432\u0438\u0434\u0435\u0442\u044C."],
+    "uk": ["\u0424\u0456\u043B\u044C\u043C\u0438", "\u0421\u0435\u0440\u0456\u0430\u043B\u0438", "\u0423\u0441\u0456", "\u0424\u0456\u043B\u044C\u0442\u0440 \u0437\u0430 \u0442\u0438\u043F\u043E\u043C", "\u041D\u0435\u043C\u0430\u0454 \u043D\u0430\u0439\u043C\u0435\u043D\u0443\u0432\u0430\u043D\u044C, \u0449\u043E \u0432\u0456\u0434\u043F\u043E\u0432\u0456\u0434\u0430\u044E\u0442\u044C \u0446\u044C\u043E\u043C\u0443 \u0444\u0456\u043B\u044C\u0442\u0440\u0443.", "\u041D\u0435\u0432\u0456\u0434\u043E\u043C\u0438\u0439 \u0442\u0438\u043F: {count}. \u0412\u0438\u0431\u0435\u0440\u0456\u0442\u044C \u0423\u0441\u0456, \u0449\u043E\u0431 \u0457\u0445 \u043F\u043E\u0431\u0430\u0447\u0438\u0442\u0438."],
+    "he": ["\u05E1\u05E8\u05D8\u05D9\u05DD", "\u05E1\u05D3\u05E8\u05D5\u05EA", "\u05D4\u05DB\u05D5\u05DC", "\u05E1\u05D9\u05E0\u05D5\u05DF \u05DC\u05E4\u05D9 \u05E1\u05D5\u05D2 \u05DB\u05D5\u05EA\u05E8", "\u05D0\u05D9\u05DF \u05DB\u05D5\u05EA\u05E8\u05D9\u05DD \u05D4\u05EA\u05D5\u05D0\u05DE\u05D9\u05DD \u05DC\u05DE\u05E1\u05E0\u05DF \u05D4\u05D6\u05D4.", "\u05E1\u05D5\u05D2 \u05DC\u05D0 \u05D9\u05D3\u05D5\u05E2 \u05E2\u05D1\u05D5\u05E8 {count} \u05DB\u05D5\u05EA\u05E8\u05D9\u05DD. \u05D1\u05D7\u05E8\u05D5 \u05D4\u05DB\u05D5\u05DC \u05DB\u05D3\u05D9 \u05DC\u05E8\u05D0\u05D5\u05EA \u05D0\u05D5\u05EA\u05DD."],
+    "ar": ["\u0623\u0641\u0644\u0627\u0645", "\u0645\u0633\u0644\u0633\u0644\u0627\u062A", "\u0627\u0644\u0643\u0644", "\u062A\u0635\u0641\u064A\u0629 \u062D\u0633\u0628 \u0646\u0648\u0639 \u0627\u0644\u0639\u0646\u0648\u0627\u0646", "\u0644\u0627 \u062A\u0648\u062C\u062F \u0639\u0646\u0627\u0648\u064A\u0646 \u062A\u0637\u0627\u0628\u0642 \u0647\u0630\u0627 \u0627\u0644\u0641\u0644\u062A\u0631.", "\u0646\u0648\u0639 \u063A\u064A\u0631 \u0645\u0639\u0631\u0648\u0641 \u0644\u0640 {count} \u0639\u0646\u0648\u0627\u0646\u064B\u0627. \u0627\u062E\u062A\u0631 \u0627\u0644\u0643\u0644 \u0644\u0639\u0631\u0636\u0647\u0627."],
+    "hi": ["\u092B\u093C\u093F\u0932\u094D\u092E\u0947\u0902", "\u0938\u0940\u0930\u0940\u091C\u093C", "\u0938\u092D\u0940", "\u091F\u093E\u0907\u091F\u0932 \u0915\u0947 \u092A\u094D\u0930\u0915\u093E\u0930 \u0938\u0947 \u092B\u093C\u093F\u0932\u094D\u091F\u0930 \u0915\u0930\u0947\u0902", "\u0907\u0938 \u092B\u093C\u093F\u0932\u094D\u091F\u0930 \u0938\u0947 \u0915\u094B\u0908 \u091F\u093E\u0907\u091F\u0932 \u092E\u0947\u0932 \u0928\u0939\u0940\u0902 \u0916\u093E\u0924\u093E.", "{count} \u091F\u093E\u0907\u091F\u0932 \u0915\u093E \u092A\u094D\u0930\u0915\u093E\u0930 \u0909\u092A\u0932\u092C\u094D\u0927 \u0928\u0939\u0940\u0902 \u0939\u0948. \u0907\u0928\u094D\u0939\u0947\u0902 \u0926\u0947\u0916\u0928\u0947 \u0915\u0947 \u0932\u093F\u090F \u0938\u092D\u0940 \u091A\u0941\u0928\u0947\u0902."],
+    "th": ["\u0E20\u0E32\u0E1E\u0E22\u0E19\u0E15\u0E23\u0E4C", "\u0E0B\u0E35\u0E23\u0E35\u0E2A\u0E4C", "\u0E17\u0E31\u0E49\u0E07\u0E2B\u0E21\u0E14", "\u0E01\u0E23\u0E2D\u0E07\u0E15\u0E32\u0E21\u0E1B\u0E23\u0E30\u0E40\u0E20\u0E17\u0E40\u0E19\u0E37\u0E49\u0E2D\u0E2B\u0E32", "\u0E44\u0E21\u0E48\u0E21\u0E35\u0E40\u0E19\u0E37\u0E49\u0E2D\u0E2B\u0E32\u0E17\u0E35\u0E48\u0E15\u0E23\u0E07\u0E01\u0E31\u0E1A\u0E15\u0E31\u0E27\u0E01\u0E23\u0E2D\u0E07\u0E19\u0E35\u0E49", "\u0E44\u0E21\u0E48\u0E17\u0E23\u0E32\u0E1A\u0E1B\u0E23\u0E30\u0E40\u0E20\u0E17\u0E02\u0E2D\u0E07\u0E40\u0E19\u0E37\u0E49\u0E2D\u0E2B\u0E32 {count} \u0E40\u0E23\u0E37\u0E48\u0E2D\u0E07 \u0E40\u0E25\u0E37\u0E2D\u0E01\u0E17\u0E31\u0E49\u0E07\u0E2B\u0E21\u0E14\u0E40\u0E1E\u0E37\u0E48\u0E2D\u0E14\u0E39"],
+    "zh": ["\u7535\u5F71", "\u5267\u96C6", "\u5168\u90E8", "\u6309\u4F5C\u54C1\u7C7B\u578B\u7B5B\u9009", "\u6CA1\u6709\u7B26\u5408\u6B64\u7B5B\u9009\u6761\u4EF6\u7684\u4F5C\u54C1\u3002", "{count} \u90E8\u4F5C\u54C1\u7684\u7C7B\u578B\u4E0D\u660E\u3002\u9009\u62E9\u5168\u90E8\u4EE5\u67E5\u770B\u3002"],
+    "ja": ["\u6620\u753B", "\u30B7\u30EA\u30FC\u30BA", "\u3059\u3079\u3066", "\u4F5C\u54C1\u306E\u7A2E\u985E\u3067\u7D5E\u308A\u8FBC\u3080", "\u3053\u306E\u6761\u4EF6\u306B\u5408\u3046\u4F5C\u54C1\u306F\u3042\u308A\u307E\u305B\u3093\u3002", "{count}\u4F5C\u54C1\u306E\u7A2E\u985E\u304C\u4E0D\u660E\u3067\u3059\u3002\u3059\u3079\u3066\u3092\u9078\u629E\u3059\u308B\u3068\u8868\u793A\u3067\u304D\u307E\u3059\u3002"],
+    "ko": ["\uC601\uD654", "\uC2DC\uB9AC\uC988", "\uC804\uCCB4", "\uC791\uD488 \uC720\uD615\uBCC4 \uD544\uD130", "\uC774 \uD544\uD130\uC5D0 \uB9DE\uB294 \uC791\uD488\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.", "\uC720\uD615\uC744 \uC54C \uC218 \uC5C6\uB294 \uC791\uD488\uC774 {count}\uAC1C \uC788\uC2B5\uB2C8\uB2E4. \uC804\uCCB4\uB97C \uC120\uD0DD\uD558\uBA74 \uBCFC \uC218 \uC788\uC2B5\uB2C8\uB2E4."]
+  };
+  for (const [locale, values] of Object.entries(TYPE_FILTER_UI_MESSAGES)) {
+    const keys = ["filterFilms", "filterSeries", "filterAll", "titleTypeFilter", "noMatchingTitles", "unknownTitleTypes"];
+    keys.forEach((key, index) => {
+      UI_MESSAGES[locale][key] = values[index];
+    });
+  }
+  var MANUAL_VIEWING_UI_MESSAGES = {
+    "da": ["Mark\xE9r som set", "Mark\xE9r som ajour", "Tilbage til Min liste", "Manuel", "Kunne ikke gemme visningsvalg. Genindl\xE6s og pr\xF8v igen.", "Placeret her af dig"],
+    "de": ["Als gesehen markieren", "Als aufgeholt markieren", "Zur\xFCck zu Meine Liste", "Manuell", "Auswahl konnte nicht gespeichert werden. Neu laden und erneut versuchen.", "Von dir hier eingeordnet"],
+    "en": ["Mark watched", "Mark caught up", "Move back to My List", "Manual", "Could not save viewing choices. Reload and try again.", "Placed here by you"],
+    "es": ["Marcar como visto", "Marcar como al d\xEDa", "Volver a Mi lista", "Manual", "No se pudieron guardar tus cambios. Recarga e int\xE9ntalo de nuevo.", "Colocado aqu\xED por ti"],
+    "fil": ["Markahang napanood", "Markahang napapanahon", "Ibalik sa Listahan Ko", "Manu-mano", "Hindi ma-save ang mga pagbabago. I-reload at subukan muli.", "Ikaw ang naglagay dito"],
+    "fr": ["Marquer comme vu", "Marquer comme \xE0 jour", "Remettre dans Ma liste", "Manuel", "Impossible d\u2019enregistrer les choix. Rechargez et r\xE9essayez.", "Plac\xE9 ici par vous"],
+    "hr": ["Ozna\u010Di kao pogledano", "Ozna\u010Di sve kao pogledano", "Vrati na Moj popis", "Ru\u010Dno", "Nije mogu\u0107e spremiti odabire. Ponovno u\u010Ditaj i poku\u0161aj.", "Vi ste ovo ovdje premjestili"],
+    "id": ["Tandai sudah ditonton", "Tandai sudah mengikuti", "Kembali ke Daftar Saya", "Manual", "Pilihan tidak dapat disimpan. Muat ulang dan coba lagi.", "Ditempatkan di sini oleh Anda"],
+    "it": ["Segna come visto", "Segna come in pari", "Riporta in La mia lista", "Manuale", "Impossibile salvare le scelte. Ricarica e riprova.", "Spostato qui da te"],
+    "hu": ["Megn\xE9zettnek jel\xF6l\xE9s", "Naprak\xE9sznek jel\xF6l\xE9s", "Vissza a Saj\xE1t list\xE1mra", "K\xE9zi", "A v\xE1laszt\xE1sok ment\xE9se sikertelen. T\xF6ltsd \xFAjra \xE9s pr\xF3b\xE1ld meg ism\xE9t.", "Te helyezted ide"],
+    "ms": ["Tandakan sudah ditonton", "Tandakan sudah mengikuti", "Kembali ke Senarai Saya", "Manual", "Pilihan tidak dapat disimpan. Muat semula dan cuba lagi.", "Diletakkan di sini oleh anda"],
+    "nl": ["Markeer als bekeken", "Markeer als bijgewerkt", "Terug naar Mijn lijst", "Handmatig", "Keuzes konden niet worden opgeslagen. Herlaad en probeer opnieuw.", "Door jou hier geplaatst"],
+    "nb": ["Merk som sett", "Merk som \xE0 jour", "Tilbake til Min liste", "Manuelt", "Kunne ikke lagre valgene. Last inn p\xE5 nytt og pr\xF8v igjen.", "Plassert her av deg"],
+    "pl": ["Oznacz jako obejrzane", "Oznacz jako na bie\u017C\u0105co", "Przenie\u015B do Mojej listy", "R\u0119cznie", "Nie uda\u0142o si\u0119 zapisa\u0107 wybor\xF3w. Od\u015Bwie\u017C i spr\xF3buj ponownie.", "Umieszczone tutaj przez Ciebie"],
+    "pt": ["Marcar como visto", "Marcar como atualizado", "Voltar para Minha lista", "Manual", "N\xE3o foi poss\xEDvel salvar as escolhas. Recarregue e tente novamente.", "Colocado aqui por voc\xEA"],
+    "ro": ["Marcheaz\u0103 ca vizionat", "Marcheaz\u0103 ca la zi", "\xCEnapoi \xEEn Lista mea", "Manual", "Nu s-au putut salva alegerile. Re\xEEncarc\u0103 \u0219i \xEEncearc\u0103 din nou.", "Plasat aici de tine"],
+    "fi": ["Merkitse katsotuksi", "Merkitse ajan tasalla olevaksi", "Takaisin Omaan listaan", "K\xE4sin", "Valintoja ei voitu tallentaa. Lataa uudelleen ja yrit\xE4 uudestaan.", "Sin\xE4 sijoitit t\xE4m\xE4n t\xE4nne"],
+    "sv": ["Markera som sedd", "Markera som ikapp", "Tillbaka till Min lista", "Manuellt", "Kunde inte spara valen. Ladda om och f\xF6rs\xF6k igen.", "Placerad h\xE4r av dig"],
+    "vi": ["\u0110\xE1nh d\u1EA5u \u0111\xE3 xem", "\u0110\xE1nh d\u1EA5u \u0111\xE3 xem h\u1EBFt", "Tr\u1EDF l\u1EA1i Danh s\xE1ch c\u1EE7a t\xF4i", "Th\u1EE7 c\xF4ng", "Kh\xF4ng th\u1EC3 l\u01B0u l\u1EF1a ch\u1ECDn. T\u1EA3i l\u1EA1i v\xE0 th\u1EED l\u1EA1i.", "B\u1EA1n \u0111\xE3 chuy\u1EC3n n\u1ED9i dung n\xE0y v\xE0o \u0111\xE2y"],
+    "tr": ["\u0130zlendi olarak i\u015Faretle", "G\xFCncel olarak i\u015Faretle", "Listeme geri ta\u015F\u0131", "Manuel", "Se\xE7imler kaydedilemedi. Yeniden y\xFCkleyip tekrar dene.", "Buraya sen yerle\u015Ftirdin"],
+    "cs": ["Ozna\u010Dit jako zhl\xE9dnut\xE9", "Ozna\u010Dit jako dokoukan\xE9", "Zp\u011Bt do M\xE9ho seznamu", "Ru\u010Dn\u011B", "Volby nelze ulo\u017Eit. Na\u010Dti str\xE1nku znovu a zkus to znovu.", "Sem jste titul p\u0159esunuli vy"],
+    "el": ["\u03A3\u03AE\u03BC\u03B1\u03BD\u03C3\u03B7 \u03C9\u03C2 \u03C0\u03C1\u03BF\u03B2\u03BB\u03B7\u03B8\u03AD\u03BD", "\u03A3\u03AE\u03BC\u03B1\u03BD\u03C3\u03B7 \u03C9\u03C2 \u03B5\u03BD\u03B7\u03BC\u03B5\u03C1\u03C9\u03BC\u03AD\u03BD\u03BF", "\u0395\u03C0\u03B9\u03C3\u03C4\u03C1\u03BF\u03C6\u03AE \u03C3\u03C4\u03B7 \u039B\u03AF\u03C3\u03C4\u03B1 \u03BC\u03BF\u03C5", "\u03A7\u03B5\u03B9\u03C1\u03BF\u03BA\u03AF\u03BD\u03B7\u03C4\u03B1", "\u0394\u03B5\u03BD \u03B1\u03C0\u03BF\u03B8\u03B7\u03BA\u03B5\u03CD\u03C4\u03B7\u03BA\u03B1\u03BD \u03BF\u03B9 \u03B5\u03C0\u03B9\u03BB\u03BF\u03B3\u03AD\u03C2. \u0391\u03BD\u03B1\u03BD\u03B5\u03CE\u03C3\u03C4\u03B5 \u03BA\u03B1\u03B9 \u03B4\u03BF\u03BA\u03B9\u03BC\u03AC\u03C3\u03C4\u03B5 \u03BE\u03B1\u03BD\u03AC.", "\u03A4\u03BF\u03C0\u03BF\u03B8\u03B5\u03C4\u03AE\u03B8\u03B7\u03BA\u03B5 \u03B5\u03B4\u03CE \u03B1\u03C0\u03CC \u03B5\u03C3\u03AC\u03C2"],
+    "ru": ["\u041E\u0442\u043C\u0435\u0442\u0438\u0442\u044C \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0435\u043D\u043D\u044B\u043C", "\u041E\u0442\u043C\u0435\u0442\u0438\u0442\u044C \u0432\u0441\u0435 \u0441\u0435\u0440\u0438\u0438 \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0435\u043D\u043D\u044B\u043C\u0438", "\u0412\u0435\u0440\u043D\u0443\u0442\u044C \u0432 \u041C\u043E\u0439 \u0441\u043F\u0438\u0441\u043E\u043A", "\u0412\u0440\u0443\u0447\u043D\u0443\u044E", "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u0432\u044B\u0431\u043E\u0440. \u041F\u0435\u0440\u0435\u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u0435 \u0441\u0442\u0440\u0430\u043D\u0438\u0446\u0443 \u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435.", "\u0412\u044B \u043F\u043E\u043C\u0435\u0441\u0442\u0438\u043B\u0438 \u044D\u0442\u043E \u0441\u044E\u0434\u0430"],
+    "uk": ["\u041F\u043E\u0437\u043D\u0430\u0447\u0438\u0442\u0438 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u043D\u0443\u0442\u0438\u043C", "\u041F\u043E\u0437\u043D\u0430\u0447\u0438\u0442\u0438 \u0432\u0441\u0456 \u0441\u0435\u0440\u0456\u0457 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u043D\u0443\u0442\u0438\u043C\u0438", "\u041F\u043E\u0432\u0435\u0440\u043D\u0443\u0442\u0438 \u0434\u043E \u041C\u043E\u0433\u043E \u0441\u043F\u0438\u0441\u043A\u0443", "\u0412\u0440\u0443\u0447\u043D\u0443", "\u041D\u0435 \u0432\u0434\u0430\u043B\u043E\u0441\u044F \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438 \u0432\u0438\u0431\u0456\u0440. \u041F\u0435\u0440\u0435\u0437\u0430\u0432\u0430\u043D\u0442\u0430\u0436\u0442\u0435 \u0439 \u043F\u043E\u0432\u0442\u043E\u0440\u0456\u0442\u044C.", "\u0412\u0438 \u043F\u043E\u043C\u0456\u0441\u0442\u0438\u043B\u0438 \u0446\u0435 \u0441\u044E\u0434\u0438"],
+    "he": ["\u05E1\u05D9\u05DE\u05D5\u05DF \u05DB\u05E0\u05E6\u05E4\u05D4", "\u05E1\u05D9\u05DE\u05D5\u05DF \u05DB\u05DC \u05D4\u05E4\u05E8\u05E7\u05D9\u05DD \u05DB\u05E0\u05E6\u05E4\u05D5", "\u05D7\u05D6\u05E8\u05D4 \u05DC\u05E8\u05E9\u05D9\u05DE\u05D4 \u05E9\u05DC\u05D9", "\u05D9\u05D3\u05E0\u05D9", "\u05DC\u05D0 \u05E0\u05D9\u05EA\u05DF \u05DC\u05E9\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D4\u05D1\u05D7\u05D9\u05E8\u05D5\u05EA. \u05D9\u05E9 \u05DC\u05D8\u05E2\u05D5\u05DF \u05DE\u05D7\u05D3\u05E9 \u05D5\u05DC\u05E0\u05E1\u05D5\u05EA \u05E9\u05D5\u05D1.", "\u05D4\u05D5\u05E2\u05D1\u05E8 \u05DC\u05DB\u05D0\u05DF \u05E2\u05DC \u05D9\u05D3\u05DA"],
+    "ar": ["\u062A\u062D\u062F\u064A\u062F \u0643\u0645\u064F\u0634\u0627\u0647\u062F", "\u062A\u062D\u062F\u064A\u062F \u0643\u0645\u064F\u062A\u0627\u0628\u064E\u0639 \u0628\u0627\u0644\u0643\u0627\u0645\u0644", "\u0625\u0639\u0627\u062F\u0629 \u0625\u0644\u0649 \u0642\u0627\u0626\u0645\u062A\u064A", "\u064A\u062F\u0648\u064A", "\u062A\u0639\u0630\u0631 \u062D\u0641\u0638 \u0627\u0644\u0627\u062E\u062A\u064A\u0627\u0631\u0627\u062A. \u0623\u0639\u062F \u0627\u0644\u062A\u062D\u0645\u064A\u0644 \u0648\u062D\u0627\u0648\u0644 \u0645\u062C\u062F\u062F\u064B\u0627.", "\u0648\u0636\u0639\u062A \u0647\u0630\u0627 \u0627\u0644\u0639\u0646\u0648\u0627\u0646 \u0647\u0646\u0627"],
+    "hi": ["\u0926\u0947\u0916\u093E \u0939\u0941\u0906 \u091A\u093F\u0939\u094D\u0928\u093F\u0924 \u0915\u0930\u0947\u0902", "\u0938\u092D\u0940 \u0909\u092A\u0932\u092C\u094D\u0927 \u090F\u092A\u093F\u0938\u094B\u0921 \u0926\u0947\u0916\u0947 \u091A\u093F\u0939\u094D\u0928\u093F\u0924 \u0915\u0930\u0947\u0902", "\u092E\u0947\u0930\u0940 \u0932\u093F\u0938\u094D\u091F \u092E\u0947\u0902 \u0935\u093E\u092A\u0938 \u0930\u0916\u0947\u0902", "\u092E\u0948\u0928\u094D\u092F\u0941\u0905\u0932", "\u091A\u0941\u0928\u093E\u0935 \u0938\u0939\u0947\u091C\u0947 \u0928\u0939\u0940\u0902 \u091C\u093E \u0938\u0915\u0947\u0964 \u092B\u093F\u0930 \u0938\u0947 \u0932\u094B\u0921 \u0915\u0930\u0915\u0947 \u092A\u094D\u0930\u092F\u093E\u0938 \u0915\u0930\u0947\u0902\u0964", "\u0906\u092A\u0928\u0947 \u0907\u0938\u0947 \u092F\u0939\u093E\u0901 \u0930\u0916\u093E \u0939\u0948"],
+    "th": ["\u0E17\u0E33\u0E40\u0E04\u0E23\u0E37\u0E48\u0E2D\u0E07\u0E2B\u0E21\u0E32\u0E22\u0E27\u0E48\u0E32\u0E14\u0E39\u0E41\u0E25\u0E49\u0E27", "\u0E17\u0E33\u0E40\u0E04\u0E23\u0E37\u0E48\u0E2D\u0E07\u0E2B\u0E21\u0E32\u0E22\u0E27\u0E48\u0E32\u0E14\u0E39\u0E04\u0E23\u0E1A\u0E41\u0E25\u0E49\u0E27", "\u0E22\u0E49\u0E32\u0E22\u0E01\u0E25\u0E31\u0E1A\u0E44\u0E1B\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E02\u0E2D\u0E07\u0E09\u0E31\u0E19", "\u0E01\u0E33\u0E2B\u0E19\u0E14\u0E40\u0E2D\u0E07", "\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E15\u0E31\u0E27\u0E40\u0E25\u0E37\u0E2D\u0E01\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49 \u0E42\u0E2B\u0E25\u0E14\u0E43\u0E2B\u0E21\u0E48\u0E41\u0E25\u0E49\u0E27\u0E25\u0E2D\u0E07\u0E2D\u0E35\u0E01\u0E04\u0E23\u0E31\u0E49\u0E07", "\u0E04\u0E38\u0E13\u0E22\u0E49\u0E32\u0E22\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E19\u0E35\u0E49\u0E21\u0E32\u0E44\u0E27\u0E49\u0E17\u0E35\u0E48\u0E19\u0E35\u0E48"],
+    "zh": ["\u6807\u8BB0\u4E3A\u5DF2\u89C2\u770B", "\u6807\u8BB0\u4E3A\u5DF2\u770B\u5B8C\u73B0\u6709\u5267\u96C6", "\u79FB\u56DE\u6211\u7684\u7247\u5355", "\u624B\u52A8", "\u65E0\u6CD5\u4FDD\u5B58\u9009\u62E9\u3002\u8BF7\u91CD\u65B0\u52A0\u8F7D\u540E\u518D\u8BD5\u3002", "\u7531\u4F60\u79FB\u5230\u6B64\u5904"],
+    "ja": ["\u8996\u8074\u6E08\u307F\u306B\u3059\u308B", "\u914D\u4FE1\u4E2D\u306E\u5168\u8A71\u3092\u8996\u8074\u6E08\u307F\u306B\u3059\u308B", "\u30DE\u30A4\u30EA\u30B9\u30C8\u306B\u623B\u3059", "\u624B\u52D5", "\u9078\u629E\u3092\u4FDD\u5B58\u3067\u304D\u307E\u305B\u3093\u3002\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002", "\u3042\u306A\u305F\u304C\u3053\u3053\u306B\u79FB\u52D5\u3057\u307E\u3057\u305F"],
+    "ko": ["\uC2DC\uCCAD \uC644\uB8CC\uB85C \uD45C\uC2DC", "\uACF5\uAC1C\uB41C \uBAA8\uB4E0 \uD68C\uCC28 \uC2DC\uCCAD \uC644\uB8CC\uB85C \uD45C\uC2DC", "\uB0B4\uAC00 \uCC1C\uD55C \uB9AC\uC2A4\uD2B8\uB85C \uC774\uB3D9", "\uC218\uB3D9", "\uC120\uD0DD\uC744 \uC800\uC7A5\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uC0C8\uB85C\uACE0\uCE68 \uD6C4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.", "\uC9C1\uC811 \uC774 \uBAA9\uB85D\uC73C\uB85C \uC774\uB3D9\uD55C \uC791\uD488"]
+  };
+  for (const [locale, values] of Object.entries(MANUAL_VIEWING_UI_MESSAGES)) {
+    const keys = [
+      "markWatched",
+      "markCaughtUp",
+      "moveBackToMyList",
+      "manualViewingChoice",
+      "viewingChoiceStorageFailed",
+      "manualViewingChoiceDescription"
+    ];
+    keys.forEach((key, index) => {
+      UI_MESSAGES[locale][key] = values[index];
+    });
+  }
+
+  // src/i18n/log-messages.js
+  var LOG_MESSAGES = {
+    viewingStatusStarted: { en: "Viewing status collection started", ja: "\u8996\u8074\u72B6\u6CC1\u306E\u53D6\u5F97\u958B\u59CB" },
+    viewingStatusCompleted: { en: "Viewing status collection completed", ja: "\u8996\u8074\u72B6\u6CC1\u306E\u53D6\u5F97\u5B8C\u4E86" },
+    viewingStatusUnavailable: { en: "Viewing status unavailable; uncertain titles stay visible", ja: "\u8996\u8074\u72B6\u6CC1\u4E0D\u660E\u306E\u4F5C\u54C1\u306F\u8868\u793A\u3092\u7D99\u7D9A" },
+    undoEntriesExpired: { en: "Expired Undo entries released", ja: "\u671F\u9650\u5207\u308C\u306EUndo\u9805\u76EE\u3092\u89E3\u653E" },
+    targetSessionSuspended: { en: "Target session suspended", ja: "\u5BFE\u8C61\u30BB\u30C3\u30B7\u30E7\u30F3\u4E2D\u65AD" },
+    targetSessionStarted: { en: "Target session started", ja: "\u5BFE\u8C61\u30BB\u30C3\u30B7\u30E7\u30F3\u958B\u59CB" },
+    routeChangeDetected: { en: "Route change detected", ja: "\u30DA\u30FC\u30B8\u9077\u79FB\u691C\u51FA" },
+    clipboardFallback: { en: "Clipboard API failed; using fallback", ja: "\u30AF\u30EA\u30C3\u30D7\u30DC\u30FC\u30C9API\u306B\u5931\u6557\u3002fallback\u3078\u79FB\u884C" },
+    execCommandCopyFailed: { en: "execCommand(copy) failed.", ja: "execCommand(copy) \u304C\u5931\u6557\u3057\u307E\u3057\u305F\u3002" },
+    copyLogsTooltip: { en: "Copy the My List for Netflix log to the clipboard", ja: "\u30AF\u30EA\u30C3\u30D7\u30DC\u30FC\u30C9\u306BMy List for Netflix\u306E\u30ED\u30B0\u3092\u30B3\u30D4\u30FC\u3057\u307E\u3059" },
+    copied: { en: "Copied.", ja: "\u30B3\u30D4\u30FC\u3057\u307E\u3057\u305F\u3002" },
+    copyLogsRequested: { en: "CopyLogs requested", ja: "CopyLogs\u8981\u6C42" },
+    copyLogsCompleted: { en: "CopyLogs completed", ja: "CopyLogs\u5B8C\u4E86" },
+    copyLogsFailed: { en: "CopyLogs failed", ja: "CopyLogs\u5931\u6557" },
+    viewingChoiceApplied: { en: "Manual viewing choice applied", ja: "\u624B\u52D5\u306E\u8996\u8074\u72B6\u614B\u3092\u9069\u7528" },
+    nativeInitializationRecovered: { en: "Retrying initialization with a verified native-source replacement", ja: "\u7D14\u6B63\u30BD\u30FC\u30B9\u306E\u7F6E\u63DB\u3092\u78BA\u8A8D\u3057\u521D\u671F\u5316\u3092\u518D\u8A66\u884C" },
+    nativeInitializationRecoveryExhausted: { en: "Native initialization replacement recovery exhausted", ja: "\u7D14\u6B63\u30BD\u30FC\u30B9\u7F6E\u63DB\u306E\u521D\u671F\u5316\u518D\u8A66\u884C\u4E0A\u9650" },
+    sourceAlignmentRestoreFailed: { en: "Native source geometry restoration failed", ja: "\u7D14\u6B63\u30BD\u30FC\u30B9\u5EA7\u6A19\u306E\u5FA9\u5143\u306B\u5931\u6557" },
+    emptyLegacyListFinalized: { en: "Empty legacy list finalized", ja: "\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8 0\u4EF6\u3092\u78BA\u5B9A" },
+    totalCountDetected: { en: "totalCount detected", ja: "totalCount\u53D6\u5F97" },
+    legacyFrameMovedToEmptyAnchor: { en: "Legacy frame moved to empty anchor", ja: "\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8\u3092\u7A7A\u30A2\u30F3\u30AB\u30FC\u3078\u79FB\u52D5" },
+    nativeMyListSourceAdoptedWithoutRescan: { en: "Native My List source adopted without rescan", ja: "\u7D14\u6B63\u30DE\u30A4\u30EA\u30B9\u30C8\u5143\u3092\u518D\u8D70\u67FB\u306A\u3057\u3067\u63A1\u7528" },
+    populatedNativeMyListDetectedAfterEmpty: { en: "Populated native My List detected after empty finalization; restarting initialization", ja: "\u7A7A\u78BA\u5B9A\u5F8C\u306B\u4F5C\u54C1\u3042\u308A\u306E\u7D14\u6B63\u30DE\u30A4\u30EA\u30B9\u30C8\u3092\u691C\u51FA\u3002\u521D\u671F\u5316\u3092\u518D\u958B" },
+    nativeEmptyMyListSectionAdopted: { en: "Native empty My List section adopted", ja: "\u7A7A\u306E\u7D14\u6B63\u30DE\u30A4\u30EA\u30B9\u30C8\u4F4D\u7F6E\u3092\u63A1\u7528" },
+    legacyItemRemovedByDifferentialUpdate: { en: "Legacy item removed by differential update", ja: "\u5DEE\u5206\u66F4\u65B0\u3067\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8\u304B\u3089\u524A\u9664" },
+    legacyItemAddedByDifferentialUpdate: { en: "Legacy item added by differential update", ja: "\u5DEE\u5206\u66F4\u65B0\u3067\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8\u3078\u8FFD\u52A0" },
+    legacyVisibleOrderAligned: { en: "Legacy visible order aligned", ja: "\u65E7\u30DE\u30A4\u30EA\u30B9\u30C8\u306E\u8868\u793A\u4E2D\u9806\u5E8F\u3092\u540C\u671F" },
+    nativeMyListBindingRefreshed: { en: "Native My List binding refreshed", ja: "\u7D14\u6B63\u30DE\u30A4\u30EA\u30B9\u30C8DOM\u53C2\u7167\u3092\u518D\u7D50\u5408" },
+    differentialUpdateTimedOutWaitingForAUsableCardSnapshot: { en: "Differential update timed out waiting for a usable card snapshot", ja: "\u5DEE\u5206\u66F4\u65B0\u3067\u5229\u7528\u53EF\u80FD\u306A\u30AB\u30FC\u30C9\u60C5\u5831\u3092\u5F85\u3064\u9593\u306B\u30BF\u30A4\u30E0\u30A2\u30A6\u30C8\u3057\u307E\u3057\u305F" },
+    myListMutationQueued: { en: "My List mutation queued", ja: "\u30DE\u30A4\u30EA\u30B9\u30C8\u5909\u66F4\u3092\u5DEE\u5206\u30AD\u30E5\u30FC\u3078\u767B\u9332" },
+    carouselMoveCancelledBeforeStart: { en: "Carousel move cancelled before start", ja: "\u30AB\u30EB\u30FC\u30BB\u30EB\u79FB\u52D5\u3092\u958B\u59CB\u524D\u306B\u4E2D\u6B62" },
+    carouselMoveControlNotFound: { en: "Carousel move control not found", ja: "\u30AB\u30EB\u30FC\u30BB\u30EB\u79FB\u52D5\u30B3\u30F3\u30C8\u30ED\u30FC\u30EB\u306A\u3057" },
+    carouselDomProfileDetected: { en: "Native carousel DOM profile detected", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EBDOM\u4E16\u4EE3\u691C\u51FA" },
+    logicalCarouselEdgeDetected: { en: "Logical carousel edge detected", ja: "\u8AD6\u7406\u30AB\u30EB\u30FC\u30BB\u30EB\u7AEF\u3092\u691C\u51FA" },
+    logicalCarouselPagesFinalized: { en: "Logical carousel pages finalized", ja: "\u8AD6\u7406\u30AB\u30EB\u30FC\u30BB\u30EB\u30DA\u30FC\u30B8\u78BA\u5B9A" },
+    logicalCarouselCycleDetected: { en: "Logical carousel cycle detected", ja: "\u8AD6\u7406\u30AB\u30EB\u30FC\u30BB\u30EB\u5FAA\u74B0\u691C\u51FA" },
+    logicalPageModelSynchronizedAfterDelta: { en: "Logical page model synchronized after My List delta", ja: "\u30DE\u30A4\u30EA\u30B9\u30C8\u5DEE\u5206\u5F8C\u306E\u8AD6\u7406\u30DA\u30FC\u30B8\u30E2\u30C7\u30EB\u540C\u671F" },
+    operationTimedOut: { en: "Operation timed out", ja: "\u51E6\u7406\u304C\u30BF\u30A4\u30E0\u30A2\u30A6\u30C8" },
+    fullCollectionIncomplete: { en: "Full collection did not complete", ja: "\u5168\u4EF6\u53D6\u5F97\u304C\u5B8C\u4E86\u3057\u307E\u305B\u3093\u3067\u3057\u305F" },
+    carouselMoveStarted: { en: "Carousel move started", ja: "\u30AB\u30EB\u30FC\u30BB\u30EB\u79FB\u52D5\u958B\u59CB" },
+    carouselMoveCompleted: { en: "Carousel move completed", ja: "\u30AB\u30EB\u30FC\u30BB\u30EB\u79FB\u52D5\u5B8C\u4E86" },
+    pageMoveRequested: { en: "Page move requested", ja: "\u30DA\u30FC\u30B8\u79FB\u52D5\u8981\u6C42" },
+    pageMoveResult: { en: "Page move result", ja: "\u30DA\u30FC\u30B8\u79FB\u52D5\u7D50\u679C" },
+    waitingForNativeCarouselInitialization: { en: "Waiting for native carousel initialization", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EB\u521D\u671F\u5316\u5F85\u3061\u958B\u59CB" },
+    nativeCarouselInitializationReady: { en: "Native carousel initialization ready", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EB\u521D\u671F\u5316\u5B8C\u4E86" },
+    nativeCarouselInitializationIsStillIncompleteInitializationDeferred: { en: "Native carousel initialization is still incomplete; initialization deferred", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EB\u521D\u671F\u5316\u304C\u672A\u5B8C\u4E86\u306E\u305F\u3081\u521D\u671F\u5316\u3092\u4FDD\u7559" },
+    nativePageByPageRestorationStarted: { en: "Native page-by-page restoration started", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6BB5\u968E\u5FA9\u5E30\u958B\u59CB" },
+    nativePageRestorationMoveFailed: { en: "Native page restoration move failed", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u5FA9\u5E30\u79FB\u52D5\u5931\u6557" },
+    nativeRestorationPageStabilized: { en: "Native restoration page stabilized", ja: "\u7D14\u6B63\u5FA9\u5E30\u30DA\u30FC\u30B8\u5B89\u5B9A" },
+    nativeRestorationStoppedBecauseTheTargetPageDidNotFullyMount: { en: "Native restoration stopped because the target page did not fully mount", ja: "\u5BFE\u8C61\u30DA\u30FC\u30B8\u304C\u5B8C\u5168\u306B\u30DE\u30A6\u30F3\u30C8\u3055\u308C\u306A\u3044\u305F\u3081\u7D14\u6B63\u5FA9\u5E30\u3092\u4E2D\u6B62" },
+    nativePageByPageRestorationCompleted: { en: "Native page-by-page restoration completed", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6BB5\u968E\u5FA9\u5E30\u5B8C\u4E86" },
+    nativeFastRestorationPhaseRepairStarted: { en: "Native fast restoration phase repair started", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u306E\u4F4D\u76F8\u88DC\u6B63\u958B\u59CB" },
+    nativeFastRestorationPhaseRepairMoveFailed: { en: "Native fast restoration phase repair move failed", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u306E\u4F4D\u76F8\u88DC\u6B63\u79FB\u52D5\u5931\u6557" },
+    nativeFastRestorationPhaseRepairAdjacentPageVerified: { en: "Native fast restoration phase repair adjacent page verified", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u306E\u4F4D\u76F8\u88DC\u6B63\u96A3\u63A5\u30DA\u30FC\u30B8\u691C\u8A3C" },
+    nativeFastRestorationPhaseRepairAdjacentPageDidNotStabilize: { en: "Native fast restoration phase repair adjacent page did not stabilize", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u306E\u4F4D\u76F8\u88DC\u6B63\u3067\u96A3\u63A5\u30DA\u30FC\u30B8\u304C\u5B89\u5B9A\u3057\u307E\u305B\u3093\u3067\u3057\u305F" },
+    nativeFastRestorationPhaseRepairCompleted: { en: "Native fast restoration phase repair completed", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u306E\u4F4D\u76F8\u88DC\u6B63\u5B8C\u4E86" },
+    nativeFastRestorationStarted: { en: "Native fast restoration started", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u958B\u59CB" },
+    nativeFastRestorationMoveFailed: { en: "Native fast restoration move failed", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u79FB\u52D5\u5931\u6557" },
+    nativeFastRestorationPhaseDiagnosis: { en: "Native fast restoration phase diagnosis", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u306E\u4F4D\u76F8\u8A3A\u65AD" },
+    nativeFastRestorationCompleted: { en: "Native fast restoration completed", ja: "\u7D14\u6B63\u9AD8\u901F\u5FA9\u5E30\u5B8C\u4E86" },
+    fastRestorationVerificationFailedUsingV49PageByPageFallback: { en: "Fast restoration verification failed; using v4.9 page-by-page fallback", ja: "\u9AD8\u901F\u5FA9\u5E30\u306E\u691C\u8A3C\u306B\u5931\u6557\u3057\u305F\u305F\u3081v4.9\u65B9\u5F0F\u306E\u6BB5\u968E\u5FA9\u5E30\u3092\u4F7F\u7528" },
+    fullCollectionStarted: { en: "Full collection started", ja: "\u5168\u4EF6\u53D6\u5F97\u958B\u59CB" },
+    collectionPageStabilized: { en: "Collection page stabilized", ja: "\u53D6\u5F97\u30DA\u30FC\u30B8\u5B89\u5B9A" },
+    collectionStoppedBecauseThePageNeverReachedTheExpectedStableState: { en: "Collection stopped because the page never reached the expected stable state", ja: "\u30DA\u30FC\u30B8\u304C\u671F\u5F85\u3059\u308B\u5B89\u5B9A\u72B6\u614B\u306B\u9054\u3057\u306A\u3044\u305F\u3081\u53D6\u5F97\u3092\u4E2D\u6B62" },
+    collectionPageResult: { en: "Collection page result", ja: "\u53D6\u5F97\u30DA\u30FC\u30B8\u7D50\u679C" },
+    couldNotAdvanceDuringFullCollection: { en: "Could not advance during full collection", ja: "\u5168\u4EF6\u53D6\u5F97\u4E2D\u306B\u6B21\u30DA\u30FC\u30B8\u3078\u9032\u3081\u307E\u305B\u3093" },
+    nativeRestorationBaselineCaptured: { en: "Native restoration baseline captured", ja: "\u7D14\u6B63\u5FA9\u5E30\u306E\u57FA\u6E96\u72B6\u614B" },
+    nativeRestorationResult: { en: "Native restoration result", ja: "\u7D14\u6B63\u5FA9\u5E30\u7D50\u679C" },
+    fullCollectionCompleted: { en: "Full collection completed", ja: "\u5168\u4EF6\u53D6\u5F97\u5B8C\u4E86" },
+    fiberGraftFailed: { en: "Fiber graft failed", ja: "Fiber\u79FB\u690D\u5931\u6557" },
+    propsGraftFailed: { en: "Props graft failed", ja: "Props\u79FB\u690D\u5931\u6557" },
+    hoverSourceSearchStarted: { en: "Hover source search started", ja: "\u30DB\u30D0\u30FC\u5143\u63A2\u7D22\u958B\u59CB" },
+    hoverSourceSearchPage: { en: "Hover source search page", ja: "\u30DB\u30D0\u30FC\u5143\u63A2\u7D22\u30DA\u30FC\u30B8" },
+    hoverSourceSearchCancelled: { en: "Hover source search cancelled", ja: "\u30DB\u30D0\u30FC\u5143\u63A2\u7D22\u4E2D\u6B62" },
+    itemPageMappingCorrected: { en: "Item page mapping corrected", ja: "\u4F5C\u54C1\u30DA\u30FC\u30B8\u88DC\u6B63" },
+    hoverSourceFound: { en: "Hover source found", ja: "\u30DB\u30D0\u30FC\u5143\u63A2\u7D22\u6210\u529F" },
+    hoverSourceSearchFailed: { en: "Hover source search failed", ja: "\u30DB\u30D0\u30FC\u5143\u63A2\u7D22\u5931\u6557" },
+    hoverExpectedPageMatch: { en: "Hover target found within expected native page", ja: "\u30DB\u30D0\u30FC\u5BFE\u8C61\u3092\u7D14\u6B63\u306E\u60F3\u5B9A\u30DA\u30FC\u30B8\u5185\u3067\u78BA\u8A8D" },
+    hoverExpectedPageMismatch: { en: "Hover target not found within expected native page", ja: "\u30DB\u30D0\u30FC\u5BFE\u8C61\u304C\u7D14\u6B63\u306E\u60F3\u5B9A\u30DA\u30FC\u30B8\u5185\u306B\u5B58\u5728\u3057\u307E\u305B\u3093" },
+    hoverExpectedPageUnknown: { en: "Hover expected-page check was inconclusive", ja: "\u30DB\u30D0\u30FC\u306E\u60F3\u5B9A\u30DA\u30FC\u30B8\u78BA\u8A8D\u306F\u5224\u5B9A\u4FDD\u7559" },
+    orderMismatchPromptShown: { en: "My List order-change prompt shown", ja: "\u30DE\u30A4\u30EA\u30B9\u30C8\u9806\u5E8F\u5909\u66F4\u30C0\u30A4\u30A2\u30ED\u30B0\u3092\u8868\u793A" },
+    orderMismatchPromptAccepted: { en: "My List order-change prompt accepted", ja: "\u30DE\u30A4\u30EA\u30B9\u30C8\u9806\u5E8F\u5909\u66F4\u30C0\u30A4\u30A2\u30ED\u30B0\u3067OK" },
+    orderMismatchPromptCancelled: { en: "My List order-change prompt cancelled", ja: "\u30DE\u30A4\u30EA\u30B9\u30C8\u9806\u5E8F\u5909\u66F4\u30C0\u30A4\u30A2\u30ED\u30B0\u3092\u30AD\u30E3\u30F3\u30BB\u30EB" },
+    manualReinitializationRequested: { en: "Manual reinitialization requested after My List order change", ja: "\u30DE\u30A4\u30EA\u30B9\u30C8\u9806\u5E8F\u5909\u66F4\u306B\u3088\u308A\u30E6\u30FC\u30B6\u30FC\u64CD\u4F5C\u3067\u518D\u521D\u671F\u5316" },
+    nativeHoverReplayCancelled: { en: "Native hover replay cancelled", ja: "\u7D14\u6B63\u30DB\u30D0\u30FC\u518D\u9001\u3092\u4E2D\u6B62" },
+    nativeHoverReplayedFromLiveSource: { en: "Native hover replayed from live source", ja: "\u751F\u304D\u3066\u3044\u308B\u7D14\u6B63\u30AB\u30FC\u30C9\u304B\u3089\u30DB\u30D0\u30FC\u518D\u9001" },
+    nativePagePreparationFailed: { en: "Native page preparation failed", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u5931\u6557" },
+    nativePagePreparationStarted: { en: "Native page preparation started", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u958B\u59CB" },
+    nativePagePreparationCancelled: { en: "Native page preparation cancelled", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u4E2D\u6B62" },
+    nativePagePreparationPositionResolved: { en: "Native page preparation position resolved", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u4F4D\u7F6E\u78BA\u5B9A" },
+    nativePageClonesUpdated: { en: "Native page clones updated", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u8907\u88FD\u66F4\u65B0" },
+    hoverCoordinatesProxied: { en: "Hover coordinates proxied", ja: "\u30DB\u30D0\u30FC\u5EA7\u6A19\u4EE3\u7406" },
+    nativePagePreparationCompleted: { en: "Native page preparation completed", ja: "\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u5B8C\u4E86" },
+    hoverWaitingResponsiveRefreshInProgress: { en: "Hover waiting: responsive refresh in progress", ja: "\u30DB\u30D0\u30FC\u5F85\u6A5F: \u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u66F4\u65B0\u4E2D" },
+    hoverCancelled: { en: "Hover cancelled", ja: "\u30DB\u30D0\u30FC\u4E2D\u6B62" },
+    hoverReusedImmediately: { en: "Hover reused immediately", ja: "\u30DB\u30D0\u30FC\u5373\u6642\u518D\u5229\u7528" },
+    hoverRequestedNativePagePreparation: { en: "Hover requested native page preparation", ja: "\u30DB\u30D0\u30FC\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u8981\u6C42" },
+    hoverNativePagePreparationResult: { en: "Hover native page preparation result", ja: "\u30DB\u30D0\u30FC\u7D14\u6B63\u30DA\u30FC\u30B8\u6E96\u5099\u7D50\u679C" },
+    liveClonePreparationFailed: { en: "Live clone preparation failed", ja: "live\u8907\u88FD\u6E96\u5099\u5931\u6557" },
+    legacyCardHoverInput: { en: "Legacy card hover input", ja: "\u65E7\u30AB\u30FC\u30C9\u30DB\u30D0\u30FC\u5165\u529B" },
+    legacyCardHoverReusedMountedNativeSource: { en: "Legacy card hover reused mounted native source", ja: "\u65E7\u30AB\u30FC\u30C9\u30DB\u30D0\u30FC\u65E2\u5B58\u7D14\u6B63\u5229\u7528" },
+    pendingHoverCancelledOnLeave: { en: "Pending hover cancelled on leave", ja: "\u30DE\u30A6\u30B9\u96E2\u8131\u3067\u5F85\u6A5F\u4E2D\u30DB\u30D0\u30FC\u3092\u4E2D\u6B62" },
+    hoverCoordinateProxyReleased: { en: "Hover coordinate proxy released", ja: "\u30DB\u30D0\u30FC\u5EA7\u6A19\u4EE3\u7406\u89E3\u9664" },
+    hoverReplayGuardRejected: { en: "Hover replay guard rejected target", ja: "\u30DB\u30D0\u30FC\u518D\u9001\u6761\u4EF6\u304C\u5BFE\u8C61\u3092\u62D2\u5426" },
+    hoverPointerLeaveObserved: { en: "Hover pointer leave observed", ja: "\u30DB\u30D0\u30FC\u4E2D\u306E\u30DD\u30A4\u30F3\u30BF\u96E2\u8131\u3092\u8A18\u9332" },
+    hoverPreviewTransfer: { en: "Hover positioning retained for matching preview", ja: "\u5BFE\u5FDC\u3059\u308B\u30D7\u30EC\u30D3\u30E5\u30FC\u306E\u30DB\u30D0\u30FC\u4F4D\u7F6E\u3092\u4FDD\u6301" },
+    hoverPreviewTransferRejected: { en: "Hover preview transfer rejected", ja: "\u30DB\u30D0\u30FC\u306E\u30D7\u30EC\u30D3\u30E5\u30FC\u79FB\u884C\u3092\u62D2\u5426" },
+    hoverPreviewReleased: { en: "Hover preview positioning released", ja: "\u30DB\u30D0\u30FC\u306E\u30D7\u30EC\u30D3\u30E5\u30FC\u4F4D\u7F6E\u3092\u89E3\u9664" },
+    hoverPreviewPresence: { en: "Hover preview presence observation", ja: "\u30DB\u30D0\u30FC\u30D7\u30EC\u30D3\u30E5\u30FC\u306E\u5B58\u5728\u3092\u89B3\u6E2C" },
+    legacyGridBuilt: { en: "Legacy grid built", ja: "\u30B0\u30EA\u30C3\u30C9\u751F\u6210\u5B8C\u4E86" },
+    responsiveStatusNote: { en: "Responsive status note", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u72B6\u614B\u30E1\u30E2" },
+    responsiveItemPageMappingRecalculatedWithoutNativeCarouselScan: { en: "Responsive item-page mapping rebuilt from native first-page anchor", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u4F5C\u54C1\u30DA\u30FC\u30B8\u5BFE\u5FDC\u3092\u7D14\u6B63\u5148\u982D\u30A2\u30F3\u30AB\u30FC\u57FA\u6E96\u3067\u518D\u69CB\u6210" },
+    responsiveRefreshStarted: { en: "Responsive refresh started", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u66F4\u65B0\u958B\u59CB" },
+    responsiveMeasurementResolved: { en: "Responsive measurement resolved", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u5B9F\u6E2C\u78BA\u5B9A" },
+    responsivePageMappingUpdatedWithoutNativeCarouselMovement: { en: "Responsive page mapping rebuilt after native anchor synchronization", ja: "\u7D14\u6B63\u30A2\u30F3\u30AB\u30FC\u540C\u671F\u5F8C\u306B\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u30DA\u30FC\u30B8\u5BFE\u5FDC\u3092\u518D\u69CB\u6210" },
+    responsiveRefreshCompleted: { en: "Responsive refresh completed", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u66F4\u65B0\u5B8C\u4E86" },
+    responsiveRelayoutFailed: { en: "Responsive relayout failed", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u518D\u914D\u7F6E\u5931\u6557" },
+    responsiveRemeasurementNoShapeChange: { en: "Responsive remeasurement: no shape change", ja: "\u30EC\u30B9\u30DD\u30F3\u30B7\u30D6\u518D\u6E2C\u5B9A\u30FB\u5F62\u72B6\u5909\u66F4\u306A\u3057" },
+    windowResizeDetected: { en: "window resize detected", ja: "window resize\u691C\u51FA" },
+    visualViewportResizeDetected: { en: "visualViewport resize detected", ja: "visualViewport resize\u691C\u51FA" },
+    nativeSourceWaitFailed: { en: "Native source wait failed", ja: "\u7D14\u6B63\u30BD\u30FC\u30B9\u5F85\u3061\u5931\u6557" },
+    nativeCarouselReadinessCheckFailed: { en: "Native carousel readiness check failed", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EB\u521D\u671F\u5316\u78BA\u8A8D\u5931\u6557" },
+    initializationStarted: { en: "Initialization started", ja: "\u521D\u671F\u5316\u958B\u59CB" },
+    initialLayoutMeasured: { en: "Initial layout measured", ja: "\u521D\u671F\u30EC\u30A4\u30A2\u30A6\u30C8\u5B9F\u6E2C" },
+    nativeCarouselScanModeStarted: { en: "Native carousel scan mode started", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EB\u53D6\u5F97\u30E2\u30FC\u30C9\u958B\u59CB" },
+    noNativeNetflixCardsCouldBeCollected: { en: "No native Netflix cards could be collected.", ja: "Netflix\u7D14\u6B63\u30AB\u30FC\u30C9\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002" },
+    fullCollectionResultFinalized: { en: "Full collection result finalized", ja: "\u5168\u4EF6\u53D6\u5F97\u7D50\u679C\u78BA\u5B9A" },
+    nativeCarouselStandbyMode: { en: "Native carousel standby mode", ja: "\u7D14\u6B63\u30AB\u30EB\u30FC\u30BB\u30EB\u5F85\u6A5F\u30E2\u30FC\u30C9" },
+    initialHoverPreparationDeferred: { en: "Initial hover preparation deferred", ja: "\u521D\u671F\u30DB\u30D0\u30FC\u6E96\u5099\u3092\u9045\u5EF6" },
+    collectedCountDoesNotMatchTotalCount: { en: "Collected count does not match totalCount", ja: "\u53D6\u5F97\u4EF6\u6570\u304C\u5B9F\u6570\u3068\u4E00\u81F4\u3057\u307E\u305B\u3093" },
+    initializationCompleted: { en: "Initialization completed", ja: "\u521D\u671F\u5316\u5B8C\u4E86" },
+    initializationCancelledByRouteChange: { en: "Initialization cancelled by route change", ja: "\u30DA\u30FC\u30B8\u9077\u79FB\u306B\u3088\u308A\u521D\u671F\u5316\u4E2D\u6B62" },
+    initializationFailed: { en: "Initialization failed", ja: "\u521D\u671F\u5316\u5931\u6557" },
+    scriptStarted: { en: "Script started", ja: "\u30B9\u30AF\u30EA\u30D7\u30C8\u958B\u59CB" },
+    originalMyListVisibilityChanged: { en: "Original My List visibility changed", ja: "\u7D14\u6B63\u30DE\u30A4\u30EA\u30B9\u30C8\u8868\u793A\u72B6\u614B\u5909\u66F4" },
+    copyFailed: { en: "Copy failed: {message}", ja: "\u30B3\u30D4\u30FC\u5931\u6557: {message}" }
+  };
+
+  // src/i18n/i18n.js
+  function createI18n({ readLanguage }) {
+    if (typeof readLanguage !== "function") throw new TypeError("readLanguage must be a function");
+    function getBaseLanguage(value) {
+      const raw = String(value || "").trim().replace(/_/g, "-");
+      const match = raw.match(/^([A-Za-z]{2,3})(?:-|$)/);
+      return match ? match[1].toLowerCase() : "";
+    }
+    function getUiLocale() {
+      const language = getBaseLanguage(readLanguage());
+      return NETFLIX_PRIMARY_UI_LOCALES.has(language) ? language : "en";
+    }
+    function getLogLocale() {
+      return getUiLocale() === "ja" ? "ja" : "en";
+    }
+    function formatMessage(template, params = {}) {
+      return String(template || "").replace(
+        /\{([A-Za-z0-9_]+)\}/g,
+        (_, key) => Object.prototype.hasOwnProperty.call(params, key) ? String(params[key]) : `{${key}}`
+      );
+    }
+    function tUi(key, params = {}) {
+      const locale = getUiLocale();
+      const localizedValue = UI_MESSAGES[locale]?.[key];
+      const fallbackValue = UI_MESSAGES.en?.[key];
+      const template = typeof localizedValue === "string" ? localizedValue : fallbackValue;
+      return formatMessage(template, params);
+    }
+    function tUiPlural(key, count, params = {}) {
+      const locale = getUiLocale();
+      const localizedForms = UI_MESSAGES[locale]?.[key];
+      const fallbackForms = UI_MESSAGES.en?.[key];
+      if (!localizedForms || typeof localizedForms !== "object") return tUi(key, params);
+      let category = "other";
+      try {
+        category = new Intl.PluralRules(locale).select(count);
+      } catch (_) {
+      }
+      const template = localizedForms[category] || localizedForms.other || fallbackForms?.[category] || fallbackForms?.other || String(count);
+      return formatMessage(template, { count, ...params });
+    }
+    function tLog(key, params = {}) {
+      const entry = LOG_MESSAGES[key];
+      if (!entry) return key;
+      const template = entry[getLogLocale()] || entry.en || key;
+      return formatMessage(template, params);
+    }
+    function formatUiNumber(value, fractionDigits = 0) {
+      try {
+        return new Intl.NumberFormat(getUiLocale(), {
+          minimumFractionDigits: fractionDigits,
+          maximumFractionDigits: fractionDigits
+        }).format(value);
+      } catch (_) {
+        return Number(value).toFixed(fractionDigits);
+      }
+    }
+    function formatItemCount(current, total, finalized = false) {
+      const maximum = Number.isFinite(total) ? total : current;
+      const base = tUiPlural("itemCount", maximum, { count: formatUiNumber(maximum) });
+      if (!finalized || !Number.isFinite(total)) return base;
+      const missing = Math.max(0, total - current);
+      return missing > 0 ? `${base}  ${tUi("errorCount", { count: formatUiNumber(missing) })}` : base;
+    }
+    function formatInitializationTime(elapsedMs) {
+      if (!Number.isFinite(elapsedMs)) return tUi("initializing");
+      const seconds = elapsedMs / 1e3;
+      return tUi("initTime", { seconds: formatUiNumber(seconds, 2) });
+    }
+    return Object.freeze({ getUiLocale, getLogLocale, tUi, tUiPlural, tLog, formatUiNumber, formatItemCount, formatInitializationTime });
+  }
+
+  // src/diagnostics/logger.js
+  var MAX_LOG_ENTRIES = 5e3;
+  function createLogger({ name, version, Element, console, now = () => /* @__PURE__ */ new Date(), isTraceEnabled = () => false }) {
+    const LOG_PREFIX = `[${name} v${version}]`;
+    const investigationLog = [];
+    let investigationLogStart = 0;
+    function formatLogValue(value) {
+      if (value instanceof Error) {
+        return JSON.stringify({
+          name: value.name,
+          message: value.message,
+          stack: value.stack || ""
+        });
+      }
+      if (value instanceof Element) {
+        const tag = value.tagName.toLowerCase();
+        const id = value.id ? `#${value.id}` : "";
+        const cls = value.classList?.length ? `.${[...value.classList].join(".")}` : "";
+        return `<${tag}${id}${cls}>`;
+      }
+      if (typeof value === "string") return value;
+      try {
+        const seen = /* @__PURE__ */ new WeakSet();
+        return JSON.stringify(value, (key, item) => {
+          if (item instanceof Element) return formatLogValue(item);
+          if (item instanceof Error) {
+            return { name: item.name, message: item.message, stack: item.stack || "" };
+          }
+          if (item && typeof item === "object") {
+            if (seen.has(item)) return "[Circular]";
+            seen.add(item);
+          }
+          return item;
+        });
+      } catch (_) {
+        return String(value);
+      }
+    }
+    function formatSystemTimestamp(date = now()) {
+      const pad = (value, width = 2) => String(value).padStart(width, "0");
+      const offsetMinutes = -date.getTimezoneOffset();
+      const sign = offsetMinutes >= 0 ? "+" : "-";
+      const absoluteOffset = Math.abs(offsetMinutes);
+      const offsetHours = pad(Math.floor(absoluteOffset / 60));
+      const offsetMins = pad(absoluteOffset % 60);
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}${sign}${offsetHours}:${offsetMins}`;
+    }
+    function appendInvestigationLog(level, args) {
+      const body = args.map(formatLogValue).join(" ");
+      const entry = `[${formatSystemTimestamp()}] ${level.padEnd(5, " ")} ${body}`;
+      if (investigationLog.length < MAX_LOG_ENTRIES) {
+        investigationLog.push(entry);
+      } else {
+        investigationLog[investigationLogStart] = entry;
+        investigationLogStart = (investigationLogStart + 1) % MAX_LOG_ENTRIES;
+      }
+    }
+    function retainedInvestigationLog() {
+      return investigationLog.slice(investigationLogStart).concat(investigationLog.slice(0, investigationLogStart));
+    }
+    function trace(buildArgs) {
+      if (isTraceEnabled()) log(...buildArgs());
+    }
+    function log(...args) {
+      appendInvestigationLog("INFO", args);
+      console.log(LOG_PREFIX, ...args);
+    }
+    function warn(...args) {
+      appendInvestigationLog("WARN", args);
+      console.warn(LOG_PREFIX, ...args);
+    }
+    return Object.freeze({
+      log,
+      warn,
+      trace,
+      entries: retainedInvestigationLog,
+      size: () => investigationLog.length,
+      formatValue: formatLogValue,
+      formatTimestamp: formatSystemTimestamp
+    });
+  }
+
+  // src/app/application.js
+  function createApplication({
+    environment = globalThis,
+    version = "",
+    createSession = createMyListSession,
+    userscript = {
+      registerMenu: environment.GM_registerMenuCommand,
+      unregisterMenu: environment.GM_unregisterMenuCommand,
+      getValue: environment.GM_getValue,
+      setValue: environment.GM_setValue
+    }
+  } = {}) {
+    const { window, document, location, history, navigator, Element, queueMicrotask } = environment;
+    const context = createNetflixContext({ window, document, navigator, location });
+    const i18n = createI18n({ readLanguage: context.getNetflixLanguage });
+    const logger = createLogger({
+      name: "My List for Netflix",
+      version,
+      Element,
+      console: environment.console,
+      isTraceEnabled: () => false
+    });
+    let active = false, session = null, settings = null, lastObservedUrl = "", routeChangeSequence = 0, revision = 0, sessionEpoch = 0;
+    const hooks = [];
+    function isTargetPage() {
+      return location.origin === "https://www.netflix.com" && location.pathname === "/browse/my-list";
+    }
+    function retireSession(reason) {
+      const previous = session;
+      session = null;
+      previous?.dispose(reason);
+    }
+    function routeChanged(source = "unknown") {
+      if (!active) return;
+      const currentUrl = location.href;
+      if (currentUrl === lastObservedUrl && source !== "initial") return;
+      const previousUrl = lastObservedUrl;
+      lastObservedUrl = currentUrl;
+      const target = isTargetPage();
+      logger.log(i18n.tLog("routeChangeDetected"), { seq: ++routeChangeSequence, source, previousUrl, currentUrl, target });
+      if (!target) {
+        retireSession(`route:${source}`);
+        return;
+      }
+      if (session) {
+        session.check();
+        return;
+      }
+      const owner = revision;
+      let next;
+      next = createSession({
+        environment,
+        version,
+        context,
+        i18n,
+        logger,
+        settings,
+        userscript,
+        nextSessionToken: () => ++sessionEpoch,
+        onNavigation: (reason) => {
+          if (active && revision === owner && session === next) routeChanged(reason);
+        }
+      });
+      session = next;
+      session.start(`route:${source}`);
+    }
+    function installHooks() {
+      const owner = revision;
+      const deliver = (reason) => {
+        if (active && revision === owner) routeChanged(reason);
+      };
+      for (const method of ["pushState", "replaceState"]) {
+        const original = history[method];
+        if (typeof original !== "function") continue;
+        const wrapper = function(...args) {
+          const result = original.apply(this, args);
+          queueMicrotask(() => deliver(`history.${method}`));
+          return result;
+        };
+        history[method] = wrapper;
+        hooks.push(() => {
+          if (history[method] === wrapper) history[method] = original;
+        });
+      }
+      for (const type of ["popstate", "hashchange"]) {
+        const listener = () => deliver(type);
+        window.addEventListener(type, listener, true);
+        hooks.push(() => window.removeEventListener(type, listener, true));
+      }
+    }
+    function start() {
+      if (active) return;
+      active = true;
+      ++revision;
+      lastObservedUrl = location.href;
+      let storage;
+      try {
+        storage = environment.localStorage;
+      } catch (_) {
+      }
+      settings = createSettings({
+        storage,
+        registerMenu: userscript.registerMenu,
+        unregisterMenu: userscript.unregisterMenu,
+        tUi: i18n.tUi,
+        onChange: (preferences) => {
+          session?.preferencesChanged(preferences);
+          logger.log(i18n.tLog("originalMyListVisibilityChanged"), { enabled: preferences.viewOriginalMyList });
+        }
+      });
+      settings.start();
+      installHooks();
+      logger.log(i18n.tLog("scriptStarted"), {
+        version,
+        url: location.href,
+        userAgent: navigator.userAgent,
+        browserLanguage: navigator.language || "",
+        htmlLanguage: context.getHtmlLanguage(),
+        netflixLanguage: context.getNetflixLanguage(),
+        displayLanguage: i18n.getUiLocale(),
+        logLanguage: i18n.getLogLocale(),
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        devicePixelRatio: window.devicePixelRatio
+      });
+      routeChanged("initial");
+    }
+    function dispose() {
+      if (!active) return;
+      active = false;
+      ++revision;
+      try {
+        retireSession("application-dispose");
+      } finally {
+        try {
+          settings?.dispose();
+        } finally {
+          for (const release of hooks.splice(0).reverse()) release();
+        }
+      }
+    }
+    return Object.freeze({ start, dispose, diagnostics: () => Object.freeze({
+      active,
+      routeChangeSequence,
+      currentSession: session?.diagnostics() || null
+    }) });
   }
 
   // src/main.js
-  startLegacy();
+  var SCRIPT_VERSION = "1.4.57";
+  createApplication({ version: SCRIPT_VERSION, userscript: {
+    registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
+    unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
+    getValue: typeof GM_getValue === "function" ? (...args) => GM_getValue(...args) : void 0,
+    setValue: typeof GM_setValue === "function" ? (...args) => GM_setValue(...args) : void 0
+  } }).start();
 })();

@@ -605,6 +605,14 @@ export function createHover(options) {
         intent, isCancelled: hoverPreparationCancelled, isTargetCurrent: gridHoverTargetActive,
         protectedCards: () => Object.freeze([activeClone, pendingGridHoverClone].filter(Boolean)),
         hasInteraction: () => Boolean(activeClone || pendingGridHoverClone || activeHoverPreparationDiagnostic?.token === hoverToken),
+        observeReplacement(card) {
+            if (!gridView.isCardCurrent(card)) return null;
+            try {
+                const hovered = card.node.matches(':hover'); card.node.__tmHoverReplacementHovered = hovered;
+                if (!hovered) performanceDiagnostics.hoverInteraction.replacementNotHovered++;
+                return hovered;
+            } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; return null; }
+        },
         resetDiagnostics() { timing.reset(); performanceDiagnostics = timing.counters; },
         diagnostics: () => Object.freeze({ ...timing.diagnostics(), hoverScrollState: Object.freeze(hoverScrollStateSnapshot()) }),
         count(section, field) { if (Object.hasOwn(performanceDiagnostics[section] || {}, field)) performanceDiagnostics[section][field]++; },

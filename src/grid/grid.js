@@ -83,6 +83,19 @@ export function createGrid({ document, location, runChunks, imageDiagnostics = {
         frame.clearCards();
         cards.publish(new Map());
     }
+    function applyMembershipOrder(change, assertCurrent = () => {}) {
+        const root = frame.root;
+        for (let index = 0; index < change.ordered.length; index++) {
+            assertCurrent();
+            frame.assertParent(root);
+            const handle = cards.getCard(change.ordered[index]);
+            if (!handle) continue;
+            cards.assertCard(handle); frame.assertParent(root);
+            const before = root.children[change.index + index] || null;
+            if (before !== handle.node) frame.moveCard(handle.node, root, before);
+            assertCurrent();
+        }
+    }
     return Object.freeze({ publish, dispose, images, clearCards, mount: frame.mount, cancelBuild: () => { ++buildGeneration; },
         get cards() { return cards.view; }, get root() { return frame.root; }, get status() { return frame.status; },
         updateStatus: frame.updateStatus, layoutStatus: frame.layoutStatus, applyStatusTypography: frame.applyStatusTypography,
@@ -95,7 +108,11 @@ export function createGrid({ document, location, runChunks, imageDiagnostics = {
         getCard: cards.getCard, assertCard: cards.assertCard, isCardCurrent: cards.isCurrent,
         replaceCard: cards.replaceCard,
         removeCard: (...args) => { const result = cards.removeCard(...args); frame.setEmpty(cards.view.size === 0); return result; },
-        insertCard: (...args) => { const result = cards.insertCard(...args); frame.setEmpty(false); return result; },
+        insertCard: (record, options = {}) => {
+            if (options.ordered) { options.assertCurrent?.(); frame.assertParent(frame.root); }
+            const before = options.ordered ? frame.root.children[options.index] || null : options.before;
+            const result = cards.insertCard(record, { ...options, before }); frame.setEmpty(false); return result;
+        }, applyMembershipOrder,
         setEmpty: frame.setEmpty,
         updateCard: cards.updateCard, materialFor: cards.materialFor,
         updateCardPlacement: groups.updateCardPlacement, attachPlacementActions: groups.attachPlacementActions,

@@ -28,6 +28,7 @@ function install(c) {
         pageDom:{videoIdFromHref:(...args)=>c.videoIdFromHref(...args),decodeTrackingContext:(...args)=>c.decodeTrackingContext(...args)},
         readIntent:()=>({token:c.hoverToken,sessionToken:c.sessionScope.token,clone:c.activeClone,videoId:c.activeVideoId,pointerX:c.lastPointerX,pointerY:c.lastPointerY}),
         readEnvironment:()=>({grid:c.sourceState?.grid,scroller:c.sourceState?.scroller}),readDiagnostics:()=>c.performanceDiagnostics,
+        onAlignmentRestore: failures => { c.performanceDiagnostics.nativeRecovery.alignmentRestores++; c.performanceDiagnostics.nativeRecovery.alignmentRestoreFailures += failures; },
         gridOwnsClone:(...args)=>c.gridOwnsClone(...args),gridCloneFromPointerEvent:(...args)=>c.gridCloneFromPointerEvent(...args),
         isCancelled:token=>c.hoverPreparationCancelled?.(token),isSessionCurrent:token=>c.isRouteSessionActive(token),isTargetCurrent:(...args)=>c.gridHoverTargetActive(...args),
         recordTiming:(...args)=>c.recordHoverTiming(...args),onReplay:phase=>c.startHoverFrameDiagnostics(phase),onFailed:(...args)=>c.releaseFailedGridHover(...args),

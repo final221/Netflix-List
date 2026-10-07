@@ -38,6 +38,7 @@ export function createNativePopup(options = {}) {
     let replayAdmission = null, replaySourceCurrent = null, replayGridCard = null;
     let interactionRevision = 0;
     let cleanupFailures = 0;
+    let alignmentRestores = 0, alignmentRestoreFailures = 0;
     const pendingFrames = new Map();
     const graftHandles = new WeakMap();
     // Contains the private React-key graft used only to make cloned cards hoverable.
@@ -188,9 +189,9 @@ export function createNativePopup(options = {}) {
         }
 
         if (activeGeometryProxy?.sourceSlot !== proxy.sourceSlot) proxy.sourceSlot.removeAttribute('data-tm-source-proxied');
-        performanceDiagnostics.nativeRecovery.alignmentRestores++;
+        alignmentRestores++; alignmentRestoreFailures += failures;
+        try { options.onAlignmentRestore?.(failures); } catch (_) { diagnosticFailure(); }
         if (failures) {
-            performanceDiagnostics.nativeRecovery.alignmentRestoreFailures += failures;
             warn(tLog('sourceAlignmentRestoreFailed'), { methods: failures, nodes: proxy.entries.length });
         }
     }
@@ -739,7 +740,7 @@ export function createNativePopup(options = {}) {
             return false;
         },
         diagnostics: () => Object.freeze({ grafts: graftedGridClones.size, geometryOwned: Boolean(activeGeometryProxy),
-            sourceConnected: Boolean(activeSourceSlot?.isConnected), replayOwned: Boolean(activeNativeHover), previewOwned: Boolean(activeNativeHover?.previewRoot), pendingReplays: pendingFrames.size, cleanupFailures }),
+            sourceConnected: Boolean(activeSourceSlot?.isConnected), replayOwned: Boolean(activeNativeHover), previewOwned: Boolean(activeNativeHover?.previewRoot), pendingReplays: pendingFrames.size, cleanupFailures, alignmentRestores, alignmentRestoreFailures }),
         describeActiveSource() { try { return slotDescriptor(activeSourceSlot); } catch (_) { return null; } },
         replayFacts(clone) { const owner = activeNativeHover; return owner && readIntent().clone === clone
             ? Object.freeze({ sessionToken: owner.sessionToken, replayedAt: owner.replayedAt, coordinates: Object.freeze({...owner.coordinates}) }) : null; }

@@ -80,6 +80,16 @@ test('generated userscript starts exactly once and hooks the existing page envir
     assert.equal(b.scheduler.timers.size, 0);
 });
 
+test('generated entry preserves lexical userscript grants outside globalThis', () => {
+    const b = browser({ grants: false });
+    b.context.captureMenu = (label, callback) => { b.menus.set(42, { label, callback }); return 42; };
+    vm.runInContext('const GM_registerMenuCommand = (label, callback) => captureMenu(label, callback); const GM_unregisterMenuCommand = () => {};', b.context);
+    assert.equal(b.context.GM_registerMenuCommand, undefined);
+    b.start(); assert.equal(b.menus.size, 1);
+    const previous = b.menus.get(42).label; b.menus.get(42).callback();
+    assert.notEqual(b.menus.get(42).label, previous);
+});
+
 test('generated route entry, exit and reentry own one listener/observer set', async () => {
     const b = browser();
     b.mountMyList();
@@ -274,9 +284,11 @@ test('check rejects altered grants and execution settings', async () => {
     }
 });
 
-test('importing authored legacy source does not activate the runtime', async () => {
-    const legacy = await import('../src/legacy.js');
-    assert.equal(typeof legacy.startLegacy, 'function');
+test('importing authored application/session source does not activate the runtime', async () => {
+    const application = await import('../src/app/application.js');
+    const session = await import('../src/app/my-list-session.js');
+    assert.equal(typeof application.createApplication, 'function');
+    assert.equal(typeof session.createMyListSession, 'function');
 });
 
 test('production graph rejects a forbidden feature import before output comparison', async () => {
@@ -321,8 +333,10 @@ test('production graph rejects dormant source and unlisted legacy bridges', asyn
         await mkdir(path.join(directory, 'src/grid'), { recursive: true });
         await writeFile(path.join(directory, 'src/grid/dormant.js'), 'export function createDormant() {}\n');
         const legacy = path.join(directory, 'src/legacy.js');
-        await writeFile(legacy, "import './grid/dormant.js';\n" + await readFile(legacy, 'utf8'));
-        await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*legacy\.js.*grid\/dormant\.js/);
+        await writeFile(legacy, "import './grid/dormant.js';\n");
+        const main = path.join(directory, 'src/main.js');
+        await writeFile(main, "import './legacy.js';\n" + await readFile(main, 'utf8'));
+        await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*(?:legacy\.js|main\.js)/);
     });
 });
 

@@ -19,6 +19,9 @@ function install(c) {
         get: (_, key) => typeof c[name]?.[key] === 'function' ? (...args) => c[name][key](...args) : c[name]?.[key]
     }) : (...args) => c[name]?.(...args)]));
     options.readState = () => c.sourceState; options.readSessionToken = () => c.sessionScope.token;
+    options.acceptLayoutChange = (state, layout) => { state.layout = layout; };
+    options.acceptInitialPage = (state, page) => { state.initialPage = page; };
+    options.acceptViewportSignature = (state, signature) => { state.resizeViewportSignature = signature; };
     options.readOriginalVisibility = () => c.viewOriginalMyList;
     options.ResizeObserver = function(...args) { return new c.ResizeObserver(...args); };
     options.inspect = value => { responsivePrivate = value; };

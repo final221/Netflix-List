@@ -1,7 +1,71 @@
+import { createSessionScope } from '../src/app/session-scope.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSessionScope } from '../src/app/session-scope.js';
+import { createApplication } from '../src/app/application.js';
+import { createSettings } from '../src/app/settings.js';
+import { createDocument, Element, EventTarget } from './helpers/dom.js';
 import { createScheduler } from './helpers/scheduler.js';
+
+test('settings publishes semantic preference changes and retires old menu callbacks', () => {
+    const callbacks = [], changes = [], writes = [];
+    const settings = createSettings({ storage: { getItem: () => '{"viewOriginalMyList":false,"obsolete":true}', setItem: (_key, value) => writes.push(value) },
+        registerMenu: (_label, fn) => { callbacks.push(fn); return callbacks.length; }, unregisterMenu() {},
+        tUi: key => key, onChange: value => changes.push(value) });
+    assert.equal(callbacks.length, 0);
+    settings.start(); settings.start(); assert.equal(callbacks.length, 1);
+    assert.deepEqual(settings.preferences(), { viewOriginalMyList: false });
+    callbacks[0](); assert.deepEqual(changes, [{ viewOriginalMyList: true }]);
+    callbacks[0](); assert.equal(changes.length, 1);
+    settings.dispose(); callbacks[1](); assert.equal(changes.length, 1);
+    assert.deepEqual(JSON.parse(writes[0]), { viewOriginalMyList: false });
+});
+
+test('application retires exact page sessions and restores its navigation hooks on repeated disposal', async () => {
+    const document = createDocument(), window = new EventTarget(), scheduler = createScheduler();
+    const location = { origin: 'https://www.netflix.com', pathname: '/browse', href: 'https://www.netflix.com/browse' };
+    const history = { pushState(_state, _title, url) { const next = new URL(url, location.href); location.pathname = next.pathname; location.href = next.href; }, replaceState() {} };
+    const original = history.pushState, instances = [];
+    const application = createApplication({ environment: { ...scheduler, document, window, location, history, Element,
+        navigator: { language: 'en' }, console: { log() {}, warn() {} }, AbortController, queueMicrotask,
+        localStorage: { getItem: () => null, setItem() {} } }, createSession: options => {
+        const instance = { starts: 0, disposals: 0, checks: 0, start() { this.starts++; }, dispose() { this.disposals++; }, check() { this.checks++; }, preferencesChanged() {}, diagnostics: () => ({}) };
+        instance.navigate = options.onNavigation; instances.push(instance); return instance;
+    } });
+    assert.equal(window.listenerCount('popstate'), 0); application.start(); application.start();
+    history.pushState(null, '', '/browse/my-list'); await scheduler.flush();
+    assert.equal(instances.length, 1);
+    history.pushState(null, '', '/browse'); await scheduler.flush();
+    assert.equal(instances[0].disposals, 1);
+    history.pushState(null, '', '/browse/my-list'); await scheduler.flush(); assert.equal(instances.length, 2);
+    location.pathname = '/browse'; location.href = 'https://www.netflix.com/browse';
+    instances[0].navigate('retired-native-observer'); assert.equal(instances[1].disposals, 0);
+    const stale = history.pushState;
+    application.dispose(); application.dispose();
+    assert.equal(instances[1].disposals, 1); assert.equal(history.pushState, original);
+    stale(null, '', '/browse'); await scheduler.flush(); assert.equal(instances.length, 2);
+    assert.equal(window.listenerCount('popstate'), 0); assert.equal(window.listenerCount('hashchange'), 0);
+});
+
+test('denied settings storage and absent menu grants still expose the original-source preference', () => {
+    const settings = createSettings({ storage: { getItem() { throw new Error('denied'); }, setItem() { assert.fail('failed read cannot write'); } } });
+    settings.start(); assert.deepEqual(settings.preferences(), { viewOriginalMyList: true });
+    assert.throws(() => { settings.preferences().viewOriginalMyList = false; }, TypeError);
+    settings.dispose(); settings.dispose();
+});
+
+test('separate page scopes cannot retire a newer page during an old cleanup callback', () => {
+    const scheduler = createScheduler(); let epoch = 0;
+    const options = { isTargetPage: () => true, AbortController, setTimeout: scheduler.setTimeout,
+        clearTimeout: scheduler.clearTimeout, nextToken: () => ++epoch };
+    const previous = createSessionScope(options), current = createSessionScope(options);
+    const oldToken = previous.begin(), oldRequest = previous.beginRequest(oldToken);
+    const token = current.begin(), request = current.beginRequest(token);
+    previous.dispose(); previous.finishRequest(oldRequest); previous.dispose();
+    assert.equal(current.isCurrent(token), true); assert.equal(request.controller.signal.aborted, false);
+    assert.equal(previous.isCurrent(oldToken), false); assert.notEqual(oldToken, token);
+    current.dispose(); assert.equal(request.controller.signal.aborted, true);
+});
+
 
 function environment() {
     const scheduler = createScheduler();

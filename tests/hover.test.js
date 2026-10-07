@@ -191,7 +191,7 @@ test('grid retirement settles only that card pending replay without waiting for 
 
 test('actual native-source composition uses the current scope without a removed compatibility variable', async () => {
     const e = await environment();
-    const source = readFileSync(new URL('../src/legacy.js', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../src/app/my-list-session.js', import.meta.url), 'utf8');
     const context = vm.createContext({ sessionScope: e.scope, nativeCarousel: e.carousel,
         sourceState: { section: e.slot.parentElement.parentElement.parentElement,
             scroller: e.slot.parentElement.parentElement, track: e.slot.parentElement },
