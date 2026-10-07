@@ -1,9 +1,10 @@
+import { createImageDiagnostics } from './image-diagnostics.js';
 import { createCardMarkup } from '../netflix/card-markup.js';
 import { createCards } from './cards.js';
 import { createFrame } from './frame.js';
 import { createGroups } from './groups.js';
 
-export function createGrid({ document, location, runChunks,
+export function createGrid({ document, location, runChunks, imageDiagnostics = {},
     createError = (code, message) => Object.assign(new Error(message), { code }),
     readPage = item => item.page, prepareCard = () => {}, onRetire = () => {}, onReplace = () => {}, installHover = () => {},
     tLog = key => key, tUi = key => key, copyLogs = async () => {}, isActive = () => true,
@@ -23,6 +24,10 @@ export function createGrid({ document, location, runChunks,
         onMaterialReleaseFailure: () => { materialReleaseFailures++; },
         onReplace: (...args) => { groups.replacePresentation(...args); onReplace(...args); },
         readRoot: () => frame.root, keyFor: item => item.videoId ? `v:${item.videoId}` : `h:${item.href}` });
+    const images = createImageDiagnostics({ ...imageDiagnostics,
+        readState: () => ({ grid: frame.root, cloneMap: cards.view,
+            initializationStartedAt: imageDiagnostics.readInitializationStartedAt?.() }),
+        gridOwnsClone: groups.isCardVisible });
 
     async function publish({ items, assertCurrent, readMaterial = null, readPage: readBuildPage = null, releaseMaterial = () => {}, onAccepted = () => {}, ...mount }) {
         const owner = ++buildGeneration;
@@ -78,7 +83,7 @@ export function createGrid({ document, location, runChunks,
         frame.clearCards();
         cards.publish(new Map());
     }
-    return Object.freeze({ publish, dispose, clearCards, mount: frame.mount, cancelBuild: () => { ++buildGeneration; },
+    return Object.freeze({ publish, dispose, images, clearCards, mount: frame.mount, cancelBuild: () => { ++buildGeneration; },
         get cards() { return cards.view; }, get root() { return frame.root; }, get status() { return frame.status; },
         updateStatus: frame.updateStatus, layoutStatus: frame.layoutStatus, applyStatusTypography: frame.applyStatusTypography,
         placeStatus: frame.placeStatus,

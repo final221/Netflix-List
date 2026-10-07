@@ -179,6 +179,7 @@ function environment(names, overrides = {}) {
     installNativePopup(c);
     c.fixtureResolveReady = overrides.resolveReadyHover;
     installHover(c);
+    require('./helpers/responsive.cjs').install(c);
     for (const name of ['resolveReadyHover','prepareHoverCard','popupSource','publishSourceState', 'bindViewingSession', 'ensurePageHints', 'pageForItem', 'setPageForItem', 'ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
         'beginRunningSession', 'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',

@@ -12,7 +12,7 @@ This document describes what exists now. [Migration.md](../Migration.md) defines
 
 The checker enforces Migration.md's production import directions and public entries using esbuild's dependency metadata. Private files are accessible within their owning capability; carousel internals are a separate capability inside Netflix. Back-dependencies on application coordination, direct access to another feature's internals, cycles, external inputs and dormant production files fail verification. Completion policy cannot import Netflix integration. These graph checks do not prove state ownership, import-time purity or runtime behavior; the migration still audits those contracts through actual caller transitions and capability scenarios.
 
-Legacy imports have no blanket exemption. Exact exceptions currently allow main to start legacy (removed in P20), legacy to compose DOM names/localization/logger/report/popup inspection/context/page-DOM/list-data/viewing-data/session scope/carousel/grid/list/viewing/native-popup (removed in P20; viewing scan delivery has transferred). The checker and findings.md record each caller/reason/removal step; obsolete exceptions fail verification rather than silently remaining after cutover.
+Legacy imports have no blanket exemption. Exact exceptions currently allow main to start legacy (removed in P20), legacy to compose DOM names/localization/logger/report/popup inspection/context/page-DOM/list-data/viewing-data/session scope/responsive/carousel/grid/list/viewing/hover/native-popup (removed in P20; viewing scan delivery and responsive stability have transferred). The checker and findings.md record each caller/reason/removal step; obsolete exceptions fail verification rather than silently remaining after cutover.
 
 `.github/workflows/check.yml` runs the normal verification commands in one windows-latest job, using the exact Node version from package.json and locked dependencies. Checkout includes HEAD's parent so commit whitespace checks inspect the actual change. It verifies the committed bundle before any write-producing build, then runs regression tests, rebuilds, repeats the read-only check, checks syntax/commit whitespace and rejects tracked build changes. Runtime output/version is unchanged by adding this enforcement.
 
@@ -27,6 +27,7 @@ src/main.js
      -> src/diagnostics/logger.js: application-lifetime retained logging
      -> src/diagnostics/report.js: explicit summary providers and clipboard export
      -> src/netflix/native-popup.js: private graft/geometry/replay/preview ownership
+     -> src/hover/hover.js: intent, delegated pointer listeners and private timing
      -> src/netflix/popup-inspection.js: bounded response/component investigation
      -> src/netflix/context.js: lazy page/profile/locale/request context
      -> src/netflix/page-dom.js: native discovery and membership identity facts
@@ -42,10 +43,12 @@ src/main.js
      -> src/grid/grid.js: card registry, handles, rendering and retained removal material
         -> cards.js / frame.js / groups.js: private card/frame resources and grouped presentation
         -> styles.js: private stylesheet acquisition by frame
+        -> image-diagnostics.js: bounded route resource summaries and Copy Logs thumbnail samples
         -> src/netflix/card-markup.js: pure capture/construction/sanitization
      -> src/netflix/list-data.js: page bootstrap, requests, pagination and normalized records
      -> src/netflix/viewing-data.js: typed viewing requests and interpreted progress/coverage
      -> src/app/session-scope.js: route epochs and registered request/timer ownership
+     -> src/app/responsive.js: viewport/source checks, refresh transaction and exact list deferral
      -> src/netflix/carousel/carousel.js: discovery, binding generations, reads, readiness and expected-card resolution
         -> page-model.js: private signature/page mapping and logical-window policies
         -> navigation.js: private movement, acknowledgement, hydration and restoration
@@ -79,7 +82,7 @@ The repository's `logs/` folder holds user-saved, version-specific live-test cap
 
 Inspection receives current-session checks, a current-token reader, a mounted-grid predicate and one current-source-card reader. Legacy resets its private counters on list entry and supplies the current request/hover session token. The existing validated CarouselPage response feeds the survey without another request; an admitted native preview transfer feeds shape capture. Report collection alone probes the current source card. Stale response/capture operations cannot change the current counters, and a failed probe cannot reject a native transfer or initiate recovery.
 
-Native preview presence timers now belong to native-popup. Other feature counters, frame samples and image-resource measurements remain in legacy until their planned feature transfers. Performance snapshots merge the inspection's copied counters at the original report field. Legacy composes these capabilities through exact temporary imports until P20 moves composition into app; upcoming data/native owners receive their declared operations through injected collaborators.
+Native preview presence timers belong to native-popup, hover/frame counters to hover's private timing owner, resize counters to responsive, and image-resource measurements to grid's private image provider. Performance snapshots merge their copied counters with the inspection's counters at the original report fields. Legacy composes these capabilities through exact temporary imports until P20 moves composition into app; native owners receive declared operations through injected collaborators.
 
 ## Netflix page and markup boundaries
 
@@ -357,4 +360,14 @@ The policy retains the 120 ms dwell, 180 ms scroll quiet period and 180 ms singl
 
 Private `src/hover/timing.js` owns hover counters, phase timing and finite animation-gap windows, including mixed-phase and late callbacks. Existing 12,000 route / 1,800 window frame limits, phase deadlines, 48 interruption logs and native presence-probe limits remain unchanged. Exported observations are copied; diagnostic sinks retain their exact counter owner and cannot publish into a replacement route's counters. Native probe resources remain native-popup-owned.
 
-The remaining application collaborators are `whenStable` (responsive transaction, P19), `resolveReadyHover` / `prepareHoverCard` / `prepareMountedPage` (complete source/material resolution with membership mismatch/recovery composition, P20), current-grid/blocked-state reads, and semantic counter/timing/navigation sinks (P20 composition). These callbacks return validated native source/current card handles and copied page facts; they own no hover token, pointer, dwell, replay or attempt. The exact legacy→hover exception retires stability in P19 and composition in P20. The residual characterization loader instruments the actual private instances only in tests; composed hover tests import unchanged public modules. P21 removes that temporary loader.
+The remaining application collaborators are `resolveReadyHover` / `prepareHoverCard` / `prepareMountedPage` (complete source/material resolution with membership mismatch/recovery composition, P20), current-grid/blocked-state reads, and semantic counter/timing/navigation sinks (P20 composition). Composition supplies `responsive.whenStable` to hover; hover revalidates its exact attempt after that wait. These callbacks return validated native source/current card handles and copied page facts; they own no hover token, pointer, dwell, replay or attempt. The exact legacy→hover exception now retires only composition in P20. The residual characterization loader instruments the actual private instances only in tests; composed hover tests import unchanged public modules. P21 removes that temporary loader.
+
+## Responsive coordination and image diagnostics
+
+`src/app/responsive.js` owns the window/visual-viewport listeners, one current source ResizeObserver (populated, native-empty or provisional-empty mode), the 140 ms coalesced check, active refresh promise, resize counters, signatures, count-convergence suppression and the complete refresh/remapping transaction. Public operations start, observe, accept a published layout, request a check, wait for stability, report suppression/diagnostics and dispose. Source/route/timer/observer/transaction identities reject obsolete delivery. Disposal retires admission before cleanup and releases its exact P14 reconciliation ticket without resuming a retired source. An old refresh cannot clear a replacement timer, promise, frame marker or ticket, including same-route replacement.
+
+Unchanged geometry, the narrow hidden/parked one-pixel height exception and page-count-only convergence preserve hover. Actual viewport bounds/zoom/offset changes cancel immediately; genuine geometry or stale mapping starts the existing settled measurement and bounded mapping retry. Refresh calls carousel operations directly and never invokes hover preparation or waits for its own stability promise. Hover-facing preparation waits through the composed collaborator, then rechecks intent/card/session. Explicit mismatch reinitialization also waits for stability and native navigation idle before returning to page zero. Remaining complete native observation/binding acquisition, page-hint publication, status formatting and mismatch/application callbacks are composition bridges removed in P20; they hold no responsive timer/promise/counter/ticket authority.
+
+Private `src/grid/image-diagnostics.js` is reached only through grid. `grid.images` provides route start/reset/disposal, copied resource counters and explicit Copy Logs sampling. Grid supplies its own current frame/registry and visibility operations; composition supplies only browser APIs, route admission and initialization/viewing timestamps. No sampled grid tree is retained between calls. The sampler still examines at most 600 owned cards, 24 spread geometry samples and 2,000 buffered resource entries on demand. One future-entry observer examines at most 4,000 entries per route, without reading/retaining URLs or changing Netflix's timing buffer. Obsolete callbacks and read/disconnect failures are isolated from replacement observers. Resource durations remain fetch evidence, not decode/paint or cache proof. No scrolling work, requests, background sampler or enlarged budget is added.
+
+Public responsive tests compose actual list tickets and hover waiting; public grid tests exercise the image provider and current registry. Existing geometry/zoom/clipping/parked-height/count/wrapped-tail/remapping/busy-membership and bounded-sampling scenarios remain retargeted to the actual migrated private instances. The temporary loader adds no production inspection API or copied decision implementation and retires in P21.

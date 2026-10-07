@@ -1,3 +1,4 @@
+import { createResponsive } from './app/responsive.js';
 import { createHover } from './hover/hover.js';
 import { createNativePopup } from './netflix/native-popup.js';
 import { createNetflixContext } from './netflix/context.js';
@@ -52,7 +53,12 @@ export function startLegacy() {
     const FRESH_MY_LIST_FETCH_TIMEOUT_MS = 10000;
     const sessionScope = createSessionScope({ isTargetPage, AbortController, setTimeout, clearTimeout,
         requestTimeoutMs: FRESH_MY_LIST_FETCH_TIMEOUT_MS });
-    const gridView = createGrid({ document, location, runChunks: runConstructionChunks,
+    const gridView = createGrid({ document, location,
+        imageDiagnostics: { window, location, performance, PerformanceObserver: typeof PerformanceObserver === 'function' ? PerformanceObserver : undefined,
+            getComputedStyle, readInitializationStartedAt: () => sourceState?.initializationStartedAt, readSessionToken: () => sessionScope.token,
+            isRouteSessionActive,
+            readScanFinishedAt: () => sourceState?.watchStatus ? viewing.diagnostics(sourceState.watchStatus).network?.finishedAt : null },
+        runChunks: runConstructionChunks,
         createError: (code, message) => initializationError(code, 'grid-cards', message),
         installHover: grid => hover.install(grid), readPage: pageForItem,
         onRetire: (handle, detail) => { nativePopup.retire(handle); hover.retire(handle, detail); },
@@ -107,11 +113,6 @@ export function startLegacy() {
 
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
-    // Read-only, on-demand Copy Logs samples; no work is added to scrolling.
-    const THUMBNAIL_DIAGNOSTIC_LIMITS = Object.freeze({
-        cards: 600, geometry: 24, resourceEntries: 2000
-    });
-    const IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES = 4000;
     // Short, coalesced callback-gap samples; never a continuous FPS/paint monitor.
 
     const SCRIPT_NAME = 'My List for Netflix';
@@ -132,7 +133,7 @@ export function startLegacy() {
             htmlLanguage: getHtmlLanguage(), netflixLanguage: getNetflixLanguage(), displayLanguage: getUiLocale(),
             logLanguage: getLogLocale(), viewport: `${window.innerWidth}x${window.innerHeight}`, devicePixelRatio: window.devicePixelRatio }),
         readRuntime: () => collectRuntimeSnapshot(), readSeriesViewing: () => collectViewingSeriesDiagnostics(sourceState),
-        readThumbnails: () => collectThumbnailDiagnostics(sourceState), readNativePopup: () => popupInspection.collect() });
+        readThumbnails: () => gridView.images.collect(), readNativePopup: () => popupInspection.collect() });
 
     const listData = createListData({ context: netflixContext, pageDom: netflixDom, location,
         fetch: (...args) => fetch(...args), performance, assertCurrent: assertRouteSession,
@@ -163,7 +164,7 @@ export function startLegacy() {
         sample: callback => nativeCarousel.sample(callback), grid: gridView, readSessionToken: () => sessionScope.token, isSessionCurrent: isRouteSessionActive,
         readEnvironment: () => ({ grid: sourceState?.grid, blockedReason: orderMismatchDialogOpen ? 'order-mismatch-dialog-open' :
             orderMismatchReinitializing ? 'order-mismatch-reinitializing' : '' }),
-        whenStable: () => responsiveRefreshPromise?.catch(() => {}) || null,
+        whenStable: () => responsive.whenStable(),
         resolveReady: resolveReadyHover, prepare: prepareHoverCard, sleep, assertSession: assertRouteSession,
         isCancelledError: isRouteSessionCancelledError, describeItem: itemSummary, log, warn, tLog,
         createPopup: policy => { return (nativePopup = createNativePopup({ Element, Node: globalThis.Node, document, PointerEvent: globalThis.PointerEvent, MouseEvent: globalThis.MouseEvent, performance,
@@ -176,6 +177,16 @@ export function startLegacy() {
         capturePreview: (...args) => popupInspection.capturePreview(...args) })); }
     });
 
+
+    const responsive = createResponsive({ window, ResizeObserver: globalThis.ResizeObserver,
+        performance, setTimeout, clearTimeout, nativeCarousel, gridView, hover, listMutations,
+        readState: () => sourceState, readSessionToken: () => sessionScope.token,
+        isRouteSessionActive, assertRouteSession, createRouteSessionCancelledError, isRouteSessionCancelledError,
+        nativeSourceObservation, nativeLayoutObservation, nativeSourceDiagnostics, ensureLiveNativeBinding,
+        applyGridGeometry, layoutFrameStatus, updateStatus, formatHeaderParts, measureNativeCarouselGap,
+        pageForItem, setPageForItem, itemKey, copyItemAttributes, currentGridGeometry,
+        realignActiveSource: () => nativePopup.checkDetached(), layoutSummary, collectRuntimeSnapshot,
+        sleep, log, warn, trace, tLog, tUi, readOriginalVisibility: () => viewOriginalMyList, applyLegacyEmptyStateGeometry });
     function resolveReadyHover(item, card) {
         if (!card) return null;
         const state = sourceState;
@@ -307,27 +318,17 @@ export function startLegacy() {
 
     let running = false;
     let runningSessionToken = null;
-    let initializationDeferral = null, responsiveDeferral = null;
+    let initializationDeferral = null;
     let completedSection = null;
     let scheduled = false;
     let scheduledSessionToken = null;
     let scheduledRunTimer = null;
     let scheduledRunDueAt = 0;
     let sourceState = null;
-    let resizeObserver = null;
     let orderMismatchDismissed = false;
     let orderMismatchDialogOpen = false;
     let orderMismatchReinitializing = false;
-    let responsiveRefreshTimer = null;
-    let responsiveRefreshPromise = null;
-    let responsiveRefreshing = false;
-    let activeResponsiveReason = '';
-    let myListCountConvergencePending = false;
     let mutationSourceRecoveryPending = false;
-    let lastResponsiveSignature = '';
-    let lastPageShape = '';
-    let responsiveSequence = 0;
-    let lastResponsiveReason = '';
     let lastObservedUrl = location.href;
     let routeChangeSequence = 0;
     let targetSessionActive = false;
@@ -341,105 +342,21 @@ export function startLegacy() {
     let initializationBlockedSessionToken = null;
     let nativeInitializationFailure = null;
     let performanceDiagnostics = createPerformanceDiagnostics();
-    let imageResourceObserver = null;
 
     function createPerformanceDiagnostics() {
         return {
-            resize: { events: 0, checks: 0, unchanged: 0, refreshes: 0, hoverPreserved: 0, hoverCancelled: 0,
-                parkedHeightChangesIgnored: 0, parkedHeightHoverPreserved: 0 },
             nativeRecovery: { attempts: 0, completed: 0, exhausted: 0, alignmentRestores: 0, alignmentRestoreFailures: 0 },
-            undoRetention: { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 },
-            imageResources: { scope: 'page-images-during-list-route', supported: false, active: false, stopReason: '',
-                limit: IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES, batches: 0, entriesExamined: 0, beforeRouteOrInvalid: 0,
-                skippedAtLimit: 0, imageEntries: 0, startedAfterViewingScan: 0, durationSamples: 0,
-                totalFetchMs: 0, maxFetchMs: 0, lastImageStartOffsetMs: null, cacheDelivery: 0,
-                transferBytesReported: 0, zeroTransferSizeEntries: 0, disconnectFailures: 0 }
+            undoRetention: { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 }
         };
     }
 
     function collectPerformanceDiagnostics() {
         const snapshots = Object.fromEntries(Object.entries(performanceDiagnostics).map(([key, counters]) => [key, { ...counters }]));
         return { viewingGroups: gridView.groupDiagnostics(), hoverPreparation: hover.diagnostics().hoverPreparation,
-            popupInvestigation: popupInspection.diagnostics(), ...snapshots, ...hover.diagnostics(), ...listView.diagnostics(), nativeCollection: nativeCarousel.diagnostics().collection, grid: gridView.diagnostics() };
+            popupInvestigation: popupInspection.diagnostics(), ...snapshots, resize: responsive.diagnostics().resize, imageResources: gridView.images.diagnostics(), ...hover.diagnostics(), ...listView.diagnostics(), nativeCollection: nativeCarousel.diagnostics().collection, grid: gridView.diagnostics() };
     }
 
     function createNavigationDiagnosticSink(token) { return hover.navigationSink(token); }
-
-
-    function stopImageResourceDiagnostics(reason = 'route-leave') {
-        const owner = imageResourceObserver;
-        if (!owner) return;
-        imageResourceObserver = null;
-        owner.counters.active = false;
-        owner.counters.stopReason = reason;
-        try { owner.observer?.disconnect(); } catch (_) { owner.counters.disconnectFailures++; }
-    }
-
-    function recordImageResourceEntries(owner, entries) {
-        if (imageResourceObserver !== owner || !isRouteSessionActive(owner.sessionToken) ||
-            performanceDiagnostics.imageResources !== owner.counters) return;
-        const counters = owner.counters;
-        counters.batches++;
-        const count = Math.min(entries.length, IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES - counters.entriesExamined);
-        const scanFinishedAt = sourceState?.watchStatus ? viewing.diagnostics(sourceState.watchStatus).network?.finishedAt : null;
-        for (let index = 0; index < count; index++) {
-            const entry = entries[index];
-            counters.entriesExamined++;
-            if (!Number.isFinite(entry.startTime) || entry.startTime < owner.startedAt) {
-                counters.beforeRouteOrInvalid++; continue;
-            }
-            if (entry.initiatorType !== 'img') continue;
-            counters.imageEntries++;
-            if (Number.isFinite(scanFinishedAt) && entry.startTime >= scanFinishedAt) counters.startedAfterViewingScan++;
-            counters.lastImageStartOffsetMs = Math.max(counters.lastImageStartOffsetMs ?? 0, Math.round(entry.startTime - owner.startedAt));
-            if (Number.isFinite(entry.duration) && entry.duration >= 0) {
-                counters.durationSamples++;
-                counters.totalFetchMs += Math.round(entry.duration);
-                counters.maxFetchMs = Math.max(counters.maxFetchMs, Math.round(entry.duration));
-            }
-            if (entry.deliveryType === 'cache') counters.cacheDelivery++;
-            if (Number.isFinite(entry.transferSize) && entry.transferSize > 0) counters.transferBytesReported += entry.transferSize;
-            else if (entry.transferSize === 0) counters.zeroTransferSizeEntries++;
-        }
-        if (counters.entriesExamined >= IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES) {
-            counters.skippedAtLimit += entries.length - count;
-            stopImageResourceDiagnostics('entry-limit');
-        }
-        // No URL is read or retained. These include native Netflix images as well as grid thumbnails.
-    }
-
-    function startImageResourceDiagnostics(sessionToken) {
-        if (!isRouteSessionActive(sessionToken)) return;
-        const counters = performanceDiagnostics.imageResources;
-        if (imageResourceObserver?.sessionToken === sessionToken && imageResourceObserver.counters === counters) return;
-        if (counters.entriesExamined >= IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES) return;
-        stopImageResourceDiagnostics('replaced');
-        if (typeof PerformanceObserver !== 'function') {
-            counters.stopReason = 'unsupported'; return;
-        }
-        const owner = { sessionToken, counters, startedAt: performance.now(), observer: null };
-        try {
-            const supportedTypes = PerformanceObserver.supportedEntryTypes;
-            if (Array.isArray(supportedTypes) && !supportedTypes.includes('resource')) {
-                counters.stopReason = 'unsupported'; return;
-            }
-            owner.observer = new PerformanceObserver(list => {
-                if (imageResourceObserver !== owner || !isRouteSessionActive(sessionToken) ||
-                    performanceDiagnostics.imageResources !== counters) return;
-                try { recordImageResourceEntries(owner, list.getEntries()); }
-                catch (_) { stopImageResourceDiagnostics('read-failed'); }
-            });
-            imageResourceObserver = owner;
-            // Subscribe only to future entries. Do not enlarge or clear Netflix's saved timing buffer.
-            owner.observer.observe({ entryTypes: ['resource'] });
-            counters.supported = true;
-            counters.active = true;
-            counters.stopReason = '';
-        } catch (_) {
-            if (imageResourceObserver === owner) stopImageResourceDiagnostics('observe-failed');
-            else counters.stopReason = 'observe-failed';
-        }
-    }
 
     function withNativeReadScope(...args) {
         return nativeCarousel.sample(...args);
@@ -507,7 +424,7 @@ export function startLegacy() {
             viewing.dispose(sourceState.watchStatus); sourceState.listMembership?.dispose(); sourceState.nativePageHints?.dispose();
         }
 
-        listMutations.dispose(); initializationDeferral = null; responsiveDeferral = null;
+        listMutations.dispose(); initializationDeferral = null;
         hover.cancel('source');
         restoreActiveCarouselStyles();
         completedSection = null;
@@ -515,17 +432,8 @@ export function startLegacy() {
             nativeCarousel.clearBinding();
             publishSourceState(null);
         }
-        resizeObserver?.disconnect();
-        resizeObserver = null;
-        clearTimeout(responsiveRefreshTimer);
-        responsiveRefreshTimer = null;
-        responsiveRefreshPromise = null;
-        responsiveRefreshing = false;
-        activeResponsiveReason = '';
-        myListCountConvergencePending = false;
+        responsive.dispose();
         mutationSourceRecoveryPending = false;
-        lastResponsiveSignature = '';
-        lastPageShape = '';
         missingSectionSince = 0;
         gridView.cancelBuild();
         gridView.resetEmpty();
@@ -549,11 +457,11 @@ export function startLegacy() {
     function suspendTargetSession(reason = 'route-leave') {
         const hadSession = targetSessionActive || running || sourceState || completedSection || scheduled;
         const previousToken = sessionScope.token;
-        listMutations.dispose(); initializationDeferral = null; responsiveDeferral = null;
+        listMutations.dispose(); initializationDeferral = null;
         viewing.dispose(sourceState?.watchStatus); sourceState?.listMembership?.dispose(); sourceState?.nativePageHints?.dispose();
         sessionScope.dispose();
         targetSessionActive = false;
-        stopImageResourceDiagnostics();
+        gridView.images.dispose();
         hover.dispose();
 
         if (scheduledRunTimer !== null) clearTimeout(scheduledRunTimer);
@@ -564,14 +472,7 @@ export function startLegacy() {
 
         cleanupTargetSessionDom();
         stopTargetEventListeners();
-        resizeObserver?.disconnect();
-        resizeObserver = null;
-        clearTimeout(responsiveRefreshTimer);
-        responsiveRefreshTimer = null;
-        responsiveRefreshPromise = null;
-        responsiveRefreshing = false;
-        activeResponsiveReason = '';
-        myListCountConvergencePending = false;
+        responsive.dispose();
         nativeCarousel.resetSource();
 
         running = false;
@@ -579,8 +480,6 @@ export function startLegacy() {
         completedSection = null;
         nativeCarousel.clearBinding();
         publishSourceState(null);
-        lastResponsiveSignature = '';
-        lastPageShape = '';
         missingSectionSince = 0;
         listData.reset();
         waitingForNativeEmpty = false;
@@ -608,7 +507,8 @@ export function startLegacy() {
         performanceDiagnostics = createPerformanceDiagnostics(); hover.resetDiagnostics();
         listView.resetDiagnostics();
         popupInspection.reset();
-        startImageResourceDiagnostics(sessionScope.token);
+        responsive.resetDiagnostics();
+        gridView.images.reset(); gridView.images.start(sessionScope.token);
         targetSessionEntryKind = reason === 'route:initial' ? 'initial' : 'spa';
         targetSessionReason = reason;
         const sessionToken = sessionScope.token;
@@ -804,191 +704,11 @@ export function startLegacy() {
             } : null,
             activeSourceSlot: nativePopup.describeActiveSource(),
             hoverToken: hover.intent().token,
-            responsiveRefreshing,
-            responsiveSignature: lastResponsiveSignature,
-            responsivePageShape: lastPageShape,
-            responsiveReason: lastResponsiveReason,
+            ...responsive.diagnostics(),
             resizeViewportSignature: sourceState?.resizeViewportSignature || '',
             hoverScrollState: hover.diagnostics().hoverScrollState,
             pointer: { x: hover.intent().pointerX, y: hover.intent().pointerY }
         };
-    }
-
-    function collectThumbnailDiagnostics(state = sourceState) {
-        const grid = state?.grid;
-        if (!state || state !== sourceState || !grid?.isConnected || !(state.cloneMap instanceof Map) ||
-            !isRouteSessionActive(sessionScope.token)) return { available: false, reason: 'no-current-grid' };
-        const started = performance.now();
-        const report = {
-            available: true, scope: 'first-image-per-owned-card', limits: { ...THUMBNAIL_DIAGNOSTIC_LIMITS },
-            mappedCards: state.cloneMap.size, cardsExamined: 0, truncated: state.cloneMap.size > THUMBNAIL_DIAGNOSTIC_LIMITS.cards,
-            detachedCards: 0, cardsWithoutImage: 0, duplicateImagesSkipped: 0, images: 0,
-            loading: { lazy: 0, eager: 0, other: 0 }, decoding: { async: 0, sync: 0, other: 0 },
-            pixels: { ready: 0, pending: 0, completeWithoutPixels: 0, noSource: 0 },
-            sourceSelection: { current: 0, srcFallback: 0, unresolved: 0, invalidUrl: 0,
-                graphqlAssigned: 0, graphqlSelectionMatches: 0, graphqlSelectionDiffers: 0, graphqlSelectionUnresolved: 0 },
-            dimensionAttributes: { paired: 0, missingOrPartial: 0 },
-            visibility: { renderEligible: 0, filterHidden: 0, collapsedWatched: 0, otherHidden: 0 }
-        };
-        const seen = new Set();
-        const urls = new Set();
-        const eligible = [];
-        try {
-            for (const clone of state.cloneMap.values()) {
-                if (report.cardsExamined >= THUMBNAIL_DIAGNOSTIC_LIMITS.cards) break;
-                report.cardsExamined++;
-                if (!clone?.isConnected || !grid.contains(clone)) { report.detachedCards++; continue; }
-                const image = clone.querySelector('img');
-                if (!image) { report.cardsWithoutImage++; continue; }
-                if (seen.has(image)) { report.duplicateImagesSkipped++; continue; }
-                seen.add(image);
-                report.images++;
-                report.loading[['lazy', 'eager'].includes(image.loading) ? image.loading : 'other']++;
-                report.decoding[['async', 'sync'].includes(image.decoding) ? image.decoding : 'other']++;
-                const current = image.currentSrc || '';
-                const src = image.src || image.getAttribute('src') || '';
-                if (image.getAttribute('data-tm-graphql-image') === 'true') {
-                    report.sourceSelection.graphqlAssigned++;
-                    report.sourceSelection[!current ? 'graphqlSelectionUnresolved' : current === src ?
-                        'graphqlSelectionMatches' : 'graphqlSelectionDiffers']++;
-                }
-                const hasSource = Boolean(current || src || image.getAttribute('srcset'));
-                // Complete with intrinsic dimensions does not establish decode/paint completion.
-                const status = !hasSource ? 'noSource' : image.complete !== true ? 'pending' :
-                    image.naturalWidth > 0 && image.naturalHeight > 0 ? 'ready' : 'completeWithoutPixels';
-                report.pixels[status]++;
-                report.sourceSelection[current ? 'current' : src ? 'srcFallback' : 'unresolved']++;
-                if (current || src) {
-                    try {
-                        const url = new URL(current || src, location.href);
-                        if (url.protocol === 'https:' || url.protocol === 'http:') urls.add(url.href);
-                    } catch (_) { report.sourceSelection.invalidUrl++; }
-                }
-                const width = Number(image.getAttribute('width'));
-                const height = Number(image.getAttribute('height'));
-                report.dimensionAttributes[Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0 ?
-                    'paired' : 'missingOrPartial']++;
-                if (gridOwnsClone(clone, grid)) {
-                    report.visibility.renderEligible++;
-                    eligible.push({ image, status });
-                } else if (clone.getAttribute('data-tm-type-hidden') === 'true') report.visibility.filterHidden++;
-                else if (clone.parentElement?.getAttribute('data-tm-watch-grid') === 'true' &&
-                    clone.parentElement.parentElement?.open !== true) report.visibility.collapsedWatched++;
-                else report.visibility.otherHidden++;
-            }
-        } catch (_) {
-            return { ...report, available: false, reason: 'card-read-failed', elapsedMs: Math.round(performance.now() - started) };
-        }
-        report.geometry = sampleThumbnailGeometry(eligible);
-        report.resourceTiming = collectThumbnailResourceTiming(urls, state.initializationStartedAt);
-        report.elapsedMs = Math.round(performance.now() - started);
-        // URLs and DOM references stay inside this call; only copied scalar summaries leave it.
-        return report;
-    }
-
-    function sampleThumbnailGeometry(records) {
-        const positions = () => ({ images: 0, ready: 0, pending: 0, completeWithoutPixels: 0, noSource: 0 });
-        const viewport = window.visualViewport;
-        const bounds = { left: viewport?.offsetLeft || 0, top: viewport?.offsetTop || 0,
-            width: viewport?.width || window.innerWidth, height: viewport?.height || window.innerHeight };
-        const report = {
-            available: true, positionAt: 'copy-time', bounds, eligibleImages: records.length, sampleCount: 0, rectReads: 0,
-            styleAvailable: typeof getComputedStyle === 'function',
-            inViewport: positions(), aboveViewport: positions(), belowViewport: positions(), outsideViewport: positions(), zeroArea: positions(),
-            pendingWithImageBox: 0, pendingWithParentBox: 0, imageAspectRatioHint: 0, parentAspectRatioHint: 0, parentBlockPadding: 0,
-            imageWidth: { min: null, max: null }, imageHeight: { min: null, max: null }
-        };
-        const count = Math.min(records.length, THUMBNAIL_DIAGNOSTIC_LIMITS.geometry);
-        try {
-            for (let index = 0; index < count; index++) {
-                // Spread the fixed sample across eligible cards, including both ends of the list.
-                const record = records[count === 1 ? 0 : Math.floor(index * (records.length - 1) / (count - 1))];
-                report.rectReads++;
-                const rect = record.image.getBoundingClientRect();
-                const parent = record.image.parentElement;
-                let parentRect = null;
-                if (parent) { report.rectReads++; parentRect = parent.getBoundingClientRect(); }
-                const hasBox = rect.width > 0 && rect.height > 0;
-                const position = !hasBox ? 'zeroArea' : rect.bottom <= bounds.top ? 'aboveViewport' :
-                    rect.top >= bounds.top + bounds.height ? 'belowViewport' :
-                    rect.right > bounds.left && rect.left < bounds.left + bounds.width ? 'inViewport' : 'outsideViewport';
-                report[position].images++;
-                report[position][record.status]++;
-                if (record.status === 'pending') {
-                    if (hasBox) report.pendingWithImageBox++;
-                    if (parentRect?.width > 0 && parentRect.height > 0) report.pendingWithParentBox++;
-                }
-                for (const [key, size] of [['imageWidth', rect.width], ['imageHeight', rect.height]]) {
-                    if (!Number.isFinite(size)) continue;
-                    const value = Math.round(size * 10) / 10;
-                    report[key].min = report[key].min === null ? value : Math.min(report[key].min, value);
-                    report[key].max = report[key].max === null ? value : Math.max(report[key].max, value);
-                }
-                if (report.styleAvailable) {
-                    const imageStyle = getComputedStyle(record.image);
-                    const parentStyle = parent ? getComputedStyle(parent) : null;
-                    if (imageStyle?.aspectRatio && imageStyle.aspectRatio !== 'auto') report.imageAspectRatioHint++;
-                    if (parentStyle?.aspectRatio && parentStyle.aspectRatio !== 'auto') report.parentAspectRatioHint++;
-                    if (parseFloat(parentStyle?.paddingTop) > 0 || parseFloat(parentStyle?.paddingBottom) > 0) report.parentBlockPadding++;
-                }
-                report.sampleCount++;
-            }
-        } catch (_) { report.available = false; report.reason = 'read-failed'; }
-        // A parent box or dimension hint is evidence to inspect, not proof of reserved artwork space or a layout shift.
-        return report;
-    }
-
-    function collectThumbnailResourceTiming(urls, initializationStartedAt) {
-        const report = {
-            available: false, bufferedEntries: 0, examinedEntries: 0, truncated: false, imageEntriesExamined: 0,
-            sourcesConsidered: urls.size, matchedEntries: 0, uniqueSourceMatches: 0, sourcesWithoutEntry: urls.size,
-            entriesBeforeInitializationSkipped: 0,
-            initializationStartKnown: Number.isFinite(initializationStartedAt), cacheDelivery: 0,
-            positiveTransferSizeEntries: 0, zeroTransferSizeEntries: 0, unreportedTransferSizeEntries: 0, transferBytesReported: 0,
-            fetchDurationMs: { samples: 0, total: 0, mean: null, max: null },
-            positionAtRequestKnown: false, imageDecodeMeasured: false, layoutShiftsMeasured: false
-        };
-        if (typeof performance.getEntriesByType !== 'function') return { ...report, reason: 'unsupported' };
-        try {
-            const entries = performance.getEntriesByType('resource');
-            report.bufferedEntries = entries.length;
-            report.truncated = entries.length > THUMBNAIL_DIAGNOSTIC_LIMITS.resourceEntries;
-            const matched = new Set();
-            const first = Math.max(0, entries.length - THUMBNAIL_DIAGNOSTIC_LIMITS.resourceEntries);
-            for (let index = entries.length - 1; index >= first; index--) {
-                const entry = entries[index];
-                report.examinedEntries++;
-                if (entry.initiatorType !== 'img') continue;
-                report.imageEntriesExamined++;
-                if (!urls.has(entry.name)) continue;
-                if (report.initializationStartKnown && entry.startTime < initializationStartedAt) {
-                    report.entriesBeforeInitializationSkipped++; continue;
-                }
-                report.matchedEntries++;
-                matched.add(entry.name);
-                if (Number.isFinite(entry.duration) && entry.duration >= 0) {
-                    report.fetchDurationMs.samples++;
-                    report.fetchDurationMs.total += entry.duration;
-                    report.fetchDurationMs.max = Math.max(report.fetchDurationMs.max ?? 0, entry.duration);
-                }
-                if (entry.deliveryType === 'cache') report.cacheDelivery++;
-                if (Number.isFinite(entry.transferSize) && entry.transferSize > 0) {
-                    report.positiveTransferSizeEntries++;
-                    report.transferBytesReported += entry.transferSize;
-                } else if (entry.transferSize === 0) report.zeroTransferSizeEntries++;
-                else report.unreportedTransferSizeEntries++;
-            }
-            report.uniqueSourceMatches = matched.size;
-            report.sourcesWithoutEntry = urls.size - matched.size;
-            const durations = report.fetchDurationMs;
-            durations.mean = durations.samples ? Math.round(durations.total / durations.samples * 10) / 10 : null;
-            durations.total = Math.round(durations.total * 10) / 10;
-            if (durations.max !== null) durations.max = Math.round(durations.max * 10) / 10;
-            report.available = true;
-        } catch (_) { report.reason = 'read-failed'; }
-        // Resource history can be incomplete and cross-origin byte fields can be hidden.
-        // Fetch duration is not decode/paint time; zero bytes does not establish a cache hit.
-        return report;
     }
 
     async function copyDiagnosticLogs() {
@@ -1175,7 +895,7 @@ export function startLegacy() {
             status: frame.status,
             itemMap: new Map(),
             empty: true,
-            resizeViewportSignature: responsiveViewportSignature(),
+            resizeViewportSignature: responsive.viewportSignature(),
             initializationStartedAt: initializationStarted,
             initializationElapsedMs: elapsedMs
         }, section, scroller || null, track || null));
@@ -1188,30 +908,7 @@ export function startLegacy() {
         }
         resetOrderMismatchStateAfterInitialization();
         applyOriginalMyListVisibility();
-        resizeObserver?.disconnect();
-        const emptyState = sourceState, emptySessionToken = sessionScope.token;
-        const emptyBinding = nativeCarousel.borrowBinding(section, scroller, track);
-        resizeObserver = new ResizeObserver(() => {
-            if (!isRouteSessionActive(emptySessionToken) || sourceState !== emptyState || !emptyState.empty ||
-                !frame.grid.isConnected || !nativeCarousel.isBindingCurrent(emptyBinding)) return;
-            try {
-                withNativeReadScope(() => {
-                    const observed = nativeLayoutObservation(section, emptyState.scroller, emptyState.track, 'auto', emptyState);
-                    const nextLayout = { ...observed.layout };
-                    nextLayout.rowGap = measureNativeCarouselGap(section);
-                    nativeCarousel.assertObservation(observed);
-                    emptyState.layout = nextLayout;
-                    const geometry = applyGridGeometry(section, frame.grid, nextLayout);
-                    if (sourceState !== emptyState || !nativeCarousel.isBindingCurrent(emptyBinding)) return;
-                    layoutFrameStatus(frame.status, geometry);
-                    applyLegacyEmptyStateGeometry(section, nextLayout);
-                });
-            } catch (error) {
-                if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
-            }
-        });
-        resizeObserver.observe(section);
-        if (scroller) resizeObserver.observe(scroller);
+        responsive.observe('native-empty');
         log(tLog('emptyLegacyListFinalized'), {
             reason,
             elapsedMs: Math.round(elapsedMs),
@@ -1364,31 +1061,7 @@ export function startLegacy() {
     }
 
 
-    function installEmptyFrameResizeObserver(section) {
-        const state = sourceState, sessionToken = sessionScope.token;
-        const binding = nativeCarousel.borrowBinding(section, state?.scroller, state?.track);
-        resizeObserver?.disconnect();
-        resizeObserver = new ResizeObserver(() => {
-            if (!isRouteSessionActive(sessionToken) || sourceState !== state || state.section !== section || !state.empty ||
-                !state.grid?.isConnected || !state.status?.isConnected || !nativeCarousel.isBindingCurrent(binding)) return;
-            try {
-                withNativeReadScope(() => {
-                    const observed = nativeLayoutObservation(section, null, null, 'empty', state);
-                    const nextLayout = { ...observed.layout };
-                    nextLayout.rowGap = measureNativeCarouselGap(section);
-                    nativeCarousel.assertObservation(observed);
-                    state.layout = nextLayout;
-                    const geometry = applyGridGeometry(section, state.grid, nextLayout);
-                    if (sourceState !== state || !nativeCarousel.isBindingCurrent(binding)) return;
-                    layoutFrameStatus(state.status, geometry, viewOriginalMyList ? (nextLayout.rowGap || 0) : 0);
-                    applyLegacyEmptyStateGeometry(section, nextLayout);
-                });
-            } catch (error) {
-                if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
-            }
-        });
-        resizeObserver.observe(section);
-    }
+    function installEmptyFrameResizeObserver() { responsive.observe('empty'); }
 
     function ensureSyntheticMyListSection(admission) {
         const state = sourceState, sessionToken = sessionScope.token;
@@ -1480,13 +1153,7 @@ export function startLegacy() {
         gridView.removeSynthetic(live.section);
         applyOriginalMyListVisibility();
 
-        resizeObserver?.disconnect();
-        resizeObserver = new ResizeObserver(() => {
-            if (!grid.isConnected || responsiveRefreshing) return;
-            scheduleResponsiveRefresh(140, 'ResizeObserver');
-        });
-        resizeObserver.observe(live.section);
-        resizeObserver.observe(live.scroller);
+        responsive.observe();
 
         log(tLog('nativeMyListSourceAdoptedWithoutRescan'), {
             pages: live.pages,
@@ -1569,7 +1236,7 @@ export function startLegacy() {
             } });
         if (result.status !== 'anchored') return false;
         nativeCarousel.assertMapping(result);
-        myListCountConvergencePending = true;
+        responsive.expectCountConvergence();
         log(tLog('logicalPageModelSynchronizedAfterDelta'), {
             reason, currentPage: result.currentPage, knownPageCount: result.knownPageCount,
             pageCountFinalized: result.pageCountFinalized, pageMappingStale: result.pageMappingStale,
@@ -1674,7 +1341,7 @@ export function startLegacy() {
 
     function presentListChange({ count, empty, logical }, { parent, assertCurrent }) {
         assertCurrent(); parent.empty = empty;
-        if (logical && count) { scheduleResponsiveRefresh(140, 'my-list-delta'); assertCurrent(); }
+        if (logical && count) { responsive.requestCheck(140, 'my-list-delta'); assertCurrent(); }
         gridView.setEmpty(empty); assertCurrent();
         waitingForNativeEmpty = empty;
         if (empty) syncLegacyEmptyState(parent.section, { allowProvisional: true });
@@ -1737,20 +1404,12 @@ export function startLegacy() {
 
         const sessionToken = sessionScope.token;
         cleanupTargetSessionDom();
-        resizeObserver?.disconnect();
-        resizeObserver = null;
-        clearTimeout(responsiveRefreshTimer);
-        responsiveRefreshTimer = null;
-        responsiveRefreshPromise = null;
-        responsiveDeferral?.ticket.release({ resume: false }); responsiveDeferral = null;
-        responsiveRefreshing = false;
+        responsive.dispose();
         completedSection = null;
         nativeCarousel.clearBinding();
         publishSourceState(null);
         waitingForNativeEmpty = false;
         missingSectionSince = 0;
-        lastResponsiveSignature = '';
-        lastPageShape = '';
         scheduleRun(0, sessionToken);
         return true;
     }
@@ -1920,7 +1579,7 @@ export function startLegacy() {
                 }
             };
             assertCurrent();
-            try { await Promise.resolve(responsiveRefreshPromise); } catch (_) {}
+            try { await Promise.resolve(responsive.whenStable()); } catch (_) {}
             await nativeCarousel.whenNavigationIdle();
             assertCurrent();
             const before = nativeSourceObservation(state, { position: true });
@@ -2086,43 +1745,6 @@ export function startLegacy() {
     async function ensureFreshIndicatorPageZeroAnchor(section, scroller, track, firstVideoId, sessionToken = null) {
         return nativeCarousel.anchorPageZero({ section, scroller, track, firstVideoId, sessionToken,
             columns: sourceState?.layout?.columns });
-    }
-
-    function isResizeResponsiveReason(reason) {
-        return reason === 'ResizeObserver' || reason === 'responsive-resize-retry';
-    }
-
-    function orderMismatchPromptSuppressionState() {
-        const resizePending =
-            isResizeResponsiveReason(lastResponsiveReason) &&
-            responsiveRefreshTimer !== null;
-        const resizeRunning =
-            responsiveRefreshing &&
-            isResizeResponsiveReason(activeResponsiveReason);
-
-        let nativeCountState = null;
-        let nativeCountConverged = false;
-        if (myListCountConvergencePending && sourceState?.scroller?.isConnected && sourceState?.track?.isConnected) {
-            const observation = nativeSourceObservation(sourceState, { count: 'optional' });
-            nativeCountState = observation.count;
-            nativeCarousel.assertObservation(observation);
-            nativeCountConverged =
-                Number.isSafeInteger(nativeCountState.totalCount) &&
-                nativeCountState.totalCount === (sourceState.items?.length ?? sourceState.totalCount ?? 0);
-            if (nativeCountConverged) myListCountConvergencePending = false;
-        }
-
-        return {
-            suppress: Boolean(resizePending || resizeRunning || myListCountConvergencePending),
-            resizePending,
-            resizeRunning,
-            myListCountConvergencePending,
-            nativeCountConverged,
-            legacyTotalCount: sourceState?.items?.length ?? sourceState?.totalCount ?? null,
-            nativeTotalCount: nativeCountState?.totalCount ?? null,
-            nativeCountReadings: nativeCountState?.readings || [],
-            nativeCountUniqueReadings: nativeCountState?.uniqueReadings || []
-        };
     }
 
     async function collectAllItems(section, scroller, track, totalCount, sessionToken = null) {
@@ -2483,7 +2105,7 @@ export function startLegacy() {
                             source: slotDescriptor(targetSourceSlot)
                         }]);
                     } else {
-                        const promptSuppression = orderMismatchPromptSuppressionState();
+                        const promptSuppression = responsive.suppression();
                         if (promptSuppression.suppress) {
                             log(tLog('nativePagePreparationCancelled'), {
                                 reason: 'logical-page-mapping-stale-source-not-found-transient',
@@ -2683,19 +2305,12 @@ export function startLegacy() {
         clearLegacyEmptyState({ restoreGrid: false });
         if (sourceState.watchStatus) syncWatchGroups(sourceState);
 
-        lastResponsiveSignature = responsiveSignature(layout);
-        lastPageShape = responsivePageShape(layout);
+        responsive.acceptLayout(layout);
         // Remember the viewport used to publish this grid before observing the
         // source's own collapse to the hidden, one-pixel standby height.
-        buildState.resizeViewportSignature = responsiveViewportSignature();
+        buildState.resizeViewportSignature = responsive.viewportSignature();
 
-        resizeObserver?.disconnect();
-        resizeObserver = new ResizeObserver(() => {
-            if (!grid.isConnected || responsiveRefreshing) return;
-            scheduleResponsiveRefresh(140, 'ResizeObserver');
-        });
-        resizeObserver.observe(section);
-        resizeObserver.observe(scroller);
+        responsive.observe();
 
         log(tLog('legacyGridBuilt'), {
             items: items.length,
@@ -2708,458 +2323,6 @@ export function startLegacy() {
         return grid;
     }
 
-    function responsiveSignature(layout) {
-        if (!sourceState) return '';
-        const observation = nativeSourceObservation(sourceState, { position: true });
-        const signature = [
-            Math.max(1, layout.columns),
-            observation.position.pages,
-            Math.round(layout.cardWidth),
-            Math.round(layout.gridWidth),
-            Math.round(layout.gridLeft),
-            Math.round(layout.sidePadding || 0),
-            Math.round(layout.scrollerWidth)
-        ].join('|');
-        nativeCarousel.assertObservation(observation);
-        return signature;
-    }
-
-    function responsiveViewportSignature() {
-        const viewport = typeof window === 'undefined' ? {} : window;
-        const visual = viewport.visualViewport;
-        return [viewport.innerWidth, viewport.innerHeight, viewport.devicePixelRatio,
-            visual?.width, visual?.height, visual?.scale, visual?.offsetLeft, visual?.offsetTop].join('|');
-    }
-
-    function responsiveLayoutMatches(previous, next, ignoreScrollerHeight = false) {
-        if (!previous) return false;
-        return ['columns', 'cardWidth', 'gridWidth', 'gridLeft', 'sidePadding', 'sidePaddingLeft',
-            'sidePaddingRight', 'scrollerWidth', 'scrollerHeight', 'gap', 'rowGap']
-            .every(key => (ignoreScrollerHeight && key === 'scrollerHeight') ||
-                Math.abs((previous[key] || 0) - (next[key] || 0)) <= 0.5);
-    }
-
-    function cancelResizeHover() {
-        hover.cancel('resize');
-        performanceDiagnostics.resize.hoverCancelled++;
-    }
-
-    function responsivePageShape(layout) {
-        if (!sourceState) return '';
-        const observation = nativeSourceObservation(sourceState, { position: true });
-        const shape = `${Math.max(1, layout.columns)}|${observation.position.pages}`;
-        nativeCarousel.assertObservation(observation);
-        return shape;
-    }
-
-    function updateResponsiveStatus(layout, note = '') {
-        if (!sourceState?.status || !sourceState?.items) return;
-        const geometry = applyGridGeometry(sourceState.section, sourceState.grid, layout);
-        layoutFrameStatus(sourceState.status, geometry, viewOriginalMyList ? (layout.rowGap || sourceState.layout?.rowGap || 0) : 0);
-        updateStatus(formatHeaderParts(
-            sourceState.items.length,
-            sourceState.totalCount,
-            sourceState.initializationElapsedMs,
-            true
-        ));
-
-        if (note) {
-            log(tLog('responsiveStatusNote'), { note });
-        }
-    }
-
-    async function waitResponsiveLayoutSettled(timeout = 1200, sessionToken = null) {
-        assertRouteSession(sessionToken);
-        const state = sourceState;
-        const { section, scroller, track } = state;
-        const start = performance.now();
-        let previous = '';
-        let stable = 0;
-        let latest = sourceState.layout;
-
-        while (performance.now() - start < timeout) {
-            await sleep(80);
-            assertRouteSession(sessionToken);
-            if (sourceState !== state || state.section !== section || state.scroller !== scroller || state.track !== track ||
-                !section.isConnected || !scroller.isConnected || !track.isConnected || !state.grid?.isConnected) {
-                throw createRouteSessionCancelledError();
-            }
-            const observed = nativeLayoutObservation(section, scroller, track, 'auto', state);
-            latest = { ...observed.layout };
-            latest.rowGap = sourceState?.layout?.rowGap || measureNativeCarouselGap(section);
-            const sig = responsiveSignature(latest);
-            nativeCarousel.assertObservation(observed);
-            if (sig === previous) {
-                stable++;
-                if (stable >= 2) return latest;
-            } else {
-                previous = sig;
-                stable = 0;
-            }
-        }
-        assertRouteSession(sessionToken);
-        return latest;
-    }
-
-    async function rebuildLogicalPageModelFromNativePosition(layout, reason = 'responsive-remap', sessionToken = sessionScope.token) {
-        assertRouteSession(sessionToken);
-        const live = ensureLiveNativeBinding('logical-page-model-rebuild-start') || sourceState;
-        const state = sourceState;
-        const section = live?.section || state?.section;
-        const scroller = live?.scroller || state?.scroller;
-        const track = live?.track || state?.track;
-        if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
-            throw new Error('Native carousel binding is unavailable during logical page model rebuild');
-        }
-        if (!state) throw createRouteSessionCancelledError();
-        const { itemMap, cloneMap, grid } = state;
-        const recordOwner = state.items, items = recordOwner || [];
-        const totalCount = items.length;
-        const columns = Math.max(1, layout?.columns || state.layout?.columns || 1);
-        const previousColumns = state.layout?.columns;
-        const assertOwner = () => {
-            assertRouteSession(sessionToken);
-            if (sourceState !== state || state.items !== recordOwner || items.length !== totalCount || state.itemMap !== itemMap ||
-                state.cloneMap !== cloneMap || state.grid !== grid || (grid && !grid.isConnected) ||
-                state.layout?.columns !== previousColumns || state.section !== section || state.scroller !== scroller || state.track !== track) {
-                throw createRouteSessionCancelledError();
-            }
-        };
-        const result = await nativeCarousel.refreshMapping({ mode: 'responsive', section, scroller, track,
-            totalCount, columns, reason, sessionToken, assertCurrent: assertOwner });
-        const assertPublication = () => { assertOwner(); nativeCarousel.assertMapping(result); };
-        assertPublication();
-        if (result.countConverged) myListCountConvergencePending = false;
-        if (result.status !== 'committed') return null;
-        return nativeCarousel.sample(() => {
-            let changed = 0;
-            items.forEach((item, index) => {
-                assertPublication();
-                const page = Math.min(result.knownPageCount - 1, Math.floor(index / columns));
-                if (pageForItem(item) !== page) changed++;
-                setPageForItem(item, page, state, { assertCurrent: assertPublication });
-                const clone = cloneMap?.get(itemKey(item));
-                if (clone?.isConnected) copyItemAttributes(clone, item);
-                assertPublication();
-            });
-            assertPublication();
-            state.initialPage = result.currentPage;
-            log(tLog('logicalPageModelSynchronizedAfterDelta'), {
-                reason, currentPage: result.currentPage, knownPageCount: result.knownPageCount,
-                pageCountFinalized: result.pageCountFinalized, pageMappingStale: result.pageMappingStale,
-                visibleSignature: result.visibleSignature, visibleIds: result.visibleIds,
-                itemIndices: result.itemIndices, logicalIndices: result.logicalIndices, columns, changed, totalCount
-            });
-            assertPublication();
-            return changed;
-        });
-    }
-
-    async function remapItemsByOrder(layout, sessionToken = sessionScope.token) {
-        const state = sourceState;
-        const { section, items, cloneMap } = state;
-        const columns = Math.max(1, layout.columns);
-        const runtime = nativeSourceObservation(state, { position: true });
-        const logicalMode = runtime?.mode === 'logical';
-        const pages = logicalMode
-            ? Math.max(1, Math.ceil(items.length / columns))
-            : Math.max(1, runtime.position.pages);
-        let changed = 0;
-
-        if (logicalMode) {
-            changed = await rebuildLogicalPageModelFromNativePosition(layout, 'responsive-remap', sessionToken);
-        } else {
-            nativeCarousel.sample(() => items.forEach((item, index) => {
-                nativeCarousel.assertObservation(runtime);
-                const page = Math.min(pages - 1, Math.floor(index / columns));
-                if (pageForItem(item) !== page) changed++;
-                setPageForItem(item, page, state, { assertCurrent: () => nativeCarousel.assertObservation(runtime) });
-                const clone = cloneMap?.get(itemKey(item));
-                if (clone) copyItemAttributes(clone, item);
-                nativeCarousel.assertObservation(runtime);
-            }));
-        }
-
-        const updatedRuntime = nativeSourceObservation(state);
-        log(tLog('responsiveItemPageMappingRecalculatedWithoutNativeCarouselScan'), {
-            columns,
-            pages,
-            changed,
-            total: items.length,
-            selectedPage: nativeSourceDiagnostics(section, state.scroller, state.track)?.selectedPage ?? null,
-            pageMode: updatedRuntime?.mode || null,
-            reanchoredLogicalPages: logicalMode,
-            pageMappingStale: Boolean(updatedRuntime?.needsRemapping)
-        });
-        nativeCarousel.assertObservation(updatedRuntime);
-
-        return changed;
-    }
-
-    async function refreshResponsiveLayout(sessionToken = sessionScope.token) {
-        if (!isRouteSessionActive(sessionToken) || !sourceState?.grid?.isConnected || responsiveRefreshing) return;
-        const state = sourceState;
-        const { section, scroller, track } = state;
-        responsiveRefreshing = true;
-        const responsiveOwner = { sessionToken, ticket: listMutations.deferReconciliation('responsive-refresh') };
-        responsiveDeferral = responsiveOwner;
-        let deferredLogicalRemap = false;
-        const seq = ++responsiveSequence;
-        const reason = lastResponsiveReason || 'unspecified';
-        activeResponsiveReason = reason;
-        const started = performance.now();
-        const grid = state.grid;
-        const assertOwner = () => {
-            assertRouteSession(sessionToken);
-            if (sourceState !== state || state.section !== section || state.scroller !== scroller || state.track !== track ||
-                !section.isConnected || !scroller.isConnected || !track.isConnected || state.grid !== grid || !grid.isConnected) {
-                throw createRouteSessionCancelledError();
-            }
-        };
-        try {
-            const startingNative = nativeSourceDiagnostics(section, scroller, track);
-            log(tLog('responsiveRefreshStarted'), {
-                seq,
-                reason,
-                beforeLayout: layoutSummary(sourceState.layout),
-                selectedPage: startingNative?.selectedPage ?? null,
-                pages: startingNative?.pageCount ?? null
-            });
-            gridView.setRefreshing(grid, true);
-            performanceDiagnostics.resize.refreshes++;
-            cancelResizeHover();
-            const liveLayout = await waitResponsiveLayoutSettled(1200, sessionToken);
-            assertOwner();
-            const signature = responsiveSignature(liveLayout);
-            const pageShape = responsivePageShape(liveLayout);
-
-            sourceState.layout = liveLayout;
-            updateResponsiveStatus(liveLayout, tUi('relayoutInProgress'));
-
-            const pageShapeChanged = pageShape !== lastPageShape;
-            const sourceObservation = nativeSourceObservation(state);
-            const logicalMappingStale = Boolean(sourceObservation?.needsRemapping);
-            log(tLog('responsiveMeasurementResolved'), {
-                seq,
-                reason,
-                liveLayout: layoutSummary(liveLayout),
-                signature,
-                pageShape,
-                previousPageShape: lastPageShape,
-                pageShapeChanged,
-                logicalMappingStale
-            });
-            assertOwner();
-            nativeCarousel.assertObservation(sourceObservation);
-            if (pageShapeChanged || logicalMappingStale) {
-                const changed = await remapItemsByOrder(liveLayout, sessionToken);
-                assertOwner();
-                deferredLogicalRemap = changed === null;
-                const remappedNative = nativeSourceDiagnostics(section, scroller, track);
-                if (deferredLogicalRemap) {
-                    log('Responsive logical page remap deferred', {
-                        seq,
-                        reason,
-                        columns: liveLayout.columns,
-                        pages: remappedNative?.pageCount ?? null,
-                        total: sourceState.items.length,
-                        retryCount: nativeSourceObservation(state)?.remapAttempts || 0
-                    });
-                } else {
-                    log(tLog('responsivePageMappingUpdatedWithoutNativeCarouselMovement'), {
-                        seq,
-                        reason,
-                        columns: liveLayout.columns,
-                        pages: remappedNative?.pageCount ?? null,
-                        changed,
-                        total: sourceState.items.length
-                    });
-                }
-            } else {
-                // Geometry-only resize: keep the native carousel exactly where the user left it.
-                realignActiveSource();
-            }
-
-            const finalSignature = responsiveSignature(liveLayout);
-            const finalPageShape = responsivePageShape(liveLayout);
-            lastResponsiveSignature = finalSignature;
-            lastPageShape = finalPageShape;
-            updateResponsiveStatus(liveLayout);
-            log(tLog('responsiveRefreshCompleted'), {
-                seq,
-                reason,
-                layout: layoutSummary(liveLayout),
-                elapsedMs: Math.round(performance.now() - started),
-                selectedPage: nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null,
-                finalSignature,
-                finalPageShape
-            });
-        } catch (error) {
-            if (isRouteSessionCancelledError(error)) return;
-            warn(tLog('responsiveRelayoutFailed'), {
-                seq,
-                reason,
-                error,
-                elapsedMs: Math.round(performance.now() - started),
-                snapshot: collectRuntimeSnapshot()
-            });
-            updateResponsiveStatus(sourceState.layout, tUi('relayoutFailed'));
-        } finally {
-            try {
-                gridView.setRefreshing(grid, false);
-                if (isRouteSessionActive(sessionToken) && responsiveSequence === seq && responsiveDeferral === responsiveOwner) {
-                    responsiveRefreshing = false;
-                    activeResponsiveReason = '';
-                    responsiveDeferral = null;
-                    responsiveOwner.ticket.release({ reason: 'after-responsive-refresh' });
-                    const runtime = sourceState === state ? nativeSourceObservation(state) : null;
-                    if (deferredLogicalRemap && runtime?.needsRemapping && (runtime.remapAttempts || 0) === 1) {
-                        scheduleResponsiveRefresh(
-                            400,
-                            isResizeResponsiveReason(reason) ? 'responsive-resize-retry' : 'logical-page-model-retry'
-                        );
-                    }
-                }
-            } finally {
-                const admitted = isRouteSessionActive(sessionToken) && responsiveSequence === seq && responsiveDeferral === responsiveOwner;
-                if (responsiveDeferral === responsiveOwner) {
-                    responsiveRefreshing = false; responsiveDeferral = null; activeResponsiveReason = '';
-                }
-                responsiveOwner.ticket.release({ resume: admitted, reason: 'after-responsive-refresh' });
-            }
-
-            // Resize may fast-reanchor the hidden/native carousel to rebuild the logical
-            // indicator, but it never starts MiniModal hover preparation by itself.
-        }
-    }
-
-    function scheduleResponsiveRefresh(delay = 140, reason = 'unknown') {
-        const sessionToken = sessionScope.token;
-        if (!isRouteSessionActive(sessionToken) || !sourceState?.grid?.isConnected) return;
-        const state = sourceState;
-        lastResponsiveReason = reason;
-        clearTimeout(responsiveRefreshTimer);
-        responsiveRefreshTimer = setTimeout(() => withNativeReadScope(() => {
-            responsiveRefreshTimer = null;
-            try {
-                if (!isRouteSessionActive(sessionToken) || responsiveRefreshing || sourceState !== state || !state.grid?.isConnected) return;
-                performanceDiagnostics.resize.checks++;
-                if (state.empty && (!state.scroller || !state.track)) {
-                    const observed = nativeLayoutObservation(state.section, null, null, 'empty', state);
-                    const layout = { ...observed.layout };
-                    layout.rowGap = measureNativeCarouselGap(state.section);
-                    nativeCarousel.assertObservation(observed);
-                    if (responsiveLayoutMatches(state.layout, layout)) {
-                        performanceDiagnostics.resize.unchanged++;
-                        return;
-                    }
-                    state.layout = layout;
-                    const geometry = applyGridGeometry(state.section, state.grid, layout);
-                    layoutFrameStatus(state.status, geometry);
-                    return;
-                }
-                ensureLiveNativeBinding('responsive-check');
-                if (sourceState !== state || !state.section?.isConnected || !state.scroller?.isConnected || !state.track?.isConnected) return;
-
-                // Skip the expensive rescan when measured geometry has not changed.
-                // Keep active-slot alignment here and clear it only when the responsive state actually changes.
-                const sample = withNativeReadScope(() => {
-                    const observed = nativeLayoutObservation(state.section, state.scroller, state.track, 'auto', state);
-                    const measured = { ...observed.layout };
-                    measured.rowGap = state.layout?.rowGap || measureNativeCarouselGap(state.section);
-                    const result = { measured, signature: responsiveSignature(measured), geometry: currentGridGeometry(state.section, measured), observed };
-                    nativeCarousel.assertObservation(observed);
-                    return result;
-                });
-                const measured = sample.measured;
-                const sig = sample.signature;
-                if (sourceState !== state) return;
-                const sourceObservation = nativeSourceObservation(state, { presentation: true });
-                const logicalMappingStale = Boolean(sourceObservation?.needsRemapping);
-                const applied = state.grid.__tmAppliedGeometry;
-                const layoutUnchanged = responsiveLayoutMatches(state.layout, measured);
-                // Parking a hidden source changes its own height, not the displayed
-                // grid. Preserve the first hover only after all other checks agree.
-                const parkedHeightOnlyChange = !layoutUnchanged && lastResponsiveReason === 'ResizeObserver' &&
-                    sig === lastResponsiveSignature && !logicalMappingStale &&
-                    sourceObservation.presentation.hidden && sourceObservation.presentation.parked &&
-                    state.resizeViewportSignature === responsiveViewportSignature() &&
-                    Number.isFinite(state.layout?.scrollerHeight) && state.layout.scrollerHeight > 1.5 &&
-                    Number.isFinite(measured.scrollerHeight) && measured.scrollerHeight >= 1 && measured.scrollerHeight <= 1.5 &&
-                    responsiveLayoutMatches(state.layout, measured, true);
-                const geometryUnchanged = (layoutUnchanged || parkedHeightOnlyChange) && applied &&
-                    ['width', 'left', 'columns'].every(key => Math.abs(applied[key] - sample.geometry[key]) <= 0.5);
-                if (!nativeCarousel.isObservationCurrent(sourceObservation)) return;
-                if (!nativeCarousel.isObservationCurrent(sample.observed)) return;
-                if (sig === lastResponsiveSignature && geometryUnchanged && !logicalMappingStale) {
-                    const previousScrollerHeight = state.layout.scrollerHeight;
-                    sourceState.layout = measured;
-                    realignActiveSource();
-                    performanceDiagnostics.resize.unchanged++;
-                    const hoverPreserved = Boolean(hover.hasInteraction());
-                    if (hoverPreserved) performanceDiagnostics.resize.hoverPreserved++;
-                    if (parkedHeightOnlyChange) {
-                        const counters = performanceDiagnostics.resize;
-                        counters.parkedHeightChangesIgnored++;
-                        if (hoverPreserved) counters.parkedHeightHoverPreserved++;
-                        // One event per route; later occurrences remain in Copy Logs.
-                        if (counters.parkedHeightChangesIgnored === 1) {
-                            try { log(tLog('responsiveRemeasurementNoShapeChange'), {
-                                reason: lastResponsiveReason, signature: sig, parkedHeightOnlyChange: true,
-                                previousScrollerHeight, scrollerHeight: measured.scrollerHeight, hoverPreserved
-                            }); } catch (_) { hover.count('hoverInteraction', 'diagnosticFailures'); }
-                        }
-                    } else trace(() => [tLog('responsiveRemeasurementNoShapeChange'), {
-                        reason: lastResponsiveReason,
-                        signature: sig,
-                        layout: layoutSummary(measured)
-                    }]);
-                    return;
-                }
-
-                // Netflix can change only the carousel page count after a My List removal
-                // settles (for example, after the Undo window) without changing responsive
-                // geometry. Treat that as content-state convergence, not a responsive relayout,
-                // so an active hover is not invalidated unnecessarily.
-                if (lastResponsiveReason === 'ResizeObserver') {
-                    const previousParts = String(lastResponsiveSignature || '').split('|');
-                    const currentParts = String(sig || '').split('|');
-                    const pageCountOnlyChanged =
-                        previousParts.length === 7 &&
-                        currentParts.length === 7 &&
-                        previousParts[1] !== currentParts[1] &&
-                        previousParts.every((part, index) => index === 1 || part === currentParts[index]);
-
-                    if (pageCountOnlyChanged && geometryUnchanged && !logicalMappingStale) {
-                        const previousSignature = lastResponsiveSignature;
-                        sourceState.layout = measured;
-                        lastResponsiveSignature = sig;
-                        lastPageShape = responsivePageShape(measured);
-                        realignActiveSource();
-                        performanceDiagnostics.resize.unchanged++;
-                        if (hover.hasInteraction()) performanceDiagnostics.resize.hoverPreserved++;
-                        log(tLog('responsiveRemeasurementNoShapeChange'), {
-                            reason: lastResponsiveReason,
-                            signature: sig,
-                            previousSignature,
-                            pageCountOnlyChange: true,
-                            layout: layoutSummary(measured)
-                        });
-                        return;
-                    }
-                }
-
-                const refreshPromise = refreshResponsiveLayout(sessionToken);
-                responsiveRefreshPromise = refreshPromise;
-                Promise.resolve(refreshPromise).finally(() => {
-                    if (responsiveRefreshPromise === refreshPromise) responsiveRefreshPromise = null;
-                });
-            } catch (error) {
-                if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
-            }
-        }), delay);
-    }
-
     function beginSourceScan(section, scroller, track) {
         return nativeSourcePresentation(section, scroller, track, { phase: 'scan' });
     }
@@ -3170,33 +2333,6 @@ export function startLegacy() {
 
     function realignActiveSource() {
         nativePopup.checkDetached();
-    }
-
-
-    function handleTargetWindowResize() {
-        handleTargetResize('window.resize');
-    }
-
-    function handleTargetVisualViewportResize() {
-        handleTargetResize('visualViewport.resize');
-    }
-
-    function handleTargetResize(reason) {
-        if (!sourceState?.grid?.isConnected) return;
-        performanceDiagnostics.resize.events++;
-        const signature = responsiveViewportSignature();
-        if (sourceState.resizeViewportSignature !== signature) {
-            // Real bounds/zoom/offset changes can invalidate native popup placement
-            // even when the column count is unchanged. Duplicate events cannot.
-            cancelResizeHover();
-            log(tLog(reason === 'window.resize' ? 'windowResizeDetected' : 'visualViewportResizeDetected'), {
-                previousSignature: sourceState.resizeViewportSignature || '', signature,
-                viewport: { width: window.innerWidth, height: window.innerHeight },
-                hoverCancelled: true
-            });
-            sourceState.resizeViewportSignature = signature;
-        }
-        scheduleResponsiveRefresh(140, reason);
     }
 
     function handleRelevantTargetDocumentMutation(sessionToken) {
@@ -3213,8 +2349,7 @@ export function startLegacy() {
         targetListenersActive = true;
         hover.start();
         document.addEventListener('click', handleObservedMyListToggleClick, { capture: true, passive: true });
-        window.addEventListener('resize', handleTargetWindowResize, { passive: true });
-        window.visualViewport?.addEventListener('resize', handleTargetVisualViewportResize, { passive: true });
+        responsive.start();
         nativeCarousel.startDiscovery();
     }
 
@@ -3225,8 +2360,7 @@ export function startLegacy() {
         if (!targetListenersActive && !nativeCarousel.diagnostics().discoveryActive) return;
         targetListenersActive = false;
         document.removeEventListener('click', handleObservedMyListToggleClick, true);
-        window.removeEventListener('resize', handleTargetWindowResize);
-        window.visualViewport?.removeEventListener('resize', handleTargetVisualViewportResize);
+        responsive.dispose();
         nativeCarousel.stopDiscovery();
     }
 
@@ -3259,13 +2393,7 @@ export function startLegacy() {
         performanceDiagnostics.nativeRecovery.attempts++;
         listMutations.deferPending();
         cleanupTargetSessionDom();
-        resizeObserver?.disconnect();
-        resizeObserver = null;
-        clearTimeout(responsiveRefreshTimer);
-        responsiveRefreshTimer = null;
-        responsiveRefreshPromise = null;
-        responsiveDeferral?.ticket.release({ resume: false }); responsiveDeferral = null;
-        responsiveRefreshing = false;
+        responsive.dispose();
         nativeCarousel.clearBinding();
         publishSourceState(null);
         completedSection = null;
@@ -3368,7 +2496,7 @@ export function startLegacy() {
             status: provisionalFrame.status,
             itemMap: new Map(),
             empty: false,
-            resizeViewportSignature: responsiveViewportSignature(),
+            resizeViewportSignature: responsive.viewportSignature(),
             initializationStartedAt: initializationStarted
         }, section, scroller || null, track || null));
         applyOriginalMyListVisibility();
