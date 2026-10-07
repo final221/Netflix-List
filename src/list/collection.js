@@ -100,8 +100,8 @@ export function createCollection({ runChunks, assertSession, isCancelled, collec
         const guard = () => { assertSession(sessionToken); assertCurrent(); };
         guard(); assertCount(totalCount);
         let items;
-        if (preferred?.length === totalCount) {
-            items = preferred; onPreferred(items); guard();
+        if (preferred?.items?.length === totalCount) {
+            items = preferred.items; onPreferred(items); guard();
         } else {
             beforeNative(); guard();
             try { items = await collectNative(); }
@@ -110,15 +110,17 @@ export function createCollection({ runChunks, assertSession, isCancelled, collec
         }
         if (!items.length) {
             const empty = readEmpty(), pages = empty.pages, cards = empty.cards; guard();
-            if (pages === 1 && cards === 0) return Object.freeze({ status: 'empty', items });
+            if (pages === 1 && cards === 0) return Object.freeze({ status: 'empty', transfer: prepareRecords(items, { assertCurrent: guard }) });
             const error = createFailure({ code: 'NO_NATIVE_CARDS', collected: 0, totalCount }); guard(); throw error;
         }
         if (items.length !== totalCount) {
             const error = createFailure({ code: 'COLLECTION_COUNT_MISMATCH', collected: items.length, totalCount }); guard(); throw error;
         }
-        guard(); return Object.freeze({ status: 'complete', items });
+        guard(); return Object.freeze({ status: 'complete', transfer: prepareRecords(items, {
+            assertCurrent: guard, template: preferred?.items === items ? preferred.template : null,
+            columns: preferred?.columns }) });
     }
-    async function buildItems(records, totalCount, columns, template, sessionToken = null, assertCurrent = () => {}) {
+    async function buildRecords(records, totalCount, template, sessionToken = null, assertCurrent = () => {}) {
         const guard = () => { assertSession(sessionToken); assertCurrent(); };
         guard();
         if (!Array.isArray(records) || !template || !Number.isFinite(totalCount)) return null;
@@ -127,9 +129,7 @@ export function createCollection({ runChunks, assertSession, isCancelled, collec
             guard();
             const record = records[index], videoId = record?.videoId;
             if (!videoId || seen.has(videoId)) return;
-            const itemIndex = items.length;
-            items.push({ ...record, page: Math.floor(itemIndex / Math.max(1, columns)), logicalIndex: itemIndex,
-                cardTemplate: template, graphql: true });
+            items.push(toRecord({ ...record, graphql: true }));
             seen.add(videoId);
         }, guard);
         guard();
@@ -155,22 +155,23 @@ export function createCollection({ runChunks, assertSession, isCancelled, collec
             guard();
             const data = await collectRecords({ bootstrap, totalCount, sessionToken });
             guard(); current = data.bootstrap;
-            const items = await buildItems(data.records, totalCount, columns, template, sessionToken, assertCurrent);
-            guard(); return { bootstrap: current, items, ...(data.error ? { error: data.error } : {}) };
+            const items = await buildRecords(data.records, totalCount, template, sessionToken, assertCurrent);
+            guard(); return { bootstrap: current, items, template, columns, ...(data.error ? { error: data.error } : {}) };
         } catch (error) {
             guard(); if (isCancelled(error)) throw error;
             return { bootstrap: current, items: null, error };
         }
     }
-    function prepareRecords(items, { assertCurrent = () => {} } = {}) {
+    function prepareRecords(items, { assertCurrent = () => {}, template = null, columns = 1 } = {}) {
         const materials = new Map(), inputs = [], records = [];
+        const sharedMaterial = template ? Object.freeze({ source: template, template: true }) : null;
         assertCurrent();
         for (const input of items) {
             const record = toRecord(input), source = input.snapshot || input.cardTemplate || null;
-            const material = source ? Object.freeze({ source, template: !input.snapshot && source === input.cardTemplate }) : null;
+            const material = source ? Object.freeze({ source, template: !input.snapshot && source === input.cardTemplate }) : sharedMaterial;
             assertCurrent(); records.push(record);
-            inputs.push({ input, snapshot: input.snapshot, cardTemplate: input.cardTemplate, imageUrl: input.imageUrl });
-            materials.set(record, { material, page: input.page });
+            if (source) inputs.push({ input, snapshot: input.snapshot, cardTemplate: input.cardTemplate, imageUrl: input.imageUrl });
+            materials.set(record, { material, page: input.page ?? (template ? Math.floor((records.length - 1) / Math.max(1, columns)) : undefined) });
             assertCurrent();
         }
         let released = false;
@@ -195,7 +196,7 @@ export function createCollection({ runChunks, assertSession, isCancelled, collec
                 if (failure) throw failure;
             }, discard() { released = true; materials.clear(); inputs.length = 0; } });
     }
-    return { preparePreferred, collectForPublication, waitForInitialCount, prepareEntry, buildItems, collectLogical, prepareRecords,
+    return { preparePreferred, collectForPublication, waitForInitialCount, prepareEntry, collectLogical, prepareRecords,
         resetDiagnostics: () => { for (const key of Object.keys(reuse)) reuse[key] = 0; },
         diagnostics: () => Object.freeze({ membershipReuse: Object.freeze({ ...reuse }) }) };
 }

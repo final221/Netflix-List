@@ -80,7 +80,7 @@ export function createMyListSession({ environment = globalThis, version, context
         readSession: () => sessionScope.token, isSessionActive: isRouteSessionActive, setTimeout, clearTimeout,
         ttl: UNDO_ENTRY_TTL_MS, hasRetained: (id, item) => gridView.hasRetained(id, item),
         releaseRetained: id => gridView.releaseRetained(id), mutationTimeout: DELTA_MUTATION_TIMEOUT_MS,
-        isBlocked: () => nativeInitializationFailure?.sessionToken === sessionScope.token && initializationBlockedSessionToken === sessionScope.token,
+        isBlocked: () => blockedInitialization?.native?.sessionToken === sessionScope.token,
         readParent: () => sourceState, canApply: () => Boolean(sourceState && isTargetPage()),
         assertSession: assertRouteSession, isCancelled: isRouteSessionCancelledError,
         createError: (code, message) => initializationError(code, 'native-discovery', message),
@@ -149,7 +149,7 @@ export function createMyListSession({ environment = globalThis, version, context
         navigationDiagnostics: createNavigationDiagnosticSink,
         checkRoute: () => onNavigation('MutationObserver-url'),
         onMutationDelivery: () => nativePopup.checkDetached(),
-        isInitializationBlocked: () => initializationBlockedSessionToken === sessionScope.token,
+        isInitializationBlocked: () => blockedInitialization?.sessionToken === sessionScope.token,
         onBlockedMutation: token => recoverNativeInitialization(token, 'document-mutation'),
         isGridDetached: () => Boolean(completedSection && sourceState?.grid && !sourceState.grid.isConnected),
         shouldCoalesce: () => Boolean(completedSection || (waitingForNativeEmpty && sourceState?.empty)),
@@ -213,7 +213,7 @@ export function createMyListSession({ environment = globalThis, version, context
     function resolveReadyHover(item, card) {
         if (!card) return null;
         const state = sourceState;
-        return withNativeReadScope(() => {
+        return nativeCarousel.sample(() => {
             ensureLiveNativeBinding('hover-reuse');
             const observation = nativeSourceObservation(state, { position: true });
             const page = observation.position.page, backedPage = Number(card.node.getAttribute('data-tm-backed-page'));
@@ -335,14 +335,10 @@ export function createMyListSession({ environment = globalThis, version, context
         };
     }
 
-    let running = false;
-    let runningSessionToken = null;
+    let runningInitialization = null;
     let initializationDeferral = null;
     let completedSection = null;
-    let scheduled = false;
-    let scheduledSessionToken = null;
-    let scheduledRunTimer = null;
-    let scheduledRunDueAt = 0;
+    let scheduledRun = null;
     let sourceState = null;
     let orderMismatchDismissed = false;
     let orderMismatchDialogOpen = false;
@@ -354,8 +350,7 @@ export function createMyListSession({ environment = globalThis, version, context
     let targetListenersActive = false;
     let missingSectionSince = 0;
     let waitingForNativeEmpty = false;
-    let initializationBlockedSessionToken = null;
-    let nativeInitializationFailure = null;
+    let blockedInitialization = null;
     let performanceDiagnostics = createPerformanceDiagnostics();
 
     function createPerformanceDiagnostics() {
@@ -374,14 +369,6 @@ export function createMyListSession({ environment = globalThis, version, context
     }
 
     function createNavigationDiagnosticSink(token) { return hover.navigationSink(token); }
-
-    function withNativeReadScope(...args) {
-        return nativeCarousel.sample(...args);
-    }
-
-    function invalidateNativeReadScope(...args) {
-        return nativeCarousel.invalidateReads(...args);
-    }
 
     function isTargetPage() {
         return location.origin === 'https://www.netflix.com' && location.pathname === TARGET_PATH;
@@ -419,20 +406,15 @@ export function createMyListSession({ environment = globalThis, version, context
         listMutations.start(sessionToken);
         initializationDeferral?.ticket.release({ resume: false });
         const owner = { sessionToken, ticket: listMutations.deferReconciliation('initialization') };
-        initializationDeferral = owner; running = true; runningSessionToken = sessionToken;
+        initializationDeferral = owner; runningInitialization = owner;
         return owner;
     }
 
     function clearRunningSession(sessionToken, retryMutations = true, expected = initializationDeferral) {
-        if (runningSessionToken !== sessionToken || initializationDeferral !== expected) return;
-        running = false;
-        runningSessionToken = null;
+        if (runningInitialization?.sessionToken !== sessionToken || initializationDeferral !== expected) return;
+        runningInitialization = null;
         initializationDeferral = null;
         expected?.ticket.release({ resume: retryMutations, reason: 'after-initialization' });
-    }
-
-    function restoreActiveCarouselStyles() {
-        nativeCarousel.restoreMotion();
     }
 
     function resetDetachedTargetState() {
@@ -443,7 +425,7 @@ export function createMyListSession({ environment = globalThis, version, context
 
         listMutations.dispose(); initializationDeferral = null;
         hover.cancel('source');
-        restoreActiveCarouselStyles();
+        nativeCarousel.restoreMotion();
         completedSection = null;
         if (sourceState?.section && !sourceState.section.isConnected) {
             nativeCarousel.clearBinding();
@@ -462,7 +444,7 @@ export function createMyListSession({ environment = globalThis, version, context
         const release = operation => { try { operation(); } catch (_) { sessionCleanupFailures++; } };
         release(() => viewing.dispose(sourceState?.watchStatus));
         release(() => sourceState?.listMembership?.dispose()); release(() => sourceState?.nativePageHints?.dispose());
-        release(restoreActiveCarouselStyles); release(clearSourceAlignment); release(() => nativePopup.invalidate());
+        release(nativeCarousel.restoreMotion); release(clearSourceAlignment); release(() => nativePopup.invalidate());
         release(() => gridView.dispose());
         orderMismatchDialogOpen = false;
 
@@ -472,7 +454,7 @@ export function createMyListSession({ environment = globalThis, version, context
 
     function suspendTargetSession(reason = 'route-leave') {
         const release = operation => { try { operation(); } catch (_) { sessionCleanupFailures++; } };
-        const hadSession = targetSessionActive || running || sourceState || completedSection || scheduled;
+        const hadSession = targetSessionActive || runningInitialization || sourceState || completedSection || scheduledRun;
         const previousToken = sessionScope.token;
         listMutations.dispose(); initializationDeferral = null;
         viewing.dispose(sourceState?.watchStatus); sourceState?.listMembership?.dispose(); sourceState?.nativePageHints?.dispose();
@@ -483,27 +465,22 @@ export function createMyListSession({ environment = globalThis, version, context
         gridView.images.dispose();
         hover.dispose();
 
-        if (scheduledRunTimer !== null) clearTimeout(scheduledRunTimer);
-        scheduledRunTimer = null;
-        scheduled = false;
-        scheduledSessionToken = null;
-        scheduledRunDueAt = 0;
+        if (scheduledRun) clearTimeout(scheduledRun.timer);
+        scheduledRun = null;
 
         release(cleanupTargetSessionDom);
         release(stopTargetEventListeners);
         release(() => responsive.dispose());
         release(() => nativeCarousel.resetSource());
 
-        running = false;
-        runningSessionToken = null;
+        runningInitialization = null;
         completedSection = null;
         nativeCarousel.clearBinding();
         publishSourceState(null);
         missingSectionSince = 0;
         listData.reset();
         waitingForNativeEmpty = false;
-        initializationBlockedSessionToken = null;
-        nativeInitializationFailure = null;
+        blockedInitialization = null;
         orderMismatchDismissed = false;
         orderMismatchDialogOpen = false;
         orderMismatchReinitializing = false;
@@ -521,8 +498,7 @@ export function createMyListSession({ environment = globalThis, version, context
     function startTargetSession(reason = 'route-enter') {
         sessionScope.begin();
         targetSessionActive = true;
-        initializationBlockedSessionToken = null;
-        nativeInitializationFailure = null;
+        blockedInitialization = null;
         performanceDiagnostics = createPerformanceDiagnostics(); hover.resetDiagnostics();
         listView.resetDiagnostics();
         popupInspection.reset();
@@ -636,8 +612,8 @@ export function createMyListSession({ environment = globalThis, version, context
             viewport: { width: window.innerWidth, height: window.innerHeight },
             devicePixelRatio: window.devicePixelRatio,
             status: statusText,
-            running,
-            runningSessionToken,
+            running: Boolean(runningInitialization),
+            runningSessionToken: runningInitialization?.sessionToken ?? null,
             targetSessionActive,
             routeSessionToken: sessionScope.token,
             completed: Boolean(completedSection && completedSection.isConnected),
@@ -1101,7 +1077,7 @@ export function createMyListSession({ environment = globalThis, version, context
             selectedPage: live.selectedPage,
             layout: layoutSummary(layout)
         });
-        invalidateNativeReadScope();
+        nativeCarousel.invalidateReads();
         return true;
     }
 
@@ -1153,7 +1129,7 @@ export function createMyListSession({ environment = globalThis, version, context
             layout: layoutSummary(layout),
             originalVisible: settings.preferences().viewOriginalMyList
         });
-        invalidateNativeReadScope();
+        nativeCarousel.invalidateReads();
         return true;
     }
 
@@ -1195,7 +1171,7 @@ export function createMyListSession({ environment = globalThis, version, context
         if (state?.scroller !== live.scroller || state?.track !== live.track) {
             throw initializationError('NATIVE_SOURCE_REPLACED', 'native-observation', 'Visible cards no longer belong to the current parent');
         }
-        return withNativeReadScope(() => {
+        return nativeCarousel.sample(() => {
             nativeCarousel.assertObservation(live);
             const observed = nativePageObservation(state);
             const items = observed.cards.map(entry => {
@@ -1462,7 +1438,7 @@ export function createMyListSession({ environment = globalThis, version, context
     }
 
     async function reinitializeAfterOrderMismatch() {
-        if (orderMismatchReinitializing || running || !isTargetPage() || !targetSessionActive) return;
+        if (orderMismatchReinitializing || runningInitialization || !isTargetPage() || !targetSessionActive) return;
         const sessionToken = sessionScope.token;
         const state = sourceState;
         orderMismatchReinitializing = true;
@@ -1503,7 +1479,7 @@ export function createMyListSession({ environment = globalThis, version, context
             assertCurrent();
             const before = nativeSourceObservation(state, { position: true });
             const fromPage = before.position.page;
-            const returnedPage = await goToPage(section, scroller, 0, null, sessionToken);
+            const returnedPage = await nativeCarousel.navigateTo(section, scroller, 0, null, sessionToken);
             assertCurrent();
             const after = nativeSourceObservation(state, { position: true });
             nativeCarousel.assertObservation(after);
@@ -1607,10 +1583,6 @@ export function createMyListSession({ environment = globalThis, version, context
             } });
     }
 
-    function goToPage(...args) {
-        return nativeCarousel.navigateTo(...args);
-    }
-
     function collectMountedSinglePageItems(bootstrap, totalCount, columns, sessionToken = null) {
         assertRouteSession(sessionToken);
         if (targetSessionEntryKind !== 'spa' || !targetSessionReason.startsWith('route:')) {
@@ -1636,10 +1608,6 @@ export function createMyListSession({ environment = globalThis, version, context
                 if (sourceState !== owner) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-preparation',
                     'Page session source changed during native preparation');
             } });
-    }
-
-    function waitStableCurrentPage(...args) {
-        return nativeCarousel.stablePage(...args);
     }
 
 
@@ -1673,7 +1641,7 @@ export function createMyListSession({ environment = globalThis, version, context
 
 
     function currentGridGeometry(section, layout) {
-        return withNativeReadScope(() => {
+        return nativeCarousel.sample(() => {
             const observed = nativeLayoutObservation(section, null, null, 'bounds');
             return gridView.geometry({ bounds: observed.bounds, viewportWidth: observed.viewportWidth }, layout,
                 () => nativeCarousel.assertObservation(observed));
@@ -1695,32 +1663,6 @@ export function createMyListSession({ environment = globalThis, version, context
         ensureLiveNativeBinding('hover-source-direct');
         if (!sourceState?.track?.isConnected || !sourceState?.scroller?.isConnected) return null;
         return findMountedSourceSlot(sourceState.track, item, true);
-    }
-
-    async function resolveExpectedPageSourceItem(item, expectedPage = pageForItem(item), token = null, sessionToken = null) {
-        assertRouteSession(sessionToken);
-        if (hover.isCancelled(token)) return { status: 'unknown', reason: 'hover-cancelled' };
-        ensureLiveNativeBinding('hover-expected-page-start');
-        hover.releaseInteraction();
-        const state = sourceState;
-        const result = await nativeCarousel.resolveCard({ section: state?.section, scroller: state?.scroller,
-            track: state?.track, item: { videoId: item.videoId, href: item.href }, expectedPage,
-            totalCount: state?.items?.length || 0, columns: state?.layout?.columns || 1,
-            pageItemCount: pageItemKeys(state?.items || [], expectedPage).size, hoverToken: token, sessionToken });
-        assertRouteSession(sessionToken);
-        if (sourceState !== state) return { status: 'unknown', reason: 'native-binding-lost-after-page-move' };
-        if (result.status === 'found') {
-            return { ...result, get slot() { return result.source.slot; },
-                get slots() { return nativeCarousel.sample(() => result.sources.map(source => source.slot)); } };
-        }
-        if (result.status !== 'mismatch') return result;
-        const positionMismatch = firstVisibleNativePositionMismatch(result.visibleCards);
-        if (!positionMismatch) return result;
-        log('Native My List position mismatch detected before source search', {
-            item: itemSummary(positionMismatch.item), expectedPage,
-            expectedIndex: positionMismatch.deviation.expectedIndex, actualIndex: positionMismatch.deviation.actualIndex,
-            delta: positionMismatch.deviation.delta, threshold: ORDER_MISMATCH_POSITION_THRESHOLD, visibleIds: result.visibleIds });
-        return { ...result, reason: 'position-deviation-before-source-search', positionMismatch };
     }
 
     function nativePositionDeviation(item, source) {
@@ -1756,53 +1698,6 @@ export function createMyListSession({ environment = globalThis, version, context
             [...new Set([...visibleIds, actualVideoId].filter(Boolean))]
         );
         return true;
-    }
-
-    async function refreshStaleSourceOnPreferredPage(item, preferredPage = pageForItem(item), token = null, sessionToken = null) {
-        assertRouteSession(sessionToken);
-        if (hover.isCancelled(token)) return null;
-        ensureLiveNativeBinding('hover-stale-refresh-start');
-        const state = sourceState;
-        const result = await nativeCarousel.resolveCard({ mode: 'preferred-refresh', section: state?.section,
-            scroller: state?.scroller, track: state?.track, item: itemSummary(item), preferredPage,
-            hoverToken: token, sessionToken });
-        assertRouteSession(sessionToken);
-        if (hover.isCancelled(token) || sourceState !== state || result.status !== 'found') return null;
-        return { ...result, get slot() { return result.source.slot; } };
-    }
-
-    async function locateActiveSourceItem(item, preferredPage = pageForItem(item), token = null, sessionToken = null, repairLogicalMapping = true, maxRadius = null) {
-        assertRouteSession(sessionToken);
-        if (hover.isCancelled(token)) return null;
-        ensureLiveNativeBinding('hover-locate-start');
-        const state = sourceState;
-        const result = await nativeCarousel.resolveCard({ mode: 'search', section: state?.section,
-            scroller: state?.scroller, track: state?.track, item: itemSummary(item), preferredPage,
-            columns: state?.layout?.columns || 1, repairLogicalMapping, maxRadius, hoverToken: token, sessionToken });
-        assertRouteSession(sessionToken);
-        if (hover.isCancelled(token) || sourceState !== state || result.status !== 'found') return null;
-        return nativeCarousel.sample(() => {
-            if (repairLogicalMapping) {
-                for (let index = 0; index < result.visibleCards.length; index++) {
-                    assertRouteSession(sessionToken);
-                    if (hover.isCancelled(token) || sourceState !== state) return null;
-                    nativeCarousel.assertSource(result.source);
-                    nativeCarousel.assertSource(result.sources[index]);
-                    const visibleItem = state.itemMap?.get(itemKey(result.visibleCards[index]));
-                    if (!visibleItem || pageForItem(visibleItem) === result.page) continue;
-                    const oldPage = pageForItem(visibleItem);
-                    setPageForItem(visibleItem, result.page, state);
-                    const visibleClone = findGridClone(visibleItem);
-                    if (visibleClone) copyItemAttributes(visibleClone, visibleItem);
-                    log(tLog('itemPageMappingCorrected'), { item: itemSummary(visibleItem), oldPage,
-                        actualPage: result.page, reason: 'logical-visible-page-repair' });
-                }
-            }
-            assertRouteSession(sessionToken);
-            if (hover.isCancelled(token) || sourceState !== state) return null;
-            nativeCarousel.assertSource(result.source);
-            return { ...result, get slot() { return result.source.slot; } };
-        });
     }
 
     function copyItemAttributes(target, item, index = null) {
@@ -1852,6 +1747,72 @@ export function createMyListSession({ environment = globalThis, version, context
             if (sourceState !== state || state.items !== records || state.itemMap !== itemMap ||
                 state.cloneMap !== cloneMap || state.grid !== grid) throw createRouteSessionCancelledError();
         };
+        const resolveSource = async (mode = null, options = {}) => {
+            assertRouteSession(sessionToken);
+            if (hover.isCancelled(token)) return { status: 'unknown', reason: 'hover-cancelled' };
+            const reason = mode === 'search' ? 'hover-locate-start' : mode === 'preferred-refresh'
+                ? 'hover-stale-refresh-start' : 'hover-expected-page-start';
+            ensureLiveNativeBinding(reason);
+            assertCurrent();
+            if (targetItem) gridView.assertCard(targetCard);
+            if (!mode) hover.releaseInteraction();
+            const result = await nativeCarousel.resolveCard({ mode, section, scroller, track,
+                item: itemSummary(targetItem), totalCount: records.length, columns: state.layout?.columns || 1,
+                expectedPage: page, preferredPage: page, pageItemCount: mode ? undefined : pageItemKeys(records, page).size,
+                hoverToken: token, sessionToken, ...options });
+            assertRouteSession(sessionToken);
+            if (hover.isCancelled(token)) return { status: 'unknown', reason: 'hover-cancelled' };
+            if (sourceState !== state) return { status: 'unknown', reason: 'native-binding-lost-after-page-move' };
+            assertCurrent();
+            if (result.status === 'mismatch' && !mode) {
+                const positionMismatch = firstVisibleNativePositionMismatch(result.visibleCards);
+                if (!positionMismatch) return result;
+                log('Native My List position mismatch detected before source search', {
+                    item: itemSummary(positionMismatch.item), expectedPage: page,
+                    expectedIndex: positionMismatch.deviation.expectedIndex, actualIndex: positionMismatch.deviation.actualIndex,
+                    delta: positionMismatch.deviation.delta, threshold: ORDER_MISMATCH_POSITION_THRESHOLD, visibleIds: result.visibleIds });
+                return { ...result, reason: 'position-deviation-before-source-search', positionMismatch };
+            }
+            if (result.status !== 'found') return result;
+            return nativeCarousel.sample(() => {
+                if (mode === 'search' && options.repairLogicalMapping) {
+                    for (let index = 0; index < result.visibleCards.length; index++) {
+                        assertCurrent();
+                        if (hover.isCancelled(token)) return { status: 'unknown', reason: 'hover-cancelled' };
+                        nativeCarousel.assertSource(result.source);
+                        nativeCarousel.assertSource(result.sources[index]);
+                        const visibleItem = itemMap?.get(itemKey(result.visibleCards[index]));
+                        if (!visibleItem || pageForItem(visibleItem) === result.page) continue;
+                        const oldPage = pageForItem(visibleItem);
+                        setPageForItem(visibleItem, result.page, state);
+                        const visibleClone = findGridClone(visibleItem);
+                        if (visibleClone) copyItemAttributes(visibleClone, visibleItem);
+                        log(tLog('itemPageMappingCorrected'), { item: itemSummary(visibleItem), oldPage,
+                            actualPage: result.page, reason: 'logical-visible-page-repair' });
+                    }
+                }
+                assertCurrent();
+                if (mode === 'search') nativeCarousel.assertSource(result.source);
+                return { ...result, get slot() { return result.source.slot; } };
+            });
+        };
+        const reportPositionMismatch = located => {
+            warn('Native My List position mismatch escalated without source search', {
+                targetItem: itemSummary(targetItem),
+                mismatchItem: itemSummary(located.positionMismatch.item),
+                requestedPage: page,
+                expectedIndex: located.positionMismatch.deviation.expectedIndex,
+                actualIndex: located.positionMismatch.deviation.actualIndex,
+                delta: located.positionMismatch.deviation.delta,
+                threshold: ORDER_MISMATCH_POSITION_THRESHOLD,
+                visibleIds: located.visibleIds || []
+            });
+            showOrderMismatchDialog(
+                located.positionMismatch.item || targetItem,
+                page,
+                located.visibleIds || []
+            );
+        };
         const beforeView = targetItem ? null : nativeCarousel.pageCards({ section, scroller, track,
             binding: nativeOwner, totalCount: state.totalCount, columns: state.layout?.columns, sessionToken, assertCurrent });
         const beforeSignature = beforeView?.signature || '';
@@ -1872,7 +1833,7 @@ export function createMyListSession({ environment = globalThis, version, context
         let staleSourceRecovery = false;
 
         if (targetItem) {
-            let located = await resolveExpectedPageSourceItem(targetItem, page, token, sessionToken);
+            let located = await resolveSource();
             if (token !== null && token !== hover.intent().token) {
                 log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-expected-page-check', token, hoverToken: hover.intent().token });
                 return null;
@@ -1880,21 +1841,7 @@ export function createMyListSession({ environment = globalThis, version, context
 
             if (located?.status === 'mismatch') {
                 if (located.positionMismatch) {
-                    warn('Native My List position mismatch escalated without source search', {
-                        targetItem: itemSummary(targetItem),
-                        mismatchItem: itemSummary(located.positionMismatch.item),
-                        requestedPage: page,
-                        expectedIndex: located.positionMismatch.deviation.expectedIndex,
-                        actualIndex: located.positionMismatch.deviation.actualIndex,
-                        delta: located.positionMismatch.deviation.delta,
-                        threshold: ORDER_MISMATCH_POSITION_THRESHOLD,
-                        visibleIds: located.visibleIds || []
-                    });
-                    showOrderMismatchDialog(
-                        located.positionMismatch.item || targetItem,
-                        page,
-                        located.visibleIds || []
-                    );
+                    reportPositionMismatch(located);
                     return null;
                 }
                 // Immediately after a manual reinitialization, Hawkins can expose a
@@ -1906,27 +1853,13 @@ export function createMyListSession({ environment = globalThis, version, context
                     visibleIds: located.visibleIds || []
                 });
                 await sleep(120);
-                located = await resolveExpectedPageSourceItem(targetItem, page, token, sessionToken);
+                located = await resolveSource();
                 if (token !== null && token !== hover.intent().token) {
                     log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-mismatch-retry', token, hoverToken: hover.intent().token });
                     return null;
                 }
                 if (located?.positionMismatch) {
-                    warn('Native My List position mismatch escalated without source search', {
-                        targetItem: itemSummary(targetItem),
-                        mismatchItem: itemSummary(located.positionMismatch.item),
-                        requestedPage: page,
-                        expectedIndex: located.positionMismatch.deviation.expectedIndex,
-                        actualIndex: located.positionMismatch.deviation.actualIndex,
-                        delta: located.positionMismatch.deviation.delta,
-                        threshold: ORDER_MISMATCH_POSITION_THRESHOLD,
-                        visibleIds: located.visibleIds || []
-                    });
-                    showOrderMismatchDialog(
-                        located.positionMismatch.item || targetItem,
-                        page,
-                        located.visibleIds || []
-                    );
+                    reportPositionMismatch(located);
                     return null;
                 }
             }
@@ -1953,20 +1886,14 @@ export function createMyListSession({ environment = globalThis, version, context
                         expectedPageMismatch,
                         visibleIds: located?.visibleIds || []
                     });
-                    let repaired = await refreshStaleSourceOnPreferredPage(targetItem, page, token, sessionToken);
+                    let repaired = await resolveSource('preferred-refresh');
                     if (token !== null && token !== hover.intent().token) {
                         log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-stale-page-refresh', token, hoverToken: hover.intent().token });
                         return null;
                     }
                     if (!repaired?.slot) {
-                        repaired = await locateActiveSourceItem(
-                            targetItem,
-                            page,
-                            token,
-                            sessionToken,
-                            expectedPageMismatch || mutationRecoveryPending,
-                            mutationSourceRecoveryPending ? null : 2
-                        );
+                        repaired = await resolveSource('search', { repairLogicalMapping: expectedPageMismatch || mutationRecoveryPending,
+                            maxRadius: mutationSourceRecoveryPending ? null : 2 });
                     }
                     if (token !== null && token !== hover.intent().token) {
                         log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-stale-page-search', token, hoverToken: hover.intent().token });
@@ -2020,9 +1947,9 @@ export function createMyListSession({ environment = globalThis, version, context
                 }
             }
         } else {
-            await goToPage(section, scroller, page, token, sessionToken, true);
+            await nativeCarousel.navigateTo(section, scroller, page, token, sessionToken, true);
             if (token !== null && token !== hover.intent().token) return null;
-            await waitStableCurrentPage(scroller, track, {
+            await nativeCarousel.stablePage(scroller, track, {
                 previousSignature: beforeSignature,
                 minElapsed: 160,
                 sessionToken,
@@ -2150,7 +2077,7 @@ export function createMyListSession({ environment = globalThis, version, context
     }
 
 
-    async function buildGrid(section, scroller, items, layout, totalCount, sessionToken = sessionScope.token) {
+    async function buildGrid(section, scroller, transfer, layout, totalCount, sessionToken = sessionScope.token) {
         const buildState = sourceState;
         const track = buildState?.track;
         const assertBuildParent = () => {
@@ -2162,7 +2089,7 @@ export function createMyListSession({ environment = globalThis, version, context
                     'Native My List source changed during grid construction');
             }
         };
-        const transfer = listView.prepareRecords(items, { assertCurrent: assertBuildParent });
+        const items = transfer.records;
         const publication = ensureListMembership(buildState).preparePublication(transfer.records, totalCount, { assertCurrent: assertBuildParent });
         const pageHints = ensurePageHints(buildState).stage(transfer.records, transfer.readPage, { assertCurrent: assertBuildParent });
         const assertBuildActive = () => { assertBuildParent(); publication.assertCurrent(); pageHints.assertCurrent(); };
@@ -2244,7 +2171,7 @@ export function createMyListSession({ environment = globalThis, version, context
     }
 
     function recoverNativeInitialization(sessionToken, reason) {
-        const failure = nativeInitializationFailure;
+        const failure = blockedInitialization?.native;
         if (!failure || failure.sessionToken !== sessionToken || !isRouteSessionActive(sessionToken)) return false;
         if (performanceDiagnostics.nativeRecovery.attempts >= 1) {
             if (!failure.exhaustedReported) {
@@ -2263,7 +2190,7 @@ export function createMyListSession({ environment = globalThis, version, context
 
             hover.cancel('source');
             nativeCarousel.assertObservation(discovered);
-            if (nativeInitializationFailure !== failure) return false;
+            if (blockedInitialization?.native !== failure) return false;
         } catch (error) {
             if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
             return false;
@@ -2276,8 +2203,7 @@ export function createMyListSession({ environment = globalThis, version, context
         nativeCarousel.clearBinding();
         publishSourceState(null);
         completedSection = null;
-        initializationBlockedSessionToken = null;
-        nativeInitializationFailure = null;
+        blockedInitialization = null;
         clearRunningSession(sessionToken, false);
         nativeCarousel.refreshDiscovery();
         // A replacement may have a different membership/count. Use the existing
@@ -2293,11 +2219,11 @@ export function createMyListSession({ environment = globalThis, version, context
 
     async function runScript(sessionToken = sessionScope.token) {
         if (!isRouteSessionActive(sessionToken)) return;
-        if (initializationBlockedSessionToken === sessionToken) {
+        if (blockedInitialization?.sessionToken === sessionToken) {
             recoverNativeInitialization(sessionToken, 'run');
             return;
         }
-        if (running && runningSessionToken === sessionToken) return;
+        if (runningInitialization?.sessionToken === sessionToken) return;
         let discovered;
         try {
             discovered = nativeDiscoveryObservation({ bindingOnly: true });
@@ -2352,7 +2278,7 @@ export function createMyListSession({ environment = globalThis, version, context
             }
             scroller = mountedSource.section === section ? mountedSource.scroller : null;
             track = mountedSource.section === section ? mountedSource.track : null;
-            withNativeReadScope(() => {
+            nativeCarousel.sample(() => {
                 const observed = nativeLayoutObservation(section, scroller, track);
                 provisionalLayout = { ...observed.layout };
                 provisionalLayout.rowGap = measureNativeCarouselGap(section);
@@ -2384,7 +2310,7 @@ export function createMyListSession({ environment = globalThis, version, context
         assertRouteSession(sessionToken);
         let earlyTotalCount;
         let freshMyListBootstrap = null, entryCollection;
-        let fastItems = null;
+        let fastCollection = null;
         let fastCollectionSource = 'graphql';
         const entryParent = sourceState;
         try {
@@ -2413,7 +2339,7 @@ export function createMyListSession({ environment = globalThis, version, context
                 return;
             }
             if (!isRouteSessionCancelledError(error)) {
-                initializationBlockedSessionToken = sessionToken;
+                blockedInitialization = { sessionToken };
                 reportInitializationFailure(error, {
                     stage: error?.stage || 'total-count-detection',
                     timeoutMs: error?.details?.timeoutMs ?? TOTAL_COUNT_TIMEOUT_MS,
@@ -2426,7 +2352,7 @@ export function createMyListSession({ environment = globalThis, version, context
         }
         if (earlyTotalCount === 0) {
             try {
-                withNativeReadScope(() => {
+                nativeCarousel.sample(() => {
                     const observed = nativeLayoutObservation(section, scroller, track);
                     const layout = { ...observed.layout, rowGap: measureNativeCarouselGap(section) };
                     nativeCarousel.assertObservation(observed);
@@ -2472,8 +2398,7 @@ export function createMyListSession({ environment = globalThis, version, context
                     elapsedMs: sourceWait.elapsedMs,
                     totalCount: earlyTotalCount
                 });
-                initializationBlockedSessionToken = sessionToken;
-                nativeInitializationFailure = { section, scroller, track, sessionToken };
+                blockedInitialization = { sessionToken, native: { section, scroller, track, sessionToken } };
                 reportInitializationFailure(error, {
                     stage: error.stage,
                     timeoutMs: error.details?.timeoutMs ?? null,
@@ -2509,8 +2434,7 @@ export function createMyListSession({ environment = globalThis, version, context
             return;
         }
         if (!readiness.ready) {
-            initializationBlockedSessionToken = sessionToken;
-            nativeInitializationFailure = { section, scroller, track, sessionToken };
+            blockedInitialization = { sessionToken, native: { section, scroller, track, sessionToken } };
             clearRunningSession(sessionToken, false, initializationOwner);
             if (recoverNativeInitialization(sessionToken, 'readiness-' + readiness.reason)) return;
             const readinessError = readiness.reason === 'timeout'
@@ -2529,7 +2453,7 @@ export function createMyListSession({ environment = globalThis, version, context
         if (readiness.empty) {
             try {
                 nativeCarousel.assertPreparation(readiness);
-                withNativeReadScope(() => {
+                nativeCarousel.sample(() => {
                     const observed = nativeLayoutObservation(section, scroller, track);
                     const emptyLayout = { ...observed.layout, rowGap: measureNativeCarouselGap(section) };
                     nativeCarousel.assertObservation(observed);
@@ -2557,7 +2481,7 @@ export function createMyListSession({ environment = globalThis, version, context
                     ensureFreshIndicatorPageZeroAnchor(section, scroller, track, firstVideoId, sessionToken) });
             } catch (error) {
                 if (!isRouteSessionCancelledError(error)) {
-                    initializationBlockedSessionToken = sessionToken;
+                    blockedInitialization = { sessionToken };
                     reportInitializationFailure(error, {
                         stage: error?.stage || 'normalize-native-page-zero',
                         timeoutMs: error?.details?.timeoutMs ?? null,
@@ -2602,7 +2526,7 @@ export function createMyListSession({ environment = globalThis, version, context
                     return;
                 }
                 if (!isRouteSessionCancelledError(error)) {
-                    initializationBlockedSessionToken = sessionToken;
+                    blockedInitialization = { sessionToken };
                     reportInitializationFailure(error, {
                         stage: error?.stage || 'native-react-total-count',
                         timeoutMs: error?.details?.timeoutMs ?? null,
@@ -2661,7 +2585,7 @@ export function createMyListSession({ environment = globalThis, version, context
                         });
                     } });
                 freshMyListBootstrap = preferred.bootstrap;
-                fastItems = preferred.items;
+                fastCollection = preferred;
                 fastCollectionSource = preferred.collectionSource || 'graphql';
             } catch (error) {
                 if (isRouteSessionCancelledError(error)) {
@@ -2672,7 +2596,7 @@ export function createMyListSession({ environment = globalThis, version, context
                     retryReplacedSource();
                     return;
                 }
-                fastItems = null;
+                fastCollection = null;
                 warn('GraphQL My List fast collection failed; falling back to native scan', {
                     code: error?.code || null, stage: error?.stage || 'graphql-fast-collection', error
                 });
@@ -2735,7 +2659,7 @@ export function createMyListSession({ environment = globalThis, version, context
                     'native-collection', 'Collection parent was replaced');
             };
             let emptyObservation;
-            const collected = await listView.collectForPublication({ preferred: fastItems, totalCount, sessionToken,
+            const collected = await listView.collectForPublication({ preferred: fastCollection, totalCount, sessionToken,
                 assertCurrent: assertCollectionCurrent,
                 onPreferred(items) {
                     const fastNative = nativeSourceDiagnostics(section, scroller, track);
@@ -2782,7 +2706,7 @@ export function createMyListSession({ environment = globalThis, version, context
                 finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, 'collection-confirmed-empty', emptyObservation);
                 return;
             }
-            const items = collected.items;
+            const items = collected.transfer.records;
 
             log(tLog('fullCollectionResultFinalized'), {
                 collected: items.length,
@@ -2800,7 +2724,7 @@ export function createMyListSession({ environment = globalThis, version, context
                 parked: standbyNative?.sourceParked ?? false
             });
             assertCollectionCurrent();
-            await buildGrid(section, scroller, items, layout, totalCount, sessionToken);
+            await buildGrid(section, scroller, collected.transfer, layout, totalCount, sessionToken);
             assertRouteSession(sessionToken);
             sourceState.empty = false;
             applyOriginalMyListVisibility();
@@ -2849,7 +2773,7 @@ export function createMyListSession({ environment = globalThis, version, context
                 completedSection = null;
                 retryGridBuild = true;
             } else {
-                initializationBlockedSessionToken = sessionToken;
+                blockedInitialization = { sessionToken };
                 reportInitializationFailure(error, {
                     stage: error?.stage || null,
                     timeoutMs: error?.details?.timeoutMs ?? null,
@@ -2870,32 +2794,20 @@ export function createMyListSession({ environment = globalThis, version, context
 
     function scheduleRun(delayMs = 40, sessionToken = sessionScope.token) {
         if (!isRouteSessionActive(sessionToken)) return;
-        if (initializationBlockedSessionToken === sessionToken) return;
-
+        if (blockedInitialization?.sessionToken === sessionToken) return;
         const normalizedDelay = Math.max(0, delayMs);
         const dueAt = performance.now() + normalizedDelay;
-        if (scheduled && scheduledSessionToken === sessionToken) {
-            // Keep an existing earlier/equal run, but allow a DOM mutation to pull a
-            // long fallback wait (notably the native-section 1200 ms wait) forward.
-            if (scheduledRunDueAt > 0 && scheduledRunDueAt <= dueAt + 1) return;
-        }
-
-        if (scheduledRunTimer !== null) clearTimeout(scheduledRunTimer);
-        scheduled = true;
-        scheduledSessionToken = sessionToken;
-        scheduledRunDueAt = dueAt;
-        const timer = setTimeout(() => {
-            if (scheduledRunTimer !== timer || disposed) return;
-            scheduledRunTimer = null;
-            if (scheduledSessionToken === sessionToken) {
-                scheduled = false;
-                scheduledSessionToken = null;
-                scheduledRunDueAt = 0;
-            }
+        // Keep the earliest run; DOM discovery can pull a fallback wait forward.
+        if (scheduledRun?.sessionToken === sessionToken && scheduledRun.dueAt > 0 && scheduledRun.dueAt <= dueAt + 1) return;
+        if (scheduledRun) clearTimeout(scheduledRun.timer);
+        const owner = { sessionToken, dueAt, timer: null };
+        scheduledRun = owner;
+        owner.timer = setTimeout(() => {
+            if (scheduledRun !== owner || disposed) return;
+            scheduledRun = null;
             if (!isRouteSessionActive(sessionToken)) return;
             runScript(sessionToken);
         }, normalizedDelay);
-        scheduledRunTimer = timer;
     }
 
     // Public page-session boundary; all feature state remains private to its capability.
@@ -2920,5 +2832,5 @@ export function createMyListSession({ environment = globalThis, version, context
             }
         },
         diagnostics: () => Object.freeze({ active: targetSessionActive, token: sessionScope.token,
-            running, completed: Boolean(completedSection), blocked: initializationBlockedSessionToken === sessionScope.token, cleanupFailures: sessionCleanupFailures }) });
+            running: Boolean(runningInitialization), completed: Boolean(completedSection), blocked: blockedInitialization?.sessionToken === sessionScope.token, cleanupFailures: sessionCleanupFailures }) });
 }

@@ -175,7 +175,7 @@ test('accepted publication remains admitted until another membership change supe
 
 test('source access cannot return a transfer after retiring its caller during capture', () => {
     const e=fixture();let active=true,reads=0;
-    const source={videoId:'1'};
+    const source={videoId:'1',snapshot:{}};
     Object.defineProperty(source,'imageUrl',{get(){if(++reads===2)active=false;return 'art';}});
     assert.throws(()=>e.list.prepareRecords([source],{assertCurrent(){if(!active)throw new Error('retired');}}),/retired/);
 });
@@ -278,18 +278,18 @@ test('initial count timeout reports the last availability once through the exist
 
 test('publication collection uses complete preferred material and otherwise performs one native fallback', async () => {
     const e=fixture(),preferred=[{videoId:'1'},{videoId:'2'}];let scans=0,preferredUses=0;
-    const first=await e.list.collectForPublication({preferred,totalCount:2,onPreferred(){preferredUses++;},
+    const first=await e.list.collectForPublication({preferred:{items:preferred},totalCount:2,onPreferred(){preferredUses++;},
         beforeNative(){throw new Error('unexpected scan');},collectNative(){throw new Error('unexpected native');}});
-    assert.equal(first.items,preferred);assert.equal(first.status,'complete');assert.equal(preferredUses,1);
-    const fallback=await e.list.collectForPublication({preferred:preferred.slice(0,1),totalCount:2,
+    assert.deepEqual(first.transfer.records.map(record=>record.videoId),preferred.map(record=>record.videoId));assert.equal(first.transfer.records[0],e.list.toRecord(preferred[0]));assert.equal(first.status,'complete');assert.equal(preferredUses,1);
+    const fallback=await e.list.collectForPublication({preferred:{items:preferred.slice(0,1)},totalCount:2,
         beforeNative(){scans++;},collectNative:async()=>preferred});
-    assert.equal(fallback.items,preferred);assert.equal(scans,1);
+    assert.deepEqual(fallback.transfer.records.map(record=>record.videoId),preferred.map(record=>record.videoId));assert.equal(scans,1);
 });
 
 test('publication collection confirms native empty truthfully and rejects unproven empty or mismatched counts', async () => {
     const e=fixture();const empty=await e.list.collectForPublication({totalCount:2,collectNative:async()=>[],
         readEmpty:()=>({pages:1,cards:0})});
-    assert.equal(empty.status,'empty');assert.equal(empty.items.length,0);
+    assert.equal(empty.status,'empty');assert.equal(empty.transfer.records.length,0);
     await assert.rejects(e.list.collectForPublication({totalCount:2,collectNative:async()=>[],
         readEmpty:()=>({pages:2,cards:0})}),{code:'NO_NATIVE_CARDS'});
     await assert.rejects(e.list.collectForPublication({totalCount:2,collectNative:async()=>[{videoId:'1'}]}),
@@ -299,7 +299,7 @@ test('publication collection confirms native empty truthfully and rejects unprov
 test('publication collection rejects retired preferred callbacks and completed native reads before acceptance', async () => {
     const e=fixture();let active=true,scans=0;
     const guard=()=>{if(!active)throw new Error('retired');};
-    await assert.rejects(e.list.collectForPublication({preferred:[{videoId:'1'}],totalCount:1,assertCurrent:guard,
+    await assert.rejects(e.list.collectForPublication({preferred:{items:[{videoId:'1'}]},totalCount:1,assertCurrent:guard,
         onPreferred(){active=false;},collectNative:async()=>{scans++;return [];}}),/retired/);
     assert.equal(scans,0);active=true;
     await assert.rejects(e.list.collectForPublication({totalCount:1,assertCurrent:guard,
@@ -353,4 +353,37 @@ test('entry strategy anchors only fresh SPA indicator sources and revalidates af
     assert.equal(anchors,1);
     let active=true;const current=await e.list.prepareEntry({entryKind:'spa',assertCurrent(){if(!active)throw new Error('retired');}});
     await assert.rejects(current.prepareAnchor({mode:'indicator',normalize:async()=>{active=false;}}),/retired/);
+});
+
+
+test('preferred wire collection keeps canonical records and one shared template through publication', async () => {
+    const template = {}, wire = [{videoId:'1',href:'one'},{videoId:'1',href:'duplicate'},{videoId:'2',href:'two'}];
+    const e=fixture({captureTemplate:()=>template,collectRecords:async()=>({records:wire,bootstrap:{totalCount:2}})});
+    const preferred=await e.list.collectLogical({bootstrap:{},totalCount:2,columns:1,templateSource:{}});
+    assert.deepEqual(preferred.items.map(record=>record.videoId),['1','2']);
+    assert.equal(preferred.template,template);
+    for(const record of preferred.items){
+        assert.equal(Object.isFrozen(record),true);assert.equal(record.graphql,true);
+        assert.equal(record.cardTemplate,undefined);assert.equal(record.page,undefined);
+    }
+    const result=await e.list.collectForPublication({preferred,totalCount:2,collectNative(){throw new Error('unexpected scan');}});
+    const transfer=result.transfer;
+    assert.equal(transfer.records[0],preferred.items[0]);
+    assert.equal(transfer.readMaterial(transfer.records[0]),transfer.readMaterial(transfer.records[1]));
+    assert.equal(transfer.readMaterial(transfer.records[0]).source,template);
+    assert.deepEqual(transfer.records.map(transfer.readPage),[0,1]);
+    transfer.release();assert.equal(transfer.readMaterial(transfer.records[0]),null);
+    assert.equal(preferred.items[0].href,'one');assert.equal(wire[0].href,'one');
+});
+
+test('rejected preferred collection does not consume capture before native fallback publication', async () => {
+    const e=fixture(),snapshot={},input={videoId:'1',snapshot};let scans=0;
+    const result=await e.list.collectForPublication({preferred:{items:[input]},totalCount:2,
+        beforeNative(){scans++;assert.equal(input.snapshot,snapshot);},
+        collectNative:async()=>[input,{videoId:'2',snapshot:{}}]});
+    assert.equal(scans,1);assert.equal(input.snapshot,snapshot);
+    result.transfer.discard();assert.equal(input.snapshot,snapshot);
+    const cancelled=fixture({runChunks:async(count,visit)=>{visit(0);return false;}});
+    const preferred=await cancelled.list.collectLogical({bootstrap:{},totalCount:1,templateSource:{}});
+    assert.equal(preferred.items,null,'interrupted construction cannot be accepted by matching count');
 });

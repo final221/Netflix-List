@@ -401,3 +401,44 @@ test('real session fresh logical collection publishes complete authoritative wir
     assert.equal(e.requests.length, 1); assert.deepEqual(e.moves, []);
     assert.ok(e.logs.some(row => row.includes('GraphQL My List fast collection used'))); e.dispose();
 });
+
+
+test('real session schedules early source arrival once and ignores obsolete or later timer delivery', async () => {
+    const e=sessionBrowser(),section=e.source.section,host=section.parentElement;
+    section.remove();e.app.start();await e.scheduler.advance();
+    const fallback=[...e.scheduler.timers.values()].find(timer=>timer.due-e.scheduler.performance.now()===1200);
+    assert.ok(fallback,'missing-source startup waits 1200 ms');
+    host.appendChild(section);e.deliver(host);
+    const early=[...e.scheduler.timers.entries()].find(([,timer])=>timer.due-e.scheduler.performance.now()===40);
+    assert.ok(early,'native source arrival pulls initialization forward');
+    fallback.callback();
+    assert.equal(e.app.diagnostics().currentSession.running,false,'obsolete delivery cannot initialize ahead of its replacement');
+    assert.equal(e.logs.filter(row=>row.includes('Initialization started')).length,0);
+    assert.equal(e.scheduler.timers.get(early[0]),early[1],'obsolete delivery cannot clear replacement work');
+    await e.scheduler.advance(10);e.deliver(host);
+    assert.equal(e.scheduler.timers.get(early[0]),early[1],'later DOM delivery cannot postpone initialization');
+    await e.drain(()=>e.app.diagnostics().currentSession.completed);
+    assert.deepEqual(e.cardIds(),['1','2','3','4','5','6']);
+    assert.equal(e.logs.filter(row=>row.includes('Initialization started')).length,1);e.dispose();
+});
+
+for(const replacement of [false,true]){
+    test(`real session ${replacement?'source replacement':'pointer departure'} between expected-page failure and recovery cannot replay old work`,async()=>{
+        const e=sessionBrowser({count:12});await e.start();
+        e.setIds(['1','2','3','4','5','7','6','8','9','10','11','12']);
+        let interrupted=false;const log=e.context.console.log;let card;
+        e.context.console.log=(...args)=>{
+            log(...args);
+            if(!interrupted&&args[1]==='Hover expected-page mapping is stale; searching live native source'){
+                interrupted=true;if(replacement)e.replaceTrack();else e.leavePointer(card);
+            }
+        };
+        e.grid().querySelector('[data-tm-filter-value="all"]').dispatchEvent({type:'click'});
+        e.moves.length=0;card=e.over('6');await e.drain(()=>interrupted,200);
+        await e.scheduler.advance(500);await e.scheduler.frame();await e.scheduler.flush();
+        assert.deepEqual(e.events,[],'obsolete attempt cannot replay native hover');
+        assert.deepEqual(e.moves,[],'obsolete recovery cannot navigate');
+        assert.equal(e.document.getElementById('tm-netflix-mylist-order-mismatch-dialog'),null);
+        assert.deepEqual(e.cardIds(),Array.from({length:12},(_,i)=>String(i+1)));e.dispose();
+    });
+}

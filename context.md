@@ -32,7 +32,8 @@ what it should not contain
 
 - The user uses this personal script on Windows and wants work limited to Windows. Linux and other operating-system support are out of scope unless explicitly requested.
 - For this repository, the user authorizes commits and pushes of changes to `origin` without per-commit confirmation. Use the configured GitHub SSH remote, which is authenticated without requiring the user to supply credentials. This is user authorization; it does not bypass the app's sandbox or automated-review gates. Follow those system gates without asking the user to repeat the standing authorization.
-- A request to discuss, assess, or suggest optional work is not approval to implement it. Explain tradeoffs and work only on the selected step; do not add speculative changes just to finish a plan.
+- During code reviews, the user authorizes implementing worthwhile simplifications that preserve capabilities, then reviewing again and continuing while concrete reductions remain. Discussion or suggestions outside that simplification scope do not authorize unrelated implementation.
+- Stay on main in the usual project folder for this simplification work; do not create a branch or separate worktree unless the user subsequently requests one.
 - For multi-step code reviews, the user prefers a clear ordered plan with progress reported as each step is completed.
 - For architectural work, the user wants an explicit folder/file layout and understandable responsibility boundaries before implementation, followed by incremental changes. Derive those boundaries from code dependencies, state ownership and lifetimes; frequency of past discussion or prominence in context/findings must not give a feature architectural priority.
 - During investigations, proactively propose structural alternatives that remove underlying work or delays, without waiting for the user to suggest them; do not limit ideas to tuning the current approach.
