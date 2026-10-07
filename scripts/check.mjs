@@ -12,6 +12,7 @@ const legacyImports = new Map([
     ['src/legacy.js -> src/i18n/i18n.js', 'P20: inject localization into the remaining consumers'],
     ['src/legacy.js -> src/diagnostics/logger.js', 'P20: application owns logger composition'],
     ['src/legacy.js -> src/diagnostics/report.js', 'P20: application wires explicit summary providers'],
+    ['src/legacy.js -> src/netflix/native-popup.js', 'P18: remove residual intent bridges; P20: application composes native interaction'],
     ['src/legacy.js -> src/netflix/popup-inspection.js', 'P20: application wires inspection lifetime and native consumers'],
     ['src/legacy.js -> src/netflix/context.js', 'P20: application injects current page context'],
     ['src/legacy.js -> src/netflix/page-dom.js', 'P20: application composes remaining DOM consumers'],

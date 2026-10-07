@@ -31,6 +31,7 @@ const { carouselPayload, atom, reference, viewingVideo } = require('./helpers/fi
 // Exercise residual authored functions without executing Netflix startup.
 // Generated-bundle startup and lifecycle are covered separately in bundle.test.js.
 const { source, declaration } = require('./helpers/legacy-source.cjs');
+const { install: installNativePopup } = require('./helpers/native-popup.cjs');
 const privateNavigationFunctions = new Set(['createLogicalMoveSignal', 'waitLogicalPageChange', 'waitPageByPolling', 'waitPage', 'waitForScriptMoveSettle']);
 const fixtureModelReads = new Set(['getCarouselDomRuntime', 'logicalSlotPositions', 'wrappedTailLogicalPageInfo',
     'netflixItemIndexFromSlot', 'normalizeNetflixLogicalIndex', 'detectCarouselDomProfile', 'carouselDomProfileSummary',
@@ -174,6 +175,7 @@ function environment(names, overrides = {}) {
     vm.runInContext(source.match(/^    const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_INTERRUPTION_LOG_LIMIT = \d+;/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_CANCELLATION_REASONS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
+    installNativePopup(c);
     for (const name of ['publishSourceState', 'bindViewingSession', 'ensurePageHints', 'pageForItem', 'setPageForItem', 'ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
         'beginRunningSession', 'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',

@@ -1,3 +1,4 @@
+import { createNativePopup } from './netflix/native-popup.js';
 import { createNetflixContext } from './netflix/context.js';
 import { createNetflixPageDom, NETFLIX_DOM_SELECTORS } from './netflix/page-dom.js';
 import { createGrid } from './grid/grid.js';
@@ -56,7 +57,7 @@ export function startLegacy() {
     const gridView = createGrid({ document, location, runChunks: runConstructionChunks,
         createError: (code, message) => initializationError(code, 'grid-cards', message),
         installHover: ensureGridHoverBehavior, readPage: pageForItem,
-        onRetire: retireGridCard, onReplace: onGridCardReplaced,
+        onRetire: (handle, detail) => { nativePopup.retire(handle); retireHoverCard(handle, detail); },
         tLog, tUi, formatUiNumber, formatItemCount, copyLogs: copyDiagnosticLogs, setTimeout, clearTimeout,
         readEmptyContent: section => netflixDom.readEmptyContent(section), readEmptyShell: () => netflixDom.readEmptyShell(),
         isActive: () => targetSessionActive && isTargetPage() });
@@ -116,9 +117,6 @@ export function startLegacy() {
     // Short, coalesced callback-gap samples; never a continuous FPS/paint monitor.
     const HOVER_FRAME_DIAGNOSTIC_LIMITS = Object.freeze({ routeFrames: 12000, windowFrames: 1800,
         intentMs: 600, preparationMs: 6000, replayMs: 2000, scrollMs: 1000 });
-    // One delayed presence check per sampled replay, cancelled by an earlier
-    // preview transfer or exit. This does not retry or alter native hover.
-    const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze({ delayMs: 900, routeReplays: 48, roots: 6 });
     const HOVER_INTERRUPTION_LOG_LIMIT = 48;
     const HOVER_CANCELLATION_REASONS = Object.freeze({ scroll: 'Scroll', 'pointer-leave': 'PointerLeave',
         superseded: 'Superseded', resize: 'Resize', group: 'Group', source: 'Source', route: 'Route',
@@ -160,13 +158,51 @@ export function startLegacy() {
         isHoverCancelled: hoverPreparationCancelled, readHoverToken: () => hoverToken,
         navigationDiagnostics: createNavigationDiagnosticSink,
         checkRoute: () => { if (location.href !== lastObservedUrl) handleRouteChange('MutationObserver-url'); },
-        onMutationDelivery: () => { if (activeNativeHover?.previewRoot && !activeNativeHover.previewRoot.isConnected)
-            releaseNativePreview(activeNativeHover, 'preview-removed'); },
+        onMutationDelivery: () => nativePopup.checkDetached(),
         isInitializationBlocked: () => initializationBlockedSessionToken === sessionScope.token,
         onBlockedMutation: token => recoverNativeInitialization(token, 'document-mutation'),
         isGridDetached: () => Boolean(completedSection && sourceState?.grid && !sourceState.grid.isConnected),
         shouldCoalesce: () => Boolean(completedSection || (waitingForNativeEmpty && sourceState?.empty)),
         onRelevantMutation: handleRelevantTargetDocumentMutation });
+
+
+    const nativePopup = createNativePopup({ Element, Node: globalThis.Node, document, PointerEvent: globalThis.PointerEvent, MouseEvent: globalThis.MouseEvent, performance,
+        requestAnimationFrame, cancelAnimationFrame, setTimeout, clearTimeout, carousel: nativeCarousel, grid: gridView,
+        pageDom: netflixDom, selectors: NETFLIX_DOM_SELECTORS,
+        readIntent: () => ({ token: hoverToken, sessionToken: sessionScope.token, clone: activeClone, videoId: activeVideoId, pointerX: lastPointerX, pointerY: lastPointerY }),
+        readEnvironment: () => ({ grid: sourceState?.grid, scroller: sourceState?.scroller }),
+        readDiagnostics: () => performanceDiagnostics, gridOwnsClone, gridCloneFromPointerEvent,
+        isCancelled: hoverPreparationCancelled, isSessionCurrent: isRouteSessionActive, isTargetCurrent: gridHoverTargetActive,
+        itemForSource: findItemForSourceSlot, activeSource: findActiveSourceSlot, createError: initializationError,
+        describeSource: slotDescriptor, describeItem: itemSummary, log, warn, trace, tLog, recordTiming: recordHoverTiming,
+        onReplay: startHoverFrameDiagnostics, rejectionDiagnostic: hoverReplayGuardDiagnostic, onFailed: releaseFailedGridHover,
+        capturePreview: (...args) => popupInspection.capturePreview(...args), ensureGridHoverBehavior: () => ensureGridHoverBehavior(sourceState.grid),
+        associateGridHoverItem, onPreviewRelease: (clone, reason, target, release) => {
+            const token = advanceHoverToken('preview'); release();
+            if (hoverToken === token && activeClone === clone) { activeClone = null; activeVideoId = null; activePage = null; }
+        } });
+
+    function clearSourceAlignment(slot, reason = 'source-release', relatedTarget = null) {
+        nativePopup.release(reason, relatedTarget, slot);
+    }
+
+    function popupSource(slot, item) {
+        const state = sourceState;
+        const source = nativeCarousel.mountedCard({ section: state.section, scroller: state.scroller, track: state.track,
+            item: { videoId: item.videoId, href: item.href }, activeOnly: true, sessionToken: sessionScope.token });
+        if (!source || source.slot !== slot) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-popup', 'Native card changed');
+        return source;
+    }
+
+    function scheduleNativeHoverReplay(slot, item, clone, event, page, reason, token = hoverToken, sessionToken = sessionScope.token) {
+        return nativePopup.open({ source: popupSource(slot, item), card: gridView.getCard(item), item, event, page, reason, token, sessionToken });
+    }
+
+    function makeLiveClone(slot, item, clone, page, assertCurrent = () => {}, token = hoverToken, sessionToken = sessionScope.token) {
+        const card = gridView.getCard(item);
+        if (!card || card.node !== clone) throw initializationError('GRID_CARD_RETIRED', 'grid-cards', 'Preparation card changed');
+        return nativePopup.prepare({ source: popupSource(slot, item), card, item, page, assertCurrent, token, sessionToken });
+    }
 
     let nativePresentationLease = null;
 
@@ -274,9 +310,6 @@ export function startLegacy() {
     let activeVideoId = null;
     let activePage = null;
     let activeClone = null;
-    let activeSourceSlot = null;
-    let activeGeometryProxy = null;
-    let activeNativeHover = null;
     let responsiveRefreshTimer = null;
     let responsiveRefreshPromise = null;
     let responsiveRefreshing = false;
@@ -292,7 +325,6 @@ export function startLegacy() {
     let pendingGridHoverClone = null;
     let pendingGridHoverDiagnostic = null;
     let activeHoverPreparationDiagnostic = null;
-    const graftedGridClones = new Set();
     let hoverSequence = 0;
     let responsiveSequence = 0;
     let lastResponsiveReason = '';
@@ -348,8 +380,8 @@ export function startLegacy() {
                 lastPreparationCancellationReason: '',
                 ...Object.fromEntries(Object.values(HOVER_CANCELLATION_REASONS).flatMap(reason =>
                     [[`intentCancelled${reason}`, 0], [`preparationCancelled${reason}`, 0]])) },
-            hoverPreview: { scope: 'bounded-preview-presence', delayMs: HOVER_PREVIEW_DIAGNOSTIC_LIMITS.delayMs,
-                routeReplayLimit: HOVER_PREVIEW_DIAGNOSTIC_LIMITS.routeReplays, rootLimit: HOVER_PREVIEW_DIAGNOSTIC_LIMITS.roots,
+            hoverPreview: { scope: 'bounded-preview-presence', delayMs: nativePopup.probeLimits.delayMs,
+                routeReplayLimit: nativePopup.probeLimits.routeReplays, rootLimit: nativePopup.probeLimits.roots,
                 scheduled: 0, completed: 0, checks: 0, pointerChecks: 0, rootSearches: 0,
                 checkTotalMs: 0, checkMaxMs: 0,
                 matchedTransfers: 0, matchedAtPointer: 0, matchedElsewhere: 0, noPreviewRoot: 0,
@@ -411,7 +443,7 @@ export function startLegacy() {
     function handleHoverDiagnosticVisibilityChange() {
         if (document.visibilityState === 'hidden') {
             stopHoverFrameDiagnostics('hidden');
-            finishNativePreviewDiagnostic(activeNativeHover, { result: 'hidden' });
+            nativePopup.finishProbe({ result: 'hidden' });
         }
     }
 
@@ -533,7 +565,7 @@ export function startLegacy() {
     function recordGridHoverLeave(clone, relatedTarget, event) {
         const counters = performanceDiagnostics.hoverInteraction;
         try {
-            const replay = activeClone === clone ? activeNativeHover : null;
+            const replay = nativePopup.replayFacts(clone);
             const afterReplay = Boolean(replay && replay.sessionToken === sessionScope.token);
             const sinceReplayMs = afterReplay ? Math.max(0, Math.round(performance.now() - replay.replayedAt)) : null;
             const coordinatesKnown = Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY);
@@ -754,7 +786,7 @@ export function startLegacy() {
         clearSourceAlignment();
         restoreActiveCarouselStyles();
         advanceHoverToken('source');
-        invalidateGridReact();
+        nativePopup.invalidate();
         cancelPendingGridHover('source');
         completedSection = null;
         if (sourceState?.section && !sourceState.section.isConnected) {
@@ -775,8 +807,6 @@ export function startLegacy() {
         activeVideoId = null;
         activePage = null;
         activeClone = null;
-        activeSourceSlot = null;
-        activeGeometryProxy = null;
         missingSectionSince = 0;
         gridView.cancelBuild();
         gridView.resetEmpty();
@@ -788,7 +818,7 @@ export function startLegacy() {
         viewing.dispose(sourceState?.watchStatus); sourceState?.listMembership?.dispose(); sourceState?.nativePageHints?.dispose();
         restoreActiveCarouselStyles();
         clearSourceAlignment();
-        invalidateGridReact();
+        nativePopup.invalidate();
 
         gridView.dispose();
         orderMismatchDialogOpen = false;
@@ -834,8 +864,6 @@ export function startLegacy() {
         activeVideoId = null;
         activePage = null;
         activeClone = null;
-        activeSourceSlot = null;
-        activeGeometryProxy = null;
         lastResponsiveSignature = '';
         lastPageShape = '';
         missingSectionSince = 0;
@@ -1040,10 +1068,11 @@ export function startLegacy() {
             } : null,
             sourceScan: native?.sourceScan ?? false,
             sourceParked: native?.sourceParked ?? false,
-            sourceGeometryProxy: Boolean(activeGeometryProxy),
+            sourceGeometryProxy: nativePopup.diagnostics().geometryOwned,
             hoverPresentation: 'netflix-native',
-            nativeHoverOwned: Boolean(activeNativeHover),
-            nativePreviewOwned: Boolean(activeNativeHover?.previewRoot),
+            nativeHoverOwned: nativePopup.diagnostics().replayOwned,
+            nativePreviewOwned: nativePopup.diagnostics().previewOwned,
+            nativeInteraction: nativePopup.diagnostics(),
             viewOriginalMyList,
             myListSyncMode: 'event-driven',
             pendingMyListMutations: listMutations.pendingDiagnostics(),
@@ -1058,7 +1087,7 @@ export function startLegacy() {
                 connected: Boolean(activeClone.isConnected),
                 rect: rectSummary(activeClone.getBoundingClientRect?.())
             } : null,
-            activeSourceSlot: slotDescriptor(activeSourceSlot),
+            activeSourceSlot: nativePopup.describeActiveSource(),
             hoverToken,
             responsiveRefreshing,
             responsiveSignature: lastResponsiveSignature,
@@ -1505,7 +1534,7 @@ export function startLegacy() {
 
     function cancelGroupHover() {
         cancelPendingGridHover('group'); advanceHoverToken('group'); clearSourceAlignment();
-        activeClone = null; activeVideoId = null; activePage = null; invalidateGridReact();
+        activeClone = null; activeVideoId = null; activePage = null; nativePopup.invalidate();
     }
 
     function syncWatchGroups(state, changedIds = null, reason = 'reconcile') {
@@ -1530,8 +1559,8 @@ export function startLegacy() {
             onAction: item => applyManualViewingChoice(state, item), onRefresh: () => refreshViewingStatus(state),
             onRequest: request => syncWatchGroups(state, [], request), onHoverChanged: cancelGroupHover,
             readProtectedCards: () => [activeClone, pendingGridHoverClone].filter(Boolean),
-            isProtectedSourceCurrent: () => !activeSourceSlot || activeSourceSlot.isConnected,
-            releaseInteraction: handle => releaseGridReact(handle.node),
+            isProtectedSourceCurrent: () => !nativePopup.diagnostics().geometryOwned || nativePopup.diagnostics().sourceConnected,
+            releaseInteraction: handle => nativePopup.retire(handle),
             formatHeader: summary => formatHeaderParts(state.items.length, state.totalCount, state.initializationElapsedMs, true, summary)
         });
         guard(); state.status = gridView.status;
@@ -1619,7 +1648,6 @@ export function startLegacy() {
             .replace(/\s+/g, '')
             .trim();
     }
-
 
 
     function installEmptyFrameResizeObserver(section) {
@@ -1715,7 +1743,7 @@ export function startLegacy() {
         nativeCarousel.assertObservation(observed);
         clearSourceAlignment();
         nativeCarousel.assertObservation(observed);
-        invalidateGridReact();
+        nativePopup.invalidate();
         nativeCarousel.assertObservation(observed);
         clearLegacyEmptyState({ restoreGrid: false });
         markOriginalHeader(live.section);
@@ -1768,7 +1796,7 @@ export function startLegacy() {
         nativeCarousel.assertObservation(observed);
         clearSourceAlignment();
         nativeCarousel.assertObservation(observed);
-        invalidateGridReact();
+        nativePopup.invalidate();
         nativeCarousel.assertObservation(observed);
         markOriginalHeader(live.section);
 
@@ -1837,8 +1865,6 @@ export function startLegacy() {
         nativeCarousel.assertMapping(result);
         return true;
     }
-
-
 
 
     function visibleNativeItems(live) {
@@ -1941,7 +1967,7 @@ export function startLegacy() {
         waitingForNativeEmpty = empty;
         if (empty) syncLegacyEmptyState(parent.section, { allowProvisional: true });
         else clearLegacyEmptyState();
-        assertCurrent(); invalidateGridReact(); assertCurrent();
+        assertCurrent(); nativePopup.invalidate(); assertCurrent();
         if (parent.watchStatus) { syncWatchGroups(parent); assertCurrent(); }
         const status = updateStatus(formatHeaderParts(count, count, parent.initializationElapsedMs, true));
         assertCurrent(); parent.status = status;
@@ -1982,9 +2008,6 @@ export function startLegacy() {
         }
         return null;
     }
-
-
-
 
 
     function restartInitializationForPopulatedNativeMyList(live, reason = 'late-populated-source') {
@@ -2424,114 +2447,11 @@ export function startLegacy() {
         return gridView.applyGeometry(grid, currentGridGeometry(section, layout), layout);
     }
 
-    function pairDomTrees(sourceRoot, cloneRoot) {
-        const domMap = new Map();
-        const pairs = [];
-
-        function walk(source, clone) {
-            if (!(source instanceof Element) || !(clone instanceof Element)) return;
-            domMap.set(source, clone);
-            pairs.push([source, clone]);
-
-            const sourceChildren = source.children;
-            const cloneChildren = clone.children;
-            const count = Math.min(sourceChildren.length, cloneChildren.length);
-            for (let i = 0; i < count; i++) walk(sourceChildren[i], cloneChildren[i]);
-        }
-
-        walk(sourceRoot, cloneRoot);
-        return { domMap, pairs };
-    }
-
-    // Contains the private React-key graft used only to make cloned cards hoverable.
-    const netflixReactHover = Object.freeze({
-        clearClone(root) {
-            const nodes = [root, ...root.querySelectorAll('*')];
-            for (const node of nodes) {
-                for (const key of Object.getOwnPropertyNames(node)) {
-                    if (!key.startsWith('__react')) continue;
-                    if (key.startsWith('__reactContainer$')) continue;
-                    try { delete node[key]; } catch (_) {}
-                }
-            }
-        },
-
-        graftTreeToClone(sourceRoot, cloneRoot) {
-            const { domMap, pairs } = pairDomTrees(sourceRoot, cloneRoot);
-            const fiberMap = new Map();
-            let fiberAssignments = 0;
-            let propsAssignments = 0;
-
-            function reactKeysForNode(node) {
-                const keys = Object.getOwnPropertyNames(node);
-                return {
-                    fiberKeys: keys.filter(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')),
-                    propsKeys: keys.filter(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$')),
-                    otherKeys: keys.filter(k =>
-                        k.startsWith('__react') &&
-                        !k.startsWith('__reactFiber$') &&
-                        !k.startsWith('__reactInternalInstance$') &&
-                        !k.startsWith('__reactProps$') &&
-                        !k.startsWith('__reactEventHandlers$')
-                    )
-                };
-            }
-
-            function cloneFiberChain(sourceFiber) {
-                if (!sourceFiber || typeof sourceFiber !== 'object') return sourceFiber;
-                if (fiberMap.has(sourceFiber)) return fiberMap.get(sourceFiber);
-
-                const clonedFiber = Object.assign(
-                    Object.create(Object.getPrototypeOf(sourceFiber) || Object.prototype),
-                    sourceFiber
-                );
-                fiberMap.set(sourceFiber, clonedFiber);
-
-                if (sourceFiber.stateNode instanceof Node && domMap.has(sourceFiber.stateNode)) {
-                    clonedFiber.stateNode = domMap.get(sourceFiber.stateNode);
-                }
-
-                // Preserve the structure that produced working hover behavior in legacy 1.2.0.
-                clonedFiber.return = cloneFiberChain(sourceFiber.return);
-                return clonedFiber;
-            }
-
-            for (const [source, clone] of pairs) {
-                const { fiberKeys, propsKeys, otherKeys } = reactKeysForNode(source);
-
-                for (const key of fiberKeys) {
-                    try {
-                        clone[key] = cloneFiberChain(source[key]);
-                        fiberAssignments++;
-                    } catch (error) {
-                        warn(tLog('fiberGraftFailed'), key, error);
-                    }
-                }
-
-                for (const key of propsKeys) {
-                    try {
-                        clone[key] = source[key];
-                        propsAssignments++;
-                    } catch (error) {
-                        warn(tLog('propsGraftFailed'), key, error);
-                    }
-                }
-
-                for (const key of otherKeys) {
-                    if (key.startsWith('__reactContainer$')) continue;
-                    try { clone[key] = source[key]; } catch (_) {}
-                }
-            }
-
-            cloneRoot.setAttribute('data-tm-react-grafted', 'true');
-            return { fiberAssignments, propsAssignments, clonedFibers: fiberMap.size };
-        }
-    });
 
     function findMountedSourceSlot(track, item, activeOnly = false) {
         return nativeCarousel.sample(() => nativeCarousel.mountedCard({ section: sourceState?.section,
             scroller: sourceState?.scroller, track, item: { href: item.href, videoId: item.videoId }, activeOnly,
-            sessionToken: routeSessionToken })?.slot || null);
+            sessionToken: sessionScope.token })?.slot || null);
     }
 
     function findActiveSourceSlot(item) {
@@ -2689,10 +2609,8 @@ export function startLegacy() {
         return state;
     }
 
-    function retireGridCard(handle, detail) {
+    function retireHoverCard(handle, detail) {
         const clone = handle.node;
-        if (detail.reason.endsWith('-failed') && clone?.getAttribute('data-tm-react-grafted') === 'true') graftedGridClones.add(clone);
-        releaseGridReact(clone);
         if (detail.reason === 'replacement' && detail.attempt?.token === hoverToken &&
             isRouteSessionActive(detail.attempt.sessionToken)) return;
         if (clone === activeClone || clone === pendingGridHoverClone ||
@@ -2706,10 +2624,6 @@ export function startLegacy() {
         }
     }
 
-    function onGridCardReplaced(previous, next) {
-        const clone = next.node;
-        if (clone?.getAttribute('data-tm-react-grafted') === 'true') graftedGridClones.add(clone);
-    }
 
     function findItemForSourceSlot(slot) {
         const card = slot?.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
@@ -2717,430 +2631,6 @@ export function startLegacy() {
         return sourceState.itemMap.get(itemKeyFromCard(card)) || null;
     }
 
-    function releaseGridReact(clone) {
-        if (!clone || !graftedGridClones.delete(clone)) return;
-        netflixReactHover.clearClone(clone);
-        clone.removeAttribute('data-tm-hover-ready');
-        clone.removeAttribute('data-tm-backed-page');
-        clone.removeAttribute('data-tm-react-grafted');
-    }
-
-    function invalidateGridReact(except = null) {
-        for (const clone of graftedGridClones) {
-            if (clone !== except || !clone.isConnected) releaseGridReact(clone);
-        }
-    }
-
-    function restoreGeometryProxy() {
-        const proxy = activeGeometryProxy;
-        if (!proxy) return;
-        let failures = 0;
-
-        for (const entry of proxy.entries) {
-            for (const method of ['getBoundingClientRect', 'getClientRects']) {
-                const descriptor = entry.descriptors[method];
-                try {
-                    if (descriptor) {
-                        Object.defineProperty(entry.source, method, descriptor);
-                    } else {
-                        if (!delete entry.source[method]) failures++;
-                    }
-                } catch (_) { failures++; }
-            }
-        }
-
-        proxy.sourceSlot.removeAttribute('data-tm-source-proxied');
-        activeGeometryProxy = null;
-        performanceDiagnostics.nativeRecovery.alignmentRestores++;
-        if (failures) {
-            performanceDiagnostics.nativeRecovery.alignmentRestoreFailures += failures;
-            warn(tLog('sourceAlignmentRestoreFailed'), { methods: failures, nodes: proxy.entries.length });
-        }
-    }
-
-    function clearSourceAlignment(slot = activeSourceSlot, reason = 'source-release', relatedTarget = null) {
-        releaseNativeHover(reason, relatedTarget);
-        invalidateNativeReadScope();
-        restoreGeometryProxy();
-        if (slot?.hasAttribute?.('data-tm-source-aligned')) {
-            // Clean up transforms left by legacy 2.1 when updating the script without a full page reload.
-            slot.style.removeProperty('transform');
-            slot.style.removeProperty('transform-origin');
-            slot.style.removeProperty('z-index');
-            slot.removeAttribute('data-tm-source-aligned');
-        }
-        if (!slot || slot === activeSourceSlot) activeSourceSlot = null;
-    }
-
-    function makeClientRectList(rect) {
-        const list = [rect];
-        list.item = index => list[index] || null;
-        return list;
-    }
-
-    function releaseNativeHover(reason = 'source-release', relatedTarget = null) {
-        const owner = activeNativeHover;
-        if (!owner) return;
-        // Clear ownership first: native exit handlers can synchronously cause another cleanup.
-        activeNativeHover = null;
-        finishNativePreviewDiagnostic(owner, { result: 'released-before-check', reason });
-        clearNativePreviewTransfer(owner, reason);
-        const { counters, timing, card, coordinates } = owner;
-        const started = performance.now();
-        counters.lastExitReason = reason;
-        try {
-            if (!nativeHoverSourceMatches(owner)) {
-                counters.exitSkipped++;
-                return;
-            }
-            // React derives leave events from bubbling out events. Send them while
-            // the source still has grid geometry, before removing its coordinate proxy.
-            const common = { ...coordinates, relatedTarget };
-            let dispatched = false;
-            if (typeof PointerEvent === 'function') {
-                try {
-                    card.dispatchEvent(new PointerEvent('pointerout', { ...common,
-                        pointerId: 1, pointerType: 'mouse', isPrimary: true }));
-                    dispatched = true;
-                } catch (_) { counters.exitFailed++; }
-            }
-            if (nativeHoverSourceMatches(owner) && activeNativeHover === null) {
-                try {
-                    card.dispatchEvent(new MouseEvent('mouseout', common));
-                    dispatched = true;
-                } catch (_) { counters.exitFailed++; }
-            } else counters.exitSkipped++;
-            if (dispatched) {
-                counters.exitsDispatched++;
-                if (reason === 'scroll') counters.scrollExits++;
-            }
-        } catch (_) { counters.exitFailed++; }
-        finally { recordHoverTiming(timing, 'exit', started); }
-    }
-
-    function nativeHoverSourceMatches(owner) {
-        return owner.card.isConnected && owner.sourceSlot.isConnected && Boolean(owner.videoId) &&
-            owner.sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard) === owner.card &&
-            videoIdFromHref(owner.card.href || owner.card.getAttribute('href') || '') === owner.videoId;
-    }
-
-    function finishNativePreviewDiagnostic(owner, details) {
-        const observation = owner?.previewDiagnostic;
-        if (!observation || observation.done) return;
-        observation.done = true;
-        // Clear retained DOM and timer ownership before logging or native exit.
-        const timer = observation.timer;
-        observation.timer = null;
-        observation.clone = null;
-        try {
-            if (timer !== null) clearTimeout(timer);
-            const counters = observation.counters;
-            if (performanceDiagnostics.hoverPreview !== counters) return;
-            counters.completed++;
-            counters.lastResult = details.result;
-            const field = { 'matching-preview-transfer': 'matchedTransfers', 'matching-preview-at-pointer': 'matchedAtPointer',
-                'matching-preview-elsewhere': 'matchedElsewhere', 'no-preview-root-found': 'noPreviewRoot',
-                'preview-roots-unverified': 'unverifiedRoots', 'released-before-check': 'earlyRelease',
-                'owner-invalid': 'invalidOwner', hidden: 'hidden', 'probe-failed': 'failed' }[details.result];
-            if (field) counters[field]++;
-            log(tLog('hoverPreviewPresence'), { seq: observation.seq, token: owner.token,
-                sinceReplayMs: Math.round(performance.now() - owner.replayedAt), ...details });
-        } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
-    }
-
-    function inspectNativePreviewDiagnostic(owner) {
-        const observation = owner?.previewDiagnostic;
-        if (!observation || observation.done) return;
-        const clone = observation.clone;
-        const counters = observation.counters;
-        let checkStarted = null;
-        try {
-            if (performanceDiagnostics.hoverPreview !== counters || activeNativeHover !== owner ||
-                owner.token !== hoverToken || !isRouteSessionActive(owner.sessionToken) || activeClone !== clone ||
-                activeVideoId !== owner.videoId || !gridOwnsClone(clone, sourceState?.grid) || !nativeHoverSourceMatches(owner)) {
-                finishNativePreviewDiagnostic(owner, { result: 'owner-invalid' });
-                return;
-            }
-            if (document.visibilityState === 'hidden') {
-                finishNativePreviewDiagnostic(owner, { result: 'hidden' });
-                return;
-            }
-            counters.checks++;
-            checkStarted = performance.now();
-            const physicalKnown = Number.isFinite(lastPointerX) && Number.isFinite(lastPointerY) &&
-                lastPointerX !== -1 && lastPointerY !== -1;
-            const x = physicalKnown ? lastPointerX : owner.coordinates.clientX;
-            const y = physicalKnown ? lastPointerY : owner.coordinates.clientY;
-            let hit = null;
-            let pointerTarget = 'unavailable';
-            if (Number.isFinite(x) && Number.isFinite(y) && typeof document.elementFromPoint === 'function') {
-                counters.pointerChecks++;
-                hit = document.elementFromPoint(x, y);
-                if (gridCloneFromPointerEvent({ target: hit }, sourceState.grid) === clone) pointerTarget = 'same-card';
-                else if (gridCloneFromPointerEvent({ target: hit }, sourceState.grid, true) === clone) pointerTarget = 'viewing-control';
-                else if (hit && !sourceState.grid.contains(hit) && !sourceState.scroller?.contains(hit) &&
-                    findNativeHoverPreview(hit, owner.videoId).root) pointerTarget = 'matching-preview';
-                else pointerTarget = hit ? 'elsewhere' : 'no-hit';
-            }
-            const details = { pointerTarget, physicalKnown, targetHovered: clone.matches(':hover'), rootsExamined: 0, truncated: false };
-            if (pointerTarget === 'matching-preview') {
-                finishNativePreviewDiagnostic(owner, { result: 'matching-preview-at-pointer', ...details });
-                return;
-            }
-            // Only an unconfirmed replay reaches this single bounded search.
-            // A connected matching root is presence evidence, not a visibility or
-            // paint measurement; it may be hidden or open elsewhere on the page.
-            counters.rootSearches++;
-            const roots = document.querySelectorAll('.previewModal--wrapper, .bob-container, .previewModal--container, .bob-card');
-            const limit = Math.min(roots.length, HOVER_PREVIEW_DIAGNOSTIC_LIMITS.roots);
-            details.truncated = roots.length > limit;
-            for (let index = 0; index < limit; index++) {
-                details.rootsExamined++;
-                if (sourceState.grid.contains(roots[index]) || sourceState.scroller?.contains(roots[index])) continue;
-                if (findNativeHoverPreview(roots[index], owner.videoId).root) {
-                    finishNativePreviewDiagnostic(owner, { result: 'matching-preview-elsewhere', ...details });
-                    return;
-                }
-            }
-            finishNativePreviewDiagnostic(owner, { result: roots.length ? 'preview-roots-unverified' : 'no-preview-root-found', ...details });
-        } catch (_) { finishNativePreviewDiagnostic(owner, { result: 'probe-failed' }); }
-        finally {
-            if (checkStarted !== null && performanceDiagnostics.hoverPreview === counters) {
-                const elapsed = Math.max(0, Math.round((performance.now() - checkStarted) * 10) / 10);
-                counters.checkTotalMs = Math.round((counters.checkTotalMs + elapsed) * 10) / 10;
-                counters.checkMaxMs = Math.max(counters.checkMaxMs, elapsed);
-            }
-        }
-    }
-
-    function scheduleNativePreviewDiagnostic(owner, clone) {
-        if (!owner || activeNativeHover !== owner || owner.previewDiagnostic) return;
-        const counters = performanceDiagnostics.hoverPreview;
-        if (counters.scheduled >= HOVER_PREVIEW_DIAGNOSTIC_LIMITS.routeReplays) {
-            counters.skippedAtLimit++;
-            return;
-        }
-        owner.previewDiagnostic = { counters, clone, timer: null, done: false, seq: ++counters.scheduled };
-        try {
-            if (document.visibilityState === 'hidden') {
-                finishNativePreviewDiagnostic(owner, { result: 'hidden' });
-            } else if (owner.previewRoot) {
-                finishNativePreviewDiagnostic(owner, { result: 'matching-preview-transfer' });
-            } else {
-                owner.previewDiagnostic.timer = setTimeout(() => inspectNativePreviewDiagnostic(owner), HOVER_PREVIEW_DIAGNOSTIC_LIMITS.delayMs);
-            }
-        } catch (_) { finishNativePreviewDiagnostic(owner, { result: 'probe-failed' }); }
-    }
-
-    function nativePreviewNodeVideoId(node) {
-        const raw = node.getAttribute('data-ui-tracking-context') || '';
-        if (raw && raw.length <= 4096) {
-            const tracking = decodeTrackingContext(node);
-            const direct = tracking?.video_id ?? tracking?.videoId;
-            if ((typeof direct === 'string' || typeof direct === 'number') && /^\d+$/.test(String(direct))) return String(direct);
-            const unified = typeof tracking?.unifiedEntityId === 'string' ? tracking.unifiedEntityId.match(/^Video:(\d+)$/i) : null;
-            if (unified) return unified[1];
-        }
-        const href = node.href || node.getAttribute('href') || '';
-        // A movie's Play link can identify its title. For series an episode ID
-        // alone is insufficient; a series detail/tracking reference must match.
-        return videoIdFromHref(href) || (/\/watch\/(\d+)(?:[/?#]|$)/.exec(href)?.[1] || '');
-    }
-
-    function findNativeHoverPreview(target, videoId) {
-        if (!(target instanceof Element)) return { root: null, reason: 'not-preview' };
-        // Prefer the outer wrapper so movement among image and controls stays inside.
-        const root = target.closest('.previewModal--wrapper, .bob-container') ||
-            target.closest('.previewModal--container, .bob-card');
-        if (!root?.isConnected) return { root: null, reason: 'not-preview' };
-        let node = target;
-        for (let index = 0; node && index < 8; index++, node = node.parentElement) {
-            if (nativePreviewNodeVideoId(node) === videoId) return { root, reason: 'matching-preview-title' };
-            if (node === root) break;
-        }
-        const references = root.querySelectorAll('a[href], [data-ui-tracking-context]');
-        const limit = Math.min(references.length, 16);
-        for (let index = 0; index < limit; index++) {
-            if (nativePreviewNodeVideoId(references[index]) === videoId) {
-                return { root, reason: 'matching-preview-title' };
-            }
-        }
-        return { root: null, reason: limit < references.length ? 'preview-identity-limit' : 'preview-identity-unverified' };
-    }
-
-    function retainNativeHoverForPreview(clone, relatedTarget, event) {
-        const owner = activeNativeHover;
-        if (!owner || activeClone !== clone || event?.type !== 'pointerout' || !event.isTrusted ||
-            owner.token !== hoverToken || !isRouteSessionActive(owner.sessionToken) || !gridOwnsClone(clone, sourceState?.grid)) return false;
-        try {
-            if (!nativeHoverSourceMatches(owner)) return false;
-            const candidate = findNativeHoverPreview(relatedTarget, owner.videoId);
-            if (!candidate.root) {
-                if (candidate.reason !== 'not-preview') {
-                    owner.counters.previewRejected++;
-                    log(tLog('hoverPreviewTransferRejected'), { reason: candidate.reason });
-                }
-                return false;
-            }
-            if (owner.previewRoot === candidate.root) return true;
-            owner.previewRoot = candidate.root;
-            owner.previewClone = clone;
-            owner.previewEnteredAt = performance.now();
-            owner.counters.previewTransfers++;
-            owner.counters.lastPreviewReason = candidate.reason;
-            finishNativePreviewDiagnostic(owner, { result: 'matching-preview-transfer' });
-            try { popupInspection.capturePreview(candidate.root, owner.sessionToken); }
-            catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
-            try {
-                log(tLog('hoverPreviewTransfer'), { reason: candidate.reason,
-                    sinceReplayMs: Math.round(performance.now() - owner.replayedAt) });
-            } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
-            return true;
-        } catch (_) {
-            owner.counters.previewRejected++;
-            try { log(tLog('hoverPreviewTransferRejected'), { reason: 'preview-check-failed' }); } catch (_) {}
-            return false;
-        }
-    }
-
-    function clearNativePreviewTransfer(owner, reason) {
-        if (!owner?.previewRoot) return;
-        owner.previewRoot = null;
-        owner.previewClone = null;
-        try {
-            if (reason === 'preview-return') owner.counters.previewReturns++;
-            else owner.counters.previewReleases++;
-            owner.counters.lastPreviewReason = reason;
-            recordHoverTiming(owner.timing, 'preview', owner.previewEnteredAt);
-            log(tLog('hoverPreviewReleased'), { reason, heldMs: Math.round(performance.now() - owner.previewEnteredAt) });
-        } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
-    }
-
-    function releaseNativePreview(owner, reason, relatedTarget = null) {
-        if (activeNativeHover !== owner || !owner?.previewRoot) return;
-        const clone = owner.previewClone;
-        const releaseToken = advanceHoverToken('preview');
-        clearSourceAlignment(undefined, reason, relatedTarget);
-        // Native exit callbacks may synchronously establish another hover owner.
-        if (hoverToken === releaseToken && activeClone === clone) {
-            activeClone = null;
-            activeVideoId = null;
-            activePage = null;
-        }
-    }
-
-    function nativePreviewOwnerMatches(owner) {
-        try {
-            return activeNativeHover === owner && activeClone === owner.previewClone && activeVideoId === owner.videoId &&
-                Boolean(owner.previewClone?.isConnected) && gridOwnsClone(owner.previewClone, sourceState?.grid) &&
-                isRouteSessionActive(owner.sessionToken) && owner.token === hoverToken && nativeHoverSourceMatches(owner);
-        } catch (_) { return false; }
-    }
-
-    function handleTargetPreviewPointerOut(event) {
-        const owner = activeNativeHover;
-        const root = owner?.previewRoot;
-        if (!root || !event.isTrusted || !root.contains(event.target) ||
-            (event.relatedTarget && root.contains(event.relatedTarget))) return;
-        const clone = owner.previewClone;
-        const valid = root.isConnected && nativePreviewOwnerMatches(owner);
-        if (valid && event.relatedTarget &&
-            gridCloneFromPointerEvent({ target: event.relatedTarget }, sourceState.grid) === clone) {
-            clearNativePreviewTransfer(owner, 'preview-return');
-            return;
-        }
-        releaseNativePreview(owner, valid ? 'preview-leave' : 'preview-owner-invalid', event.relatedTarget);
-    }
-
-    function alignSourceSlotToClone(sourceSlot, clone) {
-        if (!sourceSlot?.isConnected || !clone?.isConnected) return false;
-
-        const sourceItem = findItemForSourceSlot(sourceSlot);
-        if (!sourceItem || findActiveSourceSlot(sourceItem) !== sourceSlot) return false;
-
-        clearSourceAlignment();
-
-        const { pairs } = pairDomTrees(sourceSlot, clone);
-        const entries = [];
-        for (const [source, target] of pairs) {
-            if (!(source instanceof Element) || !(target instanceof Element)) continue;
-
-            const descriptors = {
-                getBoundingClientRect: Object.getOwnPropertyDescriptor(source, 'getBoundingClientRect') || null,
-                getClientRects: Object.getOwnPropertyDescriptor(source, 'getClientRects') || null
-            };
-
-            try {
-                Object.defineProperty(source, 'getBoundingClientRect', {
-                    configurable: true,
-                    value: () => target.getBoundingClientRect()
-                });
-                Object.defineProperty(source, 'getClientRects', {
-                    configurable: true,
-                    value: () => makeClientRectList(target.getBoundingClientRect())
-                });
-                entries.push({ source, descriptors });
-            } catch (_) {
-                for (const method of ['getBoundingClientRect', 'getClientRects']) {
-                    try {
-                        if (descriptors[method]) Object.defineProperty(source, method, descriptors[method]);
-                        else delete source[method];
-                    } catch (_) {}
-                }
-            }
-        }
-
-        if (!entries.length) return false;
-
-        sourceSlot.setAttribute('data-tm-source-proxied', 'true');
-        activeGeometryProxy = { sourceSlot, clone, entries };
-        activeSourceSlot = sourceSlot;
-        return true;
-    }
-
-    function replayHoverOnNativeSource(sourceSlot, triggerEvent) {
-        if (!sourceSlot?.isConnected) return false;
-        const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard) || sourceSlot;
-        const rect = card.getBoundingClientRect();
-        const inside = (x, y) => Number.isFinite(x) && Number.isFinite(y) &&
-            x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
-        const currentPointer = lastPointerX !== -1 && lastPointerY !== -1 && inside(lastPointerX, lastPointerY);
-        const originalPointer = inside(triggerEvent?.clientX, triggerEvent?.clientY);
-        const x = currentPointer ? lastPointerX : originalPointer ? triggerEvent.clientX : rect.left + rect.width / 2;
-        const y = currentPointer ? lastPointerY : originalPointer ? triggerEvent.clientY : rect.top + rect.height / 2;
-
-        const common = {
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            clientX: x,
-            clientY: y,
-            screenX: Number.isFinite(triggerEvent?.screenX) && Number.isFinite(triggerEvent?.clientX)
-                ? triggerEvent.screenX + x - triggerEvent.clientX : x,
-            screenY: Number.isFinite(triggerEvent?.screenY) && Number.isFinite(triggerEvent?.clientY)
-                ? triggerEvent.screenY + y - triggerEvent.clientY : y,
-            relatedTarget: null
-        };
-
-        const owner = { card, sourceSlot, coordinates: common, token: hoverToken, sessionToken: sessionScope.token,
-            videoId: videoIdFromHref(card.href || card.getAttribute('href') || ''),
-            counters: performanceDiagnostics.hoverLifecycle, timing: performanceDiagnostics.hoverTiming,
-            replayedAt: performance.now() };
-        releaseNativeHover('replaced');
-        activeNativeHover = owner;
-        const stillActive = () => activeNativeHover === owner && !hoverPreparationCancelled(owner.token) &&
-            isRouteSessionActive(owner.sessionToken) && nativeHoverSourceMatches(owner);
-        try {
-            card.dispatchEvent(new PointerEvent('pointerover', { ...common, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
-            if (!stillActive()) return false;
-            card.dispatchEvent(new PointerEvent('pointermove', { ...common, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
-        } catch (_) {}
-        if (!stillActive()) return false;
-        card.dispatchEvent(new MouseEvent('mouseover', common));
-        if (!stillActive()) return false;
-        card.dispatchEvent(new MouseEvent('mousemove', common));
-        return stillActive();
-    }
 
     function releaseFailedGridHover(clone, token) {
         if (!clone || token !== hoverToken || activeClone !== clone) return;
@@ -3150,110 +2640,6 @@ export function startLegacy() {
         activePage = null;
     }
 
-    function scheduleNativeHoverReplay(sourceSlot, item, clone, triggerEvent, actualPage, reason,
-        token = hoverToken, sessionToken = sessionScope.token) {
-        const generation = clone?.__tmHoverActivationGeneration;
-        const counters = performanceDiagnostics.hoverLifecycle;
-        const timing = performanceDiagnostics.hoverTiming;
-        return new Promise(resolve => requestAnimationFrame(() => {
-            const finish = success => {
-                if (!success) releaseFailedGridHover(clone, token);
-                resolve(success);
-            };
-            try {
-                if (hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) ||
-                    !gridHoverTargetActive(clone, generation, triggerEvent) ||
-                    activeClone !== clone || activeVideoId !== item.videoId) {
-                    counters.replayCancelled++;
-                    if (performanceDiagnostics.hoverLifecycle === counters) {
-                        performanceDiagnostics.hoverInteraction.replayGuardRejected++;
-                        log(tLog('hoverReplayGuardRejected'), hoverReplayGuardDiagnostic(clone, generation, token, sessionToken, item));
-                    }
-                    return finish(false);
-                }
-                counters.replayAttempts++;
-                if (!sourceSlot?.isConnected) { counters.replayFailed++; return finish(false); }
-
-                const card = sourceSlot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-                const sourceVideoId = videoIdFromHref(card?.href || card?.getAttribute?.('href') || '');
-                // Native visibility/page reads need original source geometry, not
-                // the grid rectangles installed for Netflix's popup placement.
-                clearSourceAlignment();
-                const alignmentStarted = performance.now();
-                let failureReason;
-                try {
-                    failureReason = withNativeReadScope(() => {
-                        if (!sourceVideoId || sourceVideoId !== item.videoId) return 'source-video-id-mismatch';
-                        if (findActiveSourceSlot(item) !== sourceSlot) return 'source-no-longer-active';
-                        return alignSourceSlotToClone(sourceSlot, clone) ? '' : 'source-alignment-failed';
-                    });
-                } finally { recordHoverTiming(timing, 'alignment', alignmentStarted); }
-                if (failureReason) {
-                    counters.replayFailed++;
-                    warn(tLog('nativeHoverReplayCancelled'), {
-                        reason: failureReason,
-                        targetVideoId: item.videoId,
-                        sourceVideoId,
-                        source: slotDescriptor(sourceSlot)
-                    });
-                    return finish(false);
-                }
-
-                const replayStarted = performance.now();
-                let replayed;
-                try { replayed = replayHoverOnNativeSource(sourceSlot, triggerEvent); }
-                finally { recordHoverTiming(timing, 'replay', replayStarted); }
-                if (replayed) {
-                    counters.replaysDispatched++;
-                    startHoverFrameDiagnostics('replay');
-                    scheduleNativePreviewDiagnostic(activeNativeHover, clone);
-                } else counters.replayCancelled++;
-                if (replayed) trace(() => [tLog('nativeHoverReplayedFromLiveSource'), {
-                    item: itemSummary(item),
-                    actualPage,
-                    reason,
-                    triggerEvent: triggerEvent?.type || '',
-                    source: slotDescriptor(sourceSlot)
-                }]);
-                finish(Boolean(replayed));
-            } catch (error) {
-                counters.replayFailed++;
-                warn(tLog('nativeHoverReplayCancelled'), { reason: 'replay-failed', item: itemSummary(item), error });
-                finish(false);
-            }
-        }));
-    }
-
-    function makeLiveClone(sourceSlot, item, oldClone, actualPage, assertCurrent = () => {}, token = hoverToken, sessionToken = sessionScope.token) {
-        // Keep the legacy 1.2.0 order: clone the live source, graft React data, then insert into the DOM.
-        const expected = gridView.getCard(item);
-        if (!expected || expected.node !== oldClone) throw initializationError('GRID_CARD_RETIRED', 'grid-cards', 'Preparation card changed');
-        const assertExpected = () => { assertCurrent(); gridView.assertCard(expected); };
-        assertExpected();
-        const fresh = sourceSlot.cloneNode(true);
-        assertExpected();
-        const stats = netflixReactHover.graftTreeToClone(sourceSlot, fresh);
-        assertExpected();
-        normalizeClone(fresh);
-        assertExpected();
-
-        fresh.setAttribute('data-tm-hover-ready', String(Boolean(stats?.fiberAssignments || stats?.propsAssignments)));
-        fresh.setAttribute('data-tm-backed-page', String(actualPage));
-        fresh.__tmHoverActivationGeneration = oldClone?.__tmHoverActivationGeneration;
-        if (oldClone?.getAttribute('data-tm-preparing') === 'true' &&
-            oldClone.getAttribute('data-tm-hover-token') === String(hoverToken)) {
-            fresh.setAttribute('data-tm-preparing', 'true');
-            fresh.setAttribute('data-tm-hover-token', String(hoverToken));
-            fresh.__tmHoverReplacementToken = hoverToken;
-        }
-        assertExpected();
-        ensureGridHoverBehavior(sourceState.grid);
-        assertExpected();
-        associateGridHoverItem(item, fresh);
-        assertExpected();
-        const handle = gridView.replaceCard(expected, { node: fresh, assertCurrent, attempt: { token, sessionToken } });
-        return { fresh: handle.node, stats, handle };
-    }
 
     async function prepareMountedPage(page, targetItem = null, triggerEvent = null, token = null, sessionToken = null) {
         assertRouteSession(sessionToken);
@@ -3474,7 +2860,7 @@ export function startLegacy() {
         });
 
         assertCurrent();
-        invalidateGridReact();
+        nativePopup.invalidate();
         clearSourceAlignment();
         activeVideoId = null;
         activeClone = null;
@@ -3531,8 +2917,6 @@ export function startLegacy() {
                 performanceDiagnostics.hoverPreparation.clonesRebuilt++;
                 fiberAssignments += stats?.fiberAssignments || 0;
                 propsAssignments += stats?.propsAssignments || 0;
-
-                fresh.setAttribute('data-tm-backed-page', String(actualPage));
 
                 nativeCarousel.assertObservation(pageView);
 
@@ -3899,7 +3283,7 @@ export function startLegacy() {
             clone.getAttribute('data-tm-hover-token') === String(hoverToken)) {
             recordGridHoverLeave(clone, relatedTarget, event);
         }
-        if (retainNativeHoverForPreview(clone, relatedTarget, event)) return;
+        if (nativePopup.retainPreview(clone, relatedTarget, event)) return;
         const cancellationReason = clone.__tmViewingControlHovered ? 'controls' : 'pointer-leave';
         if (pendingGridHoverClone === clone) cancelPendingGridHover(cancellationReason);
         clone.__tmHoverActivationGeneration = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
@@ -4052,7 +3436,7 @@ export function startLegacy() {
         activeVideoId = null;
         activeClone = null;
         activePage = null;
-        invalidateGridReact();
+        nativePopup.invalidate();
         performanceDiagnostics.resize.hoverCancelled++;
     }
 
@@ -4482,10 +3866,7 @@ export function startLegacy() {
     }
 
     function realignActiveSource() {
-        if (!activeGeometryProxy) return;
-        if (!activeGeometryProxy.sourceSlot.isConnected || !activeGeometryProxy.clone.isConnected) {
-            clearSourceAlignment();
-        }
+        nativePopup.checkDetached();
     }
 
     function handleTargetPointerMove(event) {
@@ -4501,17 +3882,7 @@ export function startLegacy() {
         const grid = sourceState?.grid;
         if (!grid?.isConnected) return;
         const clone = gridCloneFromPointerEvent(event, grid);
-        const owner = activeNativeHover;
-        if (owner?.previewRoot) {
-            if (!owner.previewRoot.isConnected || !gridOwnsClone(owner.previewClone, grid)) {
-                releaseNativePreview(owner, 'preview-removed');
-            } else if (owner.previewRoot.contains(event.target)) {
-                cancelPendingGridHover('preview');
-                return;
-            } else if (clone === owner.previewClone && nativePreviewOwnerMatches(owner)) {
-                clearNativePreviewTransfer(owner, 'preview-return');
-            } else releaseNativePreview(owner, 'preview-leave', event.target);
-        }
+        if (nativePopup.pointerMoved(event)) { cancelPendingGridHover('preview'); return; }
         if (performance.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) {
             if (hoverNeedsPointerMove) performanceDiagnostics.hoverScroll.physicalRearms++;
             hoverNeedsPointerMove = false;
@@ -4540,7 +3911,7 @@ export function startLegacy() {
         activePage = null;
         // Grafted React props also receive Netflix's delegated mouse events.
         // Clear them once per scroll burst so they cannot bypass the script guard.
-        invalidateGridReact();
+        nativePopup.invalidate();
     }
 
     function handleTargetWindowResize() {
@@ -4582,7 +3953,7 @@ export function startLegacy() {
         if (targetListenersActive) return;
         targetListenersActive = true;
         document.addEventListener('pointermove', handleTargetPointerMove, { passive: true, capture: true });
-        document.addEventListener('pointerout', handleTargetPreviewPointerOut, { passive: true, capture: true });
+        document.addEventListener('pointerout', nativePopup.previewPointerOut, { passive: true, capture: true });
         document.addEventListener('visibilitychange', handleHoverDiagnosticVisibilityChange, { passive: true });
         document.addEventListener('wheel', handleTargetScroll, { passive: true, capture: true });
         document.addEventListener('scroll', handleTargetScroll, { passive: true, capture: true });
@@ -4594,8 +3965,8 @@ export function startLegacy() {
 
     function stopTargetEventListeners() {
         stopHoverFrameDiagnostics();
-        finishNativePreviewDiagnostic(activeNativeHover, { result: 'released-before-check', reason: 'listeners-stopped' });
-        if (activeNativeHover?.previewRoot) releaseNativePreview(activeNativeHover, 'listeners-stopped');
+        nativePopup.finishProbe({ result: 'released-before-check', reason: 'listeners-stopped' });
+        nativePopup.release('listeners-stopped');
         if (!targetListenersActive && !nativeCarousel.diagnostics().discoveryActive) return;
         targetListenersActive = false;
         cancelPendingGridHover('route');
@@ -4604,7 +3975,7 @@ export function startLegacy() {
         lastPointerX = -1;
         lastPointerY = -1;
         document.removeEventListener('pointermove', handleTargetPointerMove, true);
-        document.removeEventListener('pointerout', handleTargetPreviewPointerOut, true);
+        document.removeEventListener('pointerout', nativePopup.previewPointerOut, true);
         document.removeEventListener('visibilitychange', handleHoverDiagnosticVisibilityChange);
         document.removeEventListener('wheel', handleTargetScroll, true);
         document.removeEventListener('scroll', handleTargetScroll, true);
@@ -4839,7 +4210,7 @@ export function startLegacy() {
             }
             assertRouteSession(sessionToken);
             if (sourceWait.nativeSection) {
-                invalidateGridReact();
+                nativePopup.invalidate();
                 gridView.dispose();
                 nativeCarousel.clearBinding();
                 publishSourceState(null);
