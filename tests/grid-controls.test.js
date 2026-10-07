@@ -1,3 +1,4 @@
+import { publishGrid } from './helpers/card-material.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGrid } from '../src/grid/grid.js';
@@ -11,7 +12,7 @@ async function fixture() {
     card.setAttribute('data-uia', 'standard-card'); card.setAttribute('href', 'https://www.netflix.com/browse?jbv=1');
     const item = { videoId: '1', href: card.getAttribute('href'), ariaLabel: 'First', page: 0, snapshot };
     const status = grid.updateStatus('My List');
-    const root = await grid.publish({ items: [item], section, status, layout: { gap: 8 },
+    const root = await publishGrid(grid, { items: [item], section, status, layout: { gap: 8 },
         geometry: { left: 0, width: 600, columns: 6 }, assertCurrent() {} });
     const controls = node => { const root = node.querySelector('[data-tm-viewing-actions]');
         return { root, toggle: root?.querySelector('button'), marker: root?.querySelector('[data-tm-manual-choice]') }; };
@@ -129,7 +130,7 @@ test('control subtree replacement during painting rejects remaining writes and g
 test('whole-grid publication retires the old delegated listener before a new policy attaches', async () => {
     const e = await fixture(), actions = [];
     e.grid.attachPlacementActions({ assertCurrent() {}, onAction: item => actions.push(item) });
-    const next = await e.grid.publish({ items: [e.item], section: e.root.parentElement, status: e.grid.status,
+    const next = await publishGrid(e.grid, { items: [e.item], section: e.root.parentElement, status: e.grid.status,
         layout: { gap: 8 }, geometry: { left: 0, width: 600, columns: 6 }, assertCurrent() {} });
     assert.equal(e.root.listenerCount('click'), 0);
     assert.equal(next.listenerCount('click'), 0);

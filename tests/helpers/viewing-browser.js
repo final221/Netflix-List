@@ -1,3 +1,4 @@
+import { publishGrid } from './card-material.js';
 import { createGrid } from '../../src/grid/grid.js';
 import { createViewing } from '../../src/viewing/viewing.js';
 import { createViewingData } from '../../src/netflix/viewing-data.js';
@@ -40,7 +41,7 @@ export async function viewingEnvironment(count = 7, _existing = null, storage = 
         card.setAttribute('href',card.href);card.setAttribute('aria-label',`Native ${i+1}`);
         return {videoId:String(i+1),href:card.href,ariaLabel:`Native ${i+1}`,page:Math.floor(i/6),snapshot};
     });
-    await c.gridView.publish({items,section,anchor:scroller,status:c.gridView.updateStatus('My List'),layout:{columns:6,gap:8,rowGap:10},
+    await publishGrid(c.gridView, {items,section,anchor:scroller,status:c.gridView.updateStatus('My List'),layout:{columns:6,gap:8,rowGap:10},
         geometry:{left:10,width:600,columns:6},assertCurrent(){}});
     const state=c.sourceState={items,totalCount:count,grid:c.gridView.root,cloneMap:new Map(items.map(item=>['v:'+item.videoId,c.gridView.getCard(item).node]))};
     Object.defineProperty(state,'cloneMap',{get:()=>new Map(state.items.map(item=>['v:'+item.videoId,c.gridView.getCard(item)?.node]))});

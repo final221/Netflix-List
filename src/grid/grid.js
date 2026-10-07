@@ -52,9 +52,7 @@ export function createGrid({ document, location, runChunks, imageDiagnostics = {
             const acceptedRevision = cards.revision;
             try { onAccepted(root); }
             finally {
-                if (readMaterial) {
-                    try { releaseMaterial(); } catch (_) { materialReleaseFailures++; }
-                } else items.forEach(cards.releaseStartup);
+                try { releaseMaterial(); } catch (_) { materialReleaseFailures++; }
                 groups.retireRoot(previous);
                 frame.releaseReplacedRoot(previous);
             }
@@ -119,9 +117,8 @@ export function createGrid({ document, location, runChunks, imageDiagnostics = {
         applyViewingChange: groups.applyViewingChange, resetViewing: groups.resetViewing,
         presentation: groups.presentation, groupDiagnostics: groups.groupDiagnostics,
         isCardVisible: groups.isCardVisible,
-        hasRetained: cards.hasRetained, releaseRetained: cards.releaseRetained, clearRetained: cards.clearRetained,
+        hasRetained: cards.hasRetained, releaseRetained: cards.releaseRetained,
         captureCard: markup.capture, captureTemplate: markup.captureTemplate, normalizeCard: markup.normalize,
         moveCard: (handle, parent, before) => { cards.assertCard(handle); frame.assertParent(parent); frame.moveCard(handle.node, parent, before); },
-        orderChildren: (parent, desired) => { frame.assertParent(parent); frame.orderChildren(parent, desired); },
         applyGeometry: frame.updateGeometry, diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics(), ...groups.diagnostics(), materialReleaseFailures }) });
 }

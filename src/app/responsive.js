@@ -473,16 +473,6 @@ export function createResponsive(options) {
     }
 
 
-    function handleTargetWindowResize() {
-        handleTargetResize('window.resize');
-    }
-
-
-    function handleTargetVisualViewportResize() {
-        handleTargetResize('visualViewport.resize');
-    }
-
-
     function handleTargetResize(reason) {
         if (!readState()?.grid?.isConnected) return;
         counters.events++;

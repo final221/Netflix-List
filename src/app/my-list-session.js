@@ -549,6 +549,11 @@ export function createMyListSession({ environment = globalThis, version, context
         return error;
     }
 
+    function reportInitializationFailure(error, detail) {
+        warn(tLog('initializationFailed'), { code: error?.code || null, ...detail,
+            error, snapshot: collectRuntimeSnapshot() });
+    }
+
     function initializationTimeoutError(stage, timeoutMs, details = {}) {
         return initializationError(
             'INITIALIZATION_TIMEOUT',
@@ -1520,12 +1525,9 @@ export function createMyListSession({ environment = globalThis, version, context
         } catch (error) {
             if (!isRouteSessionCancelledError(error) && error?.code !== 'NATIVE_SOURCE_REPLACED') {
                 orderMismatchDismissed = false;
-                warn(tLog('initializationFailed'), {
-                    code: error?.code || null,
+                reportInitializationFailure(error, {
                     stage: error?.stage || 'order-mismatch-reinitialize',
                     details: error?.details || null,
-                    error,
-                    snapshot: collectRuntimeSnapshot()
                 });
                 updateStatus(formatInitializationErrorMeta(error, sourceState?.totalCount ?? null));
             }
@@ -2412,13 +2414,10 @@ export function createMyListSession({ environment = globalThis, version, context
             }
             if (!isRouteSessionCancelledError(error)) {
                 initializationBlockedSessionToken = sessionToken;
-                warn(tLog('initializationFailed'), {
-                    code: error?.code || null,
+                reportInitializationFailure(error, {
                     stage: error?.stage || 'total-count-detection',
                     timeoutMs: error?.details?.timeoutMs ?? TOTAL_COUNT_TIMEOUT_MS,
                     details: error?.details || null,
-                    error,
-                    snapshot: collectRuntimeSnapshot()
                 });
                 updateStatus(formatInitializationErrorMeta(error, null));
             }
@@ -2475,13 +2474,10 @@ export function createMyListSession({ environment = globalThis, version, context
                 });
                 initializationBlockedSessionToken = sessionToken;
                 nativeInitializationFailure = { section, scroller, track, sessionToken };
-                warn(tLog('initializationFailed'), {
-                    code: error.code,
+                reportInitializationFailure(error, {
                     stage: error.stage,
                     timeoutMs: error.details?.timeoutMs ?? null,
                     details: error.details || null,
-                    error,
-                    snapshot: collectRuntimeSnapshot()
                 });
                 updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
                 clearRunningSession(sessionToken, false, initializationOwner);
@@ -2523,12 +2519,9 @@ export function createMyListSession({ environment = globalThis, version, context
                     state: readiness.state
                 })
                 : initializationError('NATIVE_CAROUSEL_NOT_READY', 'native-carousel-readiness', `Native carousel not ready: ${readiness.reason}`, readiness);
-            warn(tLog('initializationFailed'), {
-                code: readinessError.code,
+            reportInitializationFailure(readinessError, {
                 stage: readinessError.stage,
                 timeoutMs: readinessError.details?.timeoutMs ?? null,
-                error: readinessError,
-                snapshot: collectRuntimeSnapshot()
             });
             updateStatus(formatInitializationErrorMeta(readinessError, earlyTotalCount));
             return;
@@ -2565,13 +2558,10 @@ export function createMyListSession({ environment = globalThis, version, context
             } catch (error) {
                 if (!isRouteSessionCancelledError(error)) {
                     initializationBlockedSessionToken = sessionToken;
-                    warn(tLog('initializationFailed'), {
-                        code: error?.code || null,
+                    reportInitializationFailure(error, {
                         stage: error?.stage || 'normalize-native-page-zero',
                         timeoutMs: error?.details?.timeoutMs ?? null,
                         details: error?.details || null,
-                        error,
-                        snapshot: collectRuntimeSnapshot()
                     });
                     updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
                 }
@@ -2613,13 +2603,10 @@ export function createMyListSession({ environment = globalThis, version, context
                 }
                 if (!isRouteSessionCancelledError(error)) {
                     initializationBlockedSessionToken = sessionToken;
-                    warn(tLog('initializationFailed'), {
-                        code: error?.code || null,
+                    reportInitializationFailure(error, {
                         stage: error?.stage || 'native-react-total-count',
                         timeoutMs: error?.details?.timeoutMs ?? null,
                         details: error?.details || null,
-                        error,
-                        snapshot: collectRuntimeSnapshot()
                     });
                     updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
                 }
@@ -2863,13 +2850,10 @@ export function createMyListSession({ environment = globalThis, version, context
                 retryGridBuild = true;
             } else {
                 initializationBlockedSessionToken = sessionToken;
-                warn(tLog('initializationFailed'), {
-                    code: error?.code || null,
+                reportInitializationFailure(error, {
                     stage: error?.stage || null,
                     timeoutMs: error?.details?.timeoutMs ?? null,
                     details: error?.details || null,
-                    error,
-                    snapshot: collectRuntimeSnapshot()
                 });
                 updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
             }

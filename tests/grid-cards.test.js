@@ -1,3 +1,4 @@
+import { publishGrid, insertGrid } from './helpers/card-material.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocument, Element } from './helpers/dom.js';
@@ -21,7 +22,7 @@ async function fixture(overrides = {}) {
         card.setAttribute('href', card.href);
         return { videoId: id, href: card.href, ariaLabel: 'Title ' + id, page: 0, snapshot };
     };
-    const publish = items => grid.publish({ items, section, anchor, status,
+    const publish = items => publishGrid(grid, { items, section, anchor, status,
         geometry: { left: 10, width: 600, columns: 6 }, layout: { gap: 8, rowGap: 10 }, assertCurrent() {} });
     return { grid, document, section, anchor, status, item, publish, retired, replaced };
 }
@@ -50,7 +51,7 @@ test('grid applies membership order and inserts at authoritative positions throu
     e.grid.applyMembershipOrder({ ordered, index: 0 });
     assert.deepEqual(root.children, ordered.map(item => e.grid.getCard(item).node));
     const next = e.item('4');
-    e.grid.insertCard(next, { index: 1, ordered: true });
+    insertGrid(e.grid, next, { index: 1, ordered: true });
     assert.equal(root.children[1], e.grid.getCard(next).node);
     let checks = 0;
     assert.throws(() => e.grid.applyMembershipOrder({ ordered: items, index: 0 }, () => {
@@ -124,7 +125,7 @@ test('grid retains Undo material by exact correlation and record, separately fro
     assert.equal(e.grid.materialFor(item, 'removal-1'), old.node);
     assert.equal(e.grid.materialFor({ ...item }, 'removal-1'), null);
     assert.equal(e.grid.materialFor(item, 'expired-id'), null);
-    const current = e.grid.insertCard(item, { index: 0, correlationId: 'removal-1' });
+    const current = insertGrid(e.grid, item, { index: 0, correlationId: 'removal-1' });
     assert.notEqual(current.node, old.node);
     assert.equal(e.grid.hasRetained('removal-1', item), false);
     assert.equal(e.grid.cards.size, 1);
@@ -198,7 +199,7 @@ test('failed replacement preparation preserves the old card and failed post-comm
 test('disposal releases registry and retained material and prevents reentrant insertion from borrowing the retiring frame', async () => {
     let retiring = false, grid;
     const e = await fixture({ onRetire() { if (retiring) {
-        assert.throws(() => grid.insertCard(e.item('9')), { code: 'GRID_FRAME_RETIRED' });
+        assert.throws(() => insertGrid(grid, e.item('9')), { code: 'GRID_FRAME_RETIRED' });
     } } });
     grid = e.grid;
     const first = e.item('1'), second = e.item('2');
@@ -232,7 +233,7 @@ test('empty frame accepts the first addition and can move between native and syn
         geometry: { width: 600, left: 10, columns: 6 }, assertCurrent() {} };
     const root = e.grid.mount(facts);
     const first = e.item();
-    const handle = e.grid.insertCard(first);
+    const handle = insertGrid(e.grid, first);
     e.grid.assertCard(handle);
     assert.equal(handle.node.parentElement, root);
     assert.equal(root.getAttribute('data-tm-empty'), null);
@@ -244,7 +245,7 @@ test('empty frame accepts the first addition and can move between native and syn
     assert.equal(e.grid.mount({ ...facts, section: synthetic, anchor: null }), root);
     assert.equal(root.parentElement, synthetic);
     const second = e.item('2');
-    const next = e.grid.insertCard(second);
+    const next = insertGrid(e.grid, second);
     e.grid.assertCard(next);
     assert.equal(e.grid.mount(facts), root);
     assert.equal(root.parentElement, e.section);
@@ -270,7 +271,7 @@ test('a host exception after replacement commits cannot leave the registry point
 test('grid accepts separate captured material for an immutable DOM-free record', async () => {
     const e=await fixture(), captured=e.item('1'),record=Object.freeze({videoId:'1',href:captured.href,ariaLabel:'Immutable',page:0,imageUrl:'art'});
     let released=0,accepted=0;
-    await e.grid.publish({items:[record],readMaterial:()=>({source:captured.snapshot,template:false}),releaseMaterial(){released++;},
+    await publishGrid(e.grid, {items:[record],readMaterial:()=>({source:captured.snapshot,template:false}),releaseMaterial(){released++;},
         onAccepted(){accepted++;},section:e.section,anchor:e.anchor,status:e.status,
         geometry:{left:10,width:600,columns:6},layout:{gap:8},assertCurrent(){}});
     e.grid.assertCard(e.grid.getCard(record));assert.equal(record.imageUrl,'art');
@@ -279,7 +280,7 @@ test('grid accepts separate captured material for an immutable DOM-free record',
 
 test('accepted material release failure cannot split the published frame and registry', async () => {
     const e=await fixture(),raw=e.item('1'),record=Object.freeze({videoId:'1',href:raw.href,page:0});
-    const root=await e.grid.publish({items:[record],readMaterial:()=>({source:raw.snapshot,template:false}),
+    const root=await publishGrid(e.grid, {items:[record],readMaterial:()=>({source:raw.snapshot,template:false}),
         releaseMaterial(){throw new Error('release failed');},section:e.section,anchor:e.anchor,status:e.status,
         geometry:{left:0,width:600,columns:6},layout:{gap:8},assertCurrent(){}});
     assert.equal(root,e.grid.root);e.grid.assertCard(e.grid.getCard(record));
@@ -290,9 +291,9 @@ test('separate insertion material preserves exact retained record identity throu
     const e=await fixture();await e.publish([]);
     const raw=e.item('1'),record=Object.freeze({videoId:'1',href:raw.href,page:0,imageUrl:'art'});
     let releases=0;
-    const first=e.grid.insertCard(record,{material:{source:raw.snapshot,template:false},releaseMaterial(){releases++;}});
+    const first=insertGrid(e.grid, record,{material:{source:raw.snapshot,template:false},releaseMaterial(){releases++;}});
     e.grid.removeCard(first,{correlationId:'undo'});
-    const restored=e.grid.insertCard(record,{correlationId:'undo',releaseMaterial(){releases++;}});
+    const restored=insertGrid(e.grid, record,{correlationId:'undo',releaseMaterial(){releases++;}});
     e.grid.assertCard(restored);assert.equal(releases,2);assert.equal(record.imageUrl,'art');
     assert.equal(e.grid.diagnostics().retainedCards,0);
 });
@@ -300,7 +301,7 @@ test('separate insertion material preserves exact retained record identity throu
 test('material release which retires the accepted grid cannot return an admitted insertion', async () => {
     const e=await fixture();await e.publish([]);
     const raw=e.item('1'),record=Object.freeze({videoId:'1',href:raw.href,page:0});
-    assert.throws(()=>e.grid.insertCard(record,{material:{source:raw.snapshot,template:false},releaseMaterial(){e.grid.dispose();}}),{code:'GRID_CARD_RETIRED'});
+    assert.throws(()=>insertGrid(e.grid, record,{material:{source:raw.snapshot,template:false},releaseMaterial(){e.grid.dispose();}}),{code:'GRID_CARD_RETIRED'});
     assert.equal(e.grid.cards.size,0);
 });
 
@@ -310,7 +311,7 @@ test('grid reads scalar native hints without placing page state on immutable rec
     const e = await fixture({ readPage: () => page });
     const input = e.item();
     const record = Object.freeze({ videoId: input.videoId, href: input.href, ariaLabel: input.ariaLabel });
-    await e.grid.publish({ items: [record], section: e.section, anchor: e.anchor, status: e.status,
+    await publishGrid(e.grid, { items: [record], section: e.section, anchor: e.anchor, status: e.status,
         geometry: { left: 10, width: 600, columns: 6 }, layout: { gap: 8, rowGap: 10 },
         readMaterial: () => ({ source: input.snapshot }), readPage: () => 2, assertCurrent() {} });
     const handle = e.grid.getCard(record);
@@ -331,4 +332,18 @@ test('grid rejects a page read that retires its exact card before attribute publ
     assert.throws(() => e.grid.updateCard(handle, record, 9), { code: 'GRID_CARD_RETIRED' });
     assert.equal(handle.node.getAttribute('data-tm-item-page'), oldPage);
     assert.equal(handle.node.getAttribute('data-tm-item-order'), '0');
+});
+
+
+test('grid requires supplied capture material and never consumes embedded markup itself', async () => {
+    const e = await fixture(), captured = e.item();
+    const snapshot = captured.snapshot;
+    await assert.rejects(e.grid.publish({ items: [captured], section: e.section, anchor: e.anchor,
+        status: e.status, geometry: { left: 10, width: 600, columns: 6 }, layout: {}, assertCurrent() {} }),
+        { code: 'GRID_CARD_MATERIAL_MISSING' });
+    assert.equal(captured.snapshot, snapshot);
+    assert.equal(e.grid.cards.size, 0);
+    await e.publish([captured]);
+    assert.equal(captured.snapshot, null, 'the supplied transfer releases the capture after acceptance');
+    assert.equal(e.grid.getCard(captured).node.isConnected, true);
 });

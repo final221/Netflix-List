@@ -156,6 +156,11 @@ for(const recover of [true,false]){
     test(`real session blocked initialization ${recover?'recovers once from':'exhausts recovery after'} a replacement source`,async()=>{
         const e=sessionBrowser({count:12});e.source.track.querySelectorAll('a').forEach(node=>node.remove());
         e.app.start();await e.drain(()=>e.app.diagnostics().currentSession.blocked,240);
+        const failure = e.logs.find(row => row[1] === 'Initialization failed')[2];
+        assert.equal(failure.code, 'INITIALIZATION_TIMEOUT');
+        assert.equal(failure.stage, 'native-carousel-readiness');
+        assert.equal(failure.timeoutMs, 3000);
+        assert.equal(Object.hasOwn(failure, 'details'), false, 'readiness report retains its field contract');
         assert.deepEqual(e.cardIds(),[]);e.deliver();await e.scheduler.flush();
         assert.equal(e.logs.filter(row=>row.includes('Retrying initialization with a verified native-source replacement')).length,0,'unchanged blocked source cannot retry');
         e.replaceSource();

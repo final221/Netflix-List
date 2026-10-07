@@ -34,17 +34,16 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
     }
     function materialFor(item, correlationId = null) {
         if (!item) return null;
-        if (item.snapshot) return item.snapshot;
         const entry = entries.get(keyFor(item));
         if (entry?.item === item) return entry.node;
         const removed = retained.get(correlationId);
         if (removed?.item === item) return removed.node;
-        return item.cardTemplate || null;
+        return null;
     }
     function createClone(item, correlationId, material = null) {
         const source = material ? material.source : materialFor(item, correlationId);
         if (!source) throw createError('GRID_CARD_MATERIAL_MISSING', 'No card markup available for ' + keyFor(item));
-        return markup.createClone(source, item, material ? material.template : source === item.cardTemplate);
+        return markup.createClone(source, item, material ? material.template : false);
     }
     function prepare(node, item, index, detail = {}, page = readPage(item, index)) {
         markup.normalize(node);
@@ -53,12 +52,6 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
         node.setAttribute('data-tm-item-video-id', item.videoId || '');
         node.__tmMyListItem = item;
         prepareCard(node, item, detail);
-    }
-    function releaseStartup(item) {
-        const hadMaterial = Boolean(item.snapshot || item.cardTemplate);
-        if (item.snapshot) item.snapshot = null;
-        if (item.cardTemplate) item.cardTemplate = null;
-        if (hadMaterial && item.imageUrl) item.imageUrl = '';
     }
     function stage(items, root, index, map, material = null, page = undefined) {
         const item = items[index], node = createClone(item, null, material);
@@ -162,7 +155,7 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
         finally {
             if (releaseMaterial) {
                 try { releaseMaterial(); } catch (_) { onMaterialReleaseFailure(); }
-            } else releaseStartup(item);
+            }
         }
         assertCard(handle);
         return handle;
@@ -187,8 +180,8 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
         old.clear();
     }
     return { get view() { return view; }, get revision() { return revision; }, getCard, isCurrent, assertCard, materialFor, createClone,
-        stage, retireForPublication, publish, releaseStartup, replaceCard, removeCard, insertCard, updateCard, dispose,
+        stage, retireForPublication, publish, replaceCard, removeCard, insertCard, updateCard, dispose,
         hasRetained: (id, item) => retained.get(id)?.item === item,
-        releaseRetained: id => retained.delete(id), clearRetained: () => retained.clear(),
+        releaseRetained: id => retained.delete(id),
         diagnostics: () => ({ activeCards: entries.size, retainedCards: retained.size, retirementFailures }) };
 }

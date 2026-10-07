@@ -66,7 +66,7 @@ function createPolicy(options) {
         presentation(watch) { const facts = owner(watch).choices.presentation();
             return Object.freeze({ ...facts, disabled: facts.disabled || !isProfileCurrent(watch) }); },
         reconcileCoverage: (watch, ids = null, assertCurrent = () => {}) => owner(watch).choices.reconcile(id => watch.seriesCoverage.get(id), ids, assertCurrent),
-        clearCache, readCache: cache.read, writeCache: cache.write,
+        clearCache, writeCache: cache.write,
         invalidateCache(watch, id, { type = false } = {}) { const current = owner(watch); current.cacheGeneration++;
             (type ? current.cached.types : current.cached.results).delete(id); },
         cacheCount: watch => owner(watch).cached.types.size, cacheResultCount: watch => owner(watch).cached.results.size,

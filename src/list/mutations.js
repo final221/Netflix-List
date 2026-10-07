@@ -118,7 +118,7 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
             const nativeItem = call(captureNative, videoId, live);
             const candidate = nativeItem || intent.fallbackItem || call(findFallback, videoId);
             const correlationId = candidate === intent.fallbackItem ? intent.correlationId : null;
-            if (!call(hasMaterial, candidate, correlationId)) return false;
+            if (!candidate) return false;
             const index = nativeItem ? call(preferredIndex, videoId, live, { assertCurrent: guard })
                 : (Number.isFinite(intent.preferredIndex) ? intent.preferredIndex : 0);
             call(assertNative, live);
@@ -367,7 +367,7 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
     function add(input, preferred = 0, reason = 'click-delta', correlationId = correlationFor(input), admission = {}) {
         const owner = publicationOwner(admission); if (!owner || !input?.videoId) return false;
         const { membership, guard, parent } = owner;
-        if (!owner.call(hasMaterial, input, correlationId) || membership.lookup.has('v:' + input.videoId)) return false;
+        if (membership.lookup.has('v:' + input.videoId)) return false;
         if (!owner.call(canInsertCard, { parent, assertCurrent: guard })) return false;
         const index = Math.max(0, Math.min(membership.records.length, Number.isFinite(preferred) ? Math.floor(preferred) : 0));
         guard();
@@ -376,6 +376,7 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         try {
             guard();
             record = transfer.records[0];
+            if (!transfer.readMaterial(record) && !owner.call(hasMaterial, record, correlationId)) return false;
             const layout = owner.call(readLayout, parent, { positionOnly: true });
             const assertLayout = () => { guard(); layout.assertCurrent(); guard(); };
             assertLayout();

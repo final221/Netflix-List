@@ -1,3 +1,4 @@
+import { publishGrid } from './helpers/card-material.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createNativePopup } from '../src/netflix/native-popup.js';
@@ -36,7 +37,7 @@ async function environment(overrides = {}) {
         onRetire: (handle, detail) => { popup?.retire(handle); hover?.retire(handle, detail); overrides.onRetire?.(handle, detail); } });
     const item = { videoId: '1', href: nativeCard.href, ariaLabel: 'One', snapshot: slot.cloneNode(true) };
     const other = { videoId: '2', href: neighborCard.href, ariaLabel: 'Two', snapshot: neighbor.cloneNode(true) };
-    await grid.publish({ items: [item, other], section, status, anchor: scroller, geometry: { left: 0, width: 600, columns: 2 }, layout: { gap: 8, rowGap: 10 }, assertCurrent() {} });
+    await publishGrid(grid, { items: [item, other], section, status, anchor: scroller, geometry: { left: 0, width: 600, columns: 2 }, layout: { gap: 8, rowGap: 10 }, assertCurrent() {} });
     const diagnostics = Object.fromEntries(['hoverLifecycle','hoverTiming','hoverInteraction','hoverPreview','nativeRecovery'].map(key => [key, new Proxy({}, {get:(object,name)=>object[name]??0})]));
     const events = []; nativeCard.dispatchEvent = event => { events.push(event.type); overrides.dispatch?.(event); };
     class NativeEvent { constructor(type, facts) { this.type = type; Object.assign(this, facts); } }
@@ -91,7 +92,7 @@ test('graft retirement visits only prepared cards in 30, 150 and 600-card regist
             videoId:String(i+3),href:`https://www.netflix.com/browse?jbv=${i+3}`,ariaLabel:`Title ${i+3}`,
             snapshot:e.neighbor.cloneNode(true)
         }))];
-        await e.grid.publish({items:records,section:e.section,status:e.status,
+        await publishGrid(e.grid, {items:records,section:e.section,status:e.status,
             anchor:e.scroller,geometry:{left:0,width:600,columns:6},layout:{gap:8,rowGap:10},assertCurrent(){}});
         const prepared=e.prepare();assert.equal(e.popup.diagnostics().grafts,1);
         for(const record of records.slice(1))e.grid.getCard(record).node.removeAttribute=()=>{throw new Error('Unprepared card visited');};

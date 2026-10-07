@@ -1,3 +1,4 @@
+import { publishGrid, insertGrid } from './helpers/card-material.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGrid } from '../src/grid/grid.js';
@@ -24,7 +25,7 @@ function thumbnailEnvironment() {
         const id=String(++sequence),snapshot=new Element(),card=snapshot.appendChild(new Element('a'));
         card.setAttribute('data-uia','standard-card');card.href=`https://www.netflix.com/browse?jbv=${id}`;card.setAttribute('href',card.href);
         const input=snapshot.appendChild(new Element('img'));input.id='img';
-        const item={videoId:id,href:card.href,page:0,snapshot};const clone=grid.insertCard(item).node;
+        const item={videoId:id,href:card.href,page:0,snapshot};const clone=insertGrid(grid, item).node;
         if(options.parent)options.parent.appendChild(clone);
         const image=clone.querySelector('img'),query=clone.querySelector.bind(clone);
         clone.querySelector=selector=>{reads.queries++;return query(selector);};
@@ -96,7 +97,7 @@ test('Copy Logs thumbnail sampling uses the current grid registry and rejects di
     const snapshot = new Element(), card = snapshot.appendChild(new Element('a'));
     card.setAttribute('data-uia', 'standard-card'); card.setAttribute('href', 'https://www.netflix.com/browse?jbv=1');
     const item = { videoId: '1', href: card.getAttribute('href'), snapshot };
-    await f.grid.publish({ items: [item], section, anchor, status, geometry: { width: 100, left: 0, columns: 1 }, layout: {}, assertCurrent() {} });
+    await publishGrid(f.grid, { items: [item], section, anchor, status, geometry: { width: 100, left: 0, columns: 1 }, layout: {}, assertCurrent() {} });
     assert.equal(f.grid.images.collect().mappedCards, 1);
     assert.equal(f.grid.images.collect().cardsWithoutImage, 1);
     f.grid.dispose();

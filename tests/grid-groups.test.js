@@ -1,3 +1,4 @@
+import { publishGrid, insertGrid } from './helpers/card-material.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGrid } from '../src/grid/grid.js';
@@ -15,7 +16,7 @@ async function fixture(count = 5) {
     });
     const status = grid.updateStatus('My List'), mount = { section, status, layout: { gap: 8 },
         geometry: { left: 0, width: 600, columns: 6 }, assertCurrent() {} };
-    await grid.publish({ items, ...mount });
+    await publishGrid(grid, { items, ...mount });
     const facts = new Map(items.map((item, i) => [item.videoId, { status: i === 0 ? 'complete' : 'unknown',
         type: i < 2 ? 'movie' : i < 4 ? 'series' : 'unknown', manual: false }]));
     let classifications = 0;
@@ -76,7 +77,7 @@ test('frame replacement preserves selections and expansion while reset restores 
     const e = await fixture(); e.sync(); e.filter('main', 'series');
     const details = e.grid.root.querySelector('details'); details.open = true; details.dispatchEvent({ type: 'toggle' });
     const oldFilter = e.grid.root.querySelector('[data-tm-filter-value="series"]');
-    await e.grid.publish({ items: e.items, ...e.mount }); e.sync();
+    await publishGrid(e.grid, { items: e.items, ...e.mount }); e.sync();
     assert.equal(oldFilter.listenerCount('click'), 0);
     assert.equal(details.listenerCount('toggle'), 0);
     assert.equal(e.grid.presentation().filters.main, 'series');
@@ -119,7 +120,7 @@ test('queued filter, refresh and toggle callbacks cannot act on a replacement gr
     const details = e.grid.root.querySelector('details'), filter = e.grid.root.querySelector('[data-tm-filter-value="series"]');
     const refresh = e.grid.root.querySelector('[data-tm-watch-controls]').querySelector('button');
     const oldFilter = [...filter.listeners.get('click')][0], oldRefresh = [...refresh.listeners.get('click')][0], oldToggle = [...details.listeners.get('toggle')][0];
-    await e.grid.publish({ items: e.items, ...e.mount }); e.sync(null, { onRefresh() { refreshes++; } });
+    await publishGrid(e.grid, { items: e.items, ...e.mount }); e.sync(null, { onRefresh() { refreshes++; } });
     details.open = true; oldFilter(); oldRefresh(); oldToggle();
     assert.deepEqual(e.grid.presentation().filters, { main: 'movie', watched: 'movie' });
     assert.equal(e.grid.presentation().expanded, false); assert.equal(refreshes, 0);
@@ -135,7 +136,7 @@ test('reentrant listener cleanup on disposal preserves a newly mounted card, con
         const snapshot = new Element(), card = snapshot.appendChild(new Element('a'));
         card.setAttribute('data-uia', 'standard-card'); card.setAttribute('href', 'https://www.netflix.com/browse?jbv=99');
         const item = { videoId: '99', href: card.getAttribute('href'), page: 0, snapshot };
-        newer = e.grid.insertCard(item);
+        newer = insertGrid(e.grid, item);
         e.grid.applyViewingChange({ ...e.input, items: [item], readPlacement: () => ({ status: 'unknown', type: 'movie', manual: false }),
             onAction() { actions++; } });
     };

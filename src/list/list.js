@@ -19,6 +19,6 @@ export function createList(options) {
         waitForInitialCount: collection.waitForInitialCount,
         collectForPublication: collection.collectForPublication,
         preparePreferred: collection.preparePreferred,
-        collectLogical: collection.collectLogical, buildItems: collection.buildItems,
+        collectLogical: collection.collectLogical,
         diagnostics: collection.diagnostics, resetDiagnostics: collection.resetDiagnostics });
 }

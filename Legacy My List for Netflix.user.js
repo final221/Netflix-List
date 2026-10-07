@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.59
+// @version      1.4.60
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -477,12 +477,6 @@
         }
       }), delay);
       responsiveRefreshTimer = check;
-    }
-    function handleTargetWindowResize() {
-      handleTargetResize("window.resize");
-    }
-    function handleTargetVisualViewportResize() {
-      handleTargetResize("visualViewport.resize");
     }
     function handleTargetResize(reason) {
       if (!readState()?.grid?.isConnected) return;
@@ -3484,17 +3478,16 @@
     }
     function materialFor(item, correlationId = null) {
       if (!item) return null;
-      if (item.snapshot) return item.snapshot;
       const entry = entries.get(keyFor(item));
       if (entry?.item === item) return entry.node;
       const removed = retained.get(correlationId);
       if (removed?.item === item) return removed.node;
-      return item.cardTemplate || null;
+      return null;
     }
     function createClone(item, correlationId, material = null) {
       const source = material ? material.source : materialFor(item, correlationId);
       if (!source) throw createError("GRID_CARD_MATERIAL_MISSING", "No card markup available for " + keyFor(item));
-      return markup.createClone(source, item, material ? material.template : source === item.cardTemplate);
+      return markup.createClone(source, item, material ? material.template : false);
     }
     function prepare(node, item, index, detail = {}, page = readPage(item, index)) {
       markup.normalize(node);
@@ -3503,12 +3496,6 @@
       node.setAttribute("data-tm-item-video-id", item.videoId || "");
       node.__tmMyListItem = item;
       prepareCard(node, item, detail);
-    }
-    function releaseStartup(item) {
-      const hadMaterial = Boolean(item.snapshot || item.cardTemplate);
-      if (item.snapshot) item.snapshot = null;
-      if (item.cardTemplate) item.cardTemplate = null;
-      if (hadMaterial && item.imageUrl) item.imageUrl = "";
     }
     function stage(items, root, index, map, material = null, page = void 0) {
       const item = items[index], node = createClone(item, null, material);
@@ -3646,7 +3633,7 @@
           } catch (_) {
             onMaterialReleaseFailure();
           }
-        } else releaseStartup(item);
+        }
       }
       assertCard(handle);
       return handle;
@@ -3691,7 +3678,6 @@
       stage,
       retireForPublication,
       publish,
-      releaseStartup,
       replaceCard,
       removeCard,
       insertCard,
@@ -3699,7 +3685,6 @@
       dispose,
       hasRetained: (id, item) => retained.get(id)?.item === item,
       releaseRetained: (id) => retained.delete(id),
-      clearRetained: () => retained.clear(),
       diagnostics: () => ({ activeCards: entries.size, retainedCards: retained.size, retirementFailures })
     };
   }
@@ -5439,13 +5424,11 @@
         try {
           onAccepted(root);
         } finally {
-          if (readMaterial) {
-            try {
-              releaseMaterial();
-            } catch (_) {
-              materialReleaseFailures++;
-            }
-          } else items.forEach(cards.releaseStartup);
+          try {
+            releaseMaterial();
+          } catch (_) {
+            materialReleaseFailures++;
+          }
           groups.retireRoot(previous);
           frame.releaseReplacedRoot(previous);
         }
@@ -5561,7 +5544,6 @@
       isCardVisible: groups.isCardVisible,
       hasRetained: cards.hasRetained,
       releaseRetained: cards.releaseRetained,
-      clearRetained: cards.clearRetained,
       captureCard: markup.capture,
       captureTemplate: markup.captureTemplate,
       normalizeCard: markup.normalize,
@@ -5569,10 +5551,6 @@
         cards.assertCard(handle);
         frame.assertParent(parent);
         frame.moveCard(handle.node, parent, before);
-      },
-      orderChildren: (parent, desired) => {
-        frame.assertParent(parent);
-        frame.orderChildren(parent, desired);
       },
       applyGeometry: frame.updateGeometry,
       diagnostics: () => ({ ...cards.diagnostics(), ...frame.diagnostics(), ...groups.diagnostics(), materialReleaseFailures })
@@ -5790,7 +5768,7 @@
         const nativeItem = call(captureNative, videoId, live);
         const candidate = nativeItem || intent.fallbackItem || call(findFallback, videoId);
         const correlationId = candidate === intent.fallbackItem ? intent.correlationId : null;
-        if (!call(hasMaterial, candidate, correlationId)) return false;
+        if (!candidate) return false;
         const index = nativeItem ? call(preferredIndex, videoId, live, { assertCurrent: guard }) : Number.isFinite(intent.preferredIndex) ? intent.preferredIndex : 0;
         call(assertNative, live);
         const changed = call(add, candidate, index, nativeItem ? reason + "-native" : reason + "-captured", correlationId, { assertCurrent: guard });
@@ -6125,7 +6103,7 @@
       const owner = publicationOwner(admission);
       if (!owner || !input?.videoId) return false;
       const { membership, guard, parent } = owner;
-      if (!owner.call(hasMaterial, input, correlationId) || membership.lookup.has("v:" + input.videoId)) return false;
+      if (membership.lookup.has("v:" + input.videoId)) return false;
       if (!owner.call(canInsertCard, { parent, assertCurrent: guard })) return false;
       const index = Math.max(0, Math.min(membership.records.length, Number.isFinite(preferred) ? Math.floor(preferred) : 0));
       guard();
@@ -6134,6 +6112,7 @@
       try {
         guard();
         record = transfer.records[0];
+        if (!transfer.readMaterial(record) && !owner.call(hasMaterial, record, correlationId)) return false;
         const layout = owner.call(readLayout, parent, { positionOnly: true });
         const assertLayout = () => {
           guard();
@@ -6861,7 +6840,6 @@
       collectForPublication: collection.collectForPublication,
       preparePreferred: collection.preparePreferred,
       collectLogical: collection.collectLogical,
-      buildItems: collection.buildItems,
       diagnostics: collection.diagnostics,
       resetDiagnostics: collection.resetDiagnostics
     });
@@ -9205,7 +9183,6 @@
       reconcileCoverage: (watch, ids = null, assertCurrent = () => {
       }) => owner(watch).choices.reconcile((id) => watch.seriesCoverage.get(id), ids, assertCurrent),
       clearCache,
-      readCache: cache.read,
       writeCache: cache.write,
       invalidateCache(watch, id, { type = false } = {}) {
         const current = owner(watch);
@@ -15530,6 +15507,14 @@
       error.details = details;
       return error;
     }
+    function reportInitializationFailure(error, detail) {
+      warn(tLog("initializationFailed"), {
+        code: error?.code || null,
+        ...detail,
+        error,
+        snapshot: collectRuntimeSnapshot()
+      });
+    }
     function initializationTimeoutError(stage, timeoutMs, details = {}) {
       return initializationError(
         "INITIALIZATION_TIMEOUT",
@@ -16488,12 +16473,9 @@
       } catch (error) {
         if (!isRouteSessionCancelledError(error) && error?.code !== "NATIVE_SOURCE_REPLACED") {
           orderMismatchDismissed = false;
-          warn(tLog("initializationFailed"), {
-            code: error?.code || null,
+          reportInitializationFailure(error, {
             stage: error?.stage || "order-mismatch-reinitialize",
-            details: error?.details || null,
-            error,
-            snapshot: collectRuntimeSnapshot()
+            details: error?.details || null
           });
           updateStatus(formatInitializationErrorMeta(error, sourceState?.totalCount ?? null));
         }
@@ -17464,13 +17446,10 @@
         }
         if (!isRouteSessionCancelledError(error)) {
           initializationBlockedSessionToken = sessionToken;
-          warn(tLog("initializationFailed"), {
-            code: error?.code || null,
+          reportInitializationFailure(error, {
             stage: error?.stage || "total-count-detection",
             timeoutMs: error?.details?.timeoutMs ?? TOTAL_COUNT_TIMEOUT_MS,
-            details: error?.details || null,
-            error,
-            snapshot: collectRuntimeSnapshot()
+            details: error?.details || null
           });
           updateStatus(formatInitializationErrorMeta(error, null));
         }
@@ -17523,13 +17502,10 @@
           });
           initializationBlockedSessionToken = sessionToken;
           nativeInitializationFailure = { section, scroller, track, sessionToken };
-          warn(tLog("initializationFailed"), {
-            code: error.code,
+          reportInitializationFailure(error, {
             stage: error.stage,
             timeoutMs: error.details?.timeoutMs ?? null,
-            details: error.details || null,
-            error,
-            snapshot: collectRuntimeSnapshot()
+            details: error.details || null
           });
           updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
           clearRunningSession(sessionToken, false, initializationOwner);
@@ -17564,12 +17540,9 @@
           elapsedMs: readiness.elapsedMs,
           state: readiness.state
         }) : initializationError("NATIVE_CAROUSEL_NOT_READY", "native-carousel-readiness", `Native carousel not ready: ${readiness.reason}`, readiness);
-        warn(tLog("initializationFailed"), {
-          code: readinessError.code,
+        reportInitializationFailure(readinessError, {
           stage: readinessError.stage,
-          timeoutMs: readinessError.details?.timeoutMs ?? null,
-          error: readinessError,
-          snapshot: collectRuntimeSnapshot()
+          timeoutMs: readinessError.details?.timeoutMs ?? null
         });
         updateStatus(formatInitializationErrorMeta(readinessError, earlyTotalCount));
         return;
@@ -17599,13 +17572,10 @@
         } catch (error) {
           if (!isRouteSessionCancelledError(error)) {
             initializationBlockedSessionToken = sessionToken;
-            warn(tLog("initializationFailed"), {
-              code: error?.code || null,
+            reportInitializationFailure(error, {
               stage: error?.stage || "normalize-native-page-zero",
               timeoutMs: error?.details?.timeoutMs ?? null,
-              details: error?.details || null,
-              error,
-              snapshot: collectRuntimeSnapshot()
+              details: error?.details || null
             });
             updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
           }
@@ -17650,13 +17620,10 @@
           }
           if (!isRouteSessionCancelledError(error)) {
             initializationBlockedSessionToken = sessionToken;
-            warn(tLog("initializationFailed"), {
-              code: error?.code || null,
+            reportInitializationFailure(error, {
               stage: error?.stage || "native-react-total-count",
               timeoutMs: error?.details?.timeoutMs ?? null,
-              details: error?.details || null,
-              error,
-              snapshot: collectRuntimeSnapshot()
+              details: error?.details || null
             });
             updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
           }
@@ -17936,13 +17903,10 @@
           retryGridBuild = true;
         } else {
           initializationBlockedSessionToken = sessionToken;
-          warn(tLog("initializationFailed"), {
-            code: error?.code || null,
+          reportInitializationFailure(error, {
             stage: error?.stage || null,
             timeoutMs: error?.details?.timeoutMs ?? null,
-            details: error?.details || null,
-            error,
-            snapshot: collectRuntimeSnapshot()
+            details: error?.details || null
           });
           updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
         }
@@ -19302,7 +19266,7 @@
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.4.59";
+  var SCRIPT_VERSION = "1.4.60";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
