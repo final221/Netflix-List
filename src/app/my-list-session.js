@@ -25,6 +25,7 @@ export function createMyListSession({ environment = globalThis, version, context
         AbortController, queueMicrotask, console } = environment;
     const { getValue: GM_getValue, setValue: GM_setValue } = userscript;
     let started = false, disposed = false, sessionCleanupFailures = 0;
+    const sessionPauses = new Map();
 
     const { getHtmlLanguage, getNetflixLanguage } = netflixContext;
     const viewingData = createViewingData({ context: netflixContext,
@@ -477,6 +478,8 @@ export function createMyListSession({ environment = globalThis, version, context
         viewing.dispose(sourceState?.watchStatus); sourceState?.listMembership?.dispose(); sourceState?.nativePageHints?.dispose();
         sessionScope.dispose();
         targetSessionActive = false;
+        const pauses = [...sessionPauses]; sessionPauses.clear();
+        for (const [timer, settle] of pauses) { release(() => clearTimeout(timer)); settle(); }
         gridView.images.dispose();
         hover.dispose();
 
@@ -724,7 +727,14 @@ export function createMyListSession({ environment = globalThis, version, context
     }
 
     function sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+        if (disposed) return Promise.resolve();
+        return new Promise(resolve => {
+            const timer = setTimeout(() => {
+                if (sessionPauses.get(timer) !== resolve) return;
+                sessionPauses.delete(timer); resolve();
+            }, ms);
+            sessionPauses.set(timer, resolve);
+        });
     }
 
     function cleanupOldArtifacts() {

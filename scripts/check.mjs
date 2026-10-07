@@ -79,6 +79,40 @@ async function checkDependencies(metafile, root) {
     for (const file of graph.keys()) visit(file);
 }
 
+// Final suites exercise real capabilities. Only bundle.test.js executes code in
+// a VM, and its input is the complete generated userscript, never declarations.
+async function checkTestBoundaries(root, directory = 'tests') {
+    for (const entry of await readdir(path.join(root, directory), { withFileTypes: true })) {
+        const relative = `${directory}/${entry.name}`;
+        if (entry.isDirectory()) { await checkTestBoundaries(root, relative); continue; }
+        assert.ok(entry.name.endsWith('.js') || entry.name === 'scenario-transfers.json', 'Residual test support: ' + relative);
+        if (relative === 'tests/bundle.test.js' || entry.name.endsWith('.json')) continue;
+        const source = await readFile(path.join(root, relative), 'utf8');
+        assert.ok(!/node:vm|\b(?:eval|Function)\s*\(/.test(source), 'Source-instrumenting test: ' + relative);
+    }
+}
+
+async function checkScenarioTransfers(root) {
+    const ledger = JSON.parse(await readFile(path.join(root, 'tests/scenario-transfers.json'), 'utf8'));
+    assert.equal(ledger.baseline.cases, 372, 'Scenario transfer baseline changed');
+    assert.equal(ledger.transfers.length, ledger.baseline.cases, 'Missing baseline scenario transfers');
+    assert.equal(new Set(ledger.transfers.map(row => row.line)).size, ledger.baseline.cases, 'Duplicate baseline scenario transfers');
+    const suites = new Map();
+    for (const row of ledger.transfers) {
+        assert.ok(row.title && row.coverage.length, 'Scenario transfer has no named coverage');
+        assert.ok(['retained', 'owner-boundary replacement'].includes(row.disposition), 'Unknown scenario disposition');
+        for (const target of row.coverage) {
+            assert.match(target.file, /^tests\/[\w-]+\.test\.js$/, 'Scenario target must be a named suite');
+            if (!suites.has(target.file)) {
+                const source = await readFile(path.join(root, target.file), 'utf8');
+                suites.set(target.file, new Set([...source.matchAll(/\btest\(\s*(['"])(.*?)\1\s*,/g)].map(match => match[2])));
+            }
+            assert.ok(suites.get(target.file).has(target.title), 'Missing scenario transfer target: ' + target.title);
+            if (row.disposition === 'retained') assert.equal(target.title, row.title, 'Retained scenario was renamed');
+        }
+    }
+}
+
 // Preserve the baseline installation contract while feature ownership migrates.
 function checkInstallation(metadata) {
     assert.deepEqual(metadata.match, ['https://www.netflix.com/*'], 'Metadata match must preserve the Netflix scope');
@@ -97,6 +131,8 @@ export async function checkUserscript({ root = repositoryRoot } = {}) {
     const generated = await generateUserscript({ root });
     checkInstallation(generated.metadata);
     await checkDependencies(generated.metafile, root);
+    await checkTestBoundaries(root);
+    await checkScenarioTransfers(root);
     const shipped = (await readFile(path.join(root, distributionName), 'utf8')).replace(/\r\n/g, '\n');
     const header = shipped.match(/^\/\/ ==UserScript==\n([\s\S]*?)\/\/ ==\/UserScript==\n/);
     assert.ok(header, 'Userscript header must be the first bytes');

@@ -1,0 +1,4874 @@
+{
+  "baseline": {
+    "revision": "60f0df8",
+    "file": "tests/performance.test.cjs",
+    "cases": 372
+  },
+  "policy": "Retained cases keep their scenario names. Owner-boundary replacements exercise the surviving semantic contract through unmodified owners; retired bridge names and direct writes to private state are not an acceptance interface. References are exact named tests, not a test-count equivalence claim. Replacement references include split contracts when old composition fixtures combined two owners. Private field/shim assertions are replaced by current-command admission, copied facts, DOM outcomes and resource retirement; test counts are intentionally not one-to-one.",
+  "transfers": [
+    {
+      "line": 578,
+      "title": "ready and fresh cards both require hover intent without reading native state on entry",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "hover owns dwell and scroll requires new physical intent"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preparation uses real grid acceptance and replaces only its admitted card"
+        }
+      ]
+    },
+    {
+      "line": 590,
+      "title": "intentional hover still reuses an already-mounted native card after the dwell",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "hover owns dwell and scroll requires new physical intent"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "an obsolete dwell callback cannot clear a newly queued timer on the same card"
+        }
+      ]
+    },
+    {
+      "line": 610,
+      "title": "short visits, lost hover, and superseded targets do not prepare obsolete cards",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "matching title and node cannot rescue a retired card during dwell"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "hover owns dwell and scroll requires new physical intent"
+        }
+      ]
+    },
+    {
+      "line": 633,
+      "title": "scroll cancels pending hover and clears grafts once per burst; only later physical movement resumes intent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "hover owns dwell and scroll requires new physical intent"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "leave, scroll, resize, route and target loss prevent the one pending hover recovery"
+        }
+      ]
+    },
+    {
+      "line": 652,
+      "title": "leaving a preparing card removes its markers so re-entry can proceed",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "leaving preparation permits reentry and older completion cannot clear the newer marker"
+        }
+      ]
+    },
+    {
+      "line": 669,
+      "title": "a hover waiting for responsive refresh revalidates its target after pointer leave",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/responsive.test.js",
+          "title": "hover waits for the composed responsive transaction and revalidates pointer intent"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "leave, scroll, resize, route and target loss prevent the one pending hover recovery"
+        }
+      ]
+    },
+    {
+      "line": 681,
+      "title": "old async cleanup preserves a newer preparation marker on the same card",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "leaving preparation permits reentry and older completion cannot clear the newer marker"
+        }
+      ]
+    },
+    {
+      "line": 699,
+      "title": "a scheduled native replay is suppressed if scrolling starts before its frame",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "grid retirement settles only that card pending replay without waiting for its frame"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "diagnostic failures cannot reject an admitted replay or strand its cleanup"
+        }
+      ]
+    },
+    {
+      "line": 710,
+      "title": "physical intent inside the scroll quiet period resumes without another pointer move",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "hover owns dwell and scroll requires new physical intent"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "unchanged coordinates and synthetic events cannot rearm scroll intent"
+        }
+      ]
+    },
+    {
+      "line": 727,
+      "title": "stationary boundary events and synthetic moves never queue post-scroll intent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "unchanged coordinates and synthetic events cannot rearm scroll intent"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "hover owns dwell and scroll requires new physical intent"
+        }
+      ]
+    },
+    {
+      "line": 740,
+      "title": "leaving, scrolling again, moving outside the grid, and resizing cancel deferred intent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "hover owns dwell and scroll requires new physical intent"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "unchanged coordinates and synthetic events cannot rearm scroll intent"
+        }
+      ]
+    },
+    {
+      "line": 758,
+      "title": "only the latest physical target resumes after scrolling, and it must still be hovered",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "hover owns dwell and scroll requires new physical intent"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview return preserves one replay and physical departure or removal releases its exact owner"
+        }
+      ]
+    },
+    {
+      "line": 773,
+      "title": "post-scroll diagnostics separate boundary suppression, unchanged coordinates and deferred physical intent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "unchanged coordinates and synthetic events cannot rearm scroll intent"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "hover owns dwell and scroll requires new physical intent"
+        }
+      ]
+    },
+    {
+      "line": 811,
+      "title": "late post-scroll movement and ordinary hover report distinct intent context without added scheduling",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "unchanged coordinates and synthetic events cannot rearm scroll intent"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "counter and pointer observations are copies rather than mutation authority"
+        }
+      ]
+    },
+    {
+      "line": 840,
+      "title": "cancelled intent records cause and elapsed partial dwell once without adding cancellation logs",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "public preparation interruptions keep the fixed reason vocabulary and 48-log route budget"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "hover owns dwell and scroll requires new physical intent"
+        }
+      ]
+    },
+    {
+      "line": 876,
+      "title": "accepted intent context reaches preparation events without retaining grid or pointer objects",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "public preparation interruptions keep the fixed reason vocabulary and 48-log route budget"
+        }
+      ]
+    },
+    {
+      "line": 901,
+      "title": "preparation interruptions report the first scroll, leave or resize cause before obsolete replay cleanup",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "public preparation interruptions keep the fixed reason vocabulary and 48-log route budget"
+        }
+      ]
+    },
+    {
+      "line": 928,
+      "title": "older preparation completion cannot clear a newer diagnostic owner or alter its route counters",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "leaving preparation permits reentry and older completion cannot clear the newer marker"
+        },
+        {
+          "file": "tests/responsive.test.js",
+          "title": "retired transaction completion cannot clear a newer promise, marker or ticket"
+        }
+      ]
+    },
+    {
+      "line": 958,
+      "title": "preparation interruption logging is finite, scalar-only and excludes reasons outside the fixed vocabulary",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "public preparation interruptions keep the fixed reason vocabulary and 48-log route budget"
+        }
+      ]
+    },
+    {
+      "line": 982,
+      "title": "failed interruption logging still invalidates hover and preserves cancellation cleanup",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "failed interruption diagnostics still retire the pending preparation and restore its markers"
+        }
+      ]
+    },
+    {
+      "line": 1001,
+      "title": "a new card supersedes the old preparation once and its diagnostic survives old cleanup",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "leaving preparation permits reentry and older completion cannot clear the newer marker"
+        }
+      ]
+    },
+    {
+      "line": 1035,
+      "title": "scroll state and diagnostic exports remain copied scalar data without native DOM reads",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "counter and pointer observations are copies rather than mutation authority"
+        }
+      ]
+    },
+    {
+      "line": 1060,
+      "title": "main and watched preparation use the same hover path and report separate comparable timing",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "incremental groups follow hover replacement ownership without retaining or revisiting the old card"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "timing phase deadlines include the last delayed callback and then release the one frame"
+        }
+      ]
+    },
+    {
+      "line": 1093,
+      "title": "failed alignment follows the replacement card and retries once without another hover",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "failed replay recovers once in the same intent and permanent failure never starts a retry loop"
+        }
+      ]
+    },
+    {
+      "line": 1117,
+      "title": "permanent alignment failure is reported as failure and cannot create an automatic retry loop",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "failed replay recovers once in the same intent and permanent failure never starts a retry loop"
+        }
+      ]
+    },
+    {
+      "line": 1136,
+      "title": "leaving the replacement while replay is pending cancels it and its recovery",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "leave, scroll, resize, route and target loss prevent the one pending hover recovery"
+        }
+      ]
+    },
+    {
+      "line": 1155,
+      "title": "scroll, resize, route leave, and target loss stop recovery on the replacement card",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "leave, scroll, resize, route and target loss prevent the one pending hover recovery"
+        }
+      ]
+    },
+    {
+      "line": 1176,
+      "title": "a disconnected ready source clears active state and permits one recovery within the same hover",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "failed replay recovers once in the same intent and permanent failure never starts a retry loop"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "obsolete source, recycled title and replaced card cannot replay from an earlier handle"
+        }
+      ]
+    },
+    {
+      "line": 1196,
+      "title": "replay revalidates source identity and visibility before dispatching",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "obsolete source, recycled title and replaced card cannot replay from an earlier handle"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "failed native dispatch and source recycling restore geometry and stop the remaining enters/exits"
+        }
+      ]
+    },
+    {
+      "line": 1215,
+      "title": "old replay completion cannot release a newer activation even on the same clone",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "a reentrant newer open with the same intent retires the earlier replay"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "leaving preparation permits reentry and older completion cannot clear the newer marker"
+        }
+      ]
+    },
+    {
+      "line": 1228,
+      "title": "source revalidation uses original geometry and restores the grid proxy before native replay",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "failed native dispatch and source recycling restore geometry and stop the remaining enters/exits"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preparation uses real grid acceptance and replaces only its admitted card"
+        }
+      ]
+    },
+    {
+      "line": 1251,
+      "title": "native event dispatch failure releases state and is bounded by the same recovery limit",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "unaccepted native replacement releases detached graft material"
+        },
+        {
+          "file": "tests/grid-controls.test.js",
+          "title": "host listener-release failure cannot keep an actionable retired resource"
+        }
+      ]
+    },
+    {
+      "line": 1267,
+      "title": "replay uses the latest physical coordinates, and synthetic motion cannot replace them",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "counter and pointer observations are copies rather than mutation authority"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "composed hover, real grid and native popup transfer exactly one admitted replacement"
+        }
+      ]
+    },
+    {
+      "line": 1291,
+      "title": "fresh and ready hovers align once in the replay frame and export separate phase measurements",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preparation uses real grid acceptance and replaces only its admitted card"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "private timing owner preserves pending stalls across phase changes without layout reads"
+        }
+      ]
+    },
+    {
+      "line": 1316,
+      "title": "scroll sends one native exit before restoring geometry and cannot restart a stationary hover",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "release retires an exact geometry lease before native exit establishes a newer one"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "failed native dispatch and source recycling restore geometry and stop the remaining enters/exits"
+        }
+      ]
+    },
+    {
+      "line": 1350,
+      "title": "delegated card leave carries the actual popup destination into native exits",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-controls.test.js",
+          "title": "delegated action requires the exact current control and visible admitted card"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preparation uses real grid acceptance and replaces only its admitted card"
+        }
+      ]
+    },
+    {
+      "line": 1368,
+      "title": "obsolete or recycled native sources receive no exit intended for an earlier title",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "obsolete source, recycled title and replaced card cannot replay from an earlier handle"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "failed native dispatch and source recycling restore geometry and stop the remaining enters/exits"
+        }
+      ]
+    },
+    {
+      "line": 1386,
+      "title": "failed native exits still restore geometry and are not retried on subsequent scroll events",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "failed native dispatch and source recycling restore geometry and stop the remaining enters/exits"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "release retires an exact geometry lease before native exit establishes a newer one"
+        }
+      ]
+    },
+    {
+      "line": 1401,
+      "title": "native source changes during exit stop remaining events from reaching a recycled card",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "failed native dispatch and source recycling restore geometry and stop the remaining enters/exits"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "obsolete source, recycled title and replaced card cannot replay from an earlier handle"
+        }
+      ]
+    },
+    {
+      "line": 1418,
+      "title": "native source changes during activation stop further enters for the obsolete title",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "failed native dispatch and source recycling restore geometry and stop the remaining enters/exits"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "native source admission follows the current scope and rejects the retired source handle"
+        }
+      ]
+    },
+    {
+      "line": 1440,
+      "title": "scroll during native activation stops the remaining enter events and cannot reopen that popup",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "failed native dispatch and source recycling restore geometry and stop the remaining enters/exits"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "unchanged coordinates and synthetic events cannot rearm scroll intent"
+        }
+      ]
+    },
+    {
+      "line": 1461,
+      "title": "rapid scroll and rehover establish a new owner that obsolete replay cleanup cannot release",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "diagnostic failures cannot reject an admitted replay or strand its cleanup"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview return preserves one replay and physical departure or removal releases its exact owner"
+        }
+      ]
+    },
+    {
+      "line": 1484,
+      "title": "hover phase timing cannot write into a new route diagnostic owner",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "retired timing callbacks cannot mutate a reset diagnostic owner or inspect a later route"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "disposed dwell and timing callbacks cannot affect the next route owner"
+        }
+      ]
+    },
+    {
+      "line": 1497,
+      "title": "hover leave diagnostics identify a stationary early preview transfer without exporting DOM data",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview transfer and boundary dismissal preserve native positioning until actual exit"
+        }
+      ]
+    },
+    {
+      "line": 1532,
+      "title": "unknown pointer coordinates and bounded destination hints are not treated as stationary movement",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "counter and pointer observations are copies rather than mutation authority"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preview rejection excludes unrelated roots, controls, recycled identity and retired source"
+        }
+      ]
+    },
+    {
+      "line": 1557,
+      "title": "a diagnostic destination failure cannot interrupt hover exit and geometry restoration",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/diagnostics.test.js",
+          "title": "response diagnostic failures and private getters cannot break collection"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "diagnostic failures cannot reject an admitted replay or strand its cleanup"
+        }
+      ]
+    },
+    {
+      "line": 1572,
+      "title": "replay rejection reports loss of hover after insertion and leaves existing retry behavior intact",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "failed replay recovers once in the same intent and permanent failure never starts a retry loop"
+        }
+      ]
+    },
+    {
+      "line": 1602,
+      "title": "a fresh replacement still under the physical pointer replays on the first attempt despite delayed CSS hover",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "composed hover, real grid and native popup transfer exactly one admitted replacement"
+        }
+      ]
+    },
+    {
+      "line": 1625,
+      "title": "replacement hit testing cannot admit an overlay, another card, a viewing control, or an obsolete hover",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "controls and hidden cards cannot start preparation"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "obsolete source, recycled title and replaced card cannot replay from an earlier handle"
+        }
+      ]
+    },
+    {
+      "line": 1681,
+      "title": "the recorded stationary transfer onto a matching preview keeps positioning until the pointer leaves its controls",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview transfer and boundary dismissal preserve native positioning until actual exit"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview return preserves one replay and physical departure or removal releases its exact owner"
+        }
+      ]
+    },
+    {
+      "line": 1707,
+      "title": "returning from a preview to its card keeps the native owner without replaying or preparing again",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview return preserves one replay and physical departure or removal releases its exact owner"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preparation uses real grid acceptance and replaces only its admitted card"
+        }
+      ]
+    },
+    {
+      "line": 1724,
+      "title": "return to a viewing control or a card with a recycled native identity ends the preview owner",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preview rejection excludes unrelated roots, controls, recycled identity and retired source"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "controls and hidden cards cannot start preparation"
+        }
+      ]
+    },
+    {
+      "line": 1738,
+      "title": "preview admission requires a matching bounded title reference and a trusted current source",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "obsolete source, recycled title and replaced card cannot replay from an earlier handle"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "matching title and node cannot rescue a retired card during dwell"
+        }
+      ]
+    },
+    {
+      "line": 1767,
+      "title": "a series preview can identify its series while its play link points to an episode",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview return preserves one replay and physical departure or removal releases its exact owner"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "diagnostic failures cannot reject an admitted replay or strand its cleanup"
+        }
+      ]
+    },
+    {
+      "line": 1786,
+      "title": "scroll, real resize, source release and route listener cleanup release a retained preview once",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "leave, scroll, resize, route and target loss prevent the one pending hover recovery"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "retired delegated and document listeners cannot start a new route attempt"
+        }
+      ]
+    },
+    {
+      "line": 1807,
+      "title": "removed previews and missed pointer-out events recover through existing mutation and physical movement handlers",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview return preserves one replay and physical departure or removal releases its exact owner"
+        }
+      ]
+    },
+    {
+      "line": 1826,
+      "title": "a stale preview boundary or release cannot dispose of a newer native hover owner",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview transfer and boundary dismissal preserve native positioning until actual exit"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "release retires an exact geometry lease before native exit establishes a newer one"
+        }
+      ]
+    },
+    {
+      "line": 1841,
+      "title": "dwell diagnostics distinguish cancelled intent and a target rejected when the dwell expires",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "hover owns dwell and scroll requires new physical intent"
+        },
+        {
+          "file": "tests/diagnostics.test.js",
+          "title": "initial response diagnostics distinguish wrapped scalar metadata from absent or type-only fields without exporting values"
+        }
+      ]
+    },
+    {
+      "line": 1866,
+      "title": "an unconfirmed replay gets one delayed presence check without another replay or explicit rectangle/style reads",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview presence probes are copy-only, delayed once, bounded to six roots and never replay"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "diagnostic failures cannot reject an admitted replay or strand its cleanup"
+        }
+      ]
+    },
+    {
+      "line": 1893,
+      "title": "an identified preview transfer completes presence diagnostics before the delayed search",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview presence probes are copy-only, delayed once, bounded to six roots and never replay"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview transfer and boundary dismissal preserve native positioning until actual exit"
+        }
+      ]
+    },
+    {
+      "line": 1905,
+      "title": "presence checking distinguishes a matching pointer target from a matching root elsewhere without changing hover ownership",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview presence probes are copy-only, delayed once, bounded to six roots and never replay"
+        }
+      ]
+    },
+    {
+      "line": 1925,
+      "title": "preview presence inspection caps root identity work and exports only scalar classifications",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preview rejection excludes unrelated roots, controls, recycled identity and retired source"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview presence probes are copy-only, delayed once, bounded to six roots and never replay"
+        }
+      ]
+    },
+    {
+      "line": 1939,
+      "title": "grid and native source cards sharing preview classes cannot establish preview presence",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preparation uses real grid acceptance and replaces only its admitted card"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preview rejection excludes unrelated roots, controls, recycled identity and retired source"
+        }
+      ]
+    },
+    {
+      "line": 1955,
+      "title": "preview presence timers are cancelled on ordinary exits, route cleanup, hidden tabs and listener shutdown",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview presence probes are copy-only, delayed once, bounded to six roots and never replay"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "retired delegated and document listeners cannot start a new route attempt"
+        }
+      ]
+    },
+    {
+      "line": 1977,
+      "title": "stale preview probe callbacks cannot inspect or mutate a newer hover or diagnostic route",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "retired timing callbacks cannot mutate a reset diagnostic owner or inspect a later route"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "retired preview probe cannot inspect a newer replay and route sampling stops after 48 replays"
+        }
+      ]
+    },
+    {
+      "line": 2000,
+      "title": "failed preview diagnostics leave native cleanup working and the route replay budget is finite",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "diagnostic failures cannot reject an admitted replay or strand its cleanup"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "retired preview probe cannot inspect a newer replay and route sampling stops after 48 replays"
+        }
+      ]
+    },
+    {
+      "line": 2028,
+      "title": "the actual dwell delay reports a late timer rather than only its configured 120 ms",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "timing windows include late gaps and stop on visibility without polling"
+        }
+      ]
+    },
+    {
+      "line": 2040,
+      "title": "one bounded frame owner separates callback gaps by phase without reading DOM layout or logging each frame",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "private timing owner preserves pending stalls across phase changes without layout reads"
+        }
+      ]
+    },
+    {
+      "line": 2077,
+      "title": "frame sampling stops at time, window and route limits and cannot restart an exhausted route",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "high-refresh windows stop at 1800 frames and the route exhausts at 12000 without restart"
+        }
+      ]
+    },
+    {
+      "line": 2100,
+      "title": "high-refresh sampling covers later hovers beyond the old 3000-callback budget while keeping one bounded owner",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "high-refresh windows stop at 1800 frames and the route exhausts at 12000 without restart"
+        }
+      ]
+    },
+    {
+      "line": 2116,
+      "title": "a delayed dwell or replay transition cannot erase the pending callback stall or misattribute its phase",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "private timing owner preserves pending stalls across phase changes without layout reads"
+        }
+      ]
+    },
+    {
+      "line": 2134,
+      "title": "hidden tabs, route cleanup and obsolete callbacks stop diagnostics without writing into newer owners",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "retired timing callbacks cannot mutate a reset diagnostic owner or inspect a later route"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "disposed dwell and timing callbacks cannot affect the next route owner"
+        }
+      ]
+    },
+    {
+      "line": 2163,
+      "title": "unavailable or throwing sampling APIs fail safely without leaking private error details",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "hidden and unsupported timing APIs retire resources and disclose only bounded scalar outcomes"
+        }
+      ]
+    },
+    {
+      "line": 2174,
+      "title": "a graft without React assignments is not marked ready for later clone reuse",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "unaccepted native replacement releases detached graft material"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preparation uses real grid acceptance and replaces only its admitted card"
+        }
+      ]
+    },
+    {
+      "line": 2187,
+      "title": "native page preparation rejects replacement during graft before attaching or publishing the fresh card",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preparation uses real grid acceptance and replaces only its admitted card"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "admitted mounted capture clones only the matching card and rejects replacement during capture"
+        }
+      ]
+    },
+    {
+      "line": 2222,
+      "title": "differential reindexing rejects an obsolete source observation before copying the next item",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "source descriptions preserve indicator page interpretation without granting observation authority"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "source discovery rejects an obsolete poll before accepting a late source on the old section"
+        }
+      ]
+    },
+    {
+      "line": 2252,
+      "title": "native mismatch comparison consumes source-handle indices and rejects obsolete diagnostic publication",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "native position comparison uses the exact current record and controlled visible-span order"
+        }
+      ]
+    },
+    {
+      "line": 2283,
+      "title": "count convergence clears pending work only through a current native observation",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "route cancellation stops pending and queued native work and releases owned waits"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "identity-only discovery admits connected references without native model, card, count or geometry work"
+        }
+      ]
+    },
+    {
+      "line": 2314,
+      "title": "an order-mismatch dialog stops preparation without an extra hover retry",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-frame.test.js",
+          "title": "grid mismatch dialog admits exact current caller/actions and retires both listeners"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "leave, scroll, resize, route and target loss prevent the one pending hover recovery"
+        }
+      ]
+    },
+    {
+      "line": 2330,
+      "title": "mounted-source polling stops after cancellation without a final binding or card scan",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "mounted polling rejects obsolete binding, mapping, page and route before another card scan"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "mounted capture rejects detached slots, replaced cards and changed markup even with unchanged source facts"
+        }
+      ]
+    },
+    {
+      "line": 2350,
+      "title": "mounted-source bridges borrow real cards and reject replacement parent or native ownership",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "old presentation release cannot overwrite replacement ownership on the same native elements"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "admitted mounted capture clones only the matching card and rejects replacement during capture"
+        }
+      ]
+    },
+    {
+      "line": 2398,
+      "title": "recovery bridges consume native observations and own only transitional list/card hint publication",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native recovery can publish a valid source when its card description fails"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "page observations own wrapped-tail inclusion and borrow current cards through source handles"
+        }
+      ]
+    },
+    {
+      "line": 2470,
+      "title": "actual logical visible-order publication preserves preferred hints through native delta remapping",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list visible-order policy chooses admitted insertion positions and preserves logical hints on alignment"
+        }
+      ]
+    },
+    {
+      "line": 2483,
+      "title": "mapping bridges keep membership/card publication and convergence outside native reconstruction",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list visible-order policy chooses admitted insertion positions and preserves logical hints on alignment"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "responsive mapping commits unchanged and changed layouts with validated observations and invalidates old source handles"
+        }
+      ]
+    },
+    {
+      "line": 2507,
+      "title": "mapping bridge rejects replaced parent records and card owners before native commit or publication",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native remapping diagnostics cannot commit or publish after replacing their source"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "collection acceptance rejects incomplete or invalid facts before changing native mapping"
+        }
+      ]
+    },
+    {
+      "line": 2526,
+      "title": "mapping bridge stops remaining card publication when a callback replaces the parent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "queued recovery cannot click after mapping or route replacement"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "admitted mounted capture clones only the matching card and rejects replacement during capture"
+        }
+      ]
+    },
+    {
+      "line": 2537,
+      "title": "cancelled expected-page and recovery retries stop before native binding work",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "page-zero anchoring rejects unresolved first-title mismatch and obsolete native work"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "expected-page resolution returns native handles and truthful incomplete or mismatched observations"
+        }
+      ]
+    },
+    {
+      "line": 2579,
+      "title": "logical hover waits inspect one initial frame and coalesce mutations without quiet-frame DOM reads",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "logical hover movement coalesces mutation signals without quiet-frame reads and releases observer resources"
+        }
+      ]
+    },
+    {
+      "line": 2615,
+      "title": "an acknowledged old binding cannot update the replacement page model while its elements stay connected",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "an obsolete indicator acknowledgement cannot read or publish a replacement binding"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "binding replacement invalidates old handles even for connected sources with matching title identity"
+        }
+      ]
+    },
+    {
+      "line": 2632,
+      "title": "logical move signals cover synchronous click changes and unobserved visibility changes",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "logical movement accepts synchronous and fallback changes and unavailable observers retain frame acknowledgement"
+        }
+      ]
+    },
+    {
+      "line": 2652,
+      "title": "logical move observers preserve timeout reporting and always release signal resources",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "navigation retries one genuine timeout at the existing delay without adding a retry loop"
+        }
+      ]
+    },
+    {
+      "line": 2668,
+      "title": "unsupported and failed logical observers retain the original frame acknowledgement path",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "logical movement accepts synchronous and fallback changes and unavailable observers retain frame acknowledgement"
+        }
+      ]
+    },
+    {
+      "line": 2702,
+      "title": "a cancelled signal waits for the clicked change at coarse cadence before releasing ownership",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "cancelled clicked movement stays serialized through acknowledgement and settlement before the latest click"
+        }
+      ]
+    },
+    {
+      "line": 2719,
+      "title": "obsolete routes and closed signal callbacks cannot read or update replacement owners",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "an obsolete indicator acknowledgement cannot read or publish a replacement binding"
+        }
+      ]
+    },
+    {
+      "line": 2745,
+      "title": "logical signal cleanup failures cannot strand acknowledgement or overwrite a pending cleanup",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "logical movement accepts synchronous and fallback changes and unavailable observers retain frame acknowledgement"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "motion release attempts every restoration and releases ownership when one style write fails"
+        }
+      ]
+    },
+    {
+      "line": 2766,
+      "title": "non-hover collection retains frame polling without adding logical move observers",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native traversal commands collect overlapping windows in both modes and restore the starting page"
+        }
+      ]
+    },
+    {
+      "line": 2779,
+      "title": "an obsolete clicked logical move uses coarse polling and still records native acknowledgement",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "cancelled clicked movement stays serialized through acknowledgement and settlement before the latest click"
+        }
+      ]
+    },
+    {
+      "line": 2793,
+      "title": "an obsolete unacknowledged move expires without reporting a fresh hover failure",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "navigation retries one genuine timeout at the existing delay without adding a retry loop"
+        }
+      ]
+    },
+    {
+      "line": 2806,
+      "title": "cancelled indicator polling still acknowledges the clicked page at a lower cadence",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "cancelled clicked movement stays serialized through acknowledgement and settlement before the latest click"
+        }
+      ]
+    },
+    {
+      "line": 2860,
+      "title": "clicked moves remain serialized through native settlement and restore their styles",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "cancelled clicked movement stays serialized through acknowledgement and settlement before the latest click"
+        }
+      ]
+    },
+    {
+      "line": 2914,
+      "title": "signal-acknowledged clicks remain serialized through native settling after hover cancellation",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "cancelled clicked movement stays serialized through acknowledgement and settlement before the latest click"
+        }
+      ]
+    },
+    {
+      "line": 2958,
+      "title": "page navigation avoids the duplicate selected-page read while retaining cancellation and loop guards",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "carousel movement and strict restoration run through the native navigation owner"
+        }
+      ]
+    },
+    {
+      "line": 2989,
+      "title": "Hawkins logical hover navigation avoids boundary detours while legacy cyclic navigation keeps wrapping",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "logical page windows preserve exact membership and overlapping tails across list sizes"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "carousel movement and strict restoration run through the native navigation owner"
+        }
+      ]
+    },
+    {
+      "line": 3042,
+      "title": "script-owned child and frame mutations are ignored without native reads",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "identity-only discovery admits connected references without native model, card, count or geometry work"
+        }
+      ]
+    },
+    {
+      "line": 3052,
+      "title": "native mutation batches coalesce, and an unchanged binding avoids detailed state reads",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "discovery disposal rejects queued old observer deliveries without clearing the new owner frame"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "identity-only discovery admits connected references without native model, card, count or geometry work"
+        }
+      ]
+    },
+    {
+      "line": 3061,
+      "title": "track replacement retains the full binding adoption path",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "track replacement, membership changes, and resized columns use fresh state"
+        }
+      ]
+    },
+    {
+      "line": 3074,
+      "title": "discovery during observer delivery rejects a replaced parent before adoption or return",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "discovery observations reject copies and changed route, binding, discovery, counts or caller ownership"
+        }
+      ]
+    },
+    {
+      "line": 3087,
+      "title": "removal of the script grid still schedules recovery",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "late source arrival unblocks the real session without replacing application resources"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "discovery disposal rejects queued old observer deliveries without clearing the new owner frame"
+        }
+      ]
+    },
+    {
+      "line": 3097,
+      "title": "native empty transitions bypass the identity-only shortcut",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "discovery preserves single-page DOM count precedence and missing versus incomplete source facts"
+        }
+      ]
+    },
+    {
+      "line": 3110,
+      "title": "host replacement along the ancestor path is not filtered",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "discovery observations reject copies and changed route, binding, discovery, counts or caller ownership"
+        }
+      ]
+    },
+    {
+      "line": 3124,
+      "title": "route listener cleanup cancels pending hover and observer work",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "route cancellation stops pending and queued native work and releases owned waits"
+        },
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "leave, scroll, resize, route and target loss prevent the one pending hover recovery"
+        }
+      ]
+    },
+    {
+      "line": 3234,
+      "title": "expected-source bridge consumes real native handles and keeps position mismatch policy with membership",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "native source admission follows the current scope and rejects the retired source handle"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "source handles reject native recycling and mapping replacement without invalidating repeated observations"
+        }
+      ]
+    },
+    {
+      "line": 3270,
+      "title": "restoring a geometry proxy and resetting runtime invalidate reads inside a scope",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "synchronous read scopes discard caches before async continuation and invalidate on replacement"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "hover hydration stops before the next geometry read after cancellation"
+        }
+      ]
+    },
+    {
+      "line": 3293,
+      "title": "ready hover and frame replay share reads while refreshing original geometry on each frame",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "hover hydration stops before the next geometry read after cancellation"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "logical hover movement coalesces mutation signals without quiet-frame reads and releases observer resources"
+        }
+      ]
+    },
+    {
+      "line": 3333,
+      "title": "binding adoption clears old grafts and does not retain reads collected before its writes",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "an obsolete indicator acknowledgement cannot read or publish a replacement binding"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "fast restoration cannot inspect a replacement binding from its move failure handler"
+        }
+      ]
+    },
+    {
+      "line": 3413,
+      "title": "graft invalidation visits only six tracked cards for 30, 150, and 600-card grids",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "graft retirement visits only prepared cards in 30, 150 and 600-card registries"
+        }
+      ]
+    },
+    {
+      "line": 3429,
+      "title": "replacement and disconnected exceptions release grafts, including non-ready metadata",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "graft retirement visits only prepared cards in 30, 150 and 600-card registries"
+        }
+      ]
+    },
+    {
+      "line": 3443,
+      "title": "removal and route cleanup release tracked metadata even if the grid is detached",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "graft retirement visits only prepared cards in 30, 150 and 600-card registries"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "grid retirement settles only that card pending replay without waiting for its frame"
+        }
+      ]
+    },
+    {
+      "line": 3463,
+      "title": "live clone creation uses the resolved page without per-card native state reads",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preparation uses real grid acceptance and replaces only its admitted card"
+        }
+      ]
+    },
+    {
+      "line": 3642,
+      "title": "large construction uses task yields with bounded item batches; small builds avoid timers",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "retiring a chunked construction settles its task yield without publishing or touching a replacement visit"
+        },
+        {
+          "file": "tests/app.test.js",
+          "title": "complete application publishes populated membership before optional viewing and owns visibility until disposal"
+        }
+      ]
+    },
+    {
+      "line": 3656,
+      "title": "construction also yields for expensive individual cards before the count cap",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "construction yields below 24 items when measured work exhausts the six-millisecond quantum"
+        }
+      ]
+    },
+    {
+      "line": 3670,
+      "title": "compact GraphQL items preserve exact order, labels, artwork, pages, and frozen template markup",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "normalization keeps native order and metadata while skipping malformed and duplicate nodes"
+        },
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "grid reads scalar native hints without placing page state on immutable records"
+        },
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "markup capture and shared-template cloning preserve identity and clear inherited preparation state"
+        }
+      ]
+    },
+    {
+      "line": 3695,
+      "title": "invalid or incomplete snapshot inputs retain the native-scan fallback contract",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "list data never publishes malformed or incomplete records as a complete collection"
+        },
+        {
+          "file": "tests/list.test.js",
+          "title": "publication collection uses complete preferred material and otherwise performs one native fallback"
+        }
+      ]
+    },
+    {
+      "line": 3703,
+      "title": "snapshot construction cancels after a yield without reading more normalized records",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "retiring a chunked construction settles its task yield without publishing or touching a replacement visit"
+        }
+      ]
+    },
+    {
+      "line": 3720,
+      "title": "chunked grid publishes its complete tree and maps once while preserving card interactions",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "grid publishes complete cards, releases startup material and exposes only a read-only registry"
+        }
+      ]
+    },
+    {
+      "line": 3754,
+      "title": "route cancellation, state replacement, and native-source replacement cannot publish a partial grid",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "stale chunked publication preserves the current tree and registry and leaves unaccepted material with its collector"
+        }
+      ]
+    },
+    {
+      "line": 3774,
+      "title": "an individual clone failure leaves the current frame and maps intact",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "failed replacement preparation preserves the old card and failed post-commit presentation leaves a consistent unprepared current card"
+        }
+      ]
+    },
+    {
+      "line": 3788,
+      "title": "queued add/remove deltas apply after complete publication and stay deferred during a source retry",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "only final exact deferral release resumes deferred intents and repeated release is inert"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "busy queue timeout defers disposal and retry restarts the bounded wait"
+        }
+      ]
+    },
+    {
+      "line": 3871,
+      "title": "initial mounted-window admission rejects replacement before parallel readiness or fresh data work",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "entry strategy reuses proven mounted SPA bootstrap without starting parallel readiness or fresh data"
+        },
+        {
+          "file": "tests/list.test.js",
+          "title": "entry strategy uses initial cached count without mounted proof or fresh requests"
+        }
+      ]
+    },
+    {
+      "line": 3895,
+      "title": "visible native item capture rejects parent replacement before returning membership facts",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "delta mapping anchors native positions or visible title hints synchronously without rewriting membership"
+        },
+        {
+          "file": "tests/grid-empty.test.js",
+          "title": "replaced native content during capture cannot publish or retain obsolete material"
+        }
+      ]
+    },
+    {
+      "line": 3907,
+      "title": "GraphQL template capture rejects replaced native admission before starting data work",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-empty.test.js",
+          "title": "replaced native content during capture cannot publish or retain obsolete material"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "remapping admission rejects replaced owners and supersedes already-stale work before another native scan"
+        }
+      ]
+    },
+    {
+      "line": 3927,
+      "title": "post-collection empty admission rejects a replaced parent or binding and preserves pending mutations",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "list collection revalidates parent after data completion and rejects obsolete material"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "incoming and empty geometry can be observed before binding without adopting another source"
+        }
+      ]
+    },
+    {
+      "line": 3956,
+      "title": "late native collection failure cannot block or publish status into a replacement parent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "preferred collection strategy reports ordinary failure for native fallback and rejects obsolete acceptance"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "collection progress cannot admit old native work or restore over a replacement style lease"
+        }
+      ]
+    },
+    {
+      "line": 3976,
+      "title": "post-collection readiness preserves owned empty admission and missing-card failure distinctions",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/diagnostics.test.js",
+          "title": "response diagnostic failures and private getters cannot break collection"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "page observations reject same-page window changes including cards mounting into an empty window"
+        }
+      ]
+    },
+    {
+      "line": 3995,
+      "title": "native collection revalidates after diagnostics before parking or publishing into a replacement parent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native remapping diagnostics cannot commit or publish after replacing their source"
+        },
+        {
+          "file": "tests/list.test.js",
+          "title": "list collection revalidates parent after data completion and rejects obsolete material"
+        }
+      ]
+    },
+    {
+      "line": 4018,
+      "title": "late fast-collection completion cannot finalize the model or republish a replaced native binding",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "list collection revalidates parent after data completion and rejects obsolete material"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "carousel exposes admitted operations without raw native readers or model writers"
+        }
+      ]
+    },
+    {
+      "line": 4041,
+      "title": "late fast collection rejects remapping, repeated preparation and parent replacement on the same native binding",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "source handles reject native recycling and mapping replacement without invalidating repeated observations"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "fast restoration cannot inspect a replacement binding from its move failure handler"
+        }
+      ]
+    },
+    {
+      "line": 4071,
+      "title": "fast collection revalidates its accepted native observation after logging before grid publication",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "publication collection preserves diagnostic error adapters and revalidates after failure presentation"
+        },
+        {
+          "file": "tests/list.test.js",
+          "title": "accepted publication remains admitted until another membership change supersedes it"
+        }
+      ]
+    },
+    {
+      "line": 4096,
+      "title": "initialization rejects obsolete native count after logging and preserves queued mutations for its existing retry",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "responsive mapping defers inconsistent native counts while preserving finalized pages and releasing its motion lease"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native count observations reject changed readings, copied results and replaced admission"
+        }
+      ]
+    },
+    {
+      "line": 4130,
+      "title": "initialization never substitutes a provisional count for absent or contradictory native counts",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native count observations reject changed readings, copied results and replaced admission"
+        },
+        {
+          "file": "tests/list.test.js",
+          "title": "entry count policy rejects invalid bootstrap and invalid or obsolete native confirmation"
+        }
+      ]
+    },
+    {
+      "line": 4154,
+      "title": "actual initialization survives failure of passive native source descriptions after admission",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native recovery can publish a valid source when its card description fails"
+        }
+      ]
+    },
+    {
+      "line": 4170,
+      "title": "actual CopyLogs runtime snapshot consumes passive native facts and preserves other report fields on failure",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/diagnostics.test.js",
+          "title": "report copies current explicit summaries and chronological logs only on request"
+        },
+        {
+          "file": "tests/diagnostics.test.js",
+          "title": "Copy Logs guards inactive routes and isolates private probe failures"
+        }
+      ]
+    },
+    {
+      "line": 4237,
+      "title": "actual source presentation bridges retain visibility preference, scan parking and route cleanup",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native source presentation owns scan, parking, visibility and idempotent restoration"
+        },
+        {
+          "file": "tests/bundle.test.js",
+          "title": "production graph rejects dormant source and unlisted legacy bridges"
+        }
+      ]
+    },
+    {
+      "line": 4262,
+      "title": "actual visibility publication stops after marker admission loses its parent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-frame.test.js",
+          "title": "reentrant dialog publication preserves its newer owner and cannot execute the obsolete action"
+        },
+        {
+          "file": "tests/grid-empty.test.js",
+          "title": "reentrant empty cleanup preserves a newer publication and its sibling order"
+        }
+      ]
+    },
+    {
+      "line": 4276,
+      "title": "visibility preference can decorate a discovered source before initialization publishes parent state",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "settings publishes semantic preference changes and retires old menu callbacks"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native source presentation owns scan, parking, visibility and idempotent restoration"
+        }
+      ]
+    },
+    {
+      "line": 4288,
+      "title": "actual status geometry stops after a host write replaces its captured native caller",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-frame.test.js",
+          "title": "status painting rechecks native caller admission between host writes"
+        }
+      ]
+    },
+    {
+      "line": 4298,
+      "title": "actual status and dialog callers retain diagnostic copy and mismatch decisions through the grid owner",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-frame.test.js",
+          "title": "grid owns one detached/current status and preserves separated label, meta, geometry and CopyLogs"
+        },
+        {
+          "file": "tests/grid-frame.test.js",
+          "title": "grid mismatch dialog admits exact current caller/actions and retires both listeners"
+        }
+      ]
+    },
+    {
+      "line": 4377,
+      "title": "actual empty caller uses admitted native material and synthetic publication stops on parent replacement",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "empty frame accepts the first addition and can move between native and synthetic anchors without retaining retired cards"
+        }
+      ]
+    },
+    {
+      "line": 4394,
+      "title": "actual empty native adoption remounts owned resources and permits its first admitted addition",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "empty frame accepts the first addition and can move between native and synthetic anchors without retaining retired cards"
+        }
+      ]
+    },
+    {
+      "line": 4418,
+      "title": "actual initialization rejects marker replacement before collection and preserves queued intent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "queued recovery cannot click after mapping or route replacement"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "source replacement closes collection paint waits and rejects their obsolete callback"
+        }
+      ]
+    },
+    {
+      "line": 4439,
+      "title": "count-detection timeout keeps its primary error when native profile diagnostics fail",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "initial count timeout reports the last availability once through the existing diagnostic adapter"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "source diagnostics describe incomplete discovery and isolate failure without adding default reads"
+        }
+      ]
+    },
+    {
+      "line": 4461,
+      "title": "manual reinitialization retains its parent and native binding before tearing down the session",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "reentrant route retirement during initialization cannot publish old work and a later visit recovers"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "page-zero anchoring cannot confirm or start recovery after a diagnostic replaces its source"
+        }
+      ]
+    },
+    {
+      "line": 4492,
+      "title": "ready hover validates admitted page ownership after logging before requesting native replay",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "failed interruption diagnostics still retire the pending preparation and restore its markers"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "obsolete source, recycled title and replaced card cannot replay from an earlier handle"
+        }
+      ]
+    },
+    {
+      "line": 4515,
+      "title": "responsive page signature cannot publish after layout formatting replaces its parent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "page-zero anchoring cannot confirm or start recovery after a diagnostic replaces its source"
+        },
+        {
+          "file": "tests/app.test.js",
+          "title": "retiring a chunked construction settles its task yield without publishing or touching a replacement visit"
+        }
+      ]
+    },
+    {
+      "line": 4523,
+      "title": "GraphQL adapter awaits snapshot chunks and initialization awaits grid publication before becoming idle",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "retiring a chunked construction settles its task yield without publishing or touching a replacement visit"
+        },
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "grid publishes complete cards, releases startup material and exposes only a read-only registry"
+        }
+      ]
+    },
+    {
+      "line": 4549,
+      "title": "route leave during snapshot chunks exits initialization cleanly and preserves a newer session owner",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "retiring a chunked construction settles its task yield without publishing or touching a replacement visit"
+        }
+      ]
+    },
+    {
+      "line": 4566,
+      "title": "native-source replacement during grid construction restarts initialization with queued deltas intact",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "stale chunked publication preserves the current tree and registry and leaves unaccepted material with its collector"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "only final exact deferral release resumes deferred intents and repeated release is inert"
+        }
+      ]
+    },
+    {
+      "line": 4594,
+      "title": "small builds revalidate cancellation before their awaited result can be published",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "grid publishes complete cards, releases startup material and exposes only a read-only registry"
+        },
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "stale chunked publication preserves the current tree and registry and leaves unaccepted material with its collector"
+        }
+      ]
+    },
+    {
+      "line": 4619,
+      "title": "GraphQL construction allocates one shared template and one displayed tree per title",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "markup capture and shared-template cloning preserve identity and clear inherited preparation state"
+        },
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "grid publishes complete cards, releases startup material and exposes only a read-only registry"
+        }
+      ]
+    },
+    {
+      "line": 4644,
+      "title": "native cards retain distinct markup and controls while releasing all captured trees after publication",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "grid publishes complete cards, releases startup material and exposes only a read-only registry"
+        },
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "grid accepts separate captured material for an immutable DOM-free record"
+        }
+      ]
+    },
+    {
+      "line": 4675,
+      "title": "GraphQL template materialization preserves missing-artwork and missing-image behavior",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "GraphQL template materialization preserves missing-artwork and missing-image behavior"
+        }
+      ]
+    },
+    {
+      "line": 4694,
+      "title": "a cancelled initial grid retains its native snapshots or shared template for a safe retry",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "stale chunked publication preserves the current tree and registry and leaves unaccepted material with its collector"
+        }
+      ]
+    },
+    {
+      "line": 4718,
+      "title": "rebuilding published items uses current markup and leaves the existing grid intact on cancellation",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "stale chunked publication preserves the current tree and registry and leaves unaccepted material with its collector"
+        },
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "grid rejects retired, copied and replaced handles while same-attempt replacement returns an admitted handoff"
+        }
+      ]
+    },
+    {
+      "line": 4745,
+      "title": "remove and Undo retain only the removed tree then restore membership, order, and per-card controls",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "grid retains Undo material by exact correlation and record, separately from active cards"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list publication owns removal, exact Undo reinsertion, count/order and separate material release"
+        }
+      ]
+    },
+    {
+      "line": 4784,
+      "title": "hover replacements become the sole card source for rebuild and Undo without retaining the old tree",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preparation uses real grid acceptance and replaces only its admitted card"
+        },
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "grid retains Undo material by exact correlation and record, separately from active cards"
+        }
+      ]
+    },
+    {
+      "line": 4822,
+      "title": "expired Undo entries release their last retained snapshot reference when pruned",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list owns one expiry timer and exact record Undo correlation"
+        }
+      ]
+    },
+    {
+      "line": 4836,
+      "title": "actual membership listener feeds interpreted facts to list and queues exact retained Undo during initialization",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list owns one expiry timer and exact record Undo correlation"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "logical page windows preserve exact membership and overlapping tails across list sizes"
+        }
+      ]
+    },
+    {
+      "line": 4861,
+      "title": "Undo expiry releases idle snapshots at 30 seconds using one finite timer and aggregate diagnostics",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list owns one expiry timer and exact record Undo correlation"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "Undo expiry preserves only the exact pending record and correlation"
+        }
+      ]
+    },
+    {
+      "line": 4888,
+      "title": "Undo expiry retains a single next-expiry timer across staggered removals and consumes it after Undo",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list owns one expiry timer and exact record Undo correlation"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "Undo click does not borrow a reentrant replacement removal during expiry cleanup"
+        }
+      ]
+    },
+    {
+      "line": 4912,
+      "title": "Undo expiry preserves a queued mutation fallback after removing the Undo cache entry",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "obsolete expiry callbacks cannot clear a replacement Undo entry"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "Undo expiry preserves only the exact pending record and correlation"
+        }
+      ]
+    },
+    {
+      "line": 4936,
+      "title": "Undo expiry clears route-owned timers and ignores an obsolete callback after a new session",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "obsolete expiry callbacks cannot clear a replacement Undo entry"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list owns one expiry timer and exact record Undo correlation"
+        }
+      ]
+    },
+    {
+      "line": 4964,
+      "title": "stale same-id item objects cannot borrow another item tree",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "remapping admission rejects replaced owners and supersedes already-stale work before another native scan"
+        },
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "stale chunked publication preserves the current tree and registry and leaves unaccepted material with its collector"
+        }
+      ]
+    },
+    {
+      "line": 4974,
+      "title": "native order reads allocate no card trees and native additions capture only the matching card",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "bounds-only observations share the native sample and perform no card or layout reads"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "admitted mounted capture clones only the matching card and rejects replacement during capture"
+        }
+      ]
+    },
+    {
+      "line": 5001,
+      "title": "a native mutation capture replaced during cloning preserves its intent and never publishes into the new parent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "click admission rejects parent replacement, session retirement and newer intents during interpretation"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native empty presentation borrows its guarded content anchor and never adds carousel work"
+        }
+      ]
+    },
+    {
+      "line": 5021,
+      "title": "mutation candidate callbacks reject changed parent, route or intent before publication",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "reconciliation preserves intent when a candidate callback replaces the admitted parent"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "publication rejects parent replacement and releases cancelled transfer without accepting membership"
+        }
+      ]
+    },
+    {
+      "line": 5044,
+      "title": "post-mutation discovery replacement preserves queued intent and never aligns the new parent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "reconciliation preserves intent when a candidate callback replaces the admitted parent"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "click admission rejects parent replacement, session retirement and newer intents during interpretation"
+        }
+      ]
+    },
+    {
+      "line": 5153,
+      "title": "native collection snapshots accepted cards once across overlapping logical and indicator windows",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "logical page windows preserve exact membership and overlapping tails across list sizes"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "page-zero anchoring confirms the native first title and repairs a shifted indicator window"
+        }
+      ]
+    },
+    {
+      "line": 5178,
+      "title": "logical native collection rejects changed indices and moved titles before snapshotting the conflicting card",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native count observations reject changed readings, copied results and replaced admission"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "opt-in readiness observations copy native facts and reject changed or replaced admission"
+        }
+      ]
+    },
+    {
+      "line": 5195,
+      "title": "native collection skips incomplete card metadata without a snapshot or loss of later valid index coverage",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "collection acceptance rejects incomplete or invalid facts before changing native mapping"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native recovery can publish a valid source when its card description fails"
+        }
+      ]
+    },
+    {
+      "line": 5210,
+      "title": "native collection cancellation preserves cleanup and takes no snapshots from the obsolete next window",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native traversal cancellation releases captured material and cannot return a successful partial collection"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "hover hydration stops before the next geometry read after cancellation"
+        }
+      ]
+    },
+    {
+      "line": 5228,
+      "title": "actual retirement accepts membership before DOM cleanup can reinsert the same canonical record",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "retirement accepts registry and correlation before cleanup and reports host cleanup failure"
+        },
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "grid accepts separate captured material for an immutable DOM-free record"
+        }
+      ]
+    },
+    {
+      "line": 5245,
+      "title": "failed addition leaves membership, maps, and retained fallback intact for retry",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "presentation cleanup leaves the separate navigation motion owner intact"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "failed navigation diagnostic callbacks cannot reject or retry an admitted native move"
+        }
+      ]
+    },
+    {
+      "line": 5327,
+      "title": "SPA indicator and not-yet-mounted modes bootstrap one page without optional pagination",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "optional pagination HTTP, parse, count and cursor failures preserve the valid bootstrap"
+        },
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "optional pagination timeout retains bootstrap while count timeout uses fresh HTML fallback"
+        }
+      ]
+    },
+    {
+      "line": 5412,
+      "title": "data normalization keeps one captured template stable while Netflix recycles the mounted slot",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "markup capture and shared-template cloning preserve identity and clear inherited preparation state"
+        },
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "normalization keeps native order and metadata while skipping malformed and duplicate nodes"
+        }
+      ]
+    },
+    {
+      "line": 5426,
+      "title": "route cancellation stops data normalization at its existing construction quantum",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "retiring a chunked construction settles its task yield without publishing or touching a replacement visit"
+        }
+      ]
+    },
+    {
+      "line": 5446,
+      "title": "verified mounted single-page reuse skips membership fetches and preserves native card variants",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "mounted polling rejects obsolete binding, mapping, page and route before another card scan"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "admitted mounted capture clones only the matching card and rejects replacement during capture"
+        }
+      ]
+    },
+    {
+      "line": 5471,
+      "title": "verified mounted single-page reuse is integrated into initialization without native navigation or membership requests",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "entry strategy reuses proven mounted SPA bootstrap without starting parallel readiness or fresh data"
+        }
+      ]
+    },
+    {
+      "line": 5493,
+      "title": "mounted single-page qualification rejects partial, duplicated, shifted and unstable native membership",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "mounted qualification rejects incomplete and unstable windows and stops at route cancellation"
+        },
+        {
+          "file": "tests/list.test.js",
+          "title": "list does not accept partial mounted material as a complete membership result"
+        }
+      ]
+    },
+    {
+      "line": 5518,
+      "title": "mounted single-page reuse revalidates after readiness and fetches fresh data on stale proof",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "entry strategy reuses proven mounted SPA bootstrap without starting parallel readiness or fresh data"
+        },
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "zero and complete single-page data avoid further requests"
+        }
+      ]
+    },
+    {
+      "line": 5547,
+      "title": "initial, manual and order-mismatch entry retain the fresh membership request for single-page lists",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "entry strategy uses initial cached count without mounted proof or fresh requests"
+        },
+        {
+          "file": "tests/list.test.js",
+          "title": "entry strategy anchors only fresh SPA indicator sources and revalidates after movement"
+        }
+      ]
+    },
+    {
+      "line": 5566,
+      "title": "manual and initial entry cannot qualify mounted reuse and a stale route cannot publish it",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "entry strategy uses initial cached count without mounted proof or fresh requests"
+        },
+        {
+          "file": "tests/list.test.js",
+          "title": "list reuse diagnostics reset at route entry without mutating earlier copied reports"
+        }
+      ]
+    },
+    {
+      "line": 5582,
+      "title": "logical collection rejects incomplete/duplicate membership and reconciled-count mismatches",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "viewing coverage distinguishes absent counts from contradictory, incomplete and duplicate seasons"
+        },
+        {
+          "file": "tests/list.test.js",
+          "title": "membership owns read-only order and lookup, rejects duplicate publication and keeps counts separate"
+        }
+      ]
+    },
+    {
+      "line": 5595,
+      "title": "full initialization uses native collection after optional pagination failure without losing the fresh count",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "optional pagination timeout retains bootstrap while count timeout uses fresh HTML fallback"
+        },
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "list data uses HTML only for failed bootstrap and retains count after optional pagination failure"
+        }
+      ]
+    },
+    {
+      "line": 5615,
+      "title": "route suspension aborts GraphQL and HTML fetches, including their response bodies, without fallback warnings",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "list data rejects stale bodies before surveying or initiating fallback requests"
+        },
+        {
+          "file": "tests/app.test.js",
+          "title": "retiring a page during native readiness releases its pause and prevents late partial publication"
+        }
+      ]
+    },
+    {
+      "line": 5642,
+      "title": "route change during optional pagination rejects instead of returning retained bootstrap",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "optional pagination HTTP, parse, count and cursor failures preserve the valid bootstrap"
+        },
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "optional pagination timeout retains bootstrap while count timeout uses fresh HTML fallback"
+        }
+      ]
+    },
+    {
+      "line": 5659,
+      "title": "a new route session aborts old requests and old cleanup cannot remove its active controller",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "a replacement session aborts old requests and stale cleanup cannot release the new owner"
+        },
+        {
+          "file": "tests/netflix-data.test.js",
+          "title": "a retained continuation cannot be borrowed by another route session"
+        }
+      ]
+    },
+    {
+      "line": 5682,
+      "title": "logical SPA initialization waits for mode confirmation before continuing pagination and publishes the full grid",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "initialization stability waits remain independent of hover cancellation"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "retired polling callbacks cannot release or resume replacement waits"
+        }
+      ]
+    },
+    {
+      "line": 5708,
+      "title": "a count result from an obsolete session cannot publish an empty grid or clear the new running owner",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native count observations reject changed readings, copied results and replaced admission"
+        },
+        {
+          "file": "tests/list.test.js",
+          "title": "publication collection confirms native empty truthfully and rejects unproven empty or mismatched counts"
+        }
+      ]
+    },
+    {
+      "line": 5726,
+      "title": "HTTP failure cleanup aborts the unread response body and releases its controller and timeout",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "a replacement session aborts old requests and stale cleanup cannot release the new owner"
+        },
+        {
+          "file": "tests/list.test.js",
+          "title": "material release closes access before host failure and still releases other inputs"
+        }
+      ]
+    },
+    {
+      "line": 5968,
+      "title": "viewing overlap publishes a later title batch promptly and preserves native order",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing overlap publishes a later title batch promptly and preserves native order"
+        }
+      ]
+    },
+    {
+      "line": 5991,
+      "title": "viewing overlap shortens modeled network wait without increasing requests",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing overlap shortens modeled network wait without increasing requests"
+        }
+      ]
+    },
+    {
+      "line": 6028,
+      "title": "viewing overlap keeps series dependencies ordered and drains valid partial results after HTTP failure",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing overlap keeps series dependencies ordered and drains valid partial results after HTTP failure"
+        }
+      ]
+    },
+    {
+      "line": 6069,
+      "title": "viewing overlap aborts both owned reads after route or profile cancellation",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing overlap aborts both owned reads after route or profile cancellation"
+        }
+      ]
+    },
+    {
+      "line": 6102,
+      "title": "viewing overlap stops allocating after a failed wave and shares the finite request cap",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing overlap stops allocating after a failed wave and shares the finite request cap"
+        }
+      ]
+    },
+    {
+      "line": 6126,
+      "title": "viewing overlap does not start a peer finale after a known metadata failure",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing overlap does not start a peer finale after a known metadata failure"
+        }
+      ]
+    },
+    {
+      "line": 6154,
+      "title": "viewing overlap honors request timeouts and the combined deadline without leaked owners or retries",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing overlap honors request timeouts and the combined deadline without leaked owners or retries"
+        }
+      ]
+    },
+    {
+      "line": 6177,
+      "title": "viewing completion does not guess from missing progress or series flags",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing completion does not guess from missing progress or series flags"
+        }
+      ]
+    },
+    {
+      "line": 6192,
+      "title": "caught-up series require exact season and episode coverage, unique IDs, and complete episodes",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "caught-up series require exact season and episode coverage, unique IDs, and complete episodes"
+        }
+      ]
+    },
+    {
+      "line": 6207,
+      "title": "background viewing collection groups finished movies and complete series while preserving native order and counts",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "background viewing collection groups finished movies and complete series while preserving native order and counts"
+        }
+      ]
+    },
+    {
+      "line": 6235,
+      "title": "refresh returns a caught-up series to the main list when a new unwatched episode appears",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "refresh returns a caught-up series to the main list when a new unwatched episode appears"
+        }
+      ]
+    },
+    {
+      "line": 6247,
+      "title": "expanded watched cards use delegated hover and closed groups reject hover targets",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "incremental groups follow hover replacement ownership without retaining or revisiting the old card"
+        },
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "native hover replacements preserve the visibility of filtered sibling cards"
+        }
+      ]
+    },
+    {
+      "line": 6266,
+      "title": "group synchronization is idempotent and rebuild preserves expansion, membership, and original card metadata",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-groups.test.js",
+          "title": "frame replacement preserves selections and expansion while reset restores defaults and releases exact old listeners"
+        },
+        {
+          "file": "tests/grid-groups.test.js",
+          "title": "local title changes preserve order and one-title work while unchanged synchronization reads no cards or geometry"
+        }
+      ]
+    },
+    {
+      "line": 6285,
+      "title": "actual grid replacement transfers accepted viewing facts and rejects the old pending scan",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/viewing-scan.test.js",
+          "title": "replacement session keeps accepted classification and retires the in-flight owner"
+        },
+        {
+          "file": "tests/grid-groups.test.js",
+          "title": "replacement updates private grouped ownership and labels synchronously without revisiting the retired card"
+        }
+      ]
+    },
+    {
+      "line": 6304,
+      "title": "reentrant viewing retirement cannot reset presentation owned by a newer initialization",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-controls.test.js",
+          "title": "reentrant listener replacement preserves the newer admission and retires the interrupted action"
+        },
+        {
+          "file": "tests/app.test.js",
+          "title": "reentrant route retirement during initialization cannot publish old work and a later visit recovers"
+        }
+      ]
+    },
+    {
+      "line": 6321,
+      "title": "remove and Undo work inside watched groups and new titles stay visible until classified",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list publication owns removal, exact Undo reinsertion, count/order and separate material release"
+        },
+        {
+          "file": "tests/grid-groups.test.js",
+          "title": "group owner owns independent Films defaults, frozen scalar counts and unknown-type filtering"
+        }
+      ]
+    },
+    {
+      "line": 6341,
+      "title": "native order alignment preserves separate group order without changing Netflix membership",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "background viewing collection groups finished movies and complete series while preserving native order and counts"
+        },
+        {
+          "file": "tests/grid-groups.test.js",
+          "title": "reentrant grouping during structural ordering preserves the newer counts and card placement"
+        }
+      ]
+    },
+    {
+      "line": 6364,
+      "title": "missing active-profile identity or unsafe endpoint leaves all titles visible without requests",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "missing active-profile identity or unsafe endpoint leaves all titles visible without requests"
+        }
+      ]
+    },
+    {
+      "line": 6379,
+      "title": "viewing HTTP/JSON failures preserve the grid and never turn absent data into watched titles",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing HTTP/JSON failures preserve the grid and never turn absent data into watched titles"
+        }
+      ]
+    },
+    {
+      "line": 6403,
+      "title": "viewing title requests batch large lists and grouping never schedules periodic refresh work",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing title requests batch large lists and grouping never schedules periodic refresh work"
+        }
+      ]
+    },
+    {
+      "line": 6424,
+      "title": "long seasons request only their latest episode and oversize series remain unknown",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "long seasons request only their latest episode and oversize series remain unknown"
+        }
+      ]
+    },
+    {
+      "line": 6455,
+      "title": "viewing request budget preserves confirmed movies and leaves unverified series visible",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing request budget preserves confirmed movies and leaves unverified series visible"
+        }
+      ]
+    },
+    {
+      "line": 6467,
+      "title": "a large short-series list is fully covered within the original single-pass request budget",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "a large short-series list is fully covered within the original single-pass request budget"
+        }
+      ]
+    },
+    {
+      "line": 6486,
+      "title": "completed series results survive a budget limit inside the current episode group",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "completed series results survive a budget limit inside the current episode group"
+        }
+      ]
+    },
+    {
+      "line": 6502,
+      "title": "a later series-group HTTP failure preserves fully verified series results",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "a later series-group HTTP failure preserves fully verified series results"
+        }
+      ]
+    },
+    {
+      "line": 6524,
+      "title": "route leave aborts viewing requests and stale completion cannot update a new grid",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "route leave aborts viewing requests and stale completion cannot update a new grid"
+        }
+      ]
+    },
+    {
+      "line": 6546,
+      "title": "profile changes during body reads discard results and refreshing a new profile clears prior completion",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "profile changes during body reads discard results and refreshing a new profile clears prior completion"
+        }
+      ]
+    },
+    {
+      "line": 6567,
+      "title": "simultaneous manual refreshes share the current viewing scan",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "simultaneous manual refreshes share the current viewing scan"
+        }
+      ]
+    },
+    {
+      "line": 6585,
+      "title": "full Netflix initialization publishes the ordinary grid before optional viewing collection finishes",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "complete application publishes populated membership before optional viewing and owns visibility until disposal"
+        }
+      ]
+    },
+    {
+      "line": 6602,
+      "title": "viewing collection stops at its elapsed-time budget without hiding unverified series",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing collection stops at its elapsed-time budget without hiding unverified series"
+        }
+      ]
+    },
+    {
+      "line": 6621,
+      "title": "failed refresh reveals old completion results instead of hiding titles using stale status",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "failed refresh reveals old completion results instead of hiding titles using stale status"
+        }
+      ]
+    },
+    {
+      "line": 6633,
+      "title": "completion accepts 90 percent or earlier credits even when Netflix still reports unwatched",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "completion accepts 90 percent or earlier credits even when Netflix still reports unwatched"
+        }
+      ]
+    },
+    {
+      "line": 6652,
+      "title": "near-completion requires valid progress and runtime rather than treating missing values as watched",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "near-completion requires valid progress and runtime rather than treating missing values as watched"
+        }
+      ]
+    },
+    {
+      "line": 6678,
+      "title": "viewing requests resolve structured member API addresses before fetching",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing requests resolve structured member API addresses before fetching"
+        }
+      ]
+    },
+    {
+      "line": 6698,
+      "title": "viewing request addresses preserve string and build fallback support",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing request addresses preserve string and build fallback support"
+        }
+      ]
+    },
+    {
+      "line": 6718,
+      "title": "malformed or unsafe structured viewing endpoints do not send requests",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "malformed or unsafe structured viewing endpoints do not send requests"
+        }
+      ]
+    },
+    {
+      "line": 6741,
+      "title": "rejected viewing batches are attempted once and stop subsequent requests with endpoint diagnostics",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "rejected viewing batches are attempted once and stop subsequent requests with endpoint diagnostics"
+        }
+      ]
+    },
+    {
+      "line": 6770,
+      "title": "credit-tolerant completion moves movies and fully caught-up series out of the main grid",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "credit-tolerant completion moves movies and fully caught-up series out of the main grid"
+        }
+      ]
+    },
+    {
+      "line": 6786,
+      "title": "an unfinished latest episode cannot qualify by averaging its progress with older episodes",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "an unfinished latest episode cannot qualify by averaging its progress with older episodes"
+        }
+      ]
+    },
+    {
+      "line": 6799,
+      "title": "film filters default independently below the heading and inside watched details with accurate counts",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "film filters default independently below the heading and inside watched details with accurate counts"
+        }
+      ]
+    },
+    {
+      "line": 6833,
+      "title": "All includes unknown title types without assigning them to films or series",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "All includes unknown title types without assigning them to films or series"
+        }
+      ]
+    },
+    {
+      "line": 6847,
+      "title": "unavailable metadata keeps every title reachable through All and displays an accurate empty filter state",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "unavailable metadata keeps every title reachable through All and displays an accurate empty filter state"
+        }
+      ]
+    },
+    {
+      "line": 6864,
+      "title": "filter selections survive collapse and rebuild while stale controls cannot alter the new grid",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-groups.test.js",
+          "title": "frame replacement preserves selections and expansion while reset restores defaults and releases exact old listeners"
+        }
+      ]
+    },
+    {
+      "line": 6892,
+      "title": "filtering cancels hover on hidden cards and rejects them until they become visible again",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "controls and hidden cards cannot start preparation"
+        },
+        {
+          "file": "tests/grid-groups.test.js",
+          "title": "queued filter, refresh and toggle callbacks cannot act on a replacement group owner"
+        }
+      ]
+    },
+    {
+      "line": 6917,
+      "title": "type filtering is available while series episode requests are still loading",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "type filtering is available while series episode requests are still loading"
+        }
+      ]
+    },
+    {
+      "line": 6941,
+      "title": "filtered counts and card order stay correct through removal, Undo and unknown-type additions",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-groups.test.js",
+          "title": "local title changes preserve order and one-title work while unchanged synchronization reads no cards or geometry"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list publication owns removal, exact Undo reinsertion, count/order and separate material release"
+        }
+      ]
+    },
+    {
+      "line": 6961,
+      "title": "native hover replacements preserve the visibility of filtered sibling cards",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "native hover replacements preserve the visibility of filtered sibling cards"
+        }
+      ]
+    },
+    {
+      "line": 6979,
+      "title": "viewing refresh preserves type selections and updates counts when a series has new episodes",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "viewing refresh preserves type selections and updates counts when a series has new episodes"
+        }
+      ]
+    },
+    {
+      "line": 6999,
+      "title": "missing series episode totals are recovered from fully covered season summaries",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "missing series episode totals are recovered from fully covered season summaries"
+        }
+      ]
+    },
+    {
+      "line": 7008,
+      "title": "small series batches fill the existing episode allowance without cutting off later series",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "small series batches fill the existing episode allowance without cutting off later series"
+        }
+      ]
+    },
+    {
+      "line": 7018,
+      "title": "a missing-count series requires validated season coverage and a usable completed latest episode",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "a missing-count series requires validated season coverage and a usable completed latest episode"
+        }
+      ]
+    },
+    {
+      "line": 7037,
+      "title": "count recovery never replaces invalid or contradictory totals supplied by Netflix",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "count recovery never replaces invalid or contradictory totals supplied by Netflix"
+        }
+      ]
+    },
+    {
+      "line": 7052,
+      "title": "bounded additional passes continue the same queue without reloading title or episode data",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "bounded additional passes continue the same queue without reloading title or episode data"
+        }
+      ]
+    },
+    {
+      "line": 7070,
+      "title": "a latest range can continue across a pass boundary without fetching older ranges",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "a latest range can continue across a pass boundary without fetching older ranges"
+        }
+      ]
+    },
+    {
+      "line": 7083,
+      "title": "the total continuation request cap is finite and leaves unprocessed series visible",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "the total continuation request cap is finite and leaves unprocessed series visible"
+        }
+      ]
+    },
+    {
+      "line": 7102,
+      "title": "the combined scan time cap bounds a scan even when few requests consume the entire allowance",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "the combined scan time cap bounds a scan even when few requests consume the entire allowance"
+        }
+      ]
+    },
+    {
+      "line": 7121,
+      "title": "slow successful requests can use the total time allowance without aborting at the old 30-second boundary",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "slow successful requests can use the total time allowance without aborting at the old 30-second boundary"
+        }
+      ]
+    },
+    {
+      "line": 7145,
+      "title": "an unfinished or unreadable latest episode saves older-range requests for later titles",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "an unfinished or unreadable latest episode saves older-range requests for later titles"
+        }
+      ]
+    },
+    {
+      "line": 7178,
+      "title": "verified groups appear before a later request completes while filters remain selected",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "verified groups appear before a later request completes while filters remain selected"
+        }
+      ]
+    },
+    {
+      "line": 7208,
+      "title": "route and profile cancellation stop an additional pass without changing a newer grid or leaking prior results",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "route and profile cancellation stop an additional pass without changing a newer grid or leaking prior results"
+        }
+      ]
+    },
+    {
+      "line": 7273,
+      "title": "referenced watched and progress fields are resolved without accepting cyclic or missing references",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "referenced watched and progress fields are resolved without accepting cyclic or missing references"
+        }
+      ]
+    },
+    {
+      "line": 7284,
+      "title": "direct episode lookups recover caught-up series from sparse nested responses",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "direct episode lookups recover caught-up series from sparse nested responses"
+        }
+      ]
+    },
+    {
+      "line": 7304,
+      "title": "direct responses can fill missing progress fields while known unfinished episodes stay visible",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "direct responses can fill missing progress fields while known unfinished episodes stay visible"
+        }
+      ]
+    },
+    {
+      "line": 7317,
+      "title": "an unusable direct response is attempted once and cannot turn unknown, negative or conflicting data into watched",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "an unusable direct response is attempted once and cannot turn unknown, negative or conflicting data into watched"
+        }
+      ]
+    },
+    {
+      "line": 7338,
+      "title": "repair batches are limited to 200 unique IDs and start after all ordinary series have been checked",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "repair batches are limited to 200 unique IDs and start after all ordinary series have been checked"
+        }
+      ]
+    },
+    {
+      "line": 7362,
+      "title": "a repaired latest episode qualifies a long series without fetching older ranges or double-counting it",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "a repaired latest episode qualifies a long series without fetching older ranges or double-counting it"
+        }
+      ]
+    },
+    {
+      "line": 7379,
+      "title": "repair budget exhaustion preserves known series and leaves an unknown latest episode visible",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "repair budget exhaustion preserves known series and leaves an unknown latest episode visible"
+        }
+      ]
+    },
+    {
+      "line": 7396,
+      "title": "a failed direct request retains known watched titles and never retries the endpoint",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "a failed direct request retains known watched titles and never retries the endpoint"
+        }
+      ]
+    },
+    {
+      "line": 7417,
+      "title": "copy-only series diagnostics explain the named cases without exporting video IDs, raw payloads or credentials",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "copy-only series diagnostics explain the named cases without exporting video IDs, raw payloads or credentials"
+        }
+      ]
+    },
+    {
+      "line": 7515,
+      "title": "image resource observations continue beyond full history using scalar counters without reading URLs or DOM",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/image-diagnostics.test.js",
+          "title": "grid image provider owns one bounded future-entry observer and returns copied summaries"
+        }
+      ]
+    },
+    {
+      "line": 7544,
+      "title": "image resource diagnostics stop at their route budget and ignore obsolete callbacks",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/image-diagnostics.test.js",
+          "title": "grid image provider owns one bounded future-entry observer and returns copied summaries"
+        },
+        {
+          "file": "tests/image-diagnostics.test.js",
+          "title": "retired image delivery and failed reads cannot stop a replacement observer"
+        }
+      ]
+    },
+    {
+      "line": 7570,
+      "title": "image resource observation failures remain private and route lifecycle disconnects the observer",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/image-diagnostics.test.js",
+          "title": "retired image delivery and failed reads cannot stop a replacement observer"
+        }
+      ]
+    },
+    {
+      "line": 7608,
+      "title": "thumbnail diagnostics distinguish the selected image from script-assigned artwork without exposing either URL",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/image-diagnostics.test.js",
+          "title": "thumbnail diagnostics distinguish the selected image from script-assigned artwork without exposing either URL"
+        }
+      ]
+    },
+    {
+      "line": 7622,
+      "title": "copy-only thumbnail measurements separate pending, hidden and current geometry without exposing sources",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/image-diagnostics.test.js",
+          "title": "copy-only thumbnail measurements separate pending, hidden and current geometry without exposing sources"
+        }
+      ]
+    },
+    {
+      "line": 7672,
+      "title": "thumbnail copy work is bounded and discloses incomplete sampling and resource history",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/image-diagnostics.test.js",
+          "title": "thumbnail copy work is bounded and discloses incomplete sampling and resource history"
+        }
+      ]
+    },
+    {
+      "line": 7693,
+      "title": "thumbnail diagnostics handle unavailable APIs and obsolete ownership without failing Copy Logs",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/image-diagnostics.test.js",
+          "title": "thumbnail diagnostics handle unavailable APIs and obsolete ownership without failing Copy Logs"
+        }
+      ]
+    },
+    {
+      "line": 7718,
+      "title": "thumbnail geometry accounts for visual viewport offsets and native dimension hints without changing layout",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/image-diagnostics.test.js",
+          "title": "thumbnail geometry accounts for visual viewport offsets and native dimension hints without changing layout"
+        }
+      ]
+    },
+    {
+      "line": 7749,
+      "title": "thumbnail inventory rejects retained stale trees and handles malformed or unresolved image URLs",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/image-diagnostics.test.js",
+          "title": "thumbnail inventory rejects retained stale trees and handles malformed or unresolved image URLs"
+        }
+      ]
+    },
+    {
+      "line": 7770,
+      "title": "profile and route changes cancel direct episode reads and discard profile-specific diagnostic summaries",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "profile and route changes cancel direct episode reads and discard profile-specific diagnostic summaries"
+        }
+      ]
+    },
+    {
+      "line": 7826,
+      "title": "a completed latest episode outweighs reset older progress and the copy report identifies the inference",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "a completed latest episode outweighs reset older progress and the copy report identifies the inference"
+        }
+      ]
+    },
+    {
+      "line": 7841,
+      "title": "latest episode diagnostics distinguish below 90 percent, earlier credits, flags and absent progress",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "latest episode diagnostics distinguish below 90 percent, earlier credits, flags and absent progress"
+        }
+      ]
+    },
+    {
+      "line": 7860,
+      "title": "an unknown finale receives a direct follow-up even when older episodes are unfinished",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "an unknown finale receives a direct follow-up even when older episodes are unfinished"
+        }
+      ]
+    },
+    {
+      "line": 7870,
+      "title": "the latest nonempty season is checked before older unfinished seasons",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "the latest nonempty season is checked before older unfinished seasons"
+        }
+      ]
+    },
+    {
+      "line": 7888,
+      "title": "malformed season plans, invalid finale references and wrong video types cannot establish the latest hint",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "malformed season plans, invalid finale references and wrong video types cannot establish the latest hint"
+        }
+      ]
+    },
+    {
+      "line": 7900,
+      "title": "manual choices move cards immediately, update filters and counts, and perform no Netflix request",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "manual choices move cards immediately, update filters and counts, and perform no Netflix request"
+        }
+      ]
+    },
+    {
+      "line": 7919,
+      "title": "manual choices survive reloads and refresh and the move button restores automatic classification when it agrees",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "manual choices survive reloads and refresh and the move button restores automatic classification when it agrees"
+        }
+      ]
+    },
+    {
+      "line": 7947,
+      "title": "cards show one move button and a passive manual marker that survives reload without becoming a hover or click action",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "manual choices survive reloads and refresh and the move button restores automatic classification when it agrees"
+        },
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "manual choices move cards immediately, update filters and counts, and perform no Netflix request"
+        }
+      ]
+    },
+    {
+      "line": 7974,
+      "title": "moving back with unknown automatic progress retains the explicit main choice when a later scan reports complete",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "moving back with unknown automatic progress retains the explicit main choice when a later scan reports complete"
+        }
+      ]
+    },
+    {
+      "line": 7998,
+      "title": "the move button can restore an agreed cached classification without a live result or a new request",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "the move button can restore an agreed cached classification without a live result or a new request"
+        }
+      ]
+    },
+    {
+      "line": 8022,
+      "title": "failed automatic restoration keeps the saved placement and marker and the diagnostic reports that actual state",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "failed automatic restoration keeps the saved placement and marker and the diagnostic reports that actual state"
+        }
+      ]
+    },
+    {
+      "line": 8045,
+      "title": "manual corrections remain available when optional viewing requests fail",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "manual corrections remain available when optional viewing requests fail"
+        }
+      ]
+    },
+    {
+      "line": 8057,
+      "title": "a manual series correction expires for an added episode and the change is persisted",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "a manual series correction expires for an added episode and the change is persisted"
+        }
+      ]
+    },
+    {
+      "line": 8075,
+      "title": "manual series corrections detect a new season without relying on a larger total count",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "manual series corrections detect a new season without relying on a larger total count"
+        }
+      ]
+    },
+    {
+      "line": 8091,
+      "title": "unavailable or conflicting season metadata preserves a manual correction until reliable new coverage arrives",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "unavailable or conflicting season metadata preserves a manual correction until reliable new coverage arrives"
+        }
+      ]
+    },
+    {
+      "line": 8103,
+      "title": "a correction made before season metadata arrives captures its first reliable baseline once",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "a correction made before season metadata arrives captures its first reliable baseline once"
+        }
+      ]
+    },
+    {
+      "line": 8126,
+      "title": "profile switching isolates manual choices and stale controls cannot write to the new profile",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "profile switching isolates manual choices and stale controls cannot write to the new profile"
+        }
+      ]
+    },
+    {
+      "line": 8145,
+      "title": "storage read/write failures surface without pretending a correction was remembered",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "storage read/write failures surface without pretending a correction was remembered"
+        }
+      ]
+    },
+    {
+      "line": 8160,
+      "title": "malformed persisted choices are ignored and missing profile identity never writes a correction",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "malformed persisted choices are ignored and missing profile identity never writes a correction"
+        }
+      ]
+    },
+    {
+      "line": 8178,
+      "title": "rebuilds and card replacements keep one working action row and reject obsolete controls",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-controls.test.js",
+          "title": "whole-grid publication retires the old delegated listener before a new policy attaches"
+        },
+        {
+          "file": "tests/grid-groups.test.js",
+          "title": "replacement updates private grouped ownership and labels synchronously without revisiting the retired card"
+        }
+      ]
+    },
+    {
+      "line": 8202,
+      "title": "viewing controls cancel pending popup preparation and ordinary artwork can regain hover intent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "controls and hidden cards cannot start preparation"
+        }
+      ]
+    },
+    {
+      "line": 8222,
+      "title": "manual grouping survives removal and Undo and detailed logs omit stored profile and season IDs",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "profile switching isolates manual choices and stale controls cannot write to the new profile"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list publication owns removal, exact Undo reinsertion, count/order and separate material release"
+        }
+      ]
+    },
+    {
+      "line": 8243,
+      "title": "saving from an older tab preserves unrelated corrections already saved by another tab",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "saving from an older tab preserves unrelated corrections already saved by another tab"
+        }
+      ]
+    },
+    {
+      "line": 8257,
+      "title": "stable manual card synchronization performs no storage calls, allocations or attribute writes",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "stable manual card synchronization performs no storage calls, allocations or attribute writes"
+        }
+      ]
+    },
+    {
+      "line": 8271,
+      "title": "new episodes are revealed in the current grid even if saving manual expiry fails",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "new episodes are revealed in the current grid even if saving manual expiry fails"
+        }
+      ]
+    },
+    {
+      "line": 8294,
+      "title": "native hover clone replacement publishes correctly labeled manual controls before another group sync",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "native hover clone replacement publishes correctly labeled manual controls before another group sync"
+        }
+      ]
+    },
+    {
+      "line": 8309,
+      "title": "late automatic baseline capture preserves an override cleared by the move button in another tab",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "late automatic baseline capture preserves an override cleared by the move button in another tab"
+        }
+      ]
+    },
+    {
+      "line": 8335,
+      "title": "marking titles into the collapsed watched section preserves the viewport while handing off focus",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "marking titles into the collapsed watched section preserves the viewport while handing off focus"
+        }
+      ]
+    },
+    {
+      "line": 8357,
+      "title": "reversing and resetting a correction preserve the viewport when the destination filter hides the card",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "reversing and resetting a correction preserve the viewport when the destination filter hides the card"
+        }
+      ]
+    },
+    {
+      "line": 8401,
+      "title": "confirmed movies publish after the first title batch while later title responses are pending",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "confirmed movies publish after the first title batch while later title responses are pending"
+        }
+      ]
+    },
+    {
+      "line": 8427,
+      "title": "500 long series use 500 finale records and 30 bounded requests instead of downloading older progress",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "500 long series use 500 finale records and 30 bounded requests instead of downloading older progress"
+        }
+      ]
+    },
+    {
+      "line": 8445,
+      "title": "a recent same-profile cache groups titles before the first response and remains read-only during browsing",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "a recent same-profile cache groups titles before the first response and remains read-only during browsing"
+        }
+      ]
+    },
+    {
+      "line": 8476,
+      "title": "fresh movies replace cache immediately and a newly unfinished finale returns a cached series to My List",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "fresh movies replace cache immediately and a newly unfinished finale returns a cached series to My List"
+        }
+      ]
+    },
+    {
+      "line": 8497,
+      "title": "manual main-list choices outweigh initial cached completion and never enter the automatic cache",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "manual main-list choices outweigh initial cached completion and never enter the automatic cache"
+        }
+      ]
+    },
+    {
+      "line": 8515,
+      "title": "a failed verification reveals cached automatic titles but retains explicit manual watched choices",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "a failed verification reveals cached automatic titles but retains explicit manual watched choices"
+        }
+      ]
+    },
+    {
+      "line": 8531,
+      "title": "startup cache validates age, schema, cutoff and membership without trusting malformed entries",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "startup cache validates age, schema, cutoff and membership without trusting malformed entries"
+        }
+      ]
+    },
+    {
+      "line": 8552,
+      "title": "optional cache storage errors preserve fresh grouping and working manual corrections",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "optional cache storage errors preserve fresh grouping and working manual corrections"
+        }
+      ]
+    },
+    {
+      "line": 8571,
+      "title": "cache reuse is isolated by the active profile and a cancelled response cannot publish or save it",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "cache reuse is isolated by the active profile and a cancelled response cannot publish or save it"
+        }
+      ]
+    },
+    {
+      "line": 8609,
+      "title": "a later startup failure preserves fresh movie results and drops only unverified cached titles",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "a later startup failure preserves fresh movie results and drops only unverified cached titles"
+        }
+      ]
+    },
+    {
+      "line": 8639,
+      "title": "refresh keeps the current series grouping until its new finale result arrives without rereading storage",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "refresh keeps the current series grouping until its new finale result arrives without rereading storage"
+        }
+      ]
+    },
+    {
+      "line": 8657,
+      "title": "a warm 500-series scan initializes card controls once and performs no further work while browsing",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "a warm 500-series scan initializes card controls once and performs no further work while browsing"
+        }
+      ]
+    },
+    {
+      "line": 8701,
+      "title": "one manual movie move touches one of 500 controls and preserves an unrelated stationary hover",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-groups.test.js",
+          "title": "local title changes preserve order and one-title work while unchanged synchronization reads no cards or geometry"
+        }
+      ]
+    },
+    {
+      "line": 8730,
+      "title": "moving a preceding card cancels hover when the protected card actually changes position",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-groups.test.js",
+          "title": "local title changes preserve order and one-title work while unchanged synchronization reads no cards or geometry"
+        }
+      ]
+    },
+    {
+      "line": 8745,
+      "title": "unchanged publication avoids card and layout reads, and filters reuse stored classifications",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-groups.test.js",
+          "title": "local title changes preserve order and one-title work while unchanged synchronization reads no cards or geometry"
+        }
+      ]
+    },
+    {
+      "line": 8764,
+      "title": "incremental groups follow hover replacement ownership without retaining or revisiting the old card",
+      "disposition": "retained",
+      "coverage": [
+        {
+          "file": "tests/viewing-integration.test.js",
+          "title": "incremental groups follow hover replacement ownership without retaining or revisiting the old card"
+        }
+      ]
+    },
+    {
+      "line": 8795,
+      "title": "readiness detachment retries one verified replacement and preserves queued mutations until publication",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "late source arrival unblocks the real session without replacing application resources"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "an obsolete readiness poll cannot publish success from still-connected old binding elements"
+        }
+      ]
+    },
+    {
+      "line": 8832,
+      "title": "a replacement mounted after a readiness timeout can unblock through the native observer",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "late source arrival unblocks the real session without replacing application resources"
+        }
+      ]
+    },
+    {
+      "line": 8854,
+      "title": "native initialization replacement recovery stops after one attempt and ignores obsolete sessions",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "a missing positive-count source times out while a connected empty carousel must stabilize"
+        },
+        {
+          "file": "tests/app.test.js",
+          "title": "late source arrival unblocks the real session without replacing application resources"
+        }
+      ]
+    },
+    {
+      "line": 8876,
+      "title": "obsolete discovery recovery preserves the replacement parent or failure and its retry budget",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "discovery observations reject copies and changed route, binding, discovery, counts or caller ownership"
+        }
+      ]
+    },
+    {
+      "line": 8898,
+      "title": "initial discovery replacement retries before cleanup or provisional publication",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "discovery observations reject copies and changed route, binding, discovery, counts or caller ownership"
+        },
+        {
+          "file": "tests/app.test.js",
+          "title": "reentrant route retirement during initialization cannot publish old work and a later visit recovers"
+        }
+      ]
+    },
+    {
+      "line": 8918,
+      "title": "detached reset restores original geometry descriptors before dropping source and clone references",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "release retires an exact geometry lease before native exit establishes a newer one"
+        }
+      ]
+    },
+    {
+      "line": 8953,
+      "title": "six mounted cards rebuild only the hover target, and another card prepares on its own later hover",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preparation uses real grid acceptance and replaces only its admitted card"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "graft retirement visits only prepared cards in 30, 150 and 600-card registries"
+        }
+      ]
+    },
+    {
+      "line": 9076,
+      "title": "owned hidden-source collapse preserves active, pending and preparing hovers with one route log",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "prepared observations reject source, route, mapping and preparation replacement before finalization"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "route cancellation stops pending and queued native work and releases owned waits"
+        }
+      ]
+    },
+    {
+      "line": 9117,
+      "title": "hidden height transitions cannot bypass source, viewport, signature, mapping or clipping guards",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/responsive.test.js",
+          "title": "parked height observations preserve interaction only under every source, viewport, mapping and clipping guard"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "prepared observations reject source, route, mapping and preparation replacement before finalization"
+        }
+      ]
+    },
+    {
+      "line": 9149,
+      "title": "parked-height exception is limited to observer notifications and coalesces duplicate callbacks",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/responsive.test.js",
+          "title": "parked height observations preserve interaction only under every source, viewport, mapping and clipping guard"
+        },
+        {
+          "file": "tests/responsive.test.js",
+          "title": "duplicate viewport events coalesce while real zoom, dimensions and offsets cancel immediately"
+        }
+      ]
+    },
+    {
+      "line": 9168,
+      "title": "real viewport events still cancel hover before a later parked-height observer check",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/responsive.test.js",
+          "title": "duplicate viewport events coalesce while real zoom, dimensions and offsets cancel immediately"
+        },
+        {
+          "file": "tests/responsive.test.js",
+          "title": "parked height observations preserve interaction only under every source, viewport, mapping and clipping guard"
+        }
+      ]
+    },
+    {
+      "line": 9184,
+      "title": "obsolete route and source checks cannot count or log an ignored parked-height change",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/responsive.test.js",
+          "title": "parked height observations preserve interaction only under every source, viewport, mapping and clipping guard"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "source preparation and acceptance check the captured caller before publishing"
+        }
+      ]
+    },
+    {
+      "line": 9198,
+      "title": "failed parked-height diagnostics cannot cancel or strand an active hover",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "diagnostic failures cannot reject an admitted replay or strand its cleanup"
+        },
+        {
+          "file": "tests/responsive.test.js",
+          "title": "parked height observations preserve interaction only under every source, viewport, mapping and clipping guard"
+        }
+      ]
+    },
+    {
+      "line": 9212,
+      "title": "a first real native preparation survives the parked-height startup check and dispatches replay",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/responsive.test.js",
+          "title": "parked height observations preserve interaction only under every source, viewport, mapping and clipping guard"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "composed hover, real grid and native popup transfer exactly one admitted replacement"
+        }
+      ]
+    },
+    {
+      "line": 9257,
+      "title": "duplicate window and visual-viewport events coalesce to one check and preserve hover without style writes",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/responsive.test.js",
+          "title": "duplicate viewport events coalesce while real zoom, dimensions and offsets cancel immediately"
+        }
+      ]
+    },
+    {
+      "line": 9276,
+      "title": "real viewport bounds, zoom, pixel ratio and offset changes still cancel hover immediately",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/responsive.test.js",
+          "title": "duplicate viewport events coalesce while real zoom, dimensions and offsets cancel immediately"
+        },
+        {
+          "file": "tests/responsive.test.js",
+          "title": "retired viewport delivery cannot change replacement counters"
+        }
+      ]
+    },
+    {
+      "line": 9292,
+      "title": "same-viewport geometry changes or stale page mapping still trigger responsive refresh",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "responsive mapping defers inconsistent native counts while preserving finalized pages and releasing its motion lease"
+        },
+        {
+          "file": "tests/responsive.test.js",
+          "title": "retired viewport delivery cannot change replacement counters"
+        }
+      ]
+    },
+    {
+      "line": 9305,
+      "title": "page-count convergence and obsolete scheduled checks avoid relayout and preserve current owners",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/responsive.test.js",
+          "title": "retired coalesced check cannot consume a newer scheduled check"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "responsive mapping defers a canonical window with no title signature and preserves count convergence"
+        }
+      ]
+    },
+    {
+      "line": 9324,
+      "title": "copied performance counters are independent snapshots without title, profile or DOM data",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover-intent.test.js",
+          "title": "counter and pointer observations are copies rather than mutation authority"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "presentation observations are copied, optional and reject changed native markers"
+        }
+      ]
+    },
+    {
+      "line": 9334,
+      "title": "target-only hover preparation still rejects a target in the wrapped tail buffer",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "page observations own wrapped-tail inclusion and borrow current cards through source handles"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "responsive mapping validates compatible wrapped tails and retains count convergence on non-canonical deferral"
+        }
+      ]
+    },
+    {
+      "line": 9362,
+      "title": "grid clipping changes require refresh even when carousel geometry signatures are identical",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "indicator selection and carousel generation refresh on the next sample"
+        },
+        {
+          "file": "tests/grid-frame.test.js",
+          "title": "grid owns one detached/current status and preserves separated label, meta, geometry and CopyLogs"
+        }
+      ]
+    },
+    {
+      "line": 9371,
+      "title": "obsolete empty-frame resize callbacks cannot measure or rewrite a replacement layout",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-empty.test.js",
+          "title": "empty geometry and disposal reject stale callbacks and preserve replacement nodes with the same ID"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "replacement closes mounted qualification frames and a late callback cannot complete the new proof"
+        }
+      ]
+    },
+    {
+      "line": 9391,
+      "title": "current empty-frame resize publishes copied layout and keeps its next callback usable",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-empty.test.js",
+          "title": "missing native empty content does not create a provisional frame unless the caller explicitly allows it"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "preparation checks its admission after profile and readiness diagnostic callbacks"
+        }
+      ]
+    },
+    {
+      "line": 9413,
+      "title": "responsive formatting replacement discards its observation without publishing or refreshing",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "retiring a chunked construction settles its task yield without publishing or touching a replacement visit"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "an obsolete indicator acknowledgement cannot read or publish a replacement binding"
+        }
+      ]
+    },
+    {
+      "line": 9425,
+      "title": "initialization geometry admission survives replacement without publishing an old frame or collection",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "an obsolete indicator acknowledgement cannot read or publish a replacement binding"
+        },
+        {
+          "file": "tests/grid-empty.test.js",
+          "title": "retired and foreign roots reject frame geometry writes"
+        }
+      ]
+    },
+    {
+      "line": 9449,
+      "title": "grid geometry formatting cannot return a measurement into a replacement parent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "position admission rejects parent replacement and indicator count change on the same elements"
+        },
+        {
+          "file": "tests/grid-empty.test.js",
+          "title": "empty geometry and disposal reject stale callbacks and preserve replacement nodes with the same ID"
+        }
+      ]
+    },
+    {
+      "line": 9461,
+      "title": "incoming layout replacement rejects adoption before releasing the current grid interaction",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preparation uses real grid acceptance and replaces only its admitted card"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "composed hover, real grid and native popup transfer exactly one admitted replacement"
+        }
+      ]
+    },
+    {
+      "line": 9491,
+      "title": "one responsive sample shares the section rectangle between native layout and grid geometry",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "bounds-only observations share the native sample and perform no card or layout reads"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "one native-state sample shares profile, filled-slot, rectangle, and React-index reads"
+        }
+      ]
+    },
+    {
+      "line": 9511,
+      "title": "unrestorable native geometry overrides produce a bounded failure diagnostic",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "release retires an exact geometry lease before native exit establishes a newer one"
+        }
+      ]
+    },
+    {
+      "line": 9528,
+      "title": "obsolete responsive refreshes cannot update replacement grids or clear a newer refresh owner",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-frame.test.js",
+          "title": "obsolete and out-of-order clipboard completions cannot paint a replacement or newer feedback"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "native preparation uses real grid acceptance and replaces only its admitted card"
+        }
+      ]
+    },
+    {
+      "line": 9559,
+      "title": "responsive settling stops before another native read when its source owner is replaced",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "native recovery can publish a valid source when its card description fails"
+        },
+        {
+          "file": "tests/grid-empty.test.js",
+          "title": "grid positions and disposes its synthetic section from read-only native placement facts"
+        }
+      ]
+    },
+    {
+      "line": 9573,
+      "title": "preview shape capture follows admitted title/route ownership and survives normal native dismissal",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview transfer and boundary dismissal preserve native positioning until actual exit"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "native source admission follows the current scope and rejects the retired source handle"
+        }
+      ]
+    },
+    {
+      "line": 9594,
+      "title": "a throwing preview diagnostic cannot reject an admitted native transfer",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/hover.test.js",
+          "title": "preview transfer and boundary dismissal preserve native positioning until actual exit"
+        },
+        {
+          "file": "tests/hover.test.js",
+          "title": "composed hover, real grid and native popup transfer exactly one admitted replacement"
+        }
+      ]
+    },
+    {
+      "line": 9612,
+      "title": "a failed issued click cannot restore motion styles acquired by its replacement owner",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/carousel.test.js",
+          "title": "shared motion suppression restores original priorities only after its last lease releases"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "collection progress cannot admit old native work or restore over a replacement style lease"
+        }
+      ]
+    },
+    {
+      "line": 9647,
+      "title": "actual grid admission rejects an obsolete preparation before native capture and preserves the replacement controls",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "click fallback capture cannot queue on a replacement parent and membership controls take precedence over toast facts"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "old presentation release cannot overwrite replacement ownership on the same native elements"
+        }
+      ]
+    },
+    {
+      "line": 9663,
+      "title": "actual grid replacement hands the admitted hover attempt to its new handle and cancels unrelated replacement",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "grid rejects retired, copied and replaced handles while same-attempt replacement returns an admitted handoff"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "restoration attempts remaining native fields and cannot erase a reentrant replacement lease"
+        }
+      ]
+    },
+    {
+      "line": 9689,
+      "title": "actual grid caller rejects duplicate membership before constructing or replacing the current frame",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "membership owns read-only order and lookup, rejects duplicate publication and keeps counts separate"
+        },
+        {
+          "file": "tests/grid-cards.test.js",
+          "title": "grid applies membership order and inserts at authoritative positions through its own registry"
+        }
+      ]
+    },
+    {
+      "line": 9696,
+      "title": "actual grid caller discards a yielded build when newer membership has been accepted",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "membership validates publication before grid work and superseded staged acceptance cannot replace newer records"
+        },
+        {
+          "file": "tests/list.test.js",
+          "title": "reentrant membership admission preserves the newer publication instead of committing an obsolete removal"
+        }
+      ]
+    },
+    {
+      "line": 9706,
+      "title": "actual parent publication retires old membership without disposing the accepted replacement or a same-parent adoption",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "reentrant retirement or order publication cannot change the replacement membership"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "publication rejects parent replacement and releases cancelled transfer without accepting membership"
+        }
+      ]
+    },
+    {
+      "line": 9716,
+      "title": "actual parent cleanup retires membership before native or frame resource callbacks",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "membership retirement clears owned collections and rejects old commands before invoking their callbacks"
+        },
+        {
+          "file": "tests/app.test.js",
+          "title": "separate page scopes cannot retire a newer page during an old cleanup callback"
+        }
+      ]
+    },
+    {
+      "line": 9727,
+      "title": "expired correlation cannot retain or borrow a later removal of the same canonical record",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "Undo expiry preserves only the exact pending record and correlation"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list owns one expiry timer and exact record Undo correlation"
+        }
+      ]
+    },
+    {
+      "line": 9744,
+      "title": "disposing an old queued correlation preserves a newer removal entry and its exact tree",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "toast click selects the latest valid canonical Undo entry and copies its exact correlation and index"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "replacement queue inherits only its exact pending record and correlation after Undo expiry"
+        }
+      ]
+    },
+    {
+      "line": 9757,
+      "title": "actual click queue carries explicit Undo correlation beyond entry expiry without record state",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "Undo expiry preserves only the exact pending record and correlation"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "replacement queue inherits only its exact pending record and correlation after Undo expiry"
+        }
+      ]
+    },
+    {
+      "line": 9775,
+      "title": "native mismatch comparison rejects an obsolete same-title record index instead of borrowing current order",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "native position comparison uses the exact current record and controlled visible-span order"
+        }
+      ]
+    },
+    {
+      "line": 9784,
+      "title": "native expected position follows controlled membership order after visible-span reconciliation",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list.test.js",
+          "title": "native position comparison uses the exact current record and controlled visible-span order"
+        }
+      ]
+    },
+    {
+      "line": 9797,
+      "title": "actual initialization cleanup cannot release a newer owner in the same route session",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/app.test.js",
+          "title": "retiring a chunked construction settles its task yield without publishing or touching a replacement visit"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "only final exact deferral release resumes deferred intents and repeated release is inert"
+        }
+      ]
+    },
+    {
+      "line": 9809,
+      "title": "actual session retirement drops list intents and tickets before native cleanup callbacks",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list disposal attempts every resource cleanup and old callbacks remain inert after failures"
+        },
+        {
+          "file": "tests/app.test.js",
+          "title": "retiring a page during native readiness releases its pause and prevents late partial publication"
+        }
+      ]
+    },
+    {
+      "line": 9827,
+      "title": "responsive setup and cleanup failures cannot strand their exact reconciliation ticket",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/responsive.test.js",
+          "title": "retired transaction completion cannot clear a newer promise, marker or ticket"
+        },
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list disposal attempts every resource cleanup and old callbacks remain inert after failures"
+        }
+      ]
+    },
+    {
+      "line": 9843,
+      "title": "delta anchoring consumes native-owned preferred hints when canonical slot indices are absent",
+      "disposition": "owner-boundary replacement",
+      "coverage": [
+        {
+          "file": "tests/list-mutations.test.js",
+          "title": "list visible-order policy chooses admitted insertion positions and preserves logical hints on alignment"
+        },
+        {
+          "file": "tests/carousel.test.js",
+          "title": "delta mapping anchors native positions or visible title hints synchronously without rewriting membership"
+        }
+      ]
+    }
+  ]
+}

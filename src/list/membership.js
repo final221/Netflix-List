@@ -40,6 +40,7 @@ export function createMembership({ items = [], totalCount = null, collectedCount
         let committed = false;
         return Object.freeze({ records: accepted, assertCurrent: () => guard(), commit() {
             guard(); if (committed) return records;
+            guard(); for (const record of accepted) Object.freeze(record);
             guard(); records = accepted; map = nextMap; expectedCount = totalCount; collected = next.length;
             revision++; lookup = view(); committed = true; guard = guardFor(admission); return records;
         } });
@@ -60,6 +61,7 @@ export function createMembership({ items = [], totalCount = null, collectedCount
         const key = keyFor(record); guard(); if (map.has(key)) return false;
         const index = Math.max(0, Math.min(records.length, Number.isFinite(position) ? Math.floor(position) : 0));
         const next = [...records.slice(0, index), record, ...records.slice(index)]; guard();
+        Object.freeze(record); guard();
         records = Object.freeze(next); map.set(key, record); expectedCount = records.length; collected = records.length;
         revision++; lookup = view(); return true;
     }

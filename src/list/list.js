@@ -8,7 +8,7 @@ export function createList(options) {
     const text = value => value === null || value === undefined ? '' : String(value);
     function toRecord(input) {
         if (normalized.has(input)) return normalized.get(input);
-        const record = Object.seal({ videoId: text(input.videoId), href: text(input.href), ariaLabel: text(input.ariaLabel),
+        const record = Object.freeze({ videoId: text(input.videoId), href: text(input.href), ariaLabel: text(input.ariaLabel),
             imageUrl: text(input.imageUrl),
             graphql: Boolean(input.graphql) });
         normalized.set(input, record); normalized.set(record, record);

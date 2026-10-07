@@ -240,6 +240,20 @@ test('markup capture and shared-template cloning preserve identity and clear inh
     assert.equal(e.markup.captureTemplate(new Element('div')), null);
 });
 
+test('GraphQL template materialization preserves missing-artwork and missing-image behavior', () => {
+    const e=environment();
+    for(const missing of ['artwork','image']){
+        const source=slot('123'),image=source.querySelector('img');
+        image.src='native-image.jpg';image.setAttribute('srcset','native-srcset');
+        if(missing==='image')image.remove();
+        const template=e.markup.captureTemplate(source),record={videoId:'456',href:'/browse?jbv=456',ariaLabel:'Next',imageUrl:''};
+        const clone=e.markup.createClone(template,record,true),result=clone.querySelector('img');
+        if(missing==='image')assert.equal(result,null);
+        else {assert.equal(result.src,'native-image.jpg');assert.equal(result.getAttribute('srcset'),'native-srcset');}
+        assert.equal(clone.querySelector('a').href,record.href);
+    }
+});
+
 function dataEnvironment(count = 4, overrides = {}) {
     const e = environment();
     const scheduler = createScheduler();

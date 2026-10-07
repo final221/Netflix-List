@@ -4,22 +4,24 @@ import { createResponsive } from '../src/app/responsive.js';
 import { createScheduler } from './helpers/scheduler.js';
 import { createList } from '../src/list/list.js';
 import { createHover } from '../src/hover/hover.js';
-import { createDocument, Element } from './helpers/dom.js';
+import { createDocument, Element, EventTarget } from './helpers/dom.js';
 
 function transactionFixture() {
     const scheduler = createScheduler(), observers = [];
     const node = () => ({ isConnected: true });
     let state = { section: node(), scroller: node(), track: node(), grid: node(), items: [],
-        layout: { columns: 6, gridWidth: 100, cardWidth: 10, gridLeft: 0, scrollerWidth: 100 },
+        layout: { columns: 6, gridWidth: 100, cardWidth: 10, gridLeft: 0, scrollerWidth: 100,scrollerHeight:60 },
         resizeViewportSignature: '', status: node() };
     let layout = { ...state.layout }, pages = 4, hoverCancels = 0, remaps = 0;
     state.grid.__tmAppliedGeometry = { width: 100, left: 0, columns: 6 };
     const list = createList({}).createMutations({ now: () => scheduler.performance.now(), readSession: () => 1,
         isSessionActive: () => true, setTimeout: scheduler.setTimeout, clearTimeout: scheduler.clearTimeout,
         readParent: () => state });
-    const window = { innerWidth: 100, innerHeight: 100, addEventListener() {}, removeEventListener() {} };
+    const window = Object.assign(new EventTarget(),{ innerWidth: 100, innerHeight: 100,devicePixelRatio:1,
+        visualViewport:Object.assign(new EventTarget(),{width:100,height:100,scale:1,offsetLeft:0,offsetTop:0}) });
     const carousel = { sample: fn => fn(), assertObservation() {}, isObservationCurrent: () => true };
-    const observed = () => ({ layout, mode: 'indicator', position: { pages: pages }, presentation: { hidden: false, parked: false } });
+    let hidden=false,parked=false,needsRemapping=false,geometryLeft=0;
+    const observed = () => ({ layout, mode: 'indicator', position: { pages: pages }, presentation: { hidden, parked },needsRemapping });
     const owner = createResponsive({
         acceptLayoutChange: (state, layout) => { state.layout = layout; },
         acceptInitialPage: (state, page) => { state.initialPage = page; },
@@ -30,7 +32,7 @@ function transactionFixture() {
         nativeSourceObservation: observed, nativeLayoutObservation: observed, nativeSourceDiagnostics: () => ({}),
         listMutations: list, ensureLiveNativeBinding: () => state, hover: { cancel: () => { hoverCancels++; }, hasInteraction: () => true, count() {} },
         gridView: { setRefreshing(grid, value) { grid.refreshing = value; } },
-        currentGridGeometry: () => ({ width: layout.gridWidth, left: 0, columns: layout.columns }),
+        currentGridGeometry: () => ({ width: layout.gridWidth, left: geometryLeft, columns: layout.columns }),
         applyGridGeometry: () => ({}), layoutFrameStatus() {}, updateStatus() {}, formatHeaderParts: () => '',
         measureNativeCarouselGap: () => 0, layoutSummary: value => value, collectRuntimeSnapshot: () => ({}),
         realignActiveSource() {}, sleep: ms => new Promise(resolve => scheduler.setTimeout(resolve, ms)),
@@ -40,7 +42,9 @@ function transactionFixture() {
     // Native refresh work calls the carousel directly; it has no responsive wait collaborator.
     carousel.refreshMapping = () => { remaps++; return {}; };
     owner.acceptLayout(state.layout);
-    return { owner, scheduler, list, observers, get state() { return state; }, get cancels() { return hoverCancels; },
+    return { owner, scheduler, list, observers,window,carousel,layout,value(name,next){layout[name]=next;},
+        parked(){hidden=true;parked=true;layout.scrollerHeight=1;},mapping(){needsRemapping=true;},clip(){geometryLeft=1;},
+        get state() { return state; }, get cancels() { return hoverCancels; },
         get remaps() { return remaps; }, change: () => { layout = { ...layout, gridWidth: 110 }; },
         replace: () => { state = { ...state, grid: node(), section: node(), scroller: node(), track: node() }; } };
 }
@@ -146,4 +150,34 @@ test('retired viewport delivery cannot change replacement counters', () => {
     const f = fixture(); f.owner.start(); const delivery = f.listeners.get('resize');
     f.owner.dispose(); f.owner.start(); delivery();
     assert.equal(f.owner.diagnostics().resize.events, 0);
+});
+
+test('parked height observations preserve interaction only under every source, viewport, mapping and clipping guard',async()=>{
+    const mutations=[null,f=>{f.window.innerWidth++;},f=>{f.window.innerHeight++;},f=>{f.window.devicePixelRatio++;},
+        f=>{f.window.visualViewport.scale++;},f=>{f.window.visualViewport.offsetLeft++;},f=>f.mapping(),f=>f.clip(),
+        f=>f.value('columns',7),f=>f.value('scrollerWidth',101),f=>f.value('gridLeft',1)];
+    for(const mutate of mutations){
+        const f=transactionFixture();f.parked();mutate?.(f);f.owner.requestCheck(0,'ResizeObserver');await f.scheduler.advance();
+        if(!mutate){
+            assert.equal(f.cancels,0);assert.equal(f.owner.diagnostics().resize.parkedHeightChangesIgnored,1);
+            f.owner.requestCheck(0,'ResizeObserver');await f.scheduler.advance();
+            assert.equal(f.owner.diagnostics().resize.parkedHeightChangesIgnored,1);
+            assert.equal(f.state.layout.scrollerHeight,1);
+        }else{
+            assert.equal(f.owner.diagnostics().resize.parkedHeightChangesIgnored,0);
+            assert.ok(f.cancels>0);
+        }
+        f.owner.dispose();await f.scheduler.advance(160);assert.equal(f.list.deferralDiagnostics().active.length,0);
+    }
+});
+test('duplicate viewport events coalesce while real zoom, dimensions and offsets cancel immediately',async()=>{
+    const f=transactionFixture();f.owner.start();
+    f.window.dispatchEvent({type:'resize'});f.window.visualViewport.dispatchEvent({type:'resize'});
+    assert.equal(f.cancels,0);assert.equal(f.scheduler.timers.size,1);await f.scheduler.advance(140);
+    assert.equal(f.owner.diagnostics().resize.checks,1);
+    for(const [object,key] of [[f.window,'innerWidth'],[f.window,'innerHeight'],[f.window,'devicePixelRatio'],
+        [f.window.visualViewport,'scale'],[f.window.visualViewport,'offsetTop']]){
+        const before=f.cancels;object[key]++;f.window.dispatchEvent({type:'resize'});assert.equal(f.cancels,before+1);
+    }
+    f.owner.dispose();assert.equal(f.scheduler.timers.size,0);
 });

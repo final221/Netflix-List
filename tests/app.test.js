@@ -5,6 +5,112 @@ import { createApplication } from '../src/app/application.js';
 import { createSettings } from '../src/app/settings.js';
 import { createDocument, Element, EventTarget } from './helpers/dom.js';
 import { createScheduler } from './helpers/scheduler.js';
+import { createBrowser } from './helpers/browser.js';
+import { carouselPayload, pageBootstrapHtml } from './helpers/fixtures.js';
+
+async function populatedApplication({count=2,drain=true,nativeAll=false,browser=null,application=null,beforeStart=()=>{}}={}) {
+    const b=browser||createBrowser({pathname:'/browse/my-list'}),section=b.mountMyList();
+    const scroller=section.appendChild(new Element()),track=scroller.appendChild(new Element());
+    scroller.setAttribute('data-uia','carousel-scroller');
+    const control=section.appendChild(new Element('button'));control.setAttribute('data-uia','carousel-right-button');
+    const rect=(left,width)=>({left,top:0,right:left+width,bottom:60,width,height:60});
+    section.getBoundingClientRect=scroller.getBoundingClientRect=()=>rect(0,600);
+    for(let i=0;i<(nativeAll?count:Math.min(6,count));i++){
+        const slot=track.appendChild(new Element()),card=slot.appendChild(new Element('a'));
+        slot.setAttribute('data-virtual-slot',String(i));
+        const width=nativeAll?600/count:100;
+        slot.getBoundingClientRect=card.getBoundingClientRect=()=>rect(i*width,width);
+        card.setAttribute('data-uia','standard-card');card.href=`https://www.netflix.com/browse?jbv=${i+1}`;card.setAttribute('href',card.href);
+        card.setAttribute('aria-label',`Title ${i+1}`);
+    }
+    for(let page=0;page<(nativeAll?1:Math.ceil(count/6));page++){
+        const indicator=section.appendChild(new Element());indicator.setAttribute('data-uia','carousel-page-indicator-item');
+        if(page===0)indicator.setAttribute('data-indicator-selected','true');
+    }
+    const payload=carouselPayload(count,Array.from({length:count},(_,i)=>String(i+1))).data.node;
+    payload.eventListeners=[{notificationMessageRegex:'UPDATE_PLAYLIST'}];
+    b.window.netflix={reactContext:{models:{graphql:{data:{list:payload}}}}};
+    b.context.fetch=async()=>({ok:true,status:200,url:b.location.href,text:async()=>pageBootstrapHtml(count),
+        json:async()=>carouselPayload(count,Array.from({length:count},(_,i)=>String(i+1)))});
+    beforeStart(b);
+    const app=application||createApplication({environment:b.context,version:'test'});
+    if(application)await b.navigate('/browse/my-list?source-mounted');else app.start();
+    await b.scheduler.advance();
+    if(drain)for(let i=0;i<80&&app.diagnostics().currentSession?.running;i++){await b.scheduler.advance(25);await b.scheduler.frame();}
+    return {...b,app,section,scroller,track};
+}
+test('complete application publishes populated membership before optional viewing and owns visibility until disposal',async()=>{
+    const e=await populatedApplication();
+    assert.equal(e.app.diagnostics().currentSession.completed,true,e.logs.map(row=>row[2]?.error?.stack).filter(Boolean).join('\n'));
+    const root=e.document.getElementById('tm-netflix-mylist-v15-grid');assert.ok(root);
+    assert.equal(root.querySelectorAll('[data-tm-item-video-id]').length,2);
+    [...e.menus.values()][0].callback();assert.equal(e.section.getAttribute('data-tm-original-mylist-visible'),'false');
+    e.app.dispose();e.app.dispose();assert.equal(e.document.getElementById('tm-netflix-mylist-v15-grid'),null);
+    assert.equal(e.scheduler.timers.size,0);assert.equal(e.scheduler.frames.size,0);assert.equal(e.menus.size,0);
+});
+test('late source arrival unblocks the real session without replacing application resources',async()=>{
+    const b=createBrowser({pathname:'/browse/my-list'}),app=createApplication({environment:b.context,version:'test'});
+    app.start();await b.scheduler.advance(1000);const token=app.diagnostics().currentSession.token;
+    const e=await populatedApplication({browser:b,application:app});
+    assert.equal(app.diagnostics().currentSession.token,token);assert.equal(app.diagnostics().currentSession.completed,true);
+    assert.equal(b.window.listenerCount('popstate'),1);app.dispose();assert.equal(b.scheduler.timers.size,0);assert.equal(b.scheduler.frames.size,0);
+});
+test('reentrant route retirement during initialization cannot publish old work and a later visit recovers',async()=>{
+    for(const trigger of ['totalCount detected','Native carousel initialization ready','Initialization started','Initial layout measured']){
+        let retired=false;
+        const e=await populatedApplication({beforeStart:b=>{
+            const log=b.context.console.log;b.context.console.log=(...args)=>{
+                log(...args);if(!retired&&args[1]===trigger){retired=true;b.history.pushState(null,'','/browse');}
+            };
+        }});
+        assert.equal(retired,true,trigger);await e.scheduler.flush();assert.equal(e.app.diagnostics().currentSession,null);
+        assert.equal(e.document.getElementById('tm-netflix-mylist-v15-grid'),null);
+        await e.navigate('/browse/my-list');
+        for(let i=0;i<80&&!e.app.diagnostics().currentSession.completed;i++){await e.scheduler.advance(25);await e.scheduler.frame();}
+        assert.equal(e.app.diagnostics().currentSession.completed,true,trigger);
+        e.app.dispose();assert.equal(e.scheduler.timers.size,0);assert.equal(e.scheduler.frames.size,0);
+    }
+});
+test('retiring a page during native readiness releases its pause and prevents late partial publication',async()=>{
+    const e=await populatedApplication({count:150,drain:false});
+    assert.equal(e.app.diagnostics().currentSession.running,true);
+    const callbacks=[...e.scheduler.timers.values()].map(timer=>timer.callback);
+    const frames=[...e.scheduler.frames.values()];
+    e.app.dispose();assert.equal(e.scheduler.timers.size,0);assert.equal(e.scheduler.frames.size,0);
+    for(const callback of frames)callback();
+    for(const callback of callbacks)callback();await e.scheduler.flush();
+    assert.equal(e.document.getElementById('tm-netflix-mylist-v15-grid'),null);
+    assert.equal(e.document.listenerCount('pointermove'),0);
+    assert.ok(!e.logs.some(row=>row.includes('Initialization failed')));
+});
+test('retiring a chunked construction settles its task yield without publishing or touching a replacement visit',async()=>{
+    const e=await populatedApplication({count:150,drain:false,nativeAll:true});
+    for(let i=0;i<80&&!Array.from(e.scheduler.timers.values()).some(timer=>timer.due<=e.scheduler.performance.now());i++){
+        await e.scheduler.advance(25);await e.scheduler.frame();
+    }
+    assert.ok(Array.from(e.scheduler.timers.values()).some(timer=>timer.due<=e.scheduler.performance.now()),JSON.stringify(e.logs.map(row=>[row[1],row[2]?.code,row[2]?.error?.stack])));
+    const old=[...e.scheduler.timers.values()].map(timer=>timer.callback);
+    await e.navigate('/browse');assert.equal(e.scheduler.timers.size,0);
+    await e.navigate('/browse/my-list');const current=e.app.diagnostics().currentSession.token;
+    for(const callback of old)callback();await e.scheduler.flush();
+    assert.equal(e.app.diagnostics().currentSession.token,current);assert.equal(e.app.diagnostics().currentSession.active,true);
+    e.app.dispose();assert.equal(e.scheduler.timers.size,0);
+});
+
+test('construction yields below 24 items when measured work exhausts the six-millisecond quantum', async () => {
+    let measuredCost=0;
+    const e=await populatedApplication({count:7,drain:false,nativeAll:true,beforeStart:b=>{
+        const now=b.context.performance.now;
+        b.context.performance={...b.context.performance,now:()=>now()+(measuredCost+=7)};
+    }});
+    for(let i=0;i<80&&!Array.from(e.scheduler.timers.values()).some(timer=>timer.due<=e.scheduler.performance.now());i++){
+        await e.scheduler.advance(25);await e.scheduler.frame();
+    }
+    assert.equal(e.app.diagnostics().currentSession.running,true);
+    assert.ok(Array.from(e.scheduler.timers.values()).some(timer=>timer.due<=e.scheduler.performance.now()));
+    assert.equal(e.document.getElementById('tm-netflix-mylist-v15-grid')?.querySelectorAll('[data-tm-item-video-id]').length||0,0);
+    e.app.dispose();await e.scheduler.flush();assert.equal(e.scheduler.timers.size,0);assert.equal(e.scheduler.frames.size,0);
+});
 
 test('settings publishes semantic preference changes and retires old menu callbacks', () => {
     const callbacks = [], changes = [], writes = [];

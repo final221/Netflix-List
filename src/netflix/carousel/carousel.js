@@ -29,7 +29,24 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     const assertRouteSession = token => scope.assertCurrent(token);
     const NATIVE_READY_TIMEOUT_MS = 3000, NATIVE_SINGLE_PAGE_STABLE_MS = 700, NATIVE_EMPTY_STABLE_MS = 1200;
     const NATIVE_READY_POLL_MS = 25, NATIVE_LOGICAL_STABLE_MS = 120;
-    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const readinessWaits = new Set();
+    let readinessCleanupFailures = 0;
+    function readinessWait(schedule, cancel) {
+        return new Promise(resolve => {
+            const ticket = { id: null, cancel, settle: resolve }; readinessWaits.add(ticket);
+            try { ticket.id = schedule(() => { if (readinessWaits.delete(ticket)) resolve(); }); }
+            catch (error) { readinessWaits.delete(ticket); throw error; }
+        });
+    }
+    const sleep = ms => readinessWait(resolve => setTimeout(resolve, ms), clearTimeout);
+    const readinessFrame = () => readinessWait(requestAnimationFrame, cancelAnimationFrame);
+    function resetReadinessWaits() {
+        const retired = [...readinessWaits]; readinessWaits.clear();
+        for (const ticket of retired) {
+            try { ticket.cancel(ticket.id); } catch (_) { readinessCleanupFailures++; }
+            finally { ticket.settle(); }
+        }
+    }
     let nativeReadScope = null;
     let models = new WeakMap();
     let acceptedBinding = null;
@@ -998,6 +1015,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     function diagnostics(options = {}) {
         const snapshot = { bindingGeneration, readScopeActive: Boolean(nativeReadScope), navigation: navigation.diagnostics(),
             collection: collection.diagnostics(), collectionOperations: collection.pending(), mountedSourceWaits: mountedWaits.size,
+            readinessWaits: readinessWaits.size, readinessCleanupFailures,
             discoveryActive: Boolean(targetDocumentObserver), pendingMutationFrame: targetMutationFrame !== null,
             presentation: sourcePresentation.diagnostics() };
         if (Object.hasOwn(options, 'card')) {
@@ -1089,13 +1107,13 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         if (acceptedBinding && acceptedBinding.section === section && acceptedBinding.scroller === scroller &&
             acceptedBinding.track === track && isBindingCurrent(acceptedBinding)) return acceptedBinding;
         preparationOwner = null;
-        resetMountedWaits(); collection.reset(); navigation.reset();
+        resetReadinessWaits(); resetMountedWaits(); collection.reset(); navigation.reset();
         bindingGeneration++; invalidateNativeReadScope();
         if (section) models.delete(section);
         acceptedBinding = borrowBinding(section, scroller, track);
         return acceptedBinding;
     }
-    function clearBinding() { preparationOwner = null; resetMountedWaits(); collection.reset(); navigation.reset(); bindingGeneration++; acceptedBinding = null; invalidateNativeReadScope(); }
+    function clearBinding() { preparationOwner = null; resetReadinessWaits(); resetMountedWaits(); collection.reset(); navigation.reset(); bindingGeneration++; acceptedBinding = null; invalidateNativeReadScope(); }
     function median(values) {
         if (!values.length) return 0;
         const sorted = [...values].sort((a, b) => a - b);
@@ -1501,10 +1519,10 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
             }
 
             if (logicalCarouselReady || multiPageReady || singlePageReady) {
-                await new Promise(resolve => requestAnimationFrame(resolve));
+                await readinessFrame();
                 assertAdmission();
                 assertRouteSession(sessionToken);
-                await new Promise(resolve => requestAnimationFrame(resolve));
+                await readinessFrame();
                 assertAdmission();
                 assertRouteSession(sessionToken);
                 if (!isBindingCurrent(bindingOwner)) return { ready: false, reason: 'detached',

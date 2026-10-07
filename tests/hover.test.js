@@ -8,8 +8,6 @@ import { createSessionScope } from '../src/app/session-scope.js';
 import { createHover } from '../src/hover/hover.js';
 import { createDocument, Element } from './helpers/dom.js';
 import { createScheduler } from './helpers/scheduler.js';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
 
 async function environment(overrides = {}) {
     const document = createDocument(), scheduler = createScheduler();
@@ -70,7 +68,7 @@ async function environment(overrides = {}) {
     } else popup = createNativePopup(popupOptions);
     const prepare = () => { const result = popup.prepare({ source: source(), card: grid.getCard(item), item, page: 0, token, sessionToken: scope.token }); active = result.fresh; return result; };
     const open = () => { active = grid.getCard(item).node; return popup.open({ source: source(), card: grid.getCard(item), item, page: 0, token, sessionToken: scope.token }); };
-    return { document, scheduler, scope, carousel, grid, popup, hover, source, slot, nativeCard, neighbor, item, other, events, diagnostics, prepare, open,
+    return { document, scheduler, scope, carousel, grid, popup, hover, source, section, status, scroller, slot, nativeCard, neighbor, item, other, events, diagnostics, prepare, open,
         setToken: value => { token = value; }, setActive: node => { active = node; } };
 }
 
@@ -85,6 +83,23 @@ test('native popup owns replay resources and settles a retired pending open', as
     assert.equal(await pending, false);
     assert.equal(frames.size, 0);
     assert.equal(popup.diagnostics().pendingReplays, 0);
+});
+
+test('graft retirement visits only prepared cards in 30, 150 and 600-card registries', async () => {
+    for(const size of [30,150,600]){
+        const e=await environment(), records=[e.item,e.other,...Array.from({length:size-2},(_,i)=>({
+            videoId:String(i+3),href:`https://www.netflix.com/browse?jbv=${i+3}`,ariaLabel:`Title ${i+3}`,
+            snapshot:e.neighbor.cloneNode(true)
+        }))];
+        await e.grid.publish({items:records,section:e.section,status:e.status,
+            anchor:e.scroller,geometry:{left:0,width:600,columns:6},layout:{gap:8,rowGap:10},assertCurrent(){}});
+        const prepared=e.prepare();assert.equal(e.popup.diagnostics().grafts,1);
+        for(const record of records.slice(1))e.grid.getCard(record).node.removeAttribute=()=>{throw new Error('Unprepared card visited');};
+        e.popup.invalidate(prepared.fresh);assert.equal(e.popup.diagnostics().grafts,1);
+        prepared.fresh.remove();e.popup.invalidate(prepared.fresh);
+        assert.equal(e.popup.diagnostics().grafts,0);assert.equal(prepared.fresh.querySelector('a').__reactProps$test,undefined);
+        e.popup.invalidate();assert.equal(e.popup.diagnostics().grafts,0);
+    }
 });
 
 test('native preparation uses real grid acceptance and replaces only its admitted card', async () => {
@@ -189,17 +204,84 @@ test('grid retirement settles only that card pending replay without waiting for 
     assert.deepEqual(e.events, []);
 });
 
-test('actual native-source composition uses the current scope without a removed compatibility variable', async () => {
+test('native source admission follows the current scope and rejects the retired source handle', async () => {
     const e = await environment();
-    const source = readFileSync(new URL('../src/app/my-list-session.js', import.meta.url), 'utf8');
-    const context = vm.createContext({ sessionScope: e.scope, nativeCarousel: e.carousel,
-        sourceState: { section: e.slot.parentElement.parentElement.parentElement,
-            scroller: e.slot.parentElement.parentElement, track: e.slot.parentElement },
-        withNativeReadScope: callback => e.carousel.sample(callback), initializationError: (code, stage, message) => Object.assign(new Error(message), { code, stage }) });
-    for (const name of ['popupSource','findMountedSourceSlot']) vm.runInContext(source.match(new RegExp('    function '+name+'\\([\\s\\S]*?\\n    }'))[0], context);
-    assert.equal(context.findMountedSourceSlot(context.sourceState.track, e.item, true), e.slot);
-    e.carousel.assertSource(context.popupSource(e.slot, e.item));
-    e.scope.begin(); e.carousel.bind(context.sourceState.section, context.sourceState.scroller, context.sourceState.track);
-    assert.equal(context.findMountedSourceSlot(context.sourceState.track, e.item, true), e.slot);
-    e.carousel.assertSource(context.popupSource(e.slot, e.item));
+    const previous=e.source(),track=e.slot.parentElement,scroller=track.parentElement,section=scroller.parentElement;
+    e.carousel.assertSource(previous);assert.equal(previous.slot,e.slot);
+    e.scope.begin();e.carousel.bind(section,scroller,track);
+    assert.throws(()=>e.carousel.assertSource(previous),error=>error.code==='NATIVE_SOURCE_REPLACED');
+    const current=e.source();e.carousel.assertSource(current);assert.equal(current.slot,e.slot);
+});
+
+test('failed native dispatch and source recycling restore geometry and stop the remaining enters/exits', async()=>{
+    for(const stage of ['enter-throw','enter-recycle','exit-throw','exit-recycle']){
+        const e=await environment({dispatch(event){
+            if(stage==='enter-throw'&&['pointerover','mouseover'].includes(event.type))throw new Error('host dispatch failed');
+            if(stage==='exit-throw'&&['pointerout','mouseout'].includes(event.type))throw new Error('host dispatch failed');
+            if(event.type===(stage.startsWith('enter')?'pointerover':'pointerout')){
+                if(stage.endsWith('throw'))throw new Error('host dispatch failed');
+                e.nativeCard.href='https://www.netflix.com/browse?jbv=9';
+            }
+        }});
+        const pending=e.open();await e.scheduler.frame();const opened=await pending;
+        if(stage.startsWith('exit')){assert.equal(opened,true);e.popup.release('scroll');}
+        else assert.equal(opened,false);
+        assert.equal(e.popup.diagnostics().geometryOwned,false);assert.equal(e.popup.diagnostics().replayOwned,false);
+        if(stage.endsWith('recycle'))assert.equal(e.events.includes(stage.startsWith('enter')?'mouseover':'mouseout'),false);
+        const count=e.events.length;e.popup.release();assert.equal(e.events.length,count);
+        assert.equal(e.scheduler.timers.size,0);assert.equal(e.scheduler.frames.size,0);
+    }
+});
+test('native preview rejection excludes unrelated roots, controls, recycled identity and retired source', async()=>{
+    for(const kind of ['other-title','source-recycled','binding-retired','disconnected','grid-card']){
+        const e=await environment();e.prepare();const pending=e.open();await e.scheduler.frame();assert.equal(await pending,true);
+        const preview=e.document.body.appendChild(new Element());preview.classList.add('previewModal--wrapper');
+        const link=preview.appendChild(new Element('a'));link.href=kind==='other-title'?'https://www.netflix.com/browse?jbv=9':e.item.href;link.setAttribute('href',link.href);
+        if(kind==='source-recycled')e.nativeCard.href='https://www.netflix.com/browse?jbv=9';
+        if(kind==='binding-retired')e.carousel.clearBinding();
+        if(kind==='disconnected')preview.remove();
+        const target=kind==='grid-card'?e.grid.getCard(e.item).node:link;
+        assert.equal(e.popup.retainPreview(e.grid.getCard(e.item).node,target,{type:'pointerout',isTrusted:true}),false,kind);
+        assert.equal(e.popup.diagnostics().previewOwned,false);e.popup.release();
+    }
+});
+test('preview return preserves one replay and physical departure or removal releases its exact owner', async()=>{
+    for(const removed of [false,true]){
+        const e=await environment();e.prepare();const pending=e.open();await e.scheduler.frame();assert.equal(await pending,true);
+        const clone=e.grid.getCard(e.item).node,preview=e.document.body.appendChild(new Element());preview.classList.add('previewModal--wrapper');
+        const link=preview.appendChild(new Element('a'));link.href=e.item.href;link.setAttribute('href',link.href);
+        assert.equal(e.popup.retainPreview(clone,link,{type:'pointerout',isTrusted:true}),true);
+        e.popup.pointerMoved({target:clone});assert.equal(e.popup.diagnostics().previewOwned,false);assert.equal(e.popup.diagnostics().geometryOwned,true);
+        assert.equal(e.events.filter(type=>type==='pointerover').length,1);
+        assert.equal(e.popup.retainPreview(clone,link,{type:'pointerout',isTrusted:true}),true);
+        if(removed)preview.remove();e.popup.pointerMoved({target:e.document.body});
+        assert.equal(e.popup.diagnostics().geometryOwned,false);assert.equal(e.scheduler.timers.size,0);
+    }
+});
+test('preview presence probes are copy-only, delayed once, bounded to six roots and never replay',async()=>{
+    const e=await environment();const pending=e.open();await e.scheduler.frame();assert.equal(await pending,true);
+    assert.equal(e.scheduler.timers.size,1);assert.equal(e.diagnostics.hoverPreview.scheduled,1);
+    let reads=0;
+    for(let i=0;i<12;i++){
+        const preview=e.document.body.appendChild(new Element());preview.classList.add('previewModal--wrapper');
+        const attribute=preview.getAttribute.bind(preview);preview.getAttribute=name=>{if(['href','data-ui-tracking-context'].includes(name))reads++;return attribute(name);};
+        const link=preview.appendChild(new Element('a'));link.href='https://www.netflix.com/browse?jbv=9';link.setAttribute('href',link.href);
+    }
+    const count=e.events.length;
+    await e.scheduler.advance(900);
+    assert.equal(e.events.length,count);assert.equal(e.diagnostics.hoverPreview.completed,1);
+    assert.equal(e.diagnostics.hoverPreview.rootSearches,1);assert.ok(reads>0&&reads<=6*3);
+    assert.equal(e.scheduler.timers.size,0);assert.ok(!JSON.stringify(e.diagnostics.hoverPreview).includes('https:'));
+    e.popup.release();
+});
+test('retired preview probe cannot inspect a newer replay and route sampling stops after 48 replays',async()=>{
+    const e=await environment();let pending=e.open();await e.scheduler.frame();await pending;
+    const old=[...e.scheduler.timers.values()][0].callback;e.popup.release();
+    pending=e.open();await e.scheduler.frame();await pending;
+    const currentTimer=[...e.scheduler.timers.keys()][0],before=e.diagnostics.hoverPreview.checks;
+    old();assert.equal(e.diagnostics.hoverPreview.checks,before);assert.ok(e.scheduler.timers.has(currentTimer));
+    e.popup.release();
+    for(let i=2;i<49;i++){pending=e.open();await e.scheduler.frame();assert.equal(await pending,true);e.popup.release();}
+    assert.equal(e.diagnostics.hoverPreview.scheduled,48);assert.equal(e.diagnostics.hoverPreview.skippedAtLimit,1);
+    assert.equal(e.scheduler.timers.size,0);assert.equal(e.scheduler.frames.size,0);
 });

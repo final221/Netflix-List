@@ -2170,6 +2170,48 @@ test('page-zero anchoring cannot confirm or start recovery after a diagnostic re
     }
 });
 
+test('logical hover movement coalesces mutation signals without quiet-frame reads and releases observer resources', async () => {
+    const e=navigationEnvironment({onClick(){}});
+    let reads=0;const filled=e.pageDom.filledSlots;e.pageDom.filledSlots=(...args)=>{reads++;return filled(...args);};
+    const move=e.carousel.movePage(e.section,e.scroller,1,1,e.scope.token);await e.scheduler.flush();
+    const observer=e.observers[0];assert.ok(observer);await e.scheduler.frame(4);const initial=reads;
+    for(let i=0;i<12;i++)await e.scheduler.frame(4);
+    assert.equal(reads,initial,'quiet frames must not inspect the native source');
+    assert.equal(e.scheduler.frames.size,0);
+    e.setPage(1);for(let i=0;i<5;i++)observer.callback([]);
+    assert.equal(reads,initial);assert.equal(e.scheduler.frames.size,1);
+    assert.equal(await e.settle(move),1);assert.equal(observer.disconnects,1);
+    observer.callback([]);assert.equal(e.scheduler.frames.size,0);assert.equal(e.scheduler.timers.size,0);
+});
+
+test('logical movement accepts synchronous and fallback changes and unavailable observers retain frame acknowledgement', async () => {
+    for(const mode of ['synchronous','fallback','unsupported','construct','observe']){
+        const overrides={};
+        if(mode==='unsupported')overrides.MutationObserver=undefined;
+        if(mode==='construct')overrides.MutationObserver=class{constructor(){throw new Error('observer denied');}};
+        if(mode==='observe')overrides.MutationObserver=class{observe(){throw new Error('observe denied');}disconnect(){}};
+        const e=navigationEnvironment({overrides,onClick:mode==='synchronous'?null:()=>{}});
+        const move=e.carousel.movePage(e.section,e.scroller,1,1,e.scope.token);await e.scheduler.flush();
+        await e.scheduler.frame(4);
+        if(mode!=='synchronous'){e.setPage(1);if(mode==='fallback')await e.scheduler.advance(80);}
+        assert.equal(await e.settle(move),1,mode);assert.equal(e.scheduler.timers.size,0);assert.equal(e.scheduler.frames.size,0);
+    }
+});
+
+test('cancelled clicked movement stays serialized through acknowledgement and settlement before the latest click', async () => {
+    for(const mode of ['logical','indicator']){
+        const e=navigationEnvironment({mode,onClick:({direction,page,setPage})=>{if(e.directions.length>1)setPage(page+direction);}});
+        const first=e.carousel.movePage(e.section,e.scroller,1,1,e.scope.token);await e.scheduler.flush();
+        e.cancelHover();const obsolete=e.carousel.movePage(e.section,e.scroller,1,1,e.scope.token);
+        const latest=e.carousel.movePage(e.section,e.scroller,1,2,e.scope.token);await e.scheduler.flush();
+        assert.equal(e.directions.length,1);e.setPage(1);await e.scheduler.advance(80);
+        assert.equal(e.directions.length,1,'an acknowledgement cannot release native settlement');
+        await e.settle(Promise.all([first,obsolete,latest]));assert.equal(e.directions.length,2);
+        assert.equal(e.scheduler.timers.size,0);assert.equal(e.scheduler.frames.size,0);
+        assert.equal(e.carousel.diagnostics().navigation.motionLeases,0);
+    }
+});
+
 test('carousel movement and strict restoration run through the native navigation owner', async () => {
     const e = navigationEnvironment();
     const moved = e.carousel.movePage(e.section, e.scroller, 1, null, e.scope.token);

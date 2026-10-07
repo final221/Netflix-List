@@ -1,3 +1,4 @@
+import { createBrowser } from './helpers/browser.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdtemp, mkdir, cp, rm, access } from 'node:fs/promises';
@@ -12,61 +13,8 @@ const distribution = 'Legacy My List for Netflix.user.js';
 const shipped = (await readFile(path.join(root, distribution), 'utf8')).replace(/\r\n/g, '\n');
 const releaseVersion = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
 
-function browser({ pathname = '/browse', grants = true, visualViewport = true, storage = true, language = 'en' } = {}) {
-    const scheduler = createScheduler();
-    const document = createDocument();
-    document.documentElement.setAttribute('lang', language);
-    const window = new EventTarget();
-    Object.assign(window, { innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1 });
-    if (visualViewport) window.visualViewport = new EventTarget();
-    const location = { origin: 'https://www.netflix.com', pathname, href: 'https://www.netflix.com' + pathname };
-    const logs = [], menus = new Map(), observers = [], requests = [], clipboard = [];
-    class MutationObserver {
-        constructor(callback) { this.callback = callback; this.active = false; observers.push(this); }
-        observe() { this.active = true; }
-        disconnect() { this.active = false; }
-    }
-    const history = {};
-    for (const method of ['pushState', 'replaceState']) {
-        history[method] = (_state, _title, url) => {
-            const next = new URL(url, location.href);
-            Object.assign(location, { origin: next.origin, pathname: next.pathname, href: next.href });
-        };
-    }
-    const context = vm.createContext({
-        window, document, location, history, Element, HTMLElement: Element, MutationObserver, URL, AbortController,
-        navigator: { userAgent: 'offline-bundle-test', language: 'en',
-            clipboard: { writeText: async text => { clipboard.push(text); } } },
-        localStorage: storage ? { getItem: () => null, setItem() {} } : { getItem() { throw new Error('denied'); } },
-        console: { log: (...args) => logs.push(args), warn: (...args) => logs.push(args) },
-        performance: scheduler.performance,
-        setTimeout: scheduler.setTimeout, clearTimeout: scheduler.clearTimeout,
-        requestAnimationFrame: scheduler.requestAnimationFrame, cancelAnimationFrame: scheduler.cancelAnimationFrame,
-        queueMicrotask,
-        getComputedStyle: () => ({ gap: '8px', rowGap: '8px', paddingLeft: '0', paddingRight: '0',
-            fontSize: '16px', fontFamily: 'sans-serif', fontWeight: '400', lineHeight: '20px', color: 'white',
-            getPropertyValue(name) { return this[name] || ''; } }),
-        fetch: (url, options) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }))
-    });
-    if (grants) Object.assign(context, {
-        GM_registerMenuCommand: (label, callback) => { const id = menus.size + 1; menus.set(id, { label, callback }); return id; },
-        GM_unregisterMenuCommand: id => menus.delete(id)
-    });
-    // In raw mode the browser's page globals and window refer to the same environment.
-    window.netflix = {};
-    return { context, scheduler, document, window, history, location, logs, menus, observers, requests, clipboard,
-        start: () => vm.runInContext(shipped, context, { filename: distribution, timeout: 1000 }),
-        async navigate(url, method = 'pushState') { history[method](null, '', url); await scheduler.flush(); },
-        mountMyList() {
-            const host = document.body.appendChild(new Element('main'));
-            host.setAttribute('data-uia', 'browse-page-sections');
-            const section = host.appendChild(new Element('section'));
-            section.setAttribute('data-uia', 'carousel-row-section-1');
-            section.appendChild(new Element('h2'));
-            return section;
-        }
-    };
-}
+function browser(options) { const b=createBrowser(options);vm.createContext(b.context);return {...b,start:()=>vm.runInContext(shipped,b.context,{filename:distribution,timeout:1000})}; }
+
 
 test('generated userscript starts exactly once and hooks the existing page environment', async () => {
     const b = browser();
@@ -214,7 +162,7 @@ async function fixture(operation) {
     const base = path.resolve(root, '.tmp-build-tests-');
     const directory = await mkdtemp(base);
     try {
-        for (const name of ['package.json', 'userscript.meta.json', 'src']) {
+        for (const name of ['package.json', 'userscript.meta.json', 'src', 'tests']) {
             await cp(path.join(root, name), path.join(directory, name), { recursive: true });
         }
         await writeFile(path.join(directory, distribution), shipped);
@@ -243,6 +191,25 @@ test('build is deterministic, self-contained and preserves metadata/version', as
     assert.doesNotMatch(header, /@require|@resource/);
     assert.ok(Object.values(first.metafile.outputs).every(output => output.imports.length === 0));
     new vm.Script(first.code);
+});
+
+test('final verification rejects residual suites and source-instrumenting test loaders', async () => {
+    const { checkUserscript } = await import('../scripts/check.mjs');
+    await fixture(async directory => {
+        await writeFile(path.join(directory,'tests/performance.test.cjs'), '');
+        await assert.rejects(checkUserscript({root:directory}), /Residual test support/);
+    });
+    await fixture(async directory => {
+        await writeFile(path.join(directory,'tests/helpers/private-loader.js'), "import vm from 'node:vm';\n");
+        await assert.rejects(checkUserscript({root:directory}), /Source-instrumenting test/);
+    });
+    await fixture(async directory => {
+        const file=path.join(directory,'tests/scenario-transfers.json');
+        const ledger=JSON.parse(await readFile(file,'utf8'));
+        ledger.transfers[0].coverage[0].title='missing coverage';
+        await writeFile(file,JSON.stringify(ledger));
+        await assert.rejects(checkUserscript({root:directory}), /Missing scenario transfer target/);
+    });
 });
 
 test('check rejects stale output/source and version disagreement without writing', async () => {

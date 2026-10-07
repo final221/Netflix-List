@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.57
+// @version      1.4.58
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -6696,6 +6696,8 @@
         guard();
         if (committed) return records;
         guard();
+        for (const record of accepted) Object.freeze(record);
+        guard();
         records = accepted;
         map = nextMap;
         expectedCount = totalCount2;
@@ -6735,6 +6737,8 @@
       if (map.has(key)) return false;
       const index = Math.max(0, Math.min(records.length, Number.isFinite(position) ? Math.floor(position) : 0));
       const next = [...records.slice(0, index), record, ...records.slice(index)];
+      guard();
+      Object.freeze(record);
       guard();
       records = Object.freeze(next);
       map.set(key, record);
@@ -6834,7 +6838,7 @@
     const text = (value) => value === null || value === void 0 ? "" : String(value);
     function toRecord(input) {
       if (normalized.has(input)) return normalized.get(input);
-      const record = Object.seal({
+      const record = Object.freeze({
         videoId: text(input.videoId),
         href: text(input.href),
         ariaLabel: text(input.ariaLabel),
@@ -12306,7 +12310,37 @@
     const assertRouteSession = (token) => scope.assertCurrent(token);
     const NATIVE_READY_TIMEOUT_MS = 3e3, NATIVE_SINGLE_PAGE_STABLE_MS = 700, NATIVE_EMPTY_STABLE_MS = 1200;
     const NATIVE_READY_POLL_MS = 25, NATIVE_LOGICAL_STABLE_MS = 120;
-    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const readinessWaits = /* @__PURE__ */ new Set();
+    let readinessCleanupFailures = 0;
+    function readinessWait(schedule, cancel) {
+      return new Promise((resolve) => {
+        const ticket = { id: null, cancel, settle: resolve };
+        readinessWaits.add(ticket);
+        try {
+          ticket.id = schedule(() => {
+            if (readinessWaits.delete(ticket)) resolve();
+          });
+        } catch (error) {
+          readinessWaits.delete(ticket);
+          throw error;
+        }
+      });
+    }
+    const sleep = (ms) => readinessWait((resolve) => setTimeout(resolve, ms), clearTimeout);
+    const readinessFrame = () => readinessWait(requestAnimationFrame, cancelAnimationFrame);
+    function resetReadinessWaits() {
+      const retired = [...readinessWaits];
+      readinessWaits.clear();
+      for (const ticket of retired) {
+        try {
+          ticket.cancel(ticket.id);
+        } catch (_) {
+          readinessCleanupFailures++;
+        } finally {
+          ticket.settle();
+        }
+      }
+    }
     let nativeReadScope = null;
     let models = /* @__PURE__ */ new WeakMap();
     let acceptedBinding = null;
@@ -13554,6 +13588,8 @@
         collection: collection.diagnostics(),
         collectionOperations: collection.pending(),
         mountedSourceWaits: mountedWaits.size,
+        readinessWaits: readinessWaits.size,
+        readinessCleanupFailures,
         discoveryActive: Boolean(targetDocumentObserver),
         pendingMutationFrame: targetMutationFrame !== null,
         presentation: sourcePresentation.diagnostics()
@@ -13671,6 +13707,7 @@
     function bind(section, scroller = null, track = null) {
       if (acceptedBinding && acceptedBinding.section === section && acceptedBinding.scroller === scroller && acceptedBinding.track === track && isBindingCurrent(acceptedBinding)) return acceptedBinding;
       preparationOwner = null;
+      resetReadinessWaits();
       resetMountedWaits();
       collection.reset();
       navigation.reset();
@@ -13682,6 +13719,7 @@
     }
     function clearBinding() {
       preparationOwner = null;
+      resetReadinessWaits();
       resetMountedWaits();
       collection.reset();
       navigation.reset();
@@ -14031,10 +14069,10 @@
           };
         }
         if (logicalCarouselReady || multiPageReady || singlePageReady) {
-          await new Promise((resolve) => requestAnimationFrame(resolve));
+          await readinessFrame();
           assertAdmission();
           assertRouteSession(sessionToken);
-          await new Promise((resolve) => requestAnimationFrame(resolve));
+          await readinessFrame();
           assertAdmission();
           assertRouteSession(sessionToken);
           if (!isBindingCurrent(bindingOwner)) return {
@@ -14725,6 +14763,7 @@
     } = environment;
     const { getValue: GM_getValue2, setValue: GM_setValue2 } = userscript;
     let started = false, disposed = false, sessionCleanupFailures = 0;
+    const sessionPauses = /* @__PURE__ */ new Map();
     const { getHtmlLanguage, getNetflixLanguage } = netflixContext;
     const viewingData = createViewingData({
       context: netflixContext,
@@ -15420,6 +15459,12 @@
       sourceState?.nativePageHints?.dispose();
       sessionScope.dispose();
       targetSessionActive = false;
+      const pauses = [...sessionPauses];
+      sessionPauses.clear();
+      for (const [timer, settle] of pauses) {
+        release(() => clearTimeout(timer));
+        settle();
+      }
       gridView.images.dispose();
       hover.dispose();
       if (scheduledRunTimer !== null) clearTimeout(scheduledRunTimer);
@@ -15648,7 +15693,15 @@
       }
     }
     function sleep(ms) {
-      return new Promise((resolve) => setTimeout(resolve, ms));
+      if (disposed) return Promise.resolve();
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          if (sessionPauses.get(timer) !== resolve) return;
+          sessionPauses.delete(timer);
+          resolve();
+        }, ms);
+        sessionPauses.set(timer, resolve);
+      });
     }
     function cleanupOldArtifacts() {
       const state = sourceState, sessionToken = sessionScope.token;
@@ -19242,7 +19295,7 @@
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.4.57";
+  var SCRIPT_VERSION = "1.4.58";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

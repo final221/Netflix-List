@@ -1,6 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createList } from '../src/list/list.js';
+test('native position comparison uses the exact current record and controlled visible-span order', () => {
+    const list=createList({}), records=['1','2','3'].map(videoId=>list.toRecord({videoId,href:videoId}));
+    const membership=list.createMembership({items:records,totalCount:3});
+    assert.equal(membership.positionDeviation({...records[0]},2),null);
+    assert.equal(membership.positionDeviation(records[0],-1),null);
+    assert.equal(membership.firstPositionMismatch([{videoId:'missing',itemIndex:8}],1),null);
+    assert.equal(membership.firstPositionMismatch([{videoId:'1',itemIndex:2}],2).item,records[0]);
+    assert.equal(membership.firstPositionMismatch([{videoId:'1',itemIndex:1}],2),null);
+    membership.alignVisible(['3','1'],0);
+    assert.equal(membership.positionDeviation(records[2],0).absoluteDelta,0);
+    membership.remove('v:1');
+    assert.equal(membership.positionDeviation(records[0],0),null);
+    membership.dispose();assert.equal(membership.firstPositionMismatch([{videoId:'3',itemIndex:9}],1),null);
+});
+test('accepted record identity and display fields cannot be rewritten by a borrowing owner', () => {
+    const list = createList({}), record = list.toRecord({videoId:'1',href:'one',imageUrl:'art'});
+    const membership = list.createMembership({items:[record],totalCount:1});
+    assert.throws(()=>{record.videoId='2';}, TypeError);
+    assert.throws(()=>{membership.records[0].imageUrl='changed';}, TypeError);
+    const inserted={videoId:'2',href:'two'}; membership.insert(inserted,1);
+    assert.throws(()=>{inserted.href='changed';}, TypeError);
+    assert.equal(membership.lookup.get('v:1'),record);
+    assert.equal(record.imageUrl,'art'); assert.equal(inserted.href,'two');
+});
 
 function fixture(extra = {}) {
     let requests = 0;
