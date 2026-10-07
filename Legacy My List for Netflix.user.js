@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.47
+// @version      1.4.48
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -2618,7 +2618,6 @@
     hasRetained,
     releaseRetained,
     normalizeTitle = String,
-    isDeferred = () => false,
     isBlocked = () => false,
     applyMutation = null,
     readParent = () => null,
@@ -2653,22 +2652,68 @@
   }) {
     let entries = /* @__PURE__ */ new Map(), timer = null, generation = 0;
     let pending = /* @__PURE__ */ new Map(), sequence = 0;
+    let deferralEpoch = 0, disposedToken = null, cleanupFailures = 0;
+    function cleanup(operation) {
+      try {
+        operation();
+      } catch (_) {
+        cleanupFailures++;
+      }
+    }
+    const isAdmitted = (token) => token !== disposedToken && isSessionActive(token);
+    function start(token = readSession()) {
+      if (!isSessionActive(token)) return false;
+      disposedToken = null;
+      return true;
+    }
+    const deferrals = /* @__PURE__ */ new Map();
+    function isDeferred() {
+      for (const owner of deferrals.values()) if (isAdmitted(owner.token)) return true;
+      return false;
+    }
+    function deferReconciliation(reason) {
+      const owner = { token: readSession(), epoch: deferralEpoch, reason };
+      const ticket = Object.freeze({ reason, release({ resume = true, reason: retryReason = "after-" + reason } = {}) {
+        if (!deferrals.delete(ticket)) return false;
+        if (owner.epoch !== deferralEpoch || !isAdmitted(owner.token)) return false;
+        if (resume && !isDeferred()) retryMutations(retryReason);
+        return true;
+      } });
+      if (isAdmitted(owner.token)) deferrals.set(ticket, owner);
+      return ticket;
+    }
+    function dispose() {
+      const oldPending = pending, oldEntries = entries, oldTimer = timer;
+      pending = /* @__PURE__ */ new Map();
+      entries = /* @__PURE__ */ new Map();
+      timer = null;
+      deferrals.clear();
+      deferralEpoch++;
+      sequence++;
+      generation++;
+      disposedToken = readSession();
+      if (oldTimer) cleanup(() => clearTimeout2(oldTimer.id));
+      cleanup(() => onCounter("cleared", oldEntries.size));
+      for (const intent of oldPending.values()) releaseIntent(intent, oldEntries);
+      for (const entry of oldEntries.values()) {
+        const current = entries.get(entry.videoId), intent = readPending(entry.videoId);
+        const retained = current?.item === entry.item && current?.correlationId === entry.correlationId || intent?.fallbackItem === entry.item && intent?.correlationId === entry.correlationId;
+        if (!retained) cleanup(() => releaseRetained(entry.correlationId));
+      }
+    }
     const phases = /* @__PURE__ */ new WeakMap();
     const readPending = (videoId) => pending.get(String(videoId)) || null;
-    const isMutationCurrent = (intent) => Boolean(intent && readPending(intent.videoId) === intent && isSessionActive(phases.get(intent)?.token));
-    function releaseIntent(intent) {
+    const isMutationCurrent = (intent) => Boolean(intent && readPending(intent.videoId) === intent && isAdmitted(phases.get(intent)?.token));
+    function releaseIntent(intent, oldEntries = entries) {
       const phase = phases.get(intent), oldTimer = phase.timer, observer = phase.observer;
       phase.timer = null;
       phase.observer = null;
-      if (oldTimer) clearTimeout2(oldTimer.id);
-      try {
-        observer?.disconnect();
-      } catch (_) {
-      }
+      if (oldTimer) cleanup(() => clearTimeout2(oldTimer.id));
+      cleanup(() => observer?.disconnect());
       const next = readPending(intent.videoId);
       const transferred = next?.fallbackItem === intent.fallbackItem && next?.correlationId === intent.correlationId;
-      if (intent.correlationId && entries.get(intent.videoId)?.correlationId !== intent.correlationId && !transferred) {
-        releaseRetained(intent.correlationId);
+      if (intent.correlationId && entries.get(intent.videoId)?.correlationId !== intent.correlationId && oldEntries.get(intent.videoId)?.correlationId !== intent.correlationId && !transferred) {
+        cleanup(() => releaseRetained(intent.correlationId));
       }
     }
     function disposeMutation(videoId, expected = null) {
@@ -2686,7 +2731,7 @@
     function observeMembership(descriptor) {
       if (!descriptor?.videoId) return null;
       const token = readSession(), seq = ++sequence, videoId = String(descriptor.videoId);
-      if (!isSessionActive(token)) return null;
+      if (!isAdmitted(token)) return null;
       const previous = readPending(videoId);
       const phase = { token, timer: null, observer: null, deferred: Boolean(descriptor.deferredWhileBusy) };
       const intent = Object.freeze({
@@ -2705,7 +2750,7 @@
           return phase.deferred;
         }
       });
-      if (sequence !== seq || !isSessionActive(token)) return null;
+      if (sequence !== seq || !isAdmitted(token)) return null;
       phases.set(intent, phase);
       pending.set(videoId, intent);
       if (previous) releaseIntent(previous);
@@ -2717,7 +2762,7 @@
       const parent = readParent(), token = readSession();
       const guard = () => {
         assertSession(token);
-        if (readParent() !== parent || !isMutationCurrent(intent) || !canApply()) {
+        if (readParent() !== parent || !isMutationCurrent(intent) || !canApply() || isDeferred()) {
           throw createError("NATIVE_SOURCE_REPLACED", "Mutation admission was replaced");
         }
       };
@@ -2798,7 +2843,7 @@
       if (!isMutationCurrent(intent) || phase.timer !== owner) clearTimeout2(owner.id);
     }
     function retryMutations(reason) {
-      if (isDeferred() || !isSessionActive(readSession())) return;
+      if (isDeferred() || !isAdmitted(readSession())) return;
       for (const intent of [...pending.values()]) {
         if (!phases.get(intent).deferred) continue;
         const applied = reconcileMutation(intent, reason);
@@ -2812,7 +2857,7 @@
       if (!descriptor?.videoId) return null;
       const token = readSession(), owner = sequence;
       const fallbackItem = descriptor.action === "add" ? descriptor.fallbackItem || findFallback(String(descriptor.videoId)) : null;
-      if (sequence !== owner || !isSessionActive(token)) return null;
+      if (sequence !== owner || !isAdmitted(token)) return null;
       const intent = observeMembership({
         ...descriptor,
         fallbackItem,
@@ -2858,7 +2903,7 @@
       let dueAt = Infinity;
       for (const entry of entries.values()) dueAt = Math.min(dueAt, entry.removedAt + ttl);
       const token = readSession();
-      if (!Number.isFinite(dueAt) || !isSessionActive(token)) {
+      if (!Number.isFinite(dueAt) || !isAdmitted(token)) {
         cancelExpiry();
         return;
       }
@@ -2871,7 +2916,7 @@
       owner.id = setTimeout2(() => {
         if (timer !== owner) return;
         timer = null;
-        if (!isSessionActive(owner.token)) return;
+        if (!isAdmitted(owner.token)) return;
         onCounter("expiryCallbacks", 1);
         pruneUndo();
       }, Math.max(0, dueAt - now()));
@@ -2921,11 +2966,11 @@
     function rememberUndo(item, index, correlationId) {
       if (!item?.videoId) return;
       const token = readSession(), owner = generation;
-      if (!isSessionActive(token) || !hasRetained(correlationId, item)) return;
-      if (owner !== generation || !isSessionActive(token)) return;
-      if (!pruneUndo() || !isSessionActive(token)) return;
+      if (!isAdmitted(token) || !hasRetained(correlationId, item)) return;
+      if (owner !== generation || !isAdmitted(token)) return;
+      if (!pruneUndo() || !isAdmitted(token)) return;
       const admitted = generation, title = normalizeTitle(item.ariaLabel || ""), removedAt = now();
-      if (generation !== admitted || !isSessionActive(token)) return;
+      if (generation !== admitted || !isAdmitted(token)) return;
       entries.set(String(item.videoId), Object.freeze({
         videoId: String(item.videoId),
         correlationId,
@@ -2952,6 +2997,10 @@
       return latest;
     }
     return Object.freeze({
+      start,
+      deferReconciliation,
+      dispose,
+      deferralDiagnostics: () => ({ cleanupFailures, active: [...deferrals.values()].filter((owner) => isAdmitted(owner.token)).map((owner) => owner.reason) }),
       observeMembership,
       queueMutation,
       reconcileMutation,
@@ -2971,7 +3020,6 @@
       clearUndo,
       latestUndo,
       correlationFor,
-      ownsUndoCorrelation: (videoId, id) => entries.get(String(videoId))?.correlationId === id,
       undoEntries: () => Object.freeze([...entries.values()]),
       undoDiagnostics: () => ({
         entries: entries.size,
@@ -11387,7 +11435,6 @@
       hasRetained: (id, item) => gridView.hasRetained(id, item),
       releaseRetained: (id) => gridView.releaseRetained(id),
       mutationTimeout: DELTA_MUTATION_TIMEOUT_MS,
-      isDeferred: () => running || responsiveRefreshing,
       isBlocked: () => nativeInitializationFailure?.sessionToken === sessionScope.token && initializationBlockedSessionToken === sessionScope.token,
       readParent: () => sourceState,
       canApply: () => Boolean(sourceState && isTargetPage()),
@@ -11482,7 +11529,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.47";
+    const SCRIPT_VERSION = "1.4.48";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -11666,6 +11713,7 @@
     }
     let running = false;
     let runningSessionToken = null;
+    let initializationDeferral = null, responsiveDeferral = null;
     let completedSection = null;
     let scheduled = false;
     let scheduledSessionToken = null;
@@ -12302,11 +12350,22 @@
         lastEvent: performanceDiagnostics.hoverScroll.lastScrollEvent
       };
     }
-    function clearRunningSession(sessionToken, retryMutations = true) {
-      if (runningSessionToken !== sessionToken) return;
+    function beginRunningSession(sessionToken) {
+      assertRouteSession(sessionToken);
+      listMutations.start(sessionToken);
+      initializationDeferral?.ticket.release({ resume: false });
+      const owner = { sessionToken, ticket: listMutations.deferReconciliation("initialization") };
+      initializationDeferral = owner;
+      running = true;
+      runningSessionToken = sessionToken;
+      return owner;
+    }
+    function clearRunningSession(sessionToken, retryMutations = true, expected = initializationDeferral) {
+      if (runningSessionToken !== sessionToken || initializationDeferral !== expected) return;
       running = false;
       runningSessionToken = null;
-      if (retryMutations) retryPendingMyListMutations("after-initialization");
+      initializationDeferral = null;
+      expected?.ticket.release({ resume: retryMutations, reason: "after-initialization" });
     }
     function restoreActiveCarouselStyles() {
       nativeCarousel.restoreMotion();
@@ -12317,6 +12376,9 @@
         sourceState.listMembership?.dispose();
         sourceState.nativePageHints?.dispose();
       }
+      listMutations.dispose();
+      initializationDeferral = null;
+      responsiveDeferral = null;
       clearSourceAlignment();
       restoreActiveCarouselStyles();
       advanceHoverToken("source");
@@ -12346,8 +12408,6 @@
       missingSectionSince = 0;
       gridView.cancelBuild();
       gridView.resetEmpty();
-      clearPendingMyListMutations();
-      clearUndoEntries();
       listData.reset();
       waitingForNativeEmpty = false;
     }
@@ -12365,6 +12425,9 @@
     function suspendTargetSession(reason = "route-leave") {
       const hadSession = targetSessionActive || running || sourceState || completedSection || scheduled;
       const previousToken = sessionScope.token;
+      listMutations.dispose();
+      initializationDeferral = null;
+      responsiveDeferral = null;
       sourceState?.listMembership?.dispose();
       sourceState?.nativePageHints?.dispose();
       sessionScope.dispose();
@@ -12388,8 +12451,6 @@
       activeResponsiveReason = "";
       myListCountConvergencePending = false;
       nativeCarousel.resetSource();
-      clearPendingMyListMutations();
-      clearUndoEntries();
       running = false;
       runningSessionToken = null;
       completedSection = null;
@@ -12574,6 +12635,7 @@
         gridCards: sourceState?.cloneMap?.size ?? 0,
         performanceWork: collectPerformanceDiagnostics(),
         undoRetention: listMutations.undoDiagnostics(),
+        reconciliation: listMutations.deferralDiagnostics(),
         viewingStatus: sourceState?.watchStatus ? {
           completed: gridView.presentation().completedCount,
           unknown: gridView.presentation().unknownCount,
@@ -13987,9 +14049,6 @@
     function normalizeNetflixUiText(value) {
       return String(value || "").replace(/[\u200b-\u200f\u2060\ufeff]/g, "").replace(/\s+/g, "").trim();
     }
-    function clearUndoEntries() {
-      listMutations.clearUndo();
-    }
     function forgetUndoEntry(videoId) {
       listMutations.forgetUndo(videoId);
     }
@@ -14460,12 +14519,6 @@
       log(tLog("legacyVisibleOrderAligned"), { page: live.selectedPage, ids: nativeIds });
       return true;
     }
-    function retryPendingMyListMutations(reason) {
-      listMutations.retryMutations(reason);
-    }
-    function clearPendingMyListMutations() {
-      listMutations.clearPending();
-    }
     function restartInitializationForPopulatedNativeMyList(live, reason = "late-populated-source") {
       if (!sourceState?.empty || !live?.section || !live?.scroller || !live?.track) return false;
       const visibleItems = visibleNativeItems(live);
@@ -14484,6 +14537,8 @@
       clearTimeout(responsiveRefreshTimer);
       responsiveRefreshTimer = null;
       responsiveRefreshPromise = null;
+      responsiveDeferral?.ticket.release({ resume: false });
+      responsiveDeferral = null;
       responsiveRefreshing = false;
       completedSection = null;
       nativeCarousel.clearBinding();
@@ -16704,6 +16759,8 @@
       const state = sourceState;
       const { section, scroller, track } = state;
       responsiveRefreshing = true;
+      const responsiveOwner = { sessionToken, ticket: listMutations.deferReconciliation("responsive-refresh") };
+      responsiveDeferral = responsiveOwner;
       let deferredLogicalRemap = false;
       const seq = ++responsiveSequence;
       const reason = lastResponsiveReason || "unspecified";
@@ -16716,18 +16773,18 @@
           throw createRouteSessionCancelledError();
         }
       };
-      const startingNative = nativeSourceDiagnostics(section, scroller, track);
-      log(tLog("responsiveRefreshStarted"), {
-        seq,
-        reason,
-        beforeLayout: layoutSummary(sourceState.layout),
-        selectedPage: startingNative?.selectedPage ?? null,
-        pages: startingNative?.pageCount ?? null
-      });
-      gridView.setRefreshing(grid, true);
-      performanceDiagnostics.resize.refreshes++;
-      cancelResizeHover();
       try {
+        const startingNative = nativeSourceDiagnostics(section, scroller, track);
+        log(tLog("responsiveRefreshStarted"), {
+          seq,
+          reason,
+          beforeLayout: layoutSummary(sourceState.layout),
+          selectedPage: startingNative?.selectedPage ?? null,
+          pages: startingNative?.pageCount ?? null
+        });
+        gridView.setRefreshing(grid, true);
+        performanceDiagnostics.resize.refreshes++;
+        cancelResizeHover();
         const liveLayout = await waitResponsiveLayoutSettled(1200, sessionToken);
         assertOwner();
         const signature = responsiveSignature(liveLayout);
@@ -16801,18 +16858,29 @@
         });
         updateResponsiveStatus(sourceState.layout, tUi("relayoutFailed"));
       } finally {
-        gridView.setRefreshing(grid, false);
-        if (isRouteSessionActive(sessionToken) && responsiveSequence === seq) {
-          responsiveRefreshing = false;
-          activeResponsiveReason = "";
-          retryPendingMyListMutations("after-responsive-refresh");
-          const runtime = sourceState === state ? nativeSourceObservation(state) : null;
-          if (deferredLogicalRemap && runtime?.needsRemapping && (runtime.remapAttempts || 0) === 1) {
-            scheduleResponsiveRefresh(
-              400,
-              isResizeResponsiveReason(reason) ? "responsive-resize-retry" : "logical-page-model-retry"
-            );
+        try {
+          gridView.setRefreshing(grid, false);
+          if (isRouteSessionActive(sessionToken) && responsiveSequence === seq && responsiveDeferral === responsiveOwner) {
+            responsiveRefreshing = false;
+            activeResponsiveReason = "";
+            responsiveDeferral = null;
+            responsiveOwner.ticket.release({ reason: "after-responsive-refresh" });
+            const runtime = sourceState === state ? nativeSourceObservation(state) : null;
+            if (deferredLogicalRemap && runtime?.needsRemapping && (runtime.remapAttempts || 0) === 1) {
+              scheduleResponsiveRefresh(
+                400,
+                isResizeResponsiveReason(reason) ? "responsive-resize-retry" : "logical-page-model-retry"
+              );
+            }
           }
+        } finally {
+          const admitted = isRouteSessionActive(sessionToken) && responsiveSequence === seq && responsiveDeferral === responsiveOwner;
+          if (responsiveDeferral === responsiveOwner) {
+            responsiveRefreshing = false;
+            responsiveDeferral = null;
+            activeResponsiveReason = "";
+          }
+          responsiveOwner.ticket.release({ resume: admitted, reason: "after-responsive-refresh" });
         }
       }
     }
@@ -17083,6 +17151,8 @@
       clearTimeout(responsiveRefreshTimer);
       responsiveRefreshTimer = null;
       responsiveRefreshPromise = null;
+      responsiveDeferral?.ticket.release({ resume: false });
+      responsiveDeferral = null;
       responsiveRefreshing = false;
       nativeCarousel.clearBinding();
       publishSourceState(null);
@@ -17190,8 +17260,7 @@
         initializationStartedAt: initializationStarted
       }, section, scroller || null, track || null));
       applyOriginalMyListVisibility();
-      running = true;
-      runningSessionToken = sessionToken;
+      const initializationOwner = beginRunningSession(sessionToken);
       assertRouteSession(sessionToken);
       let earlyTotalCount;
       let freshMyListBootstrap = null, entryCollection;
@@ -17225,7 +17294,7 @@
       } catch (error) {
         if (error?.code === "NATIVE_SOURCE_REPLACED") {
           log("Initial native card observation discarded after source replacement", { sessionToken });
-          clearRunningSession(sessionToken, false);
+          clearRunningSession(sessionToken, false, initializationOwner);
           scheduleRun(0, sessionToken);
           return;
         }
@@ -17241,7 +17310,7 @@
           });
           updateStatus(formatInitializationErrorMeta(error, null));
         }
-        clearRunningSession(sessionToken);
+        clearRunningSession(sessionToken, true, initializationOwner);
         return;
       }
       if (earlyTotalCount === 0) {
@@ -17254,11 +17323,11 @@
           });
         } catch (error) {
           if (error?.code !== "NATIVE_SOURCE_REPLACED" && !isRouteSessionCancelledError(error)) throw error;
-          clearRunningSession(sessionToken, false);
+          clearRunningSession(sessionToken, false, initializationOwner);
           if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
           return;
         }
-        clearRunningSession(sessionToken);
+        clearRunningSession(sessionToken, true, initializationOwner);
         return;
       }
       if (!scroller || !track) {
@@ -17269,7 +17338,7 @@
           if (!isRouteSessionCancelledError(error)) {
             warn(tLog("nativeSourceWaitFailed"), error);
           }
-          clearRunningSession(sessionToken);
+          clearRunningSession(sessionToken, true, initializationOwner);
           return;
         }
         assertRouteSession(sessionToken);
@@ -17279,7 +17348,7 @@
           nativeCarousel.clearBinding();
           publishSourceState(null);
           completedSection = null;
-          clearRunningSession(sessionToken);
+          clearRunningSession(sessionToken, true, initializationOwner);
           scheduleRun(0, sessionToken);
           return;
         }
@@ -17299,7 +17368,7 @@
             snapshot: collectRuntimeSnapshot()
           });
           updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
-          clearRunningSession(sessionToken, false);
+          clearRunningSession(sessionToken, false, initializationOwner);
           recoverNativeInitialization(sessionToken, "native-source-wait");
           return;
         }
@@ -17312,20 +17381,20 @@
         readiness = await entryCollection.prepareReadiness((options) => waitForNativeCarouselReady(section, scroller, track, sessionToken, options));
       } catch (error) {
         if (error?.code === "NATIVE_SOURCE_REPLACED") {
-          clearRunningSession(sessionToken, false);
+          clearRunningSession(sessionToken, false, initializationOwner);
           recoverNativeInitialization(sessionToken, "readiness-source-replaced");
           return;
         }
         if (!isRouteSessionCancelledError(error)) {
           warn(tLog("nativeCarouselReadinessCheckFailed"), error);
         }
-        clearRunningSession(sessionToken);
+        clearRunningSession(sessionToken, true, initializationOwner);
         return;
       }
       if (!readiness.ready) {
         initializationBlockedSessionToken = sessionToken;
         nativeInitializationFailure = { section, scroller, track, sessionToken };
-        clearRunningSession(sessionToken, false);
+        clearRunningSession(sessionToken, false, initializationOwner);
         if (recoverNativeInitialization(sessionToken, "readiness-" + readiness.reason)) return;
         const readinessError = readiness.reason === "timeout" ? initializationTimeoutError(readiness.stage || "native-carousel-readiness", readiness.timeoutMs || NATIVE_READY_TIMEOUT_MS, {
           elapsedMs: readiness.elapsedMs,
@@ -17352,11 +17421,11 @@
           });
         } catch (error) {
           if (error?.code !== "NATIVE_SOURCE_REPLACED" && !isRouteSessionCancelledError(error)) throw error;
-          clearRunningSession(sessionToken, false);
+          clearRunningSession(sessionToken, false, initializationOwner);
           if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
           return;
         }
-        clearRunningSession(sessionToken);
+        clearRunningSession(sessionToken, true, initializationOwner);
         return;
       }
       const mountedMode = nativeSourceObservation()?.mode || "unknown";
@@ -17376,7 +17445,7 @@
             });
             updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
           }
-          clearRunningSession(sessionToken);
+          clearRunningSession(sessionToken, true, initializationOwner);
           return;
         }
       }
@@ -17411,7 +17480,7 @@
           }
         } catch (error) {
           if (error?.code === "NATIVE_SOURCE_REPLACED" || sourceState !== countOwner) {
-            clearRunningSession(sessionToken, false);
+            clearRunningSession(sessionToken, false, initializationOwner);
             if (!recoverNativeInitialization(sessionToken, "native-count-source-replaced")) scheduleRun(0, sessionToken);
             return;
           }
@@ -17427,14 +17496,14 @@
             });
             updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
           }
-          clearRunningSession(sessionToken);
+          clearRunningSession(sessionToken, true, initializationOwner);
           return;
         }
       }
       {
         const retryReplacedSource = () => {
           log("Fast My List collection discarded after native source replacement", { sessionToken });
-          clearRunningSession(sessionToken, false);
+          clearRunningSession(sessionToken, false, initializationOwner);
           scheduleRun(0, sessionToken);
         };
         let graphqlGeometry, graphqlLayout, templateView;
@@ -17499,7 +17568,7 @@
           fastCollectionSource = preferred.collectionSource || "graphql";
         } catch (error) {
           if (isRouteSessionCancelledError(error)) {
-            clearRunningSession(sessionToken);
+            clearRunningSession(sessionToken, true, initializationOwner);
             return;
           }
           if (error?.code === "NATIVE_SOURCE_REPLACED" || !nativeCarousel.isPreparationCurrent(readiness)) {
@@ -17714,7 +17783,7 @@
           updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
         }
       } finally {
-        clearRunningSession(sessionToken, !retryGridBuild && !retryNativeCollection);
+        clearRunningSession(sessionToken, !retryGridBuild && !retryNativeCollection, initializationOwner);
         if (isRouteSessionActive(sessionToken)) {
           if (retryNativeCollection) scheduleRun(0, sessionToken);
           else if (retryGridBuild) runScript(sessionToken);

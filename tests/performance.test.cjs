@@ -149,7 +149,7 @@ function environment(names, overrides = {}) {
         activeNativeHover: null,
         orderMismatchDialogOpen: false, orderMismatchReinitializing: false, responsiveRefreshPromise: null,
         routeSessionToken: 1, targetSessionActive: true,
-        sourceState: null,
+        sourceState: null, initializationDeferral: null, responsiveDeferral: null,
         nativeInitializationFailure: null,
         imageResourceObserver: null, IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES: 4000,
         hoverFrameDiagnosticOwner: null, startHoverFrameDiagnostics: () => {},
@@ -169,7 +169,7 @@ function environment(names, overrides = {}) {
     vm.runInContext(source.match(/^    const HOVER_INTERRUPTION_LOG_LIMIT = \d+;/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_CANCELLATION_REASONS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     for (const name of ['publishSourceState', 'ensurePageHints', 'pageForItem', 'setPageForItem', 'ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
-        'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'clearUndoEntries', 'forgetUndoEntry',
+        'beginRunningSession', 'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
         'hoverScrollElapsed', 'recordHoverCancellation', 'advanceHoverToken', 'hoverIntentDiagnosticSnapshot', 'hoverScrollStateSnapshot',
         'createLogicalMoveSignal', 'createNavigationDiagnosticSink',
@@ -377,7 +377,6 @@ function environment(names, overrides = {}) {
         clearTimeout: id => c.clearTimeout(id), ttl: c.UNDO_ENTRY_TTL_MS || 30000,
         hasRetained: (id, item) => c.gridView.hasRetained(id, item), releaseRetained: id => c.gridView.releaseRetained(id),
         mutationTimeout: c.DELTA_MUTATION_TIMEOUT_MS || 1800,
-        isDeferred: () => c.running || c.responsiveRefreshing,
         isBlocked: () => c.nativeInitializationFailure?.sessionToken === c.sessionScope.token && c.initializationBlockedSessionToken === c.sessionScope.token,
         readParent: () => c.sourceState, canApply: () => Boolean(c.sourceState && c.isTargetPage()),
         assertSession: token => c.assertRouteSession(token), isCancelled: error => c.isRouteSessionCancelledError(error),
@@ -402,6 +401,7 @@ function environment(names, overrides = {}) {
         normalizeTitle: text => c.normalizeNetflixUiText?.(text) || text,
         onCounter: (name, amount) => { if (c.performanceDiagnostics?.undoRetention) c.performanceDiagnostics.undoRetention[name] += amount; },
         onExpired: detail => c.log(c.tLog('undoEntriesExpired'), detail) });
+    if (c.running) c.beginRunningSession(c.sessionScope.token);
     Object.defineProperty(c, 'recentRemovedMyListItems', { configurable: true,
         get: () => new Map(c.listMutations.undoEntries().map(entry => [entry.videoId, entry])) });
     if (c.sourceState?.section) c.attachNativeBinding(c.sourceState, c.sourceState.section, c.sourceState.scroller, c.sourceState.track);
@@ -3518,7 +3518,7 @@ function constructionEnvironment() {
         'sleep', 'runConstructionChunks', 'collectFreshMyListCarouselItems', 'assertRouteSession',
         'createRouteSessionCancelledError', 'isRouteSessionCancelledError', 'initializationError',
         'buildGrid', 'normalizeClone', 'copyItemAttributes', 'associateGridHoverItem', 'ensureGridHoverBehavior',
-        'itemKey', 'clearRunningSession', 'retryPendingMyListMutations',
+        'itemKey', 'clearRunningSession',
         'applyLegacyRemoval', 'applyLegacyAddition',
         'cardSourceForItem', 'undoCorrelationForItem',
         'alignLegacyVisiblePageOrder',
@@ -3758,7 +3758,7 @@ test('queued add/remove deltas apply after complete publication and stay deferre
     e.c.clearRunningSession(1, false);
     assert.equal(e.c.listMutations.pendingIntents().length, 2);
     assert.equal(mutations.every(mutation => mutation.deferredWhileBusy), true);
-    e.c.running = true;
+    e.c.beginRunningSession(e.c.routeSessionToken);
     e.c.runningSessionToken = 1;
     const completion = e.c.buildGrid(e.section, e.scroller, e.items(150), e.layout, 150, 1);
     await e.drain();
@@ -3792,6 +3792,7 @@ function initializationEnvironment(count = 150) {
     };
     e.c.listData = { ...e.c.listData, firstMyListVideoId: () => '', fetchBootstrap: async () => bootstrap,
         collectRecords: async () => ({ bootstrap, records: e.records(count) }) };
+    e.c.clearRunningSession(e.c.routeSessionToken, false);
     Object.assign(e.c, {
         running: false, runningSessionToken: null, completedSection: null, initializationBlockedSessionToken: null,
         targetSessionEntryKind: 'initial', waitingForNativeEmpty: false, missingSectionSince: 0,
@@ -4856,7 +4857,7 @@ test('Undo expiry preserves a queued mutation fallback after removing the Undo c
     assert.equal(e.c.cardSourceForItem(mutation.fallbackItem), snapshot);
     const expiry = e.logs.find(row => row.name === 'undoEntriesExpired');
     assert.equal(expiry.details.pendingFallbacksPreserved, 1);
-    e.c.running = false;
+    e.c.clearRunningSession(e.c.routeSessionToken, false);
     assert.equal(e.c.listMutations.reconcileMutation(mutation, 'after-expiry'), true);
     assert.equal(e.c.sourceState.items.length, 6);
     assert.equal(e.c.listMutations.pendingIntents().length, 0);
@@ -4937,7 +4938,7 @@ test('a native mutation capture replaced during cloning preserves its intent and
     e.c.netflixDom.findTrack = () => e.track;
     let mutation = { videoId: '1', action: 'add' };
     mutation = e.c.listMutations.observeMembership(mutation);
-    e.c.running = false;
+    e.c.clearRunningSession(e.c.routeSessionToken, false);
     const clone = item.snapshot.cloneNode.bind(item.snapshot);
     let replacement, publications = 0;
     item.snapshot.cloneNode = (...args) => { replacement = e.c.sourceState = { ...e.c.sourceState }; return clone(...args); };
@@ -4956,7 +4957,7 @@ test('mutation candidate callbacks reject changed parent, route or intent before
         let mutation = { videoId: '1', action: 'add', fallbackItem: candidate };
         let replacementIntent = { ...mutation };
         mutation = e.c.listMutations.observeMembership(mutation);
-        e.c.running = false;
+        e.c.clearRunningSession(e.c.routeSessionToken, false);
         let publications = 0;
         e.c.cardSourceForItem = () => {
             if (change === 'parent') e.c.sourceState = { ...e.c.sourceState };
@@ -4977,7 +4978,7 @@ test('post-mutation discovery replacement preserves queued intent and never alig
         const e = constructionEnvironment();
         let mutation = { videoId: '1', action, fallbackItem: e.items(1)[0] };
         mutation = e.c.listMutations.observeMembership(mutation);
-        e.c.running = false;
+        e.c.clearRunningSession(e.c.routeSessionToken, false);
         e.c.applyLegacyAddition = e.c.applyLegacyRemoval = () => true;
         let reads = 0, alignments = 0, replacement;
         e.c.refreshNativeSectionAfterDelta = () => {
@@ -5230,7 +5231,7 @@ function fetchEnvironment(count = 150) {
         Object.assign(e.c, {
             scheduled: false, scheduledRunTimer: null, resizeObserver: null, responsiveRefreshTimer: null,
             cleanupTargetSessionDom() {}, stopTargetEventListeners() {}, startTargetEventListeners() {},
-            resetDetachedTargetState() {}, clearPendingMyListMutations() { e.c.listMutations.clearPending(); }
+            resetDetachedTargetState() {}
         });
         for (const name of ['suspendTargetSession', 'startTargetSession']) vm.runInContext(declaration(name), e.c);
     }
@@ -8781,7 +8782,7 @@ test('detached reset restores original geometry descriptors before dropping sour
         completedSection: e.section, activeSourceSlot: slot,
         LEGACY_EMPTY_STATE_ID: 'empty',
         activeGeometryProxy: { sourceSlot: slot, clone: e.oldGrid, entries: [{ source: slot, descriptors }] },
-        responsiveRefreshTimer: null, restoreActiveCarouselStyles() {}, clearPendingMyListMutations() {}
+        responsiveRefreshTimer: null, restoreActiveCarouselStyles() {}
     });
     for (const name of ['restoreGeometryProxy', 'clearSourceAlignment', 'cancelPendingGridHover', 'resetDetachedTargetState']) {
         vm.runInContext(declaration(name), e.c);
@@ -9386,7 +9387,6 @@ test('obsolete responsive refreshes cannot update replacement grids or clear a n
         Object.assign(e.c, {
             responsiveSequence: 0, lastResponsiveReason: 'window.resize', activeResponsiveReason: '',
             selectedPage: () => 0, waitResponsiveLayoutSettled: () => gate.promise,
-            retryPendingMyListMutations: () => { throw new Error('An obsolete owner cannot resume mutations'); },
             warn: (...args) => warnings.push(args)
         });
         for (const name of ['createRouteSessionCancelledError', 'isRouteSessionCancelledError', 'assertRouteSession', 'refreshResponsiveLayout']) {
@@ -9398,6 +9398,7 @@ test('obsolete responsive refreshes cannot update replacement grids or clear a n
             e.c.sourceState.scroller, new Element('replacement-track'));
         if (replacement === 'route') e.c.isRouteSessionActive = () => false;
         e.c.responsiveSequence = 2;
+        e.c.responsiveDeferral = { sessionToken: e.c.routeSessionToken, ticket: e.c.listMutations.deferReconciliation('replacement-refresh') };
         e.c.responsiveRefreshing = true;
         e.c.activeResponsiveReason = 'new-owner';
         gate.resolve({ ...e.measured });
@@ -9609,14 +9610,14 @@ test('actual click queue carries explicit Undo correlation beyond entry expiry w
     const e=constructionEnvironment();
     await e.c.buildGrid(e.section,e.scroller,e.items(2),e.layout,2,1);
     e.c.applyLegacyRemoval('1');const entry=e.c.recentRemovedMyListItems.get('1');
-    e.c.DELTA_MUTATION_TIMEOUT_MS=4000;e.c.queueMicrotask=callback=>callback();e.c.running=true;
+    e.c.DELTA_MUTATION_TIMEOUT_MS=4000;e.c.queueMicrotask=callback=>callback();e.c.beginRunningSession(e.c.routeSessionToken);
     e.c.listMutations.queueMutation({videoId:'1',action:'add',fallbackItem:entry.item,correlationId:entry.correlationId,
         preferredIndex:entry.index,undo:true});
     let mutation=e.c.listMutations.pendingMutation('1');
     assert.equal(mutation.correlationId,entry.correlationId);
     await e.advance(30000);assert.equal(e.c.recentRemovedMyListItems.size,0);
     assert.equal(e.c.gridView.hasRetained(mutation.correlationId,mutation.fallbackItem),true);
-    e.c.running=false;e.c.retryPendingMyListMutations('after-expiry');
+    e.c.clearRunningSession(e.c.routeSessionToken, false);e.c.listMutations.retryMutations('after-expiry');
     assert.equal(e.c.sourceState.itemMap.get('v:1'),entry.item);
     assert.equal(Object.hasOwn(entry.item,'undoId'),false);
     assert.equal(e.c.listMutations.pendingIntents().length,0);assert.equal(e.timers.size,0);
@@ -9642,4 +9643,50 @@ test('native expected position follows controlled membership order after visible
     const deviation=e.c.nativePositionDeviation(item,source);
     assert.equal(deviation.expectedIndex,2);assert.equal(deviation.actualIndex,0);assert.equal(deviation.delta,-2);
     assert.equal(Object.hasOwn(item,'logicalIndex'),false);
+});
+
+
+test('actual initialization cleanup cannot release a newer owner in the same route session',()=>{
+    const e=constructionEnvironment(),old=e.c.initializationDeferral;
+    const current=e.c.beginRunningSession(1),intent=e.c.listMutations.observeMembership({videoId:'1',action:'remove'});
+    assert.equal(e.c.listMutations.reconcileMutation(intent),false);
+    e.c.clearRunningSession(1,true,old);
+    assert.equal(e.c.running,true);assert.equal(e.c.initializationDeferral,current);
+    assert.equal(e.c.listMutations.pendingMutation('1'),intent);
+    assert.deepEqual(e.c.listMutations.deferralDiagnostics().active,['initialization']);
+    e.c.clearRunningSession(1,false,current);
+    assert.equal(e.c.running,false);assert.equal(e.c.listMutations.deferralDiagnostics().active.length,0);
+});
+
+test('actual session retirement drops list intents and tickets before native cleanup callbacks',async()=>{
+    const e=fetchEnvironment(6);e.routeLifecycle();
+    await e.c.buildGrid(e.section,e.scroller,e.items(6),e.layout,6,1);
+    e.c.applyLegacyRemoval('1');
+    e.c.listMutations.observeMembership({videoId:'2',action:'remove'});
+    let cleanup=0;
+    e.c.cleanupTargetSessionDom=()=>{
+        cleanup++;
+        assert.equal(e.c.listMutations.pendingIntents().length,0);
+        assert.equal(e.c.listMutations.undoEntries().length,0);
+        assert.equal(e.c.listMutations.deferralDiagnostics().active.length,0);
+        assert.equal(e.c.listMutations.observeMembership({videoId:'3',action:'add'}),null);
+    };
+    e.c.suspendTargetSession('list-owner-test');
+    assert.ok(cleanup>0);assert.equal(e.timers.size,0);
+});
+
+
+test('responsive setup and cleanup failures cannot strand their exact reconciliation ticket',async()=>{
+    for(const cleanupFailure of [false,true]) {
+        const e=resizeEnvironment();
+        Object.assign(e.c,{responsiveSequence:0,lastResponsiveReason:'window.resize',activeResponsiveReason:'',
+            collectRuntimeSnapshot:()=>({}),updateResponsiveStatus(){},tUi:key=>key,
+            log(name){if(name==='responsiveRefreshStarted')throw new Error('marker failure');}});
+        vm.runInContext(declaration('refreshResponsiveLayout'),e.c);
+        e.c.gridView.setRefreshing=(_grid,value)=>{if(!value&&cleanupFailure)throw new Error('cleanup failure');};
+        const work=e.c.refreshResponsiveLayout(1);
+        if(cleanupFailure)await assert.rejects(work,/cleanup failure/);else await work;
+        assert.equal(e.c.responsiveRefreshing,false);
+        assert.equal(e.c.listMutations.deferralDiagnostics().active.length,0);
+    }
 });

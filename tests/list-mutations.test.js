@@ -46,14 +46,14 @@ test('title normalization that clears ownership cannot publish the abandoned Und
 });
 
 function queueFixture(extra={}) {
-    let next=0,deferred=false;const timers=new Map(),observers=[],microtasks=[],warnings=[];
+    let next=0,ticket=null;const timers=new Map(),observers=[],microtasks=[],warnings=[];
     const owner=createList({}).createMutations({now:()=>0,readSession:()=>1,isSessionActive:()=>true,
         setTimeout:(fn,ms)=>{const id=++next;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id),
         ttl:30,hasRetained:()=>true,releaseRetained(){},mutationTimeout:10,
-        isDeferred:()=>deferred,applyMutation:()=>false,
+        applyMutation:()=>false,
         observeChanges:fn=>{const o={fn,disconnects:0,disconnect(){this.disconnects++;}};observers.push(o);return o;},
         queueMicrotask:fn=>microtasks.push(fn),onTimeout:detail=>warnings.push(detail),...extra});
-    return {owner,timers,observers,microtasks,warnings,setDeferred:value=>deferred=value};
+    return {owner,timers,observers,microtasks,warnings,setDeferred(value) { if(value)ticket=owner.deferReconciliation('test');else { ticket?.release({resume:false});ticket=null; } }};
 }
 test('list queue owns immutable intents and replaces exact observer/timer resources',()=>{
     const e=queueFixture(),first=e.owner.queueMutation({videoId:'1',action:'remove'});
@@ -113,4 +113,32 @@ test('replacement queue inherits only its exact pending record and correlation a
     const next=e.owner.queueMutation({videoId:'1',action:'add',fallbackItem:item,correlationId:'old'});
     assert.deepEqual(released,[]);assert.equal(e.owner.pendingMutation('1'),next);
     e.owner.disposeMutation('1',next);assert.deepEqual(released,['old']);
+});
+
+test('only final exact deferral release resumes deferred intents and repeated release is inert',()=>{
+    let attempts=0;const e=queueFixture({applyMutation:()=>{attempts++;return false;}});
+    const first=e.owner.deferReconciliation('initialization'),second=e.owner.deferReconciliation('refresh');
+    const intent=e.owner.observeMembership({videoId:'1',action:'add'});
+    assert.equal(e.owner.reconcileMutation(intent),false);assert.equal(attempts,0);
+    first.release();first.release();assert.equal(attempts,0);second.release();assert.equal(attempts,1);
+    second.release();assert.equal(attempts,1);assert.equal(e.timers.size,1);
+});
+test('disposed deferral cannot release or drain a replacement transaction',()=>{
+    let attempts=0;const e=queueFixture({applyMutation:()=>{attempts++;return false;}});
+    const old=e.owner.deferReconciliation('old');e.owner.queueMutation({videoId:'1',action:'remove'});e.owner.dispose();e.owner.start();
+    const fresh=e.owner.deferReconciliation('fresh'),intent=e.owner.observeMembership({videoId:'1',action:'add'});
+    e.owner.reconcileMutation(intent);old.release();assert.equal(attempts,0);assert.equal(e.owner.pendingMutation('1'),intent);
+    fresh.release();assert.equal(attempts,1);
+});
+
+test('list disposal attempts every resource cleanup and old callbacks remain inert after failures',()=>{
+    let cancelled=0,attempts=0;const e=queueFixture({applyMutation:()=>{attempts++;return false;},
+        clearTimeout(){cancelled++;if(cancelled===1)throw new Error('timer cleanup');}});
+    const first=e.owner.queueMutation({videoId:'1',action:'remove'}),second=e.owner.queueMutation({videoId:'2',action:'remove'});
+    const stale=e.observers[0].fn;e.observers[0].disconnect=()=>{throw new Error('observer cleanup');};
+    assert.doesNotThrow(()=>e.owner.dispose());
+    assert.equal(cancelled,2);assert.equal(e.observers[1].disconnects,1);
+    assert.equal(e.owner.pendingIntents().length,0);assert.equal(e.owner.isMutationCurrent(first),false);
+    assert.equal(e.owner.isMutationCurrent(second),false);stale();assert.equal(attempts,0);
+    assert.equal(e.owner.deferralDiagnostics().cleanupFailures,2);
 });
