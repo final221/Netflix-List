@@ -27,6 +27,12 @@ Edit `src/` rather than the generated root userscript. `package.json` is the sin
 
 Any pushed change to the distributable requires a version greater than the newest published release, using AGENTS.md's increment rules. Update package.json and its lockfile together, then rebuild; metadata and internal SCRIPT_VERSION receive that same version automatically. Documentation/tooling changes that leave output unchanged do not need a userscript version increase.
 
+## User testing and version logs
+
+The user tests released versions in Netflix with Tampermonkey on Windows. `logs/` stores diagnostic captures from that live use, named for the tested userscript version, such as `logs/1.4.52.txt`. CopyLogs provides the export; saving it in the repository is a manual user action.
+
+These files provide evidence of behavior in the user's browser alongside the offline tests and Windows CI. When reviewing a capture, match its version to the tested release and record the observed result, limitations and follow-up in [findings.md](findings.md), citing the log. A saved log documents that session; successful live checks require supporting observations or user confirmation. Preserve the original captures.
+
 ## Architecture and migration
 
 Viewing completion, manual placement/coverage expiry, profile-scoped automatic cache and the complete bounded scan now live behind `src/viewing/viewing.js`. Opaque sessions own jobs, requests, results and persistence; composition supplies admitted membership and renders copied semantic changes. Grid actions call the admitted placement capability and render its semantic results. Storage keys/schema and scan/request limits remain unchanged.

@@ -4,6 +4,10 @@ Updated: 2026-10-04
 
 This file records the code-review findings and the agreed follow-up plan for My List for Netflix. It is a working record; the plan does not authorize extra code changes beyond the step the user has chosen to pursue.
 
+## User live-test evidence
+
+The user introduced `logs/` for diagnostic captures from testing specific userscript versions in Netflix. [logs/1.4.52.txt](logs/1.4.52.txt) is the first supplied capture. Review relevant captures when investigating reported runtime behavior, and cite the file/version alongside observed results and follow-up here. Automated local/CI gates and user live-test evidence remain separate: this 1.4.52 capture does not establish live acceptance of 1.4.53 or every feature. The P16 notes below record that the file was left outside that commit; it is now recognized as the repository's user-testing evidence.
+
 ## G — Netflix-specific dependencies
 
 ### Current result
