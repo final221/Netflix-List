@@ -1,3 +1,4 @@
+import { createHover } from './hover/hover.js';
 import { createNativePopup } from './netflix/native-popup.js';
 import { createNetflixContext } from './netflix/context.js';
 import { createNetflixPageDom, NETFLIX_DOM_SELECTORS } from './netflix/page-dom.js';
@@ -46,9 +47,6 @@ export function startLegacy() {
     const NATIVE_READY_POLL_MS = 25;
     const DELTA_MUTATION_TIMEOUT_MS = 1800;
     const UNDO_ENTRY_TTL_MS = 30000;
-    const HOVER_ACTIVATION_DELAY_MS = 120;
-    const HOVER_SCROLL_QUIET_MS = 180;
-    const HOVER_RETRY_DELAY_MS = 180;
     const ORDER_MISMATCH_POSITION_THRESHOLD = 10;
     const TOTAL_COUNT_TIMEOUT_MS = 5000;
     const FRESH_MY_LIST_FETCH_TIMEOUT_MS = 10000;
@@ -56,8 +54,8 @@ export function startLegacy() {
         requestTimeoutMs: FRESH_MY_LIST_FETCH_TIMEOUT_MS });
     const gridView = createGrid({ document, location, runChunks: runConstructionChunks,
         createError: (code, message) => initializationError(code, 'grid-cards', message),
-        installHover: ensureGridHoverBehavior, readPage: pageForItem,
-        onRetire: (handle, detail) => { nativePopup.retire(handle); retireHoverCard(handle, detail); },
+        installHover: grid => hover.install(grid), readPage: pageForItem,
+        onRetire: (handle, detail) => { nativePopup.retire(handle); hover.retire(handle, detail); },
         tLog, tUi, formatUiNumber, formatItemCount, copyLogs: copyDiagnosticLogs, setTimeout, clearTimeout,
         readEmptyContent: section => netflixDom.readEmptyContent(section), readEmptyShell: () => netflixDom.readEmptyShell(),
         isActive: () => targetSessionActive && isTargetPage() });
@@ -115,12 +113,6 @@ export function startLegacy() {
     });
     const IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES = 4000;
     // Short, coalesced callback-gap samples; never a continuous FPS/paint monitor.
-    const HOVER_FRAME_DIAGNOSTIC_LIMITS = Object.freeze({ routeFrames: 12000, windowFrames: 1800,
-        intentMs: 600, preparationMs: 6000, replayMs: 2000, scrollMs: 1000 });
-    const HOVER_INTERRUPTION_LOG_LIMIT = 48;
-    const HOVER_CANCELLATION_REASONS = Object.freeze({ scroll: 'Scroll', 'pointer-leave': 'PointerLeave',
-        superseded: 'Superseded', resize: 'Resize', group: 'Group', source: 'Source', route: 'Route',
-        controls: 'Controls', 'outside-grid': 'OutsideGrid', preview: 'Preview', other: 'Other' });
 
     const SCRIPT_NAME = 'My List for Netflix';
     const SCRIPT_VERSION = __SCRIPT_VERSION__;
@@ -155,7 +147,7 @@ export function startLegacy() {
         readGraphqlCount: () => listData.readMyListTotalCount(),
         cardMarkup: { capture: gridView.captureCard, captureTemplate: gridView.captureTemplate }, createError: initializationError,
         log, warn, trace, tLog, logTimeout: logOperationTimeout, MutationObserver,
-        isHoverCancelled: hoverPreparationCancelled, readHoverToken: () => hoverToken,
+        isHoverCancelled: token => hover.isCancelled(token), readHoverToken: () => hover.intent().token,
         navigationDiagnostics: createNavigationDiagnosticSink,
         checkRoute: () => { if (location.href !== lastObservedUrl) handleRouteChange('MutationObserver-url'); },
         onMutationDelivery: () => nativePopup.checkDetached(),
@@ -166,21 +158,44 @@ export function startLegacy() {
         onRelevantMutation: handleRelevantTargetDocumentMutation });
 
 
-    const nativePopup = createNativePopup({ Element, Node: globalThis.Node, document, PointerEvent: globalThis.PointerEvent, MouseEvent: globalThis.MouseEvent, performance,
+    let nativePopup;
+    const hover = createHover({ Element, document, performance, setTimeout, clearTimeout, requestAnimationFrame, cancelAnimationFrame,
+        sample: callback => nativeCarousel.sample(callback), grid: gridView, readSessionToken: () => sessionScope.token, isSessionCurrent: isRouteSessionActive,
+        readEnvironment: () => ({ grid: sourceState?.grid, blockedReason: orderMismatchDialogOpen ? 'order-mismatch-dialog-open' :
+            orderMismatchReinitializing ? 'order-mismatch-reinitializing' : '' }),
+        whenStable: () => responsiveRefreshPromise?.catch(() => {}) || null,
+        resolveReady: resolveReadyHover, prepare: prepareHoverCard, sleep, assertSession: assertRouteSession,
+        isCancelledError: isRouteSessionCancelledError, describeItem: itemSummary, log, warn, tLog,
+        createPopup: policy => { return (nativePopup = createNativePopup({ Element, Node: globalThis.Node, document, PointerEvent: globalThis.PointerEvent, MouseEvent: globalThis.MouseEvent, performance,
         requestAnimationFrame, cancelAnimationFrame, setTimeout, clearTimeout, carousel: nativeCarousel, grid: gridView,
         pageDom: netflixDom, selectors: NETFLIX_DOM_SELECTORS,
-        readIntent: () => ({ token: hoverToken, sessionToken: sessionScope.token, clone: activeClone, videoId: activeVideoId, pointerX: lastPointerX, pointerY: lastPointerY }),
+        ...policy, readDiagnostics: () => ({ ...policy.readDiagnostics(), nativeRecovery: performanceDiagnostics.nativeRecovery }),
         readEnvironment: () => ({ grid: sourceState?.grid, scroller: sourceState?.scroller }),
-        readDiagnostics: () => performanceDiagnostics, gridOwnsClone, gridCloneFromPointerEvent,
-        isCancelled: hoverPreparationCancelled, isSessionCurrent: isRouteSessionActive, isTargetCurrent: gridHoverTargetActive,
-        itemForSource: findItemForSourceSlot, activeSource: findActiveSourceSlot, createError: initializationError,
-        describeSource: slotDescriptor, describeItem: itemSummary, log, warn, trace, tLog, recordTiming: recordHoverTiming,
-        onReplay: startHoverFrameDiagnostics, rejectionDiagnostic: hoverReplayGuardDiagnostic, onFailed: releaseFailedGridHover,
-        capturePreview: (...args) => popupInspection.capturePreview(...args), ensureGridHoverBehavior: () => ensureGridHoverBehavior(sourceState.grid),
-        associateGridHoverItem, onPreviewRelease: (clone, reason, target, release) => {
-            const token = advanceHoverToken('preview'); release();
-            if (hoverToken === token && activeClone === clone) { activeClone = null; activeVideoId = null; activePage = null; }
-        } });
+        isSessionCurrent: isRouteSessionActive, itemForSource: findItemForSourceSlot, activeSource: findActiveSourceSlot,
+        createError: initializationError, describeSource: slotDescriptor, describeItem: itemSummary, log, warn, trace, tLog,
+        capturePreview: (...args) => popupInspection.capturePreview(...args) })); }
+    });
+
+    function resolveReadyHover(item, card) {
+        if (!card) return null;
+        const state = sourceState;
+        return withNativeReadScope(() => {
+            ensureLiveNativeBinding('hover-reuse');
+            const observation = nativeSourceObservation(state, { position: true });
+            const page = observation.position.page, backedPage = Number(card.node.getAttribute('data-tm-backed-page'));
+            const source = card.node.getAttribute('data-tm-hover-ready') === 'true' && Number.isFinite(backedPage) && page === backedPage
+                ? nativeCarousel.mountedCard({ section: state.section, scroller: state.scroller, track: state.track,
+                    item: { videoId: item.videoId, href: item.href }, activeOnly: true, sessionToken: sessionScope.token }) : null;
+            const assertCurrent = () => { if (sourceState !== state) throw createRouteSessionCancelledError(); nativeCarousel.assertObservation(observation); };
+            assertCurrent();
+            return { source, card, page, backedPage, targetPage: pageForItem(item), assertCurrent };
+        });
+    }
+
+    function prepareHoverCard(item, card, event, token, sessionToken) {
+        if (!card || !gridView.isCardCurrent(card)) return null;
+        return prepareMountedPage(pageForItem(item), item, event, token, sessionToken);
+    }
 
     function clearSourceAlignment(slot, reason = 'source-release', relatedTarget = null) {
         nativePopup.release(reason, relatedTarget, slot);
@@ -194,11 +209,8 @@ export function startLegacy() {
         return source;
     }
 
-    function scheduleNativeHoverReplay(slot, item, clone, event, page, reason, token = hoverToken, sessionToken = sessionScope.token) {
-        return nativePopup.open({ source: popupSource(slot, item), card: gridView.getCard(item), item, event, page, reason, token, sessionToken });
-    }
 
-    function makeLiveClone(slot, item, clone, page, assertCurrent = () => {}, token = hoverToken, sessionToken = sessionScope.token) {
+    function makeLiveClone(slot, item, clone, page, assertCurrent = () => {}, token = hover.intent().token, sessionToken = sessionScope.token) {
         const card = gridView.getCard(item);
         if (!card || card.node !== clone) throw initializationError('GRID_CARD_RETIRED', 'grid-cards', 'Preparation card changed');
         return nativePopup.prepare({ source: popupSource(slot, item), card, item, page, assertCurrent, token, sessionToken });
@@ -303,13 +315,9 @@ export function startLegacy() {
     let scheduledRunDueAt = 0;
     let sourceState = null;
     let resizeObserver = null;
-    let hoverToken = 0;
     let orderMismatchDismissed = false;
     let orderMismatchDialogOpen = false;
     let orderMismatchReinitializing = false;
-    let activeVideoId = null;
-    let activePage = null;
-    let activeClone = null;
     let responsiveRefreshTimer = null;
     let responsiveRefreshPromise = null;
     let responsiveRefreshing = false;
@@ -318,14 +326,6 @@ export function startLegacy() {
     let mutationSourceRecoveryPending = false;
     let lastResponsiveSignature = '';
     let lastPageShape = '';
-    let lastPointerX = -1;
-    let lastPointerY = -1;
-    let lastTargetScrollAt = -Infinity;
-    let hoverNeedsPointerMove = false;
-    let pendingGridHoverClone = null;
-    let pendingGridHoverDiagnostic = null;
-    let activeHoverPreparationDiagnostic = null;
-    let hoverSequence = 0;
     let responsiveSequence = 0;
     let lastResponsiveReason = '';
     let lastObservedUrl = location.href;
@@ -342,59 +342,9 @@ export function startLegacy() {
     let nativeInitializationFailure = null;
     let performanceDiagnostics = createPerformanceDiagnostics();
     let imageResourceObserver = null;
-    let hoverFrameDiagnosticOwner = null;
 
     function createPerformanceDiagnostics() {
         return {
-            hoverPreparation: { calls: 0, slotsConsidered: 0, clonesRebuilt: 0, neighborsSkipped: 0 },
-            hoverLifecycle: { replayAttempts: 0, replaysDispatched: 0, replayCancelled: 0, replayFailed: 0,
-                exitsDispatched: 0, exitSkipped: 0, exitFailed: 0, scrollBursts: 0, scrollExits: 0,
-                lastExitReason: '', boundaryDetoursAvoided: 0, duplicateAlignmentsAvoided: 0,
-                duplicatePageReadsAvoided: 0, logicalMoveReads: 0, logicalMoveObserverStarts: 0,
-                logicalMoveNotifications: 0, logicalMoveSignalFrames: 0, logicalMoveFallbackWakes: 0,
-                logicalMoveObserverUnsupported: 0, logicalMoveObserverFailures: 0,
-                previewTransfers: 0, previewReturns: 0, previewReleases: 0, previewRejected: 0, lastPreviewReason: '' },
-            hoverTiming: { dwellSamples: 0, dwellTotalMs: 0, dwellMaxMs: 0,
-                queueSamples: 0, queueTotalMs: 0, queueMaxMs: 0,
-                moveSamples: 0, moveTotalMs: 0, moveMaxMs: 0,
-                acknowledgementSamples: 0, acknowledgementTotalMs: 0, acknowledgementMaxMs: 0,
-                settlementSamples: 0, settlementTotalMs: 0, settlementMaxMs: 0,
-                mainPreparationSamples: 0, mainPreparationTotalMs: 0, mainPreparationMaxMs: 0,
-                watchedPreparationSamples: 0, watchedPreparationTotalMs: 0, watchedPreparationMaxMs: 0,
-                graftSamples: 0, graftTotalMs: 0, graftMaxMs: 0,
-                alignmentSamples: 0, alignmentTotalMs: 0, alignmentMaxMs: 0,
-                replaySamples: 0, replayTotalMs: 0, replayMaxMs: 0,
-                exitSamples: 0, exitTotalMs: 0, exitMaxMs: 0,
-                previewSamples: 0, previewTotalMs: 0, previewMaxMs: 0 },
-            hoverInteraction: { intentsQueued: 0, intentsCancelled: 0, dwellCompleted: 0, dwellRejected: 0,
-                replacementNotHovered: 0, replayGuardRejected: 0, leavesBeforeReplay: 0, leavesAfterReplay: 0,
-                leavesWithin600ms: 0, stationaryLeaves: 0, leavesToPreviewHint: 0, diagnosticFailures: 0,
-                replacementPointerChecks: 0, replacementPointerAccepted: 0, replacementPointerRejected: 0,
-                replacementPointerUnavailable: 0 },
-            hoverScroll: { scope: 'scroll-intent-and-interruptions', interruptionLogLimit: HOVER_INTERRUPTION_LOG_LIMIT,
-                wheelEvents: 0, scrollEvents: 0, otherScrollEvents: 0, lastScrollEvent: '',
-                boundarySuppressedQuiet: 0, boundarySuppressedMovement: 0, unchangedPointerEvents: 0,
-                physicalRearms: 0, dwellRearms: 0, intentsDuringQuiet: 0, intentsAwaitingMovement: 0,
-                cancelledDwellTotalMs: 0, cancelledDwellMaxMs: 0, lastIntentCancellationReason: '',
-                preparationInterruptions: 0, interruptionLogs: 0, interruptionLogsSkipped: 0,
-                lastPreparationCancellationReason: '',
-                ...Object.fromEntries(Object.values(HOVER_CANCELLATION_REASONS).flatMap(reason =>
-                    [[`intentCancelled${reason}`, 0], [`preparationCancelled${reason}`, 0]])) },
-            hoverPreview: { scope: 'bounded-preview-presence', delayMs: nativePopup.probeLimits.delayMs,
-                routeReplayLimit: nativePopup.probeLimits.routeReplays, rootLimit: nativePopup.probeLimits.roots,
-                scheduled: 0, completed: 0, checks: 0, pointerChecks: 0, rootSearches: 0,
-                checkTotalMs: 0, checkMaxMs: 0,
-                matchedTransfers: 0, matchedAtPointer: 0, matchedElsewhere: 0, noPreviewRoot: 0,
-                unverifiedRoots: 0, earlyRelease: 0, invalidOwner: 0, hidden: 0, failed: 0,
-                skippedAtLimit: 0, lastResult: '' },
-            hoverFrames: { scope: 'bounded-animation-callback-gaps', supported: false, active: false, stopReason: '',
-                routeFrameLimit: HOVER_FRAME_DIAGNOSTIC_LIMITS.routeFrames,
-                windowFrameLimit: HOVER_FRAME_DIAGNOSTIC_LIMITS.windowFrames,
-                windows: 0, callbacks: 0, gapSamples: 0, totalGapMs: 0, maxGapMs: 0,
-                gapsOver32ms: 0, gapsOver50ms: 0, gapsOver100ms: 0,
-                mixedPhaseSamples: 0, mixedPhaseMaxMs: 0,
-                intentSamples: 0, intentMaxMs: 0, preparationSamples: 0, preparationMaxMs: 0,
-                replaySamples: 0, replayMaxMs: 0, scrollSamples: 0, scrollMaxMs: 0 },
             resize: { events: 0, checks: 0, unchanged: 0, refreshes: 0, hoverPreserved: 0, hoverCancelled: 0,
                 parkedHeightChangesIgnored: 0, parkedHeightHoverPreserved: 0 },
             nativeRecovery: { attempts: 0, completed: 0, exhausted: 0, alignmentRestores: 0, alignmentRestoreFailures: 0 },
@@ -409,182 +359,12 @@ export function startLegacy() {
 
     function collectPerformanceDiagnostics() {
         const snapshots = Object.fromEntries(Object.entries(performanceDiagnostics).map(([key, counters]) => [key, { ...counters }]));
-        return { viewingGroups: gridView.groupDiagnostics(), hoverPreparation: snapshots.hoverPreparation,
-            popupInvestigation: popupInspection.diagnostics(), ...snapshots, ...listView.diagnostics(), nativeCollection: nativeCarousel.diagnostics().collection, grid: gridView.diagnostics() };
+        return { viewingGroups: gridView.groupDiagnostics(), hoverPreparation: hover.diagnostics().hoverPreparation,
+            popupInvestigation: popupInspection.diagnostics(), ...snapshots, ...hover.diagnostics(), ...listView.diagnostics(), nativeCollection: nativeCarousel.diagnostics().collection, grid: gridView.diagnostics() };
     }
 
-    function createNavigationDiagnosticSink(token) {
-        const lifecycle = performanceDiagnostics.hoverLifecycle;
-        const timing = token === null ? null : performanceDiagnostics.hoverTiming;
-        return Object.freeze({
-            bump(field) { if (performanceDiagnostics.hoverLifecycle === lifecycle) lifecycle[field]++; },
-            record: timing ? (phase, started) => recordHoverTiming(timing, phase, started) : null
-        });
-    }
+    function createNavigationDiagnosticSink(token) { return hover.navigationSink(token); }
 
-    function recordHoverTiming(counters, phase, started) {
-        if (performanceDiagnostics.hoverTiming !== counters) return;
-        const elapsed = Math.max(0, Math.round((performance.now() - started) * 10) / 10);
-        counters[`${phase}Samples`]++;
-        counters[`${phase}TotalMs`] = Math.round((counters[`${phase}TotalMs`] + elapsed) * 10) / 10;
-        counters[`${phase}MaxMs`] = Math.max(counters[`${phase}MaxMs`], elapsed);
-        return elapsed;
-    }
-
-    function stopHoverFrameDiagnostics(reason = 'route-leave') {
-        const owner = hoverFrameDiagnosticOwner;
-        if (!owner) return;
-        hoverFrameDiagnosticOwner = null;
-        owner.counters.active = false;
-        owner.counters.stopReason = reason;
-        try { if (owner.frame !== null) cancelAnimationFrame(owner.frame); } catch (_) {}
-    }
-
-    function handleHoverDiagnosticVisibilityChange() {
-        if (document.visibilityState === 'hidden') {
-            stopHoverFrameDiagnostics('hidden');
-            nativePopup.finishProbe({ result: 'hidden' });
-        }
-    }
-
-    function startHoverFrameDiagnostics(phase) {
-        const counters = performanceDiagnostics.hoverFrames;
-        try {
-            if (!Object.hasOwn(HOVER_FRAME_DIAGNOSTIC_LIMITS, `${phase}Ms`)) return;
-            if (!isRouteSessionActive(sessionScope.token)) return;
-            if (hoverFrameDiagnosticOwner && hoverFrameDiagnosticOwner.counters !== counters) {
-                stopHoverFrameDiagnostics('owner-replaced');
-            }
-            counters.supported = typeof requestAnimationFrame === 'function' && typeof cancelAnimationFrame === 'function';
-            if (!counters.supported) { counters.stopReason = 'unsupported'; return; }
-            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-                stopHoverFrameDiagnostics('hidden'); counters.stopReason = 'hidden'; return;
-            }
-            if (counters.callbacks >= HOVER_FRAME_DIAGNOSTIC_LIMITS.routeFrames) {
-                counters.stopReason = 'route-frame-limit'; return;
-            }
-            const now = performance.now();
-            let owner = hoverFrameDiagnosticOwner;
-            if (!owner) {
-                owner = { counters, sessionToken: sessionScope.token, frame: null, previousAt: now, mixedPhase: false };
-                hoverFrameDiagnosticOwner = owner;
-            }
-            // Preserve an outstanding callback's baseline across phase changes:
-            // a delayed dwell timer must not erase the stall that preceded it.
-            // Intervals spanning phases are reported separately, not attributed
-            // entirely to preparation or entirely to Netflix's popup replay.
-            if (owner.phase !== phase && now > owner.previousAt) owner.mixedPhase = true;
-            owner.phase = phase;
-            owner.deadline = now + HOVER_FRAME_DIAGNOSTIC_LIMITS[`${phase}Ms`];
-            owner.windowFrames = 0;
-            counters.windows++;
-            counters.active = true;
-            counters.stopReason = '';
-            if (owner.frame === null) owner.frame = requestAnimationFrame(() => sampleHoverFrameDiagnostics(owner));
-        } catch (_) {
-            stopHoverFrameDiagnostics('api-failed'); counters.active = false; counters.stopReason = 'api-failed';
-        }
-    }
-
-    function sampleHoverFrameDiagnostics(owner) {
-        if (hoverFrameDiagnosticOwner !== owner) return;
-        owner.frame = null;
-        try {
-            if (performanceDiagnostics.hoverFrames !== owner.counters || !isRouteSessionActive(owner.sessionToken)) {
-                stopHoverFrameDiagnostics('owner-replaced'); return;
-            }
-            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-                stopHoverFrameDiagnostics('hidden'); return;
-            }
-            const now = performance.now();
-            const gap = Math.max(0, Math.round((now - owner.previousAt) * 10) / 10);
-            owner.previousAt = now;
-            const counters = owner.counters;
-            counters.callbacks++;
-            counters.gapSamples++;
-            counters.totalGapMs = Math.round((counters.totalGapMs + gap) * 10) / 10;
-            counters.maxGapMs = Math.max(counters.maxGapMs, gap);
-            if (gap > 32) counters.gapsOver32ms++;
-            if (gap > 50) counters.gapsOver50ms++;
-            if (gap > 100) counters.gapsOver100ms++;
-            const phase = owner.mixedPhase ? 'mixedPhase' : owner.phase;
-            counters[`${phase}Samples`]++;
-            counters[`${phase}MaxMs`] = Math.max(counters[`${phase}MaxMs`], gap);
-            owner.mixedPhase = false;
-            // Include a late callback's gap before stopping at the deadline.
-            if (counters.callbacks >= HOVER_FRAME_DIAGNOSTIC_LIMITS.routeFrames) {
-                stopHoverFrameDiagnostics('route-frame-limit'); return;
-            }
-            if (++owner.windowFrames >= HOVER_FRAME_DIAGNOSTIC_LIMITS.windowFrames) {
-                stopHoverFrameDiagnostics('window-frame-limit'); return;
-            }
-            if (now >= owner.deadline) { stopHoverFrameDiagnostics('window-complete'); return; }
-            owner.frame = requestAnimationFrame(() => sampleHoverFrameDiagnostics(owner));
-        } catch (_) { stopHoverFrameDiagnostics('api-failed'); }
-    }
-
-    function hoverReplayGuardDiagnostic(clone, generation, token, sessionToken, item) {
-        // Failure-only scalar checks: no rectangles, styles, DOM search or React data.
-        try {
-            return { token, currentToken: hoverToken, routeActive: isRouteSessionActive(sessionToken),
-                preparationCancelled: hoverPreparationCancelled(token), targetConnected: Boolean(clone?.isConnected),
-                gridConnected: Boolean(sourceState?.grid?.isConnected),
-                gridOwned: Boolean(clone && sourceState?.grid && gridOwnsClone(clone, sourceState.grid)),
-                generationMatches: generation === clone?.__tmHoverActivationGeneration,
-                targetHovered: Boolean(clone?.matches(':hover')), viewingControlHovered: Boolean(clone?.__tmViewingControlHovered),
-                hoverSuppressed: gridHoverSuppressed(), activeCloneMatches: activeClone === clone,
-                activeVideoMatches: activeVideoId === item.videoId,
-                replacementHoveredAtInsertion: clone?.__tmHoverReplacementHovered ?? null,
-                replacementPointerVerified: clone?.__tmHoverReplacementPointerVerified ?? null,
-                sinceScrollMs: Number.isFinite(lastTargetScrollAt) ? Math.round(performance.now() - lastTargetScrollAt) : null };
-        } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; return { unavailable: true }; }
-    }
-
-    function hoverLeaveDestinationDiagnostic(target) {
-        // Class names are inspected only for fixed UI hints, never exported.
-        // Six ancestors / eight class tokens each; no text, URLs, IDs or HTML.
-        const result = { element: target instanceof Element, tag: '', inGrid: false,
-            viewingControlHint: false, previewHint: false, ancestorsExamined: 0, truncated: false };
-        let node = target instanceof Element ? target : target?.parentElement;
-        for (; node && result.ancestorsExamined < 6; node = node.parentElement) {
-            result.ancestorsExamined++;
-            if (!result.tag && /^[a-z][a-z0-9-]{0,15}$/i.test(node.localName || '')) result.tag = node.localName;
-            if (node === sourceState?.grid) result.inGrid = true;
-            if (node.getAttribute('data-tm-viewing-actions') === 'true') result.viewingControlHint = true;
-            const classes = node.classList;
-            for (let index = 0; classes && index < Math.min(classes.length, 8); index++) {
-                if (/^(?:previewModal|mini-modal|bob|jawbone)(?:$|[-_])/i.test(classes.item(index) || '')) {
-                    result.previewHint = true;
-                }
-            }
-        }
-        result.truncated = Boolean(node);
-        return result;
-    }
-
-    function recordGridHoverLeave(clone, relatedTarget, event) {
-        const counters = performanceDiagnostics.hoverInteraction;
-        try {
-            const replay = nativePopup.replayFacts(clone);
-            const afterReplay = Boolean(replay && replay.sessionToken === sessionScope.token);
-            const sinceReplayMs = afterReplay ? Math.max(0, Math.round(performance.now() - replay.replayedAt)) : null;
-            const coordinatesKnown = Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY);
-            const pointerDeltaPx = afterReplay && coordinatesKnown ? Math.round(Math.hypot(
-                event.clientX - replay.coordinates.clientX, event.clientY - replay.coordinates.clientY) * 10) / 10 : null;
-            const destination = hoverLeaveDestinationDiagnostic(relatedTarget);
-            if (afterReplay) {
-                counters.leavesAfterReplay++;
-                if (sinceReplayMs <= 600) counters.leavesWithin600ms++;
-                if (pointerDeltaPx !== null && pointerDeltaPx <= 1) counters.stationaryLeaves++;
-            } else counters.leavesBeforeReplay++;
-            if (destination.previewHint) counters.leavesToPreviewHint++;
-            log(tLog('hoverPointerLeaveObserved'), { afterReplay, sinceReplayMs, pointerDeltaPx,
-                eventType: event?.type === 'pointerout' ? 'pointerout' : event?.type === 'pointerover' ? 'pointerover' : 'unspecified',
-                trusted: Boolean(event?.isTrusted), targetConnected: Boolean(clone.isConnected),
-                targetHovered: clone.matches(':hover'), sameCloneDestination: Boolean(relatedTarget && clone.contains(relatedTarget)),
-                destination });
-        } catch (_) { counters.diagnosticFailures++; }
-    }
 
     function stopImageResourceDiagnostics(reason = 'route-leave') {
         const owner = imageResourceObserver;
@@ -699,61 +479,6 @@ export function startLegacy() {
         sessionScope.finishRequest(request);
     }
 
-    function hoverPreparationCancelled(token) {
-        return token !== null && token !== undefined && token !== hoverToken;
-    }
-
-    function hoverScrollElapsed(now = performance.now()) {
-        return Number.isFinite(lastTargetScrollAt) ? Math.max(0, Math.round(now - lastTargetScrollAt)) : null;
-    }
-
-    function recordHoverCancellation(counters, kind, reason) {
-        const knownReason = Object.hasOwn(HOVER_CANCELLATION_REASONS, reason) ? reason : 'other';
-        if (performanceDiagnostics.hoverScroll === counters) {
-            counters[`${kind}Cancelled${HOVER_CANCELLATION_REASONS[knownReason]}`]++;
-        }
-        return knownReason;
-    }
-
-    function advanceHoverToken(reason = 'other') {
-        const token = ++hoverToken;
-        const owner = activeHoverPreparationDiagnostic;
-        // Dispose before logging: a newer intent or native exit may reenter.
-        activeHoverPreparationDiagnostic = null;
-        if (!owner || owner.token !== token - 1) return token;
-        try {
-            const counters = owner.counters;
-            if (performanceDiagnostics.hoverScroll !== counters) return token;
-            const knownReason = recordHoverCancellation(counters, 'preparation', reason);
-            counters.preparationInterruptions++;
-            counters.lastPreparationCancellationReason = knownReason;
-            if (counters.interruptionLogs >= HOVER_INTERRUPTION_LOG_LIMIT) {
-                counters.interruptionLogsSkipped++;
-                return token;
-            }
-            counters.interruptionLogs++;
-            log('Hover preparation interrupted', { seq: owner.seq, token: owner.token, nextToken: token,
-                group: owner.group, reason: knownReason, elapsedMs: Math.round(performance.now() - owner.started),
-                sinceScrollMs: hoverScrollElapsed(), intent: owner.intent });
-        } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
-        return token;
-    }
-
-    function hoverIntentDiagnosticSnapshot(owner) {
-        if (!owner) return null;
-        return { physicalMove: owner.physicalMove, sinceScrollAtQueueMs: owner.sinceScrollAtQueueMs,
-            quietRemainingAtQueueMs: owner.quietRemainingAtQueueMs, needsMovementAtQueue: owner.needsMovementAtQueue,
-            scheduledDwellMs: owner.scheduledDwellMs, actualDwellMs: Math.round(performance.now() - owner.started),
-            sinceScrollAtActivationMs: hoverScrollElapsed() };
-    }
-
-    function hoverScrollStateSnapshot() {
-        const sinceScrollMs = hoverScrollElapsed();
-        return { needsPointerMove: hoverNeedsPointerMove, sinceScrollMs,
-            quietRemainingMs: sinceScrollMs === null ? 0 : Math.max(0, HOVER_SCROLL_QUIET_MS - sinceScrollMs),
-            pendingIntent: Boolean(pendingGridHoverClone), preparing: Boolean(activeHoverPreparationDiagnostic),
-            lastEvent: performanceDiagnostics.hoverScroll.lastScrollEvent };
-    }
 
     function beginRunningSession(sessionToken) {
         assertRouteSession(sessionToken);
@@ -783,11 +508,8 @@ export function startLegacy() {
         }
 
         listMutations.dispose(); initializationDeferral = null; responsiveDeferral = null;
-        clearSourceAlignment();
+        hover.cancel('source');
         restoreActiveCarouselStyles();
-        advanceHoverToken('source');
-        nativePopup.invalidate();
-        cancelPendingGridHover('source');
         completedSection = null;
         if (sourceState?.section && !sourceState.section.isConnected) {
             nativeCarousel.clearBinding();
@@ -804,9 +526,6 @@ export function startLegacy() {
         mutationSourceRecoveryPending = false;
         lastResponsiveSignature = '';
         lastPageShape = '';
-        activeVideoId = null;
-        activePage = null;
-        activeClone = null;
         missingSectionSince = 0;
         gridView.cancelBuild();
         gridView.resetEmpty();
@@ -835,7 +554,7 @@ export function startLegacy() {
         sessionScope.dispose();
         targetSessionActive = false;
         stopImageResourceDiagnostics();
-        stopHoverFrameDiagnostics();
+        hover.dispose();
 
         if (scheduledRunTimer !== null) clearTimeout(scheduledRunTimer);
         scheduledRunTimer = null;
@@ -843,7 +562,6 @@ export function startLegacy() {
         scheduledSessionToken = null;
         scheduledRunDueAt = 0;
 
-        advanceHoverToken('route');
         cleanupTargetSessionDom();
         stopTargetEventListeners();
         resizeObserver?.disconnect();
@@ -861,9 +579,6 @@ export function startLegacy() {
         completedSection = null;
         nativeCarousel.clearBinding();
         publishSourceState(null);
-        activeVideoId = null;
-        activePage = null;
-        activeClone = null;
         lastResponsiveSignature = '';
         lastPageShape = '';
         missingSectionSince = 0;
@@ -890,7 +605,7 @@ export function startLegacy() {
         targetSessionActive = true;
         initializationBlockedSessionToken = null;
         nativeInitializationFailure = null;
-        performanceDiagnostics = createPerformanceDiagnostics();
+        performanceDiagnostics = createPerformanceDiagnostics(); hover.resetDiagnostics();
         listView.resetDiagnostics();
         popupInspection.reset();
         startImageResourceDiagnostics(sessionScope.token);
@@ -1077,25 +792,25 @@ export function startLegacy() {
             myListSyncMode: 'event-driven',
             pendingMyListMutations: listMutations.pendingDiagnostics(),
             layout: layoutSummary(sourceState?.layout),
-            activeVideoId,
-            activePage,
-            activeClone: activeClone ? {
-                videoId: activeClone.getAttribute('data-tm-item-video-id') || '',
-                page: activeClone.getAttribute('data-tm-item-page') || '',
-                backedPage: activeClone.getAttribute('data-tm-backed-page') || '',
-                hoverReady: activeClone.getAttribute('data-tm-hover-ready') === 'true',
-                connected: Boolean(activeClone.isConnected),
-                rect: rectSummary(activeClone.getBoundingClientRect?.())
+            activeVideoId: hover.intent().videoId,
+            activePage: hover.intent().page,
+            activeClone: hover.intent().clone ? {
+                videoId: hover.intent().clone.getAttribute('data-tm-item-video-id') || '',
+                page: hover.intent().clone.getAttribute('data-tm-item-page') || '',
+                backedPage: hover.intent().clone.getAttribute('data-tm-backed-page') || '',
+                hoverReady: hover.intent().clone.getAttribute('data-tm-hover-ready') === 'true',
+                connected: Boolean(hover.intent().clone.isConnected),
+                rect: rectSummary(hover.intent().clone.getBoundingClientRect?.())
             } : null,
             activeSourceSlot: nativePopup.describeActiveSource(),
-            hoverToken,
+            hoverToken: hover.intent().token,
             responsiveRefreshing,
             responsiveSignature: lastResponsiveSignature,
             responsivePageShape: lastPageShape,
             responsiveReason: lastResponsiveReason,
             resizeViewportSignature: sourceState?.resizeViewportSignature || '',
-            hoverScrollState: hoverScrollStateSnapshot(),
-            pointer: { x: lastPointerX, y: lastPointerY }
+            hoverScrollState: hover.diagnostics().hoverScrollState,
+            pointer: { x: hover.intent().pointerX, y: hover.intent().pointerY }
         };
     }
 
@@ -1533,8 +1248,7 @@ export function startLegacy() {
     function gridOwnsClone(clone, grid) { return gridView.isCardVisible(clone, grid); }
 
     function cancelGroupHover() {
-        cancelPendingGridHover('group'); advanceHoverToken('group'); clearSourceAlignment();
-        activeClone = null; activeVideoId = null; activePage = null; nativePopup.invalidate();
+        hover.cancel('group');
     }
 
     function syncWatchGroups(state, changedIds = null, reason = 'reconcile') {
@@ -1558,7 +1272,7 @@ export function startLegacy() {
             },
             onAction: item => applyManualViewingChoice(state, item), onRefresh: () => refreshViewingStatus(state),
             onRequest: request => syncWatchGroups(state, [], request), onHoverChanged: cancelGroupHover,
-            readProtectedCards: () => [activeClone, pendingGridHoverClone].filter(Boolean),
+            readProtectedCards: () => hover.protectedCards(),
             isProtectedSourceCurrent: () => !nativePopup.diagnostics().geometryOwned || nativePopup.diagnostics().sourceConnected,
             releaseInteraction: handle => nativePopup.retire(handle),
             formatHeader: summary => formatHeaderParts(state.items.length, state.totalCount, state.initializationElapsedMs, true, summary)
@@ -1914,10 +1628,8 @@ export function startLegacy() {
     function retireMutationCard(record, { correlationId, parent, assertCurrent, onAccepted }) {
         assertCurrent();
         const clone = parent.cloneMap?.get(itemKey(record));
-        if (activeVideoId === String(record.videoId) || activeClone === clone) {
-            advanceHoverToken('source'); assertCurrent();
-            clearSourceAlignment(); assertCurrent();
-            activeVideoId = null; activeClone = null; activePage = null;
+        if (hover.intent().videoId === String(record.videoId) || hover.intent().clone === clone) {
+            hover.cancel('source'); assertCurrent();
         }
         const handle = gridView.getCard(record);
         if (handle) gridView.removeCard(handle, { correlationId, assertCurrent, onAccepted });
@@ -1929,7 +1641,7 @@ export function startLegacy() {
         assertCurrent();
         const grid = parent.grid || document.getElementById(GRID_ID);
         if (!grid) return false;
-        ensureGridHoverBehavior(grid); assertCurrent(); return true;
+        hover.install(grid); assertCurrent(); return true;
     }
 
     function insertMutationCard(record, options) {
@@ -2151,7 +1863,7 @@ export function startLegacy() {
     function handleObservedMyListToggleClick(event) {
         if (!isTargetPage() || !sourceState) return;
         listMutations.observeClick(() => {
-            const membership = netflixDom.describeMembershipClick(event, { activeVideoId });
+            const membership = netflixDom.describeMembershipClick(event, { activeVideoId: hover.intent().videoId });
             return { membership, toastAction: !membership && netflixDom.describeToastActionClick(event) };
         });
     }
@@ -2179,11 +1891,7 @@ export function startLegacy() {
         orderMismatchDismissed = true;
         hideOrderMismatchDialog();
 
-        advanceHoverToken('source');
-        clearSourceAlignment();
-        activeVideoId = null;
-        activeClone = null;
-        activePage = null;
+        hover.cancel('source');
 
         log(tLog('manualReinitializationRequested'), {
             selectedPage: nativeSourceDiagnostics()?.selectedPage ?? null,
@@ -2462,12 +2170,9 @@ export function startLegacy() {
 
     async function resolveExpectedPageSourceItem(item, expectedPage = pageForItem(item), token = null, sessionToken = null) {
         assertRouteSession(sessionToken);
-        if (hoverPreparationCancelled(token)) return { status: 'unknown', reason: 'hover-cancelled' };
+        if (hover.isCancelled(token)) return { status: 'unknown', reason: 'hover-cancelled' };
         ensureLiveNativeBinding('hover-expected-page-start');
-        clearSourceAlignment();
-        activeVideoId = null;
-        activeClone = null;
-        activePage = null;
+        hover.releaseInteraction();
         const state = sourceState;
         const result = await nativeCarousel.resolveCard({ section: state?.section, scroller: state?.scroller,
             track: state?.track, item: { videoId: item.videoId, href: item.href }, expectedPage,
@@ -2549,32 +2254,32 @@ export function startLegacy() {
 
     async function refreshStaleSourceOnPreferredPage(item, preferredPage = pageForItem(item), token = null, sessionToken = null) {
         assertRouteSession(sessionToken);
-        if (hoverPreparationCancelled(token)) return null;
+        if (hover.isCancelled(token)) return null;
         ensureLiveNativeBinding('hover-stale-refresh-start');
         const state = sourceState;
         const result = await nativeCarousel.resolveCard({ mode: 'preferred-refresh', section: state?.section,
             scroller: state?.scroller, track: state?.track, item: itemSummary(item), preferredPage,
             hoverToken: token, sessionToken });
         assertRouteSession(sessionToken);
-        if (hoverPreparationCancelled(token) || sourceState !== state || result.status !== 'found') return null;
+        if (hover.isCancelled(token) || sourceState !== state || result.status !== 'found') return null;
         return { ...result, get slot() { return result.source.slot; } };
     }
 
     async function locateActiveSourceItem(item, preferredPage = pageForItem(item), token = null, sessionToken = null, repairLogicalMapping = true, maxRadius = null) {
         assertRouteSession(sessionToken);
-        if (hoverPreparationCancelled(token)) return null;
+        if (hover.isCancelled(token)) return null;
         ensureLiveNativeBinding('hover-locate-start');
         const state = sourceState;
         const result = await nativeCarousel.resolveCard({ mode: 'search', section: state?.section,
             scroller: state?.scroller, track: state?.track, item: itemSummary(item), preferredPage,
             columns: state?.layout?.columns || 1, repairLogicalMapping, maxRadius, hoverToken: token, sessionToken });
         assertRouteSession(sessionToken);
-        if (hoverPreparationCancelled(token) || sourceState !== state || result.status !== 'found') return null;
+        if (hover.isCancelled(token) || sourceState !== state || result.status !== 'found') return null;
         return nativeCarousel.sample(() => {
             if (repairLogicalMapping) {
                 for (let index = 0; index < result.visibleCards.length; index++) {
                     assertRouteSession(sessionToken);
-                    if (hoverPreparationCancelled(token) || sourceState !== state) return null;
+                    if (hover.isCancelled(token) || sourceState !== state) return null;
                     nativeCarousel.assertSource(result.source);
                     nativeCarousel.assertSource(result.sources[index]);
                     const visibleItem = state.itemMap?.get(itemKey(result.visibleCards[index]));
@@ -2588,7 +2293,7 @@ export function startLegacy() {
                 }
             }
             assertRouteSession(sessionToken);
-            if (hoverPreparationCancelled(token) || sourceState !== state) return null;
+            if (hover.isCancelled(token) || sourceState !== state) return null;
             nativeCarousel.assertSource(result.source);
             return { ...result, get slot() { return result.source.slot; } };
         });
@@ -2609,21 +2314,6 @@ export function startLegacy() {
         return state;
     }
 
-    function retireHoverCard(handle, detail) {
-        const clone = handle.node;
-        if (detail.reason === 'replacement' && detail.attempt?.token === hoverToken &&
-            isRouteSessionActive(detail.attempt.sessionToken)) return;
-        if (clone === activeClone || clone === pendingGridHoverClone ||
-            (clone.getAttribute('data-tm-preparing') === 'true' && clone.getAttribute('data-tm-hover-token') === String(hoverToken))) {
-            advanceHoverToken('source');
-            cancelPendingGridHover('source');
-            clearSourceAlignment();
-            activeClone = null;
-            activeVideoId = null;
-            activePage = null;
-        }
-    }
-
 
     function findItemForSourceSlot(slot) {
         const card = slot?.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
@@ -2632,22 +2322,13 @@ export function startLegacy() {
     }
 
 
-    function releaseFailedGridHover(clone, token) {
-        if (!clone || token !== hoverToken || activeClone !== clone) return;
-        clearSourceAlignment();
-        activeVideoId = null;
-        activeClone = null;
-        activePage = null;
-    }
-
-
     async function prepareMountedPage(page, targetItem = null, triggerEvent = null, token = null, sessionToken = null) {
         assertRouteSession(sessionToken);
-        if (hoverPreparationCancelled(token)) return null;
+        if (hover.isCancelled(token)) return null;
         let targetCard = targetItem ? gridView.getCard(targetItem) : null;
         if (targetItem) gridView.assertCard(targetCard);
-        performanceDiagnostics.hoverPreparation.calls++;
-        const hoverTiming = performanceDiagnostics.hoverTiming;
+        hover.count('hoverPreparation', 'calls');
+        const hoverTiming = hover.captureTiming();
         ensureLiveNativeBinding('hover-prepare-start');
         const state = sourceState;
         const { section, scroller, track } = state || {};
@@ -2678,7 +2359,7 @@ export function startLegacy() {
             targetItem: itemSummary(targetItem),
             triggerEvent: triggerEvent?.type || '',
             token,
-            hoverToken
+            hoverToken: hover.intent().token
         });
 
         let targetSourceSlot = null;
@@ -2688,8 +2369,8 @@ export function startLegacy() {
 
         if (targetItem) {
             let located = await resolveExpectedPageSourceItem(targetItem, page, token, sessionToken);
-            if (token !== null && token !== hoverToken) {
-                log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-expected-page-check', token, hoverToken });
+            if (token !== null && token !== hover.intent().token) {
+                log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-expected-page-check', token, hoverToken: hover.intent().token });
                 return null;
             }
 
@@ -2722,8 +2403,8 @@ export function startLegacy() {
                 });
                 await sleep(120);
                 located = await resolveExpectedPageSourceItem(targetItem, page, token, sessionToken);
-                if (token !== null && token !== hoverToken) {
-                    log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-mismatch-retry', token, hoverToken });
+                if (token !== null && token !== hover.intent().token) {
+                    log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-mismatch-retry', token, hoverToken: hover.intent().token });
                     return null;
                 }
                 if (located?.positionMismatch) {
@@ -2769,8 +2450,8 @@ export function startLegacy() {
                         visibleIds: located?.visibleIds || []
                     });
                     let repaired = await refreshStaleSourceOnPreferredPage(targetItem, page, token, sessionToken);
-                    if (token !== null && token !== hoverToken) {
-                        log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-stale-page-refresh', token, hoverToken });
+                    if (token !== null && token !== hover.intent().token) {
+                        log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-stale-page-refresh', token, hoverToken: hover.intent().token });
                         return null;
                     }
                     if (!repaired?.slot) {
@@ -2783,8 +2464,8 @@ export function startLegacy() {
                             mutationSourceRecoveryPending ? null : 2
                         );
                     }
-                    if (token !== null && token !== hoverToken) {
-                        log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-stale-page-search', token, hoverToken });
+                    if (token !== null && token !== hover.intent().token) {
+                        log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-stale-page-search', token, hoverToken: hover.intent().token });
                         return null;
                     }
                     assertCurrent();
@@ -2836,14 +2517,14 @@ export function startLegacy() {
             }
         } else {
             await goToPage(section, scroller, page, token, sessionToken, true);
-            if (token !== null && token !== hoverToken) return null;
+            if (token !== null && token !== hover.intent().token) return null;
             await waitStableCurrentPage(scroller, track, {
                 previousSignature: beforeSignature,
                 minElapsed: 160,
                 sessionToken,
                 hoverToken: token
             });
-            if (hoverPreparationCancelled(token)) return null;
+            if (hover.isCancelled(token)) return null;
             assertCurrent();
             actualPage = nativeSourceObservation(state, { position: true }).position.page;
         }
@@ -2860,11 +2541,8 @@ export function startLegacy() {
         });
 
         assertCurrent();
+        hover.releaseInteraction();
         nativePopup.invalidate();
-        clearSourceAlignment();
-        activeVideoId = null;
-        activeClone = null;
-        activePage = actualPage;
 
         const pageView = nativeCarousel.pageCards({ section, scroller, track, binding: nativeOwner,
             source: resolvedSource, page: actualPage, totalCount: records?.length || 0,
@@ -2879,9 +2557,9 @@ export function startLegacy() {
 
         nativeCarousel.sample(() => {
             for (const entry of pageView.cards) {
-                if (hoverPreparationCancelled(token)) return;
+                if (hover.isCancelled(token)) return;
                 nativeCarousel.assertObservation(pageView);
-                performanceDiagnostics.hoverPreparation.slotsConsidered++;
+                hover.count('hoverPreparation', 'slotsConsidered');
 
                 if (!entry.inPage) continue;
                 const sourceSlot = entry.source.slot;
@@ -2898,7 +2576,7 @@ export function startLegacy() {
 
                 if (targetItem && itemKey(pageItem) !== itemKey(targetItem)) {
                     neighborsSkipped++;
-                    performanceDiagnostics.hoverPreparation.neighborsSkipped++;
+                    hover.count('hoverPreparation', 'neighborsSkipped');
                     continue;
                 }
 
@@ -2910,11 +2588,11 @@ export function startLegacy() {
                 let fresh, stats, handle;
                 try { ({ fresh, stats, handle } = makeLiveClone(sourceSlot, pageItem, oldClone, actualPage,
                     () => nativeCarousel.assertObservation(pageView), token, sessionToken)); }
-                finally { recordHoverTiming(hoverTiming, 'graft', graftStarted); }
-                if (targetItem) targetCard = handle;
+                finally { hoverTiming('graft', graftStarted); }
+                if (targetItem) { hover.acceptReplacement(targetCard, handle, token, sessionToken); targetCard = handle; }
                 nativeCarousel.assertObservation(pageView);
                 refreshedCount++;
-                performanceDiagnostics.hoverPreparation.clonesRebuilt++;
+                hover.count('hoverPreparation', 'clonesRebuilt');
                 fiberAssignments += stats?.fiberAssignments || 0;
                 propsAssignments += stats?.propsAssignments || 0;
 
@@ -2923,14 +2601,14 @@ export function startLegacy() {
                 if (targetItem && itemKey(pageItem) === itemKey(targetItem)) {
                     try {
                         fresh.__tmHoverReplacementHovered = fresh.matches(':hover');
-                        if (!fresh.__tmHoverReplacementHovered) performanceDiagnostics.hoverInteraction.replacementNotHovered++;
-                    } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
+                        if (!fresh.__tmHoverReplacementHovered) hover.count('hoverInteraction', 'replacementNotHovered');
+                    } catch (_) { hover.count('hoverInteraction', 'diagnosticFailures'); }
                     freshTarget = fresh;
                     targetSourceSlot = sourceSlot;
                 }
             }
         });
-        if (hoverPreparationCancelled(token)) return null;
+        if (hover.isCancelled(token)) return null;
         nativeCarousel.assertObservation(pageView);
 
         log(tLog('nativePageClonesUpdated'), {
@@ -2958,25 +2636,6 @@ export function startLegacy() {
             return null;
         }
 
-        if (targetItem && freshTarget && targetSourceSlot) {
-            // Align once, in the replay frame after source identity/visibility is revalidated.
-            performanceDiagnostics.hoverLifecycle.duplicateAlignmentsAvoided++;
-            activeVideoId = targetItem.videoId;
-            activeClone = freshTarget;
-
-            const replayed = await scheduleNativeHoverReplay(
-                targetSourceSlot,
-                targetItem,
-                freshTarget,
-                triggerEvent,
-                actualPage,
-                'prepared-page',
-                token,
-                sessionToken
-            );
-            if (!replayed) return null;
-        }
-
         nativeCarousel.assertObservation(pageView);
         log(tLog('nativePagePreparationCompleted'), {
             requestedPage: page,
@@ -2986,358 +2645,9 @@ export function startLegacy() {
             elapsedMs: Math.round(performance.now() - started)
         });
         nativeCarousel.assertObservation(pageView);
-        return freshTarget;
+        return freshTarget ? { card: targetCard, source: popupSource(targetSourceSlot, targetItem), page: actualPage } : null;
     }
 
-    async function activateClone(item, clone, triggerEvent = null, generation = clone?.__tmHoverActivationGeneration, intentDiagnostic = null) {
-        if (!gridHoverTargetActive(clone, generation)) return;
-        const seq = ++hoverSequence;
-        const started = performance.now();
-        const timing = performanceDiagnostics.hoverTiming;
-        const group = clone.parentElement?.getAttribute('data-tm-watch-grid') === 'true' ? 'watched' : 'main';
-
-        if (orderMismatchDialogOpen || orderMismatchReinitializing) {
-            log(tLog('hoverCancelled'), {
-                seq,
-                reason: orderMismatchDialogOpen ? 'order-mismatch-dialog-open' : 'order-mismatch-reinitializing',
-                item: itemSummary(item)
-            });
-            return;
-        }
-
-        if (responsiveRefreshPromise) {
-            log(tLog('hoverWaitingResponsiveRefreshInProgress'), { seq, item: itemSummary(item) });
-            try { await responsiveRefreshPromise; } catch (_) {}
-            if (!gridHoverTargetActive(clone, generation)) return;
-        }
-        if (!clone?.isConnected) {
-            warn(tLog('hoverCancelled'), { seq, reason: 'clone-disconnected', item: itemSummary(item) });
-            return;
-        }
-        if (clone.getAttribute('data-tm-preparing') === 'true') {
-            const preparingTokenText = clone.getAttribute('data-tm-hover-token');
-            const preparingToken = preparingTokenText === null ? NaN : Number(preparingTokenText);
-            if (Number.isFinite(preparingToken) && preparingToken !== hoverToken) {
-                // The previous hover was already cancelled (typically by pointerleave),
-                // but its async cleanup has not reached finally yet. Clear only that
-                // stale marker so a new hover can start immediately; the old token will
-                // make the previous async path self-cancel at its next checkpoint.
-                clone.removeAttribute('data-tm-preparing');
-                clone.removeAttribute('data-tm-hover-token');
-            } else {
-                log(tLog('hoverCancelled'), { seq, reason: 'already-preparing', item: itemSummary(item) });
-                return;
-            }
-        }
-
-        const token = advanceHoverToken('superseded');
-        const sessionToken = sessionScope.token;
-        startHoverFrameDiagnostics('preparation');
-        clone.setAttribute('data-tm-hover-token', String(token));
-        clone.setAttribute('data-tm-preparing', 'true');
-        const diagnosticOwner = { seq, token, group, started, intent: intentDiagnostic,
-            counters: performanceDiagnostics.hoverScroll };
-        activeHoverPreparationDiagnostic = diagnosticOwner;
-        let fresh = null;
-        try {
-            assertRouteSession(sessionToken);
-            // One recovery attempt for this intent, including failed ready-source
-            // replay. Follow the current card after preparation replaces its DOM.
-            for (let attempt = 0; attempt < 2; attempt++) {
-                if (attempt) await sleep(HOVER_RETRY_DELAY_MS);
-                const current = attempt ? findGridClone(item) : clone;
-                if (hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) ||
-                    orderMismatchDialogOpen || orderMismatchReinitializing ||
-                    !gridHoverTargetActive(current, generation, triggerEvent) ||
-                    current.getAttribute('data-tm-hover-token') !== String(token)) break;
-
-                clearSourceAlignment();
-                const { selected, sourceSlot, reused } = withNativeReadScope(() => {
-                    if (!attempt && current.getAttribute('data-tm-hover-ready') === 'true') {
-                        ensureLiveNativeBinding('hover-reuse');
-                    }
-                    const observation = nativeSourceObservation(sourceState, { position: true });
-                    const selected = observation.position.page;
-                    const backedPage = Number(current.getAttribute('data-tm-backed-page'));
-                    const sourceSlot = !attempt && current.getAttribute('data-tm-hover-ready') === 'true' &&
-                        Number.isFinite(backedPage) && selected === backedPage ? findActiveSourceSlot(item) : null;
-                    nativeCarousel.assertObservation(observation);
-                    if (attempt) {
-                        log('Retrying native page preparation after transient hydration', {
-                            seq,
-                            item: itemSummary(item),
-                            token,
-                            selectedPage: selected
-                        });
-                        nativeCarousel.assertObservation(observation);
-                    }
-
-                    let reused = false;
-                    if (!attempt && sourceSlot) {
-                        performanceDiagnostics.hoverLifecycle.duplicateAlignmentsAvoided++;
-                        reused = true;
-                        activePage = selected;
-                        activeVideoId = item.videoId;
-                        activeClone = current;
-                        log(tLog('hoverReusedImmediately'), {
-                            seq,
-                            group,
-                            intent: intentDiagnostic,
-                            item: itemSummary(item),
-                            selectedPage: selected,
-                            backedPage,
-                            elapsedMs: Math.round(performance.now() - started)
-                        });
-                        nativeCarousel.assertObservation(observation);
-                    } else {
-                        log(tLog('hoverRequestedNativePagePreparation'), {
-                            seq,
-                            group,
-                            intent: intentDiagnostic,
-                            directPageDistance: Math.abs(selected - pageForItem(item)),
-                            item: itemSummary(item),
-                            selectedPage: selected,
-                            targetPage: pageForItem(item),
-                            backedPage: Number.isFinite(backedPage) ? backedPage : null,
-                            hoverReady: current.getAttribute('data-tm-hover-ready') === 'true',
-                            token,
-                            triggerEvent: triggerEvent?.type || ''
-                        });
-                        nativeCarousel.assertObservation(observation);
-                    }
-                    return { selected, sourceSlot, reused };
-                });
-                if (reused) {
-                    const replayed = await scheduleNativeHoverReplay(
-                        sourceSlot, item, current, triggerEvent, selected, 'immediate-reuse', token, sessionToken
-                    );
-                    fresh = replayed ? current : null;
-                } else {
-                    fresh = await prepareMountedPage(pageForItem(item), item, triggerEvent, token, sessionToken);
-                }
-                if (fresh || hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken) ||
-                    orderMismatchDialogOpen || orderMismatchReinitializing) break;
-            }
-            if (hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken)) return;
-            if (fresh) recordHoverTiming(timing, group === 'watched' ? 'watchedPreparation' : 'mainPreparation', started);
-            log(tLog('hoverNativePagePreparationResult'), {
-                seq,
-                group,
-                intent: intentDiagnostic,
-                item: itemSummary(item),
-                success: Boolean(fresh),
-                replayDispatched: Boolean(fresh),
-                activePage,
-                activeVideoId,
-                elapsedMs: Math.round(performance.now() - started)
-            });
-        } catch (error) {
-            if (!isRouteSessionCancelledError(error)) {
-                warn(tLog('liveClonePreparationFailed'), { seq, item: itemSummary(item), error });
-            }
-        } finally {
-            if (activeHoverPreparationDiagnostic === diagnosticOwner) activeHoverPreparationDiagnostic = null;
-            if (!fresh) releaseFailedGridHover(activeClone, token);
-            const current = findGridClone(item);
-            if (current?.isConnected && current.getAttribute('data-tm-hover-token') === String(token)) {
-                current.removeAttribute('data-tm-preparing');
-                current.removeAttribute('data-tm-hover-token');
-            }
-            if (clone?.isConnected && clone.getAttribute('data-tm-hover-token') === String(token)) {
-                clone.removeAttribute('data-tm-preparing');
-                clone.removeAttribute('data-tm-hover-token');
-            }
-        }
-    }
-
-    function gridCloneFromPointerEvent(event, grid, includeViewingControls = false) {
-        let node = event.target instanceof Element ? event.target : event.target?.parentElement;
-        while (node && node !== grid) {
-            if (!includeViewingControls && node.getAttribute('data-tm-viewing-actions') === 'true') return null;
-            if (node.__tmMyListItem && gridOwnsClone(node, grid)) return node;
-            node = node.parentElement;
-        }
-        return null;
-    }
-
-    function gridHoverSuppressed() {
-        return hoverNeedsPointerMove || performance.now() - lastTargetScrollAt < HOVER_SCROLL_QUIET_MS;
-    }
-
-    function gridHoverReplacementUnderPointer(clone, triggerEvent) {
-        // Only a replacement in this still-current preparation can use hit testing.
-        // Never infer hover merely from a saved rectangle or a nearby popup.
-        if (clone.__tmHoverReplacementToken !== hoverToken ||
-            clone.getAttribute('data-tm-hover-token') !== String(hoverToken) ||
-            clone.getAttribute('data-tm-preparing') !== 'true') return false;
-        const counters = performanceDiagnostics.hoverInteraction;
-        counters.replacementPointerChecks++;
-        const current = lastPointerX !== -1 && lastPointerY !== -1;
-        const x = current ? lastPointerX : triggerEvent?.clientX;
-        const y = current ? lastPointerY : triggerEvent?.clientY;
-        try {
-            if (!Number.isFinite(x) || !Number.isFinite(y) || typeof document?.elementFromPoint !== 'function') {
-                counters.replacementPointerUnavailable++;
-                clone.__tmHoverReplacementPointerVerified = null;
-                return false;
-            }
-            const target = document.elementFromPoint(x, y);
-            const matches = Boolean(target && gridCloneFromPointerEvent({ target }, sourceState.grid) === clone);
-            clone.__tmHoverReplacementPointerVerified = matches;
-            if (matches) counters.replacementPointerAccepted++;
-            else counters.replacementPointerRejected++;
-            return matches;
-        } catch (_) {
-            counters.replacementPointerUnavailable++;
-            clone.__tmHoverReplacementPointerVerified = null;
-            return false;
-        }
-    }
-
-    function gridHoverTargetActive(clone, generation, triggerEvent = null) {
-        const handle = clone?.__tmMyListItem ? gridView.getCard(clone.__tmMyListItem) : null;
-        return Boolean(handle && handle.node === clone && gridView.isCardCurrent(handle)) && !gridHoverSuppressed() && Boolean(sourceState?.grid?.isConnected) &&
-            Boolean(clone?.isConnected) && gridOwnsClone(clone, sourceState.grid) &&
-            !clone.__tmViewingControlHovered &&
-            generation === clone.__tmHoverActivationGeneration &&
-            (clone.matches(':hover') || gridHoverReplacementUnderPointer(clone, triggerEvent));
-    }
-
-    function cancelPendingGridHover(reason = 'other') {
-        const clone = pendingGridHoverClone;
-        const diagnostic = pendingGridHoverDiagnostic;
-        pendingGridHoverClone = null;
-        pendingGridHoverDiagnostic = null;
-        if (!clone) return;
-        performanceDiagnostics.hoverInteraction.intentsCancelled++;
-        clone.__tmHoverActivationGeneration = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
-        clearTimeout(clone.__tmHoverActivationTimer);
-        clone.__tmHoverActivationTimer = null;
-        try {
-            if (diagnostic && performanceDiagnostics.hoverScroll === diagnostic.counters) {
-                const counters = diagnostic.counters;
-                const elapsed = Math.max(0, Math.round(performance.now() - diagnostic.started));
-                counters.cancelledDwellTotalMs += elapsed;
-                counters.cancelledDwellMaxMs = Math.max(counters.cancelledDwellMaxMs, elapsed);
-                counters.lastIntentCancellationReason = recordHoverCancellation(counters, 'intent', reason);
-            }
-        } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
-    }
-
-    function handleGridClonePointerOver(event, clone, item, physicalMove = false) {
-        if (orderMismatchDialogOpen || orderMismatchReinitializing) return;
-        if (event.relatedTarget && clone.contains(event.relatedTarget)) return;
-        if (!sourceState?.section) return;
-        if (gridHoverSuppressed() && !physicalMove) {
-            const counters = performanceDiagnostics.hoverScroll;
-            if (hoverNeedsPointerMove) counters.boundarySuppressedMovement++;
-            if (performance.now() - lastTargetScrollAt < HOVER_SCROLL_QUIET_MS) counters.boundarySuppressedQuiet++;
-            return;
-        }
-        if (pendingGridHoverClone === clone || activeClone === clone) return;
-        if (clone.getAttribute('data-tm-preparing') === 'true' &&
-            clone.getAttribute('data-tm-hover-token') === String(hoverToken)) return;
-
-        // All preparation, including ready-source reuse, goes through the dwell.
-        // Physical intent received just after a scroll survives the quiet period.
-        // Boundary events alone still cannot prepare a stationary scroll target.
-        cancelPendingGridHover('superseded');
-        const generation = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
-        clone.__tmHoverActivationGeneration = generation;
-        pendingGridHoverClone = clone;
-        performanceDiagnostics.hoverInteraction.intentsQueued++;
-        startHoverFrameDiagnostics('intent');
-        const dwellStarted = performance.now();
-        const timing = performanceDiagnostics.hoverTiming;
-        const counters = performanceDiagnostics.hoverScroll;
-        const quietRemaining = Math.max(0, HOVER_SCROLL_QUIET_MS - (dwellStarted - lastTargetScrollAt));
-        const delay = Math.max(HOVER_ACTIVATION_DELAY_MS, quietRemaining);
-        const diagnostic = { started: dwellStarted, counters, physicalMove,
-            sinceScrollAtQueueMs: hoverScrollElapsed(dwellStarted), quietRemainingAtQueueMs: Math.round(quietRemaining),
-            needsMovementAtQueue: hoverNeedsPointerMove, scheduledDwellMs: Math.round(delay) };
-        pendingGridHoverDiagnostic = diagnostic;
-        if (quietRemaining > 0) counters.intentsDuringQuiet++;
-        if (hoverNeedsPointerMove) counters.intentsAwaitingMovement++;
-        clone.__tmHoverActivationTimer = setTimeout(() => {
-            recordHoverTiming(timing, 'dwell', dwellStarted);
-            clone.__tmHoverActivationTimer = null;
-            if (pendingGridHoverClone === clone) pendingGridHoverClone = null;
-            if (pendingGridHoverDiagnostic === diagnostic) pendingGridHoverDiagnostic = null;
-            if (physicalMove && sourceState?.grid?.isConnected && clone.isConnected &&
-                gridOwnsClone(clone, sourceState.grid) && generation === clone.__tmHoverActivationGeneration &&
-                clone.matches(':hover') && performance.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) {
-                if (hoverNeedsPointerMove && performanceDiagnostics.hoverScroll === counters) counters.dwellRearms++;
-                hoverNeedsPointerMove = false;
-            }
-            if (!gridHoverTargetActive(clone, generation)) {
-                performanceDiagnostics.hoverInteraction.dwellRejected++;
-                return;
-            }
-            performanceDiagnostics.hoverInteraction.dwellCompleted++;
-            activateClone(item, clone, event, generation, hoverIntentDiagnosticSnapshot(diagnostic));
-        }, delay);
-    }
-
-    function handleGridClonePointerLeave(clone, item, relatedTarget = null, event = null) {
-        if (pendingGridHoverClone === clone || activeClone === clone ||
-            clone.getAttribute('data-tm-hover-token') === String(hoverToken)) {
-            recordGridHoverLeave(clone, relatedTarget, event);
-        }
-        if (nativePopup.retainPreview(clone, relatedTarget, event)) return;
-        const cancellationReason = clone.__tmViewingControlHovered ? 'controls' : 'pointer-leave';
-        if (pendingGridHoverClone === clone) cancelPendingGridHover(cancellationReason);
-        clone.__tmHoverActivationGeneration = (Number(clone.__tmHoverActivationGeneration) || 0) + 1;
-        if (clone.__tmHoverActivationTimer !== null && clone.__tmHoverActivationTimer !== undefined) {
-            clearTimeout(clone.__tmHoverActivationTimer);
-            clone.__tmHoverActivationTimer = null;
-        }
-
-        const cloneTokenText = clone.getAttribute('data-tm-hover-token');
-        const cloneToken = cloneTokenText === null ? NaN : Number(cloneTokenText);
-        if (Number.isFinite(cloneToken) && cloneToken === hoverToken) {
-            advanceHoverToken(cancellationReason);
-            clone.removeAttribute('data-tm-hover-token');
-            clone.removeAttribute('data-tm-preparing');
-            log(tLog('pendingHoverCancelledOnLeave'), {
-                item: itemSummary(item),
-                token: cloneToken,
-                hoverToken
-            });
-        }
-        if (activeClone !== clone) return;
-        clearSourceAlignment(undefined, 'pointer-leave', relatedTarget);
-        activeVideoId = null;
-        activeClone = null;
-        activePage = null;
-        log(tLog('hoverCoordinateProxyReleased'), { item: itemSummary(item) });
-    }
-
-    function associateGridHoverItem(item, clone) {
-        clone.__tmMyListItem = item;
-    }
-
-    function ensureGridHoverBehavior(grid) {
-        if (!grid || grid.__tmHoverBehaviorInstalled) return;
-        grid.__tmHoverBehaviorInstalled = true;
-        grid.addEventListener('pointerover', event => {
-            const clone = gridCloneFromPointerEvent(event, grid);
-            if (clone) {
-                clone.__tmViewingControlHovered = false;
-                handleGridClonePointerOver(event, clone, clone.__tmMyListItem);
-            } else {
-                const controlClone = gridCloneFromPointerEvent(event, grid, true);
-                if (controlClone) {
-                    controlClone.__tmViewingControlHovered = true;
-                    handleGridClonePointerLeave(controlClone, controlClone.__tmMyListItem, event.target, event);
-                } else cancelPendingGridHover('controls');
-            }
-        }, { capture: true, passive: true });
-        grid.addEventListener('pointerout', event => {
-            const clone = gridCloneFromPointerEvent(event, grid);
-            if (!clone || (event.relatedTarget && clone.contains(event.relatedTarget))) return;
-            handleGridClonePointerLeave(clone, clone.__tmMyListItem, event.relatedTarget, event);
-        }, { capture: true, passive: true });
-    }
 
     async function buildGrid(section, scroller, items, layout, totalCount, sessionToken = sessionScope.token) {
         const buildState = sourceState;
@@ -3430,13 +2740,7 @@ export function startLegacy() {
     }
 
     function cancelResizeHover() {
-        cancelPendingGridHover('resize');
-        advanceHoverToken('resize');
-        clearSourceAlignment();
-        activeVideoId = null;
-        activeClone = null;
-        activePage = null;
-        nativePopup.invalidate();
+        hover.cancel('resize');
         performanceDiagnostics.resize.hoverCancelled++;
     }
 
@@ -3792,8 +3096,7 @@ export function startLegacy() {
                     sourceState.layout = measured;
                     realignActiveSource();
                     performanceDiagnostics.resize.unchanged++;
-                    const hoverPreserved = Boolean(activeClone || pendingGridHoverClone ||
-                        activeHoverPreparationDiagnostic?.token === hoverToken);
+                    const hoverPreserved = Boolean(hover.hasInteraction());
                     if (hoverPreserved) performanceDiagnostics.resize.hoverPreserved++;
                     if (parkedHeightOnlyChange) {
                         const counters = performanceDiagnostics.resize;
@@ -3804,7 +3107,7 @@ export function startLegacy() {
                             try { log(tLog('responsiveRemeasurementNoShapeChange'), {
                                 reason: lastResponsiveReason, signature: sig, parkedHeightOnlyChange: true,
                                 previousScrollerHeight, scrollerHeight: measured.scrollerHeight, hoverPreserved
-                            }); } catch (_) { performanceDiagnostics.hoverInteraction.diagnosticFailures++; }
+                            }); } catch (_) { hover.count('hoverInteraction', 'diagnosticFailures'); }
                         }
                     } else trace(() => [tLog('responsiveRemeasurementNoShapeChange'), {
                         reason: lastResponsiveReason,
@@ -3834,7 +3137,7 @@ export function startLegacy() {
                         lastPageShape = responsivePageShape(measured);
                         realignActiveSource();
                         performanceDiagnostics.resize.unchanged++;
-                        if (activeClone || pendingGridHoverClone) performanceDiagnostics.resize.hoverPreserved++;
+                        if (hover.hasInteraction()) performanceDiagnostics.resize.hoverPreserved++;
                         log(tLog('responsiveRemeasurementNoShapeChange'), {
                             reason: lastResponsiveReason,
                             signature: sig,
@@ -3869,50 +3172,6 @@ export function startLegacy() {
         nativePopup.checkDetached();
     }
 
-    function handleTargetPointerMove(event) {
-        // Synthetic native replay must not overwrite the latest physical position.
-        if (!event.isTrusted) return;
-        const moved = event.clientX !== lastPointerX || event.clientY !== lastPointerY;
-        lastPointerX = event.clientX;
-        lastPointerY = event.clientY;
-        if (!moved) {
-            if (hoverNeedsPointerMove) performanceDiagnostics.hoverScroll.unchangedPointerEvents++;
-            return;
-        }
-        const grid = sourceState?.grid;
-        if (!grid?.isConnected) return;
-        const clone = gridCloneFromPointerEvent(event, grid);
-        if (nativePopup.pointerMoved(event)) { cancelPendingGridHover('preview'); return; }
-        if (performance.now() - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS) {
-            if (hoverNeedsPointerMove) performanceDiagnostics.hoverScroll.physicalRearms++;
-            hoverNeedsPointerMove = false;
-        }
-        if (clone) handleGridClonePointerOver(event, clone, clone.__tmMyListItem, true);
-        else cancelPendingGridHover('outside-grid');
-    }
-
-    function handleTargetScroll(event = null) {
-        const now = performance.now();
-        const starting = now - lastTargetScrollAt >= HOVER_SCROLL_QUIET_MS;
-        lastTargetScrollAt = now;
-        const counters = performanceDiagnostics.hoverScroll;
-        const kind = event?.type === 'wheel' ? 'wheel' : event?.type === 'scroll' ? 'scroll' : 'other';
-        counters[kind === 'wheel' ? 'wheelEvents' : kind === 'scroll' ? 'scrollEvents' : 'otherScrollEvents']++;
-        counters.lastScrollEvent = kind;
-        hoverNeedsPointerMove = true;
-        cancelPendingGridHover('scroll');
-        if (!starting) return;
-        performanceDiagnostics.hoverLifecycle.scrollBursts++;
-        startHoverFrameDiagnostics('scroll');
-        advanceHoverToken('scroll');
-        clearSourceAlignment(undefined, 'scroll');
-        activeVideoId = null;
-        activeClone = null;
-        activePage = null;
-        // Grafted React props also receive Netflix's delegated mouse events.
-        // Clear them once per scroll burst so they cannot bypass the script guard.
-        nativePopup.invalidate();
-    }
 
     function handleTargetWindowResize() {
         handleTargetResize('window.resize');
@@ -3952,11 +3211,7 @@ export function startLegacy() {
     function startTargetEventListeners() {
         if (targetListenersActive) return;
         targetListenersActive = true;
-        document.addEventListener('pointermove', handleTargetPointerMove, { passive: true, capture: true });
-        document.addEventListener('pointerout', nativePopup.previewPointerOut, { passive: true, capture: true });
-        document.addEventListener('visibilitychange', handleHoverDiagnosticVisibilityChange, { passive: true });
-        document.addEventListener('wheel', handleTargetScroll, { passive: true, capture: true });
-        document.addEventListener('scroll', handleTargetScroll, { passive: true, capture: true });
+        hover.start();
         document.addEventListener('click', handleObservedMyListToggleClick, { capture: true, passive: true });
         window.addEventListener('resize', handleTargetWindowResize, { passive: true });
         window.visualViewport?.addEventListener('resize', handleTargetVisualViewportResize, { passive: true });
@@ -3964,21 +3219,11 @@ export function startLegacy() {
     }
 
     function stopTargetEventListeners() {
-        stopHoverFrameDiagnostics();
+        hover.dispose();
         nativePopup.finishProbe({ result: 'released-before-check', reason: 'listeners-stopped' });
         nativePopup.release('listeners-stopped');
         if (!targetListenersActive && !nativeCarousel.diagnostics().discoveryActive) return;
         targetListenersActive = false;
-        cancelPendingGridHover('route');
-        lastTargetScrollAt = -Infinity;
-        hoverNeedsPointerMove = false;
-        lastPointerX = -1;
-        lastPointerY = -1;
-        document.removeEventListener('pointermove', handleTargetPointerMove, true);
-        document.removeEventListener('pointerout', nativePopup.previewPointerOut, true);
-        document.removeEventListener('visibilitychange', handleHoverDiagnosticVisibilityChange);
-        document.removeEventListener('wheel', handleTargetScroll, true);
-        document.removeEventListener('scroll', handleTargetScroll, true);
         document.removeEventListener('click', handleObservedMyListToggleClick, true);
         window.removeEventListener('resize', handleTargetWindowResize);
         window.visualViewport?.removeEventListener('resize', handleTargetVisualViewportResize);
@@ -4003,8 +3248,7 @@ export function startLegacy() {
                 !section.contains(scroller) || !scroller.contains(track) ||
                 (section === failure.section && scroller === failure.scroller && track === failure.track)) return false;
 
-            advanceHoverToken('source');
-            cancelPendingGridHover('source');
+            hover.cancel('source');
             nativeCarousel.assertObservation(discovered);
             if (nativeInitializationFailure !== failure) return false;
         } catch (error) {

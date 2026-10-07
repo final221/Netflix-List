@@ -35,7 +35,7 @@ These files provide evidence of behavior in the user's browser alongside the off
 
 ## Architecture and migration
 
-Native React grafts, geometry alignment/restoration, replay and preview handoff/dismissal now belong to `src/netflix/native-popup.js`. It consumes validated source/card handles and requests replacements through grid; residual hover intent supplies admission until P18. The existing native popup behavior and bounded presence checks are preserved.
+Native React grafts, geometry alignment/restoration, replay and preview handoff/dismissal belong to `src/netflix/native-popup.js`. `src/hover/hover.js` owns delegated intent, dwell, pointer/scroll policy, exact attempts and cancellation; its private `timing.js` owns bounded measurements. Hover consumes validated source/card handles and requests native interaction through the adapter. The existing native popup behavior and bounds are preserved.
 
 Viewing completion, manual placement/coverage expiry, profile-scoped automatic cache and the complete bounded scan now live behind `src/viewing/viewing.js`. Opaque sessions own jobs, requests, results and persistence; composition supplies admitted membership and renders copied semantic changes. Grid actions call the admitted placement capability and render its semantic results. Storage keys/schema and scan/request limits remain unchanged.
 

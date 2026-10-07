@@ -7,6 +7,9 @@ const path = require('node:path');
 
 const source = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'legacy.js'), 'utf8');
 function declaration(name) {
+    if (name === 'createPerformanceDiagnostics') return declaration('fixtureAppCounters')+'\nfunction createPerformanceDiagnostics() { return {...fixtureAppCounters(), ...createHoverCounters()}; }';
+    if (name === 'fixtureAppCounters') return source.match(/    function createPerformanceDiagnostics\([\s\S]*?\n    }/)[0].replace('createPerformanceDiagnostics','fixtureAppCounters');
+    if (require('./hover.cjs').names.includes(name) || require('./hover.cjs').timingNames.includes(name)) return 'var '+name+' = fixtureHoverOriginal.'+name+';';
     if (name === 'retireGridCard') return declaration('retireHoverCard')+'\nfunction retireGridCard(handle, detail) { nativePopup.retire(handle); retireHoverCard(handle, detail); }';
     if (require('./native-popup.cjs').names.includes(name)) return 'var '+name+' = fixturePopupOriginal.'+name+';';
     if (name === 'onGridCardReplaced') return '';

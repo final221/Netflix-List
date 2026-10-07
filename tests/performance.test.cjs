@@ -32,6 +32,7 @@ const { carouselPayload, atom, reference, viewingVideo } = require('./helpers/fi
 // Generated-bundle startup and lifecycle are covered separately in bundle.test.js.
 const { source, declaration } = require('./helpers/legacy-source.cjs');
 const { install: installNativePopup } = require('./helpers/native-popup.cjs');
+const { install: installHover } = require('./helpers/hover.cjs');
 const privateNavigationFunctions = new Set(['createLogicalMoveSignal', 'waitLogicalPageChange', 'waitPageByPolling', 'waitPage', 'waitForScriptMoveSettle']);
 const fixtureModelReads = new Set(['getCarouselDomRuntime', 'logicalSlotPositions', 'wrappedTailLogicalPageInfo',
     'netflixItemIndexFromSlot', 'normalizeNetflixLogicalIndex', 'detectCarouselDomProfile', 'carouselDomProfileSummary',
@@ -176,7 +177,9 @@ function environment(names, overrides = {}) {
     vm.runInContext(source.match(/^    const HOVER_INTERRUPTION_LOG_LIMIT = \d+;/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_CANCELLATION_REASONS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     installNativePopup(c);
-    for (const name of ['publishSourceState', 'bindViewingSession', 'ensurePageHints', 'pageForItem', 'setPageForItem', 'ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
+    c.fixtureResolveReady = overrides.resolveReadyHover;
+    installHover(c);
+    for (const name of ['resolveReadyHover','prepareHoverCard','popupSource','publishSourceState', 'bindViewingSession', 'ensurePageHints', 'pageForItem', 'setPageForItem', 'ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
         'beginRunningSession', 'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
         'hoverScrollElapsed', 'recordHoverCancellation', 'advanceHoverToken', 'hoverIntentDiagnosticSnapshot', 'hoverScrollStateSnapshot',
@@ -213,8 +216,9 @@ function environment(names, overrides = {}) {
         get cards() { return c.sourceState?.cloneMap || new Map(); },
         getCard: fixtureCard, assertCard(handle) { assert.ok(handle?.node?.isConnected); return handle; },
         isCardCurrent: handle => Boolean(handle?.node?.isConnected),
-        replaceCard(handle, { node, assertCurrent = () => {} }) {
+        replaceCard(handle, { node, assertCurrent = () => {}, attempt }) {
             assertCurrent(); assert.ok(handle.node.isConnected);
+            c.hover.retire(handle, {reason:'replacement',attempt});
             node.__tmMyListItem = handle.node.__tmMyListItem;
             node.setAttribute('data-tm-item-order', handle.node.getAttribute('data-tm-item-order') || '0');
             handle.node.replaceWith(node);
@@ -586,7 +590,7 @@ test('intentional hover still reuses an already-mounted native card after the dw
     const e = hoverEnvironment(['activateClone'], {
         selectedPage: () => 0, findActiveSourceSlot: () => sourceSlot,
         alignSourceSlotToClone: () => { alignments++; return true; },
-        slotDescriptor: () => ({}), scheduleNativeHoverReplay: () => { replays++; return true; }
+        slotDescriptor: () => ({}), resolveReadyHover: (item,card) => ({source:{slot:sourceSlot},card,page:0}), scheduleNativeHoverReplay: () => { replays++; return true; }
     });
     mountNativeControls(e.section);
     e.clone.setAttribute('data-tm-hover-ready', 'true');
@@ -3122,6 +3126,7 @@ test('route listener cleanup cancels pending hover and observer work', async () 
     e.c.handleTargetWindowResize = () => {};
     e.c.handleTargetVisualViewportResize = () => {};
     e.c.document = { removeEventListener: type => removed.push(type) };
+    e.c.fixtureHover.listenersActive = false; e.c.hover.start();
     e.c.window = { removeEventListener() {}, visualViewport: { removeEventListener() {} } };
     e.c.completedSection = e.section;
     const host = new Element('host');
@@ -9662,9 +9667,11 @@ test('actual grid replacement hands the admitted hover attempt to its new handle
     const old = e.c.gridView.getCard(record);
     e.c.hoverToken = 3;
     e.c.activeClone = old.node;
+    e.c.fixtureHover.activeAttempt = { token:3,sessionToken:1,card:old };
     old.node.setAttribute('data-tm-preparing', 'true');
     old.node.setAttribute('data-tm-hover-token', '3');
     const { fresh, handle } = e.c.makeLiveClone(e.template, record, old.node, 0, () => {}, 3, 1);
+    assert.equal(e.c.hover.acceptReplacement(old, handle, 3, 1), true);
     assert.equal(e.c.hoverToken, 3);
     assert.equal(e.c.gridView.isCardCurrent(old), false);
     e.c.gridView.assertCard(handle);

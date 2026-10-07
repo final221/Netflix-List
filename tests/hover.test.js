@@ -5,6 +5,7 @@ import { createGrid } from '../src/grid/grid.js';
 import { createCarousel } from '../src/netflix/carousel/carousel.js';
 import { createNetflixPageDom, NETFLIX_DOM_SELECTORS } from '../src/netflix/page-dom.js';
 import { createSessionScope } from '../src/app/session-scope.js';
+import { createHover } from '../src/hover/hover.js';
 import { createDocument, Element } from './helpers/dom.js';
 import { createScheduler } from './helpers/scheduler.js';
 import { readFileSync } from 'node:fs';
@@ -32,9 +33,9 @@ async function environment(overrides = {}) {
         getComputedStyle: () => ({}), ...scheduler, readListShape: () => ({ totalCount: 2, columns: 2 }),
         createError: (code, stage, message) => Object.assign(new Error(message), { code, stage }), log() {}, warn() {}, tLog: key => key });
     carousel.bind(section, scroller, track);
-    let popup; let token = 1, active = null;
+    let popup, hover; let token = 1, active = null;
     const grid = createGrid({ document, location, runChunks: async (count, visit) => { for (let i = 0; i < count; i++) visit(i); },
-        onRetire: (handle, detail) => { popup?.retire(handle); overrides.onRetire?.(handle, detail); } });
+        onRetire: (handle, detail) => { popup?.retire(handle); hover?.retire(handle, detail); overrides.onRetire?.(handle, detail); } });
     const item = { videoId: '1', href: nativeCard.href, ariaLabel: 'One', snapshot: slot.cloneNode(true) };
     const other = { videoId: '2', href: neighborCard.href, ariaLabel: 'Two', snapshot: neighbor.cloneNode(true) };
     await grid.publish({ items: [item, other], section, status, anchor: scroller, geometry: { left: 0, width: 600, columns: 2 }, layout: { gap: 8, rowGap: 10 }, assertCurrent() {} });
@@ -42,7 +43,7 @@ async function environment(overrides = {}) {
     const events = []; nativeCard.dispatchEvent = event => { events.push(event.type); overrides.dispatch?.(event); };
     class NativeEvent { constructor(type, facts) { this.type = type; Object.assign(this, facts); } }
     const source = () => carousel.mountedCard({ section, scroller, track, item, sessionToken: scope.token });
-    popup = createNativePopup({ Element, Node: Element, document, PointerEvent: NativeEvent, MouseEvent: NativeEvent, ...scheduler,
+    const popupOptions = { Element, Node: Element, document, PointerEvent: NativeEvent, MouseEvent: NativeEvent, ...scheduler,
         carousel, grid, pageDom, selectors: pageDom.selectors,
         readIntent: () => ({ token, sessionToken: scope.token, clone: active, videoId: '1', pointerX: 20, pointerY: 30 }),
         readEnvironment: () => ({ grid: grid.root, scroller }), readDiagnostics: () => diagnostics,
@@ -51,10 +52,25 @@ async function environment(overrides = {}) {
         gridCloneFromPointerEvent: event => grid.root.contains(event.target) ? grid.getCard(item)?.node : null,
         itemForSource: () => item, activeSource: () => source()?.slot, associateGridHoverItem() {},
         log() {}, warn() {}, trace() {}, tLog: key => key, onFailed: () => popup.release(),
-        onPreviewRelease: (clone, reason, target, release) => { token++; release(); active = null; }, ...overrides.popup });
+        onPreviewRelease: (clone, reason, target, release) => { token++; release(); active = null; }, ...overrides.popup };
+    if (overrides.withHover) {
+        for (const record of [item, other]) grid.getCard(record).node.matches = selector => selector === ':hover';
+        hover = createHover({ ...scheduler, Element, document, grid, readSessionToken: () => scope.token, isSessionCurrent: scope.isCurrent,
+            readEnvironment: () => ({ grid: grid.root }), sample: callback => carousel.sample(callback), whenStable: () => null,
+            sleep: delay => new Promise(resolve => scheduler.setTimeout(resolve, delay)), assertSession: token => scope.assertCurrent(token),
+            isCancelledError: scope.isCancelled, log() {}, warn() {}, tLog: key => key, describeItem: value => value,
+            resolveReady: (record, card) => card.node.getAttribute('data-tm-hover-ready') === 'true' ? { source: source(), card, page: 0 } : null,
+            prepare: async (record, previous, event, token, sessionToken) => {
+                const result = popup.prepare({ source: source(), card: previous, item: record, page: 0, token, sessionToken });
+                result.fresh.matches = selector => selector === ':hover';
+                assert.equal(hover.acceptReplacement(previous, result.handle, token, sessionToken), true);
+                return { source: source(), card: result.handle, page: 0 };
+            }, createPopup: policy => (popup = createNativePopup({ ...popupOptions, ...policy })) });
+        hover.install(grid.root); hover.start();
+    } else popup = createNativePopup(popupOptions);
     const prepare = () => { const result = popup.prepare({ source: source(), card: grid.getCard(item), item, page: 0, token, sessionToken: scope.token }); active = result.fresh; return result; };
     const open = () => { active = grid.getCard(item).node; return popup.open({ source: source(), card: grid.getCard(item), item, page: 0, token, sessionToken: scope.token }); };
-    return { document, scheduler, scope, carousel, grid, popup, source, slot, nativeCard, neighbor, item, other, events, diagnostics, prepare, open,
+    return { document, scheduler, scope, carousel, grid, popup, hover, source, slot, nativeCard, neighbor, item, other, events, diagnostics, prepare, open,
         setToken: value => { token = value; }, setActive: node => { active = node; } };
 }
 
@@ -153,19 +169,16 @@ test('diagnostic failures cannot reject an admitted replay or strand its cleanup
     e.popup.release(); assert.equal(e.scheduler.timers.size, 0); assert.equal(e.popup.diagnostics().geometryOwned, false);
 });
 
-test('actual residual hover retirement preserves the same-attempt grid/native handoff', async () => {
-    const source = readFileSync(new URL('../src/legacy.js', import.meta.url), 'utf8');
-    const declaration = source.match(/    function retireHoverCard\([\s\S]*?\n    }/)[0];
-    const context = vm.createContext({ hoverToken: 1, activeClone: null, pendingGridHoverClone: null,
-        isRouteSessionActive: () => true, advanceHoverToken() { throw new Error('admitted attempt cancelled'); },
-        cancelPendingGridHover() { throw new Error('admitted attempt cancelled'); }, clearSourceAlignment() { throw new Error('native handoff released'); } });
-    vm.runInContext(declaration, context);
-    const e = await environment({ onRetire: (handle, detail) => context.retireHoverCard(handle, detail) });
-    context.activeClone = e.grid.getCard(e.item).node;
-    const result = e.prepare(); assert.equal(context.hoverToken, 1);
-    const pending = e.open(); await e.scheduler.frame(); assert.equal(await pending, true);
-    e.grid.assertCard(result.handle); assert.equal(e.events.length, 4);
-    e.popup.release();
+test('composed hover, real grid and native popup transfer exactly one admitted replacement', async () => {
+    const e = await environment({ withHover: true }), previous = e.grid.getCard(e.item);
+    e.grid.root.dispatchEvent({ type: 'pointerover', target: previous.node });
+    await e.scheduler.advance(120); await e.scheduler.frame();
+    const current = e.grid.getCard(e.item);
+    assert.equal(e.grid.isCardCurrent(previous), false); e.grid.assertCard(current);
+    assert.equal(e.hover.intent().clone, current.node); assert.equal(e.events.length, 4);
+    e.grid.replaceCard(current, { node: current.node.cloneNode(true) });
+    assert.equal(e.hover.intent().clone, null); assert.equal(e.popup.diagnostics().replayOwned, false);
+    e.hover.dispose(); assert.equal(e.scheduler.timers.size, 0); assert.equal(e.scheduler.frames.size, 0);
 });
 
 test('grid retirement settles only that card pending replay without waiting for its frame', async () => {
