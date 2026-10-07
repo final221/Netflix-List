@@ -71,9 +71,15 @@ export function startLegacy() {
         createError: (code, message) => initializationError(code, 'native-discovery', message),
         hasMember: id => sourceState.itemMap?.has('v:' + id),
         refreshNative: refreshNativeSectionAfterDelta, observeNative: nativeDiscoveryObservation,
-        removeMember: applyLegacyRemoval, addMember: applyLegacyAddition, alignVisible: alignLegacyVisiblePageOrder,
-        captureNative: findNativeMyListItemByVideoId, hasMaterial: cardSourceForItem,
-        preferredIndexForNative: preferredIndexForNativeItem, assertNative: observation => nativeCarousel.assertObservation(observation),
+        captureNative: findNativeMyListItemByVideoId, hasMaterial: (item, correlationId) => gridView.materialFor(item, correlationId),
+        assertNative: observation => nativeCarousel.assertObservation(observation),
+        readMembership: ensureListMembership, readLayout: readMutationLayout, readVisible: readMutationVisibleFacts,
+        hasCard: record => Boolean(gridView.getCard(record)), retireCard: retireMutationCard,
+        canInsertCard: prepareMutationInsertion, insertCard: insertMutationCard,
+        readPage: pageForItem, writePage: (record, page, { parent, assertCurrent }) => setPageForItem(record, page, parent, { assertCurrent }),
+        updateCard: updateMutationCard, sample: operation => nativeCarousel.sample(operation),
+        refreshMapping: syncLogicalPageModelAfterDelta, onReindexed: presentListChange, onOrder: presentListOrder,
+        onChanged: reportListChange, createCancelledError: createRouteSessionCancelledError,
         findFallback: findAnyStandardCardItemByVideoId,
         queueMicrotask, observeChanges(callback) {
             const root = document.body || document.documentElement;
@@ -87,7 +93,7 @@ export function startLegacy() {
         onTimeout: detail => warn(tLog('differentialUpdateTimedOutWaitingForAUsableCardSnapshot'), detail),
         onQueued: intent => log(tLog('myListMutationQueued'), { seq: intent.seq, videoId: intent.videoId, action: intent.action,
             uiaAction: intent.uiaAction, uia: intent.uia, syncMode: 'event-driven', undo: intent.undo,
-            preferredIndex: intent.preferredIndex, hasFallbackSnapshot: Boolean(cardSourceForItem(intent.fallbackItem)) }),
+            preferredIndex: intent.preferredIndex, hasFallbackSnapshot: Boolean(gridView.materialFor(intent.fallbackItem, intent.correlationId)) }),
         normalizeTitle: normalizeNetflixUiText,
         onCounter: (name, amount) => { performanceDiagnostics.undoRetention[name] += amount; },
         onExpired: detail => log(tLog('undoEntriesExpired'), detail) });
@@ -2362,28 +2368,6 @@ export function startLegacy() {
     }
 
 
-    function forgetUndoEntry(videoId) { listMutations.forgetUndo(videoId); }
-    function pruneUndoEntries(now = performance.now()) { listMutations.pruneUndo(now); }
-    function rememberUndoEntry(item, index, correlationId) { listMutations.rememberUndo(item, index, correlationId); }
-
-    function findNativeMyListItemByVideoId(videoId, liveState = null) {
-        const discovery = liveState || nativeDiscoveryObservation();
-        return nativeCarousel.captureMountedItem({ discovery, videoId });
-    }
-
-    function findAnyStandardCardItemByVideoId(videoId) {
-        const wanted = String(videoId);
-        for (const card of document.querySelectorAll(NETFLIX_DOM_SELECTORS.standardCardWithHref)) {
-            if (card.closest(`#${GRID_ID}`)) continue;
-            const href = card.href || card.getAttribute('href') || '';
-            if (videoIdFromHref(href) !== wanted) continue;
-            const slot = card.closest(NETFLIX_DOM_SELECTORS.virtualSlot);
-            if (!slot) continue;
-            const item = itemFromSlot(slot, 0);
-            if (item?.videoId === wanted) return item;
-        }
-        return null;
-    }
 
     function installEmptyFrameResizeObserver(section) {
         const state = sourceState, sessionToken = sessionScope.token;
@@ -2601,138 +2585,8 @@ export function startLegacy() {
         return true;
     }
 
-    function reindexLegacyItemsAfterDelta(reason = 'delta-reindex') {
-        if (!sourceState) return;
-        const state = sourceState;
-        const membership = ensureListMembership(state);
-        const items = state.items || [];
-        const columns = Math.max(1, state.layout?.columns || 1);
-        const runtime = nativeSourceObservation(state);
-        const logicalMode = runtime?.mode === 'logical';
-        const resetLogicalPages = reason === 'mutation-reindex';
-        const itemMap = state.itemMap;
-        const assertCurrent = () => {
-            nativeCarousel.assertObservation(runtime);
-            if (sourceState !== state || state.itemMap !== itemMap || (state.items && state.items !== items)) throw createRouteSessionCancelledError();
-        };
-        nativeCarousel.sample(() => items.forEach((item, index) => {
-            assertCurrent();
-            // Generation 1 retains authoritative native indicators. Generation 2
-            // keeps the last page observed from the live Hawkins carousel during
-            // order alignment. An add/remove changes every later page boundary,
-            // so mutation reindexing must reset all logical pages from the new
-            // item order before the native carousel converges.
-            if (!logicalMode || resetLogicalPages || !Number.isFinite(pageForItem(item))) {
-                setPageForItem(item, Math.floor(index / columns), state, { assertCurrent });
-            }
-            const key = itemKey(item);
-            const clone = state.cloneMap?.get(key);
-            if (clone?.isConnected) copyItemAttributes(clone, item, index);
-            assertCurrent();
-        }));
-        assertCurrent();
-        membership.observeCount({ totalCount: items.length, collectedCount: items.length }, { assertCurrent });
-        sourceState.empty = items.length === 0;
-        if (logicalMode) {
-            syncLogicalPageModelAfterDelta(reason);
-            if (items.length) scheduleResponsiveRefresh(140, 'my-list-delta');
-        }
-        gridView.setEmpty(items.length === 0);
-        if (items.length) {
-            waitingForNativeEmpty = false;
-            clearLegacyEmptyState();
-        } else {
-            waitingForNativeEmpty = true;
-            syncLegacyEmptyState(sourceState.section, { allowProvisional: true });
-        }
-        invalidateGridReact();
-        if (sourceState.watchStatus) syncWatchGroups(sourceState);
-        const elapsed = sourceState.initializationElapsedMs;
-        sourceState.status = updateStatus(formatHeaderParts(items.length, items.length, elapsed, true));
-        if (sourceState.status && sourceState.layout) {
-            layoutFrameStatus(sourceState.status, null, viewOriginalMyList && !sourceState.empty ? (sourceState.layout.rowGap || 0) : 0);
-        }
-    }
 
-    function applyLegacyRemoval(videoId, reason = 'click-delta') {
-        if (!sourceState?.items) return false;
-        const key = `v:${videoId}`;
-        const index = sourceState.items.findIndex(item => itemKey(item) === key);
-        if (index < 0) return false;
 
-        const state = sourceState;
-        const membership = ensureListMembership(state), items = state.items, removed = items[index];
-        const assertCurrent = () => {
-            if (sourceState !== state || state.items !== items || items[index] !== removed) throw createRouteSessionCancelledError();
-        };
-        const clone = sourceState.cloneMap?.get(key);
-        if (activeVideoId === String(videoId) || activeClone === clone) {
-            advanceHoverToken('source');
-            clearSourceAlignment();
-            activeVideoId = null;
-            activeClone = null;
-            activePage = null;
-        }
-        const handle = gridView.getCard(removed);
-        const correlationId = handle ? listMutations.nextCorrelation() : null;
-        if (handle) {
-            gridView.removeCard(handle, { correlationId, assertCurrent });
-        }
-        assertCurrent();
-        membership.remove(key, { assertCurrent });
-        rememberUndoEntry(removed, index, correlationId);
-        reindexLegacyItemsAfterDelta('mutation-reindex');
-        mutationSourceRecoveryPending = true;
-        if (!sourceState.items.length) {
-            // Do not inject a synthetic section into Netflix's React-managed section
-            // stack during the last-item transition. Netflix owns the native My List
-            // carousel -> empty-section replacement; we only wait for and adopt it.
-            waitingForNativeEmpty = true;
-        }
-        log(tLog('legacyItemRemovedByDifferentialUpdate'), {
-            reason,
-            removed: itemSummary(removed),
-            remaining: sourceState.items.length
-        });
-        return true;
-    }
-
-    function applyLegacyAddition(item, preferredIndex = 0, reason = 'click-delta', correlationId = undoCorrelationForItem(item)) {
-        if (!sourceState || !item?.videoId || !cardSourceForItem(item, correlationId)) return false;
-        const key = itemKey(item);
-        if (sourceState.itemMap?.has(key) || sourceState.items?.some(existing => itemKey(existing) === key)) return false;
-
-        const state = sourceState;
-        const membership = ensureListMembership(state), items = state.items;
-        const assertCurrent = () => {
-            if (sourceState !== state || state.items !== items || state.itemMap?.has(key)) throw createRouteSessionCancelledError();
-        };
-        const grid = sourceState.grid || document.getElementById(GRID_ID);
-        if (!grid) return false;
-        ensureGridHoverBehavior(grid);
-        const index = Math.max(0, Math.min(items.length, Number.isFinite(preferredIndex) ? Math.floor(preferredIndex) : 0));
-        const transfer = listView.prepareRecords([item], { assertCurrent });
-        item = transfer.records[0];
-        setPageForItem(item, Math.floor(index / Math.max(1, state.layout?.columns || 1)), state, { assertCurrent });
-        const before = sourceState.watchStatus ? null : (grid.children[index] || null);
-        try {
-            gridView.insertCard(item, { index, before, material: transfer.readMaterial(item), releaseMaterial: transfer.release,
-                onAccepted: () => membership.insert(item, index, { assertCurrent }), correlationId, assertCurrent });
-        } finally { transfer.discard(); }
-        forgetUndoEntry(item.videoId);
-        waitingForNativeEmpty = false;
-        sourceState.empty = false;
-        gridView.setEmpty(false);
-        reindexLegacyItemsAfterDelta('mutation-reindex');
-        mutationSourceRecoveryPending = true;
-        log(tLog('legacyItemAddedByDifferentialUpdate'), {
-            reason,
-            index,
-            added: itemSummary(item),
-            total: sourceState.items.length
-        });
-        return true;
-    }
 
     function visibleNativeItems(live) {
         if (!live?.scroller || !live?.track) return [];
@@ -2754,45 +2608,129 @@ export function startLegacy() {
         });
     }
 
-    function preferredIndexForNativeItem(videoId, live) {
-        const items = visibleNativeItems(live);
-        const position = items.findIndex(item => item.videoId === String(videoId));
-        if (position < 0) return 0;
-        const columns = Math.max(1, sourceState?.layout?.columns || items.length || 1);
-        return Math.min(sourceState?.items?.length ?? 0, (live.selectedPage || 0) * columns + position);
+    function readMutationLayout(parent, { positionOnly = false } = {}) {
+        const runtime = positionOnly ? null : nativeSourceObservation(parent), layout = parent.layout, columns = layout?.columns;
+        const sessionToken = sessionScope.token;
+        return Object.freeze({ mode: runtime?.mode, columns, assertCurrent() {
+            assertRouteSession(sessionToken);
+            if (runtime) nativeCarousel.assertObservation(runtime);
+            if (sourceState !== parent || parent.layout !== layout || parent.layout?.columns !== columns) throw createRouteSessionCancelledError();
+        } });
     }
 
-    function alignLegacyVisiblePageOrder(live) {
-        if (!sourceState?.items?.length || !live?.pageSignature) return false;
-        const state = sourceState, membership = ensureListMembership(state), recordOwner = state.items;
-        const nativeItems = visibleNativeItems(live), nativeIds = nativeItems.map(item => item.videoId);
-        const columns = Math.max(1, state.layout?.columns || nativeIds.length);
-        const base = Math.min(state.items.length, (live.selectedPage || 0) * columns);
-        const assertParent = () => {
-            nativeCarousel.assertObservation(live);
-            if (sourceState !== state) throw createRouteSessionCancelledError();
+    function readMutationVisibleFacts(live, parent, { order = false } = {}) {
+        const sessionToken = sessionScope.token, layout = parent.layout, columns = layout?.columns;
+        const assertCurrent = () => {
+            assertRouteSession(sessionToken);
+            if (live) nativeCarousel.assertObservation(live);
+            if (sourceState !== parent || parent.layout !== layout || parent.layout?.columns !== columns) throw createRouteSessionCancelledError();
         };
-        const change = membership.alignVisible(nativeIds, base, { assertCurrent() {
-            assertParent(); if (state.items !== recordOwner) throw createRouteSessionCancelledError();
-        } });
-        if (!change) return false;
-        const guard = () => { assertParent(); if (state.items !== change.records) throw createRouteSessionCancelledError(); };
-        const grid = state.grid;
-        if (grid && !state.watchStatus) {
-            // Preserve bounded visible-page DOM work after authoritative order acceptance.
-            for (let i = 0; i < change.ordered.length; i++) {
-                guard();
-                const item = change.ordered[i], clone = state.cloneMap?.get(itemKey(item));
-                if (!clone) continue;
-                const reference = grid.children[change.index + i] || null;
-                if (reference !== clone) gridView.moveCard(gridView.getCard(item), grid, reference);
-                guard();
-            }
-        }
-        guard(); reindexLegacyItemsAfterDelta();
-        log(tLog('legacyVisibleOrderAligned'), { page: live.selectedPage, ids: nativeIds });
-        return true;
+        assertCurrent();
+        const ids = order && !live?.pageSignature ? [] : visibleNativeItems(live).map(item => item.videoId);
+        assertCurrent();
+        return Object.freeze({ ids: Object.freeze(ids), page: live?.selectedPage || 0, columns,
+            available: Boolean(live?.pageSignature), assertCurrent });
     }
+
+    function retireMutationCard(record, { correlationId, parent, assertCurrent, onAccepted }) {
+        assertCurrent();
+        const clone = parent.cloneMap?.get(itemKey(record));
+        if (activeVideoId === String(record.videoId) || activeClone === clone) {
+            advanceHoverToken('source'); assertCurrent();
+            clearSourceAlignment(); assertCurrent();
+            activeVideoId = null; activeClone = null; activePage = null;
+        }
+        const handle = gridView.getCard(record);
+        if (handle) gridView.removeCard(handle, { correlationId, assertCurrent, onAccepted });
+        else onAccepted();
+        assertCurrent();
+    }
+
+    function prepareMutationInsertion({ parent, assertCurrent }) {
+        assertCurrent();
+        const grid = parent.grid || document.getElementById(GRID_ID);
+        if (!grid) return false;
+        ensureGridHoverBehavior(grid); assertCurrent(); return true;
+    }
+
+    function insertMutationCard(record, options) {
+        const { parent, index, assertCurrent } = options;
+        assertCurrent();
+        const grid = parent.grid || document.getElementById(GRID_ID);
+        const before = parent.watchStatus ? null : (grid.children[index] || null);
+        return gridView.insertCard(record, { ...options, before });
+    }
+
+    function updateMutationCard(record, index, { parent, assertCurrent }) {
+        assertCurrent();
+        const clone = parent.cloneMap?.get(itemKey(record));
+        if (clone?.isConnected) copyItemAttributes(clone, record, index);
+        assertCurrent();
+    }
+
+    function presentListOrder(change, { parent, assertCurrent }) {
+        assertCurrent();
+        const grid = parent.grid;
+        if (grid && !parent.watchStatus) for (let index = 0; index < change.ordered.length; index++) {
+            assertCurrent();
+            const record = change.ordered[index], clone = parent.cloneMap?.get(itemKey(record));
+            if (!clone) continue;
+            const before = grid.children[change.index + index] || null;
+            if (before !== clone) gridView.moveCard(gridView.getCard(record), grid, before);
+            assertCurrent();
+        }
+    }
+
+    function presentListChange({ count, empty, logical }, { parent, assertCurrent }) {
+        assertCurrent(); parent.empty = empty;
+        if (logical && count) { scheduleResponsiveRefresh(140, 'my-list-delta'); assertCurrent(); }
+        gridView.setEmpty(empty); assertCurrent();
+        waitingForNativeEmpty = empty;
+        if (empty) syncLegacyEmptyState(parent.section, { allowProvisional: true });
+        else clearLegacyEmptyState();
+        assertCurrent(); invalidateGridReact(); assertCurrent();
+        if (parent.watchStatus) { syncWatchGroups(parent); assertCurrent(); }
+        const status = updateStatus(formatHeaderParts(count, count, parent.initializationElapsedMs, true));
+        assertCurrent(); parent.status = status;
+        if (status && parent.layout) {
+            layoutFrameStatus(status, null, viewOriginalMyList && !empty ? (parent.layout.rowGap || 0) : 0);
+            assertCurrent();
+        }
+    }
+
+    function reportListChange(change, { assertCurrent }) {
+        assertCurrent();
+        if (change.kind === 'order') log(tLog('legacyVisibleOrderAligned'), { page: change.page, ids: change.ids });
+        else {
+            mutationSourceRecoveryPending = true;
+            if (change.kind === 'remove') log(tLog('legacyItemRemovedByDifferentialUpdate'), {
+                reason: change.reason, removed: itemSummary(change.record), remaining: change.count });
+            else log(tLog('legacyItemAddedByDifferentialUpdate'), {
+                reason: change.reason, index: change.index, added: itemSummary(change.record), total: change.count });
+        }
+        assertCurrent();
+    }
+
+    function findNativeMyListItemByVideoId(videoId, liveState = null) {
+        const discovery = liveState || nativeDiscoveryObservation();
+        return nativeCarousel.captureMountedItem({ discovery, videoId });
+    }
+
+    function findAnyStandardCardItemByVideoId(videoId) {
+        const wanted = String(videoId);
+        for (const card of document.querySelectorAll(NETFLIX_DOM_SELECTORS.standardCardWithHref)) {
+            if (card.closest(`#${GRID_ID}`)) continue;
+            const href = card.href || card.getAttribute('href') || '';
+            if (videoIdFromHref(href) !== wanted) continue;
+            const slot = card.closest(NETFLIX_DOM_SELECTORS.virtualSlot);
+            if (!slot) continue;
+            const item = itemFromSlot(slot, 0);
+            if (item?.videoId === wanted) return item;
+        }
+        return null;
+    }
+
+
 
 
 
@@ -3145,11 +3083,6 @@ export function startLegacy() {
         return nativeCarousel.stablePage(...args);
     }
 
-    function undoCorrelationForItem(item) { return listMutations.correlationFor(item); }
-
-    function cardSourceForItem(item, correlationId = undoCorrelationForItem(item)) {
-        return gridView.materialFor(item, correlationId);
-    }
 
     function itemKey(item) {
         return item.videoId ? `v:${item.videoId}` : `h:${item.href}`;

@@ -44,7 +44,10 @@ const nativeModelFacts = (e, section = e.section, scroller = e.scroller, track =
     e.c.nativeCarousel.diagnostics({ source: { section, scroller, track } }).source?.carouselDom;
 const migratedAdapterFunctions = new Set(['getHtmlLanguage', 'getNetflixLanguage', 'netflixModelData',
     'graphqlData', 'viewingRequestContext', 'nativeCardIdentity', 'videoIdFromHref', 'decodeTrackingContext',
-    'videoIdFromToggleContext', 'findMyListSection', 'itemFromSlot']);
+    'videoIdFromToggleContext', 'findMyListSection', 'itemFromSlot', 'cardSourceForItem']);
+const migratedListFunctions = new Map(Object.entries({ applyLegacyRemoval:'remove', applyLegacyAddition:'add',
+    reindexLegacyItemsAfterDelta:'reindex', preferredIndexForNativeItem:'preferredIndex', alignLegacyVisiblePageOrder:'reconcileOrder',
+    rememberUndoEntry:'rememberUndo',forgetUndoEntry:'forgetUndo',pruneUndoEntries:'pruneUndo',undoCorrelationForItem:'correlationFor' }));
 for (const name of ['isMyListGraphqlSection', 'graphqlCarouselCandidates', 'findMyListGraphqlEntry', 'graphqlSectionVideoIds',
     'extractFreshMyListBootstrap', 'carouselArtworkVariables', 'firstVideoIdFromCarouselNode', 'videoIdFromGraphqlNode',
     'firstGraphqlText', 'firstGraphqlImageUrl', 'fetchMyListCarouselPage', 'carouselFetchError',
@@ -181,7 +184,7 @@ function environment(names, overrides = {}) {
         'startImageResourceDiagnostics', 'stopImageResourceDiagnostics', 'recordImageResourceEntries',
         'responsiveViewportSignature', 'responsiveLayoutMatches',
         'cancelResizeHover', 'handleTargetResize', 'handleRelevantTargetDocumentMutation', 'recoverNativeInitialization', ...names]) {
-        if (!migratedAdapterFunctions.has(name) && !privateNavigationFunctions.has(name) && !fixtureModelReads.has(name)) vm.runInContext(declaration(name), c);
+        if (!migratedAdapterFunctions.has(name) && !migratedListFunctions.has(name) && !privateNavigationFunctions.has(name) && !fixtureModelReads.has(name)) vm.runInContext(declaration(name), c);
     }
     const location = c.location || { origin: 'https://www.netflix.com', href: 'https://www.netflix.com/browse/my-list' };
     const document = c.document || {};
@@ -219,7 +222,7 @@ function environment(names, overrides = {}) {
             handle.node.setAttribute('data-tm-item-page', String(c.pageForItem(item)));
             handle.node.setAttribute('data-tm-item-video-id', item.videoId || '');
         },
-        removeCard(handle) { c.releaseGridReact?.(handle.node); handle.node.remove(); c.sourceState?.cloneMap?.delete(handle.key); },
+        removeCard(handle, { onAccepted = () => {} } = {}) { c.releaseGridReact?.(handle.node); c.sourceState?.cloneMap?.delete(handle.key); onAccepted(); handle.node.remove(); },
         materialFor: item => item.snapshot || item.cardTemplate || fixtureCard(item)?.node || null,
         createClone: item => c.cardMarkup.createClone(item.snapshot || fixtureCard(item)?.node || item.cardTemplate, item, Boolean(item.cardTemplate)),
         captureCard: (...args) => c.cardMarkup.capture(...args), captureTemplate: (...args) => c.cardMarkup.captureTemplate(...args),
@@ -383,9 +386,18 @@ function environment(names, overrides = {}) {
         createError: (code, message) => c.initializationError(code, 'native-discovery', message),
         hasMember: id => c.sourceState.itemMap?.has('v:' + id),
         refreshNative: (...args) => c.refreshNativeSectionAfterDelta(...args), observeNative: (...args) => c.nativeDiscoveryObservation(...args),
-        removeMember: (...args) => c.applyLegacyRemoval(...args), addMember: (...args) => c.applyLegacyAddition(...args),
-        alignVisible: (...args) => c.alignLegacyVisiblePageOrder(...args), captureNative: (...args) => c.findNativeMyListItemByVideoId(...args),
-        hasMaterial: (...args) => c.cardSourceForItem(...args), preferredIndexForNative: (...args) => c.preferredIndexForNativeItem(...args),
+        captureNative: (...args) => c.findNativeMyListItemByVideoId(...args), hasMaterial: (...args) => c.cardSourceForItem(...args),
+        readMembership: state => c.ensureListMembership(state),
+        readLayout: state => c.mutationPresentationEnabled ? c.readMutationLayout(state) : {mode:'indicator',columns:state.layout?.columns,assertCurrent(){}},
+        readVisible: (...args) => c.readMutationVisibleFacts(...args),
+        hasCard: record => Boolean(c.gridView.getCard(record)), retireCard: (...args) => c.retireMutationCard(...args),
+        canInsertCard: (...args) => c.prepareMutationInsertion(...args), insertCard: (...args) => c.insertMutationCard(...args),
+        readPage: item => c.pageForItem(item), writePage: (item,page,{parent,assertCurrent}) => c.setPageForItem(item,page,parent,{assertCurrent}),
+        updateCard: (...args) => c.updateMutationCard(...args), sample: fn => c.nativeCarousel.sample(fn),
+        refreshMapping: (...args) => c.syncLogicalPageModelAfterDelta(...args),
+        onReindexed: (...args) => { if(c.mutationPresentationEnabled)c.presentListChange(...args); },
+        onOrder: (...args) => c.presentListOrder(...args), onChanged: (...args) => c.reportListChange(...args),
+        createCancelledError: () => c.createRouteSessionCancelledError?.() || c.initializationError('NATIVE_SOURCE_REPLACED','mutation-publication','Replaced'),
         assertNative: observation => c.nativeCarousel.assertObservation(observation), findFallback: id => c.findAnyStandardCardItemByVideoId?.(id),
         queueMicrotask: fn => c.queueMicrotask(fn), observeChanges(callback) {
             const root = c.document?.body || c.document?.documentElement;
@@ -401,6 +413,11 @@ function environment(names, overrides = {}) {
         normalizeTitle: text => c.normalizeNetflixUiText?.(text) || text,
         onCounter: (name, amount) => { if (c.performanceDiagnostics?.undoRetention) c.performanceDiagnostics.undoRetention[name] += amount; },
         onExpired: detail => c.log(c.tLog('undoEntriesExpired'), detail) });
+    c.cardSourceForItem=(item,correlation=c.listMutations.correlationFor(item))=>c.gridView.materialFor(item,correlation);
+    for(const [name,command] of migratedListFunctions) c[name]=(...args)=>c.listMutations[command](...args);
+    c.mutationPresentationEnabled=names.includes('reindexLegacyItemsAfterDelta');
+    for(const name of ['readMutationLayout','readMutationVisibleFacts','retireMutationCard','prepareMutationInsertion','insertMutationCard',
+        'updateMutationCard','presentListChange','presentListOrder','reportListChange']) vm.runInContext(declaration(name),c);
     if (c.running) c.beginRunningSession(c.sessionScope.token);
     Object.defineProperty(c, 'recentRemovedMyListItems', { configurable: true,
         get: () => new Map(c.listMutations.undoEntries().map(entry => [entry.videoId, entry])) });
@@ -2194,7 +2211,7 @@ test('differential reindexing rejects an obsolete source observation before copy
     for (const replacement of ['binding', 'parent']) {
         const e = preparedHoverEnvironment();
         vm.runInContext(declaration('createRouteSessionCancelledError'), e.c);
-        vm.runInContext(declaration('reindexLegacyItemsAfterDelta'), e.c);
+        e.c.mutationPresentationEnabled=true;
         e.c.clearLegacyEmptyState = () => {};
         e.c.formatHeaderParts = () => ({});
         e.c.updateStatus = () => null;
@@ -2437,6 +2454,19 @@ function remappingBridgeEnvironment() {
     e.c.myListCountConvergencePending = false;
     return { ...e, slots, items, clones, hints: e.c.ensurePageHints(e.c.sourceState) };
 }
+
+test('actual logical visible-order publication preserves preferred hints through native delta remapping',()=>{
+    const e=remappingBridgeEnvironment();
+    publishMembershipForTest(e.c,[...e.items.slice(0,6).reverse(),...e.items.slice(6)],8);
+    e.c.visibleNativeItems=()=>e.items.slice(0,6);e.c.mutationPresentationEnabled=true;e.c.presentListChange=()=>{};
+    const live=e.c.nativeDiscoveryObservation();
+    assert.equal(e.c.listMutations.reconcileOrder(live),true);
+    assert.deepEqual(Array.from(e.c.sourceState.items),e.items);
+    assert.deepEqual(e.items.map(item=>e.hints.get(item)),Array(8).fill(77));
+    assert.equal(e.c.myListCountConvergencePending,true);
+    assert.ok(e.clones.every((clone,index)=>clone.getAttribute('data-tm-item-order')===String(index)));
+    assert.equal(e.timers.size,0);
+});
 
 test('mapping bridges keep membership/card publication and convergence outside native reconstruction', async () => {
     const e = remappingBridgeEnvironment();
@@ -4967,7 +4997,7 @@ test('a native mutation capture replaced during cloning preserves its intent and
     const clone = item.snapshot.cloneNode.bind(item.snapshot);
     let replacement, publications = 0;
     item.snapshot.cloneNode = (...args) => { replacement = e.c.sourceState = { ...e.c.sourceState }; return clone(...args); };
-    e.c.applyLegacyAddition = () => { publications++; return true; };
+    e.c.insertMutationCard = () => { publications++; return true; };
     assert.equal(e.c.listMutations.reconcileMutation(mutation), false);
     assert.equal(e.c.sourceState, replacement);
     assert.equal(publications, 0);
@@ -4990,7 +5020,7 @@ test('mutation candidate callbacks reject changed parent, route or intent before
             if (change === 'intent') replacementIntent = e.c.listMutations.observeMembership(replacementIntent);
             return candidate.snapshot;
         };
-        e.c.applyLegacyAddition = () => { publications++; return true; };
+        e.c.insertMutationCard = () => { publications++; return true; };
         assert.equal(e.c.listMutations.reconcileMutation(mutation), false, change);
         assert.equal(publications, 0, change);
         assert.equal(e.c.listMutations.pendingMutation('1'), change === 'intent' ? replacementIntent : mutation);
@@ -4998,23 +5028,24 @@ test('mutation candidate callbacks reject changed parent, route or intent before
     }
 });
 
-test('post-mutation discovery replacement preserves queued intent and never aligns the new parent', () => {
+test('post-mutation discovery replacement preserves queued intent and never aligns the new parent', async () => {
     for (const action of ['add', 'remove']) {
         const e = constructionEnvironment();
-        let mutation = { videoId: '1', action, fallbackItem: e.items(1)[0] };
+        await e.c.buildGrid(e.section,e.scroller,e.items(1),e.layout,1,1);
+        const videoId=action==='remove'?'1':'2';
+        let mutation = { videoId, action, fallbackItem: e.items(2)[1] };
         mutation = e.c.listMutations.observeMembership(mutation);
         e.c.clearRunningSession(e.c.routeSessionToken, false);
-        e.c.applyLegacyAddition = e.c.applyLegacyRemoval = () => true;
         let reads = 0, alignments = 0, replacement;
         e.c.refreshNativeSectionAfterDelta = () => {
             if (++reads === 2) replacement = e.c.sourceState = { ...e.c.sourceState };
             return e.c.nativeDiscoveryObservation({ bindingOnly: true });
         };
-        e.c.alignLegacyVisiblePageOrder = () => { alignments++; };
+        e.c.presentListOrder = () => { alignments++; };
         assert.equal(e.c.listMutations.reconcileMutation(mutation), false, action);
         assert.equal(e.c.sourceState, replacement);
         assert.equal(alignments, 0);
-        assert.equal(e.c.listMutations.pendingMutation('1'), mutation);
+        assert.equal(e.c.listMutations.pendingMutation(videoId), mutation);
     }
 });
 
@@ -5179,6 +5210,23 @@ test('native collection cancellation preserves cleanup and takes no snapshots fr
         assert.equal(e.track.style.getPropertyValue('transition'), 'original-transition');
         assert.equal(e.frames.size, 0);
     }
+});
+
+test('actual retirement accepts membership before DOM cleanup can reinsert the same canonical record', async () => {
+    const e=constructionEnvironment();await e.c.buildGrid(e.section,e.scroller,e.items(1),e.layout,1,1);
+    const record=e.c.sourceState.items[0],old=e.c.gridView.getCard(record),remove=old.node.remove.bind(old.node);
+    let correlation;const retire=e.c.retireMutationCard;
+    e.c.retireMutationCard=(item,options)=>{correlation=options.correlationId;return retire(item,options);};
+    old.node.remove=()=>{
+        assert.equal(e.c.sourceState.items.length,0);assert.equal(e.c.gridView.getCard(record),null);
+        assert.equal(e.c.gridView.hasRetained(correlation,record),true);
+        assert.equal(e.c.listMutations.add(record,0,'reentrant',correlation),true);remove();
+    };
+    assert.throws(()=>e.c.listMutations.remove('1'),{code:'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED'});
+    assert.equal(e.c.sourceState.items[0],record);assert.equal(e.c.sourceState.totalCount,1);
+    const current=e.c.gridView.getCard(record);assert.notEqual(current,old);assert.equal(current.node.isConnected,true);
+    assert.equal(e.c.gridView.cards.size,1);assert.equal(e.c.gridView.hasRetained(correlation,record),false);
+    assert.equal(e.c.listMutations.undoEntries().length,0);
 });
 
 test('failed addition leaves membership, maps, and retained fallback intact for retry', async () => {
@@ -6204,7 +6252,7 @@ test('remove and Undo work inside watched groups and new titles stay visible unt
     const e = await viewingEnvironment();
     await e.start();
     mountNativeControls(e.c.sourceState.section, 'indicator');
-    vm.runInContext(declaration('reindexLegacyItemsAfterDelta'), e.c);
+    e.c.mutationPresentationEnabled=true;
     assert.equal(e.c.applyLegacyRemoval('1'), true);
     assert.deepEqual(completedViewingIds(e), ['4']);
     assert.equal(e.state.items.length, 6);
@@ -6225,8 +6273,8 @@ test('native order alignment preserves separate group order without changing Net
     await e.start();
     mountNativeControls(e.c.sourceState.section, 'indicator');
     e.c.visibleNativeItems = () => [{ videoId: '4' }, { videoId: '3' }, { videoId: '1' }];
-    vm.runInContext(declaration('reindexLegacyItemsAfterDelta'), e.c);
-    vm.runInContext(declaration('alignLegacyVisiblePageOrder'), e.c);
+    e.c.mutationPresentationEnabled=true;
+
     e.c.findMyListSection = () => e.state.section;
     e.c.netflixDom.findTrack = () => e.track;
     const query = e.section.querySelector.bind(e.section);
@@ -6824,7 +6872,7 @@ test('filtered counts and card order stay correct through removal, Undo and unkn
     const e = await viewingEnvironment();
     await e.start();
     mountNativeControls(e.c.sourceState.section, 'indicator');
-    vm.runInContext(declaration('reindexLegacyItemsAfterDelta'), e.c);
+    e.c.mutationPresentationEnabled=true;
     assert.equal(e.c.applyLegacyRemoval('2'), true);
     assert.deepEqual(filteredViewingIds(e), ['3']);
     assert.equal(viewingUi(e).mainFilter.buttons.get('movie').count.textContent, '1');

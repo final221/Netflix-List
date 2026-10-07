@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.50
+// @version      1.4.51
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -662,7 +662,8 @@
       }
       return next;
     }
-    function removeCard(expected, { correlationId = null, assertCurrent = () => {
+    function removeCard(expected, { correlationId = null, onAccepted = () => {
+    }, assertCurrent = () => {
     } } = {}) {
       assertCurrent();
       assertCard(expected);
@@ -672,8 +673,13 @@
       assertCard(expected);
       entries.delete(expected.key);
       revision++;
-      entry.node.remove();
       if (correlationId !== null) retained.set(correlationId, { item: entry.item, node: entry.node });
+      onAccepted();
+      try {
+        entry.node.remove();
+      } catch (_) {
+        retirementFailures++;
+      }
       return true;
     }
     function insertCard(item, {
@@ -681,6 +687,7 @@
       correlationId = null,
       before = null,
       material = null,
+      page = void 0,
       onAccepted = () => {
       },
       releaseMaterial = null,
@@ -692,7 +699,7 @@
       const root = readRoot();
       if (!root?.isConnected) throw createError("GRID_FRAME_RETIRED", "Grid is not mounted");
       const node = createClone(item, correlationId, material);
-      prepare(node, item, index);
+      prepare(node, item, index, {}, page);
       assertCurrent();
       if (readRoot() !== root || entries.has(keyFor(item))) throw createError("GRID_FRAME_RETIRED", "Grid changed during insertion");
       root.insertBefore(node, before);
@@ -2638,13 +2645,30 @@
     hasMember,
     refreshNative,
     observeNative,
-    removeMember,
-    addMember,
-    alignVisible,
     captureNative,
     hasMaterial,
-    preferredIndexForNative,
     assertNative,
+    readMembership,
+    prepareRecords,
+    readLayout,
+    readVisible,
+    sample = (operation) => operation(),
+    hasCard,
+    retireCard,
+    canInsertCard,
+    insertCard,
+    readPage,
+    writePage,
+    updateCard,
+    refreshMapping = () => {
+    },
+    onReindexed = () => {
+    },
+    onOrder = () => {
+    },
+    onChanged = () => {
+    },
+    createCancelledError = () => createError("NATIVE_SOURCE_REPLACED", "Mutation publication was replaced"),
     findFallback = () => null,
     observeChanges = () => null,
     queueMicrotask: queueMicrotask2 = () => {
@@ -2661,6 +2685,7 @@
   }) {
     let entries = /* @__PURE__ */ new Map(), timer = null, generation = 0;
     let pending = /* @__PURE__ */ new Map(), sequence = 0;
+    let publicationGeneration = 0;
     let deferralEpoch = 0, disposedToken = null, cleanupFailures = 0;
     function cleanup(operation) {
       try {
@@ -2700,6 +2725,7 @@
       deferralEpoch++;
       sequence++;
       generation++;
+      publicationGeneration++;
       disposedToken = readSession();
       if (oldTimer) cleanup(() => clearTimeout2(oldTimer.id));
       cleanup(() => onCounter("cleared", oldEntries.size));
@@ -2785,14 +2811,14 @@
         const videoId = intent.videoId;
         let live = call(refreshNative) || call(observeNative);
         if (intent.action === "remove") {
-          const changed2 = call(removeMember, videoId, reason);
+          const changed2 = call(remove, videoId, reason, { assertCurrent: guard });
           if (!changed2 && !call(hasMember, videoId)) {
             disposeMutation(videoId, intent);
             return true;
           }
           if (!changed2) return false;
           live = call(refreshNative) || live;
-          if (live?.track) call(alignVisible, live);
+          if (live?.track) call(reconcileOrder, live, { assertCurrent: guard });
           disposeMutation(videoId, intent);
           return true;
         }
@@ -2804,12 +2830,12 @@
         const candidate = nativeItem || intent.fallbackItem || call(findFallback, videoId);
         const correlationId = candidate === intent.fallbackItem ? intent.correlationId : null;
         if (!call(hasMaterial, candidate, correlationId)) return false;
-        const index = nativeItem ? call(preferredIndexForNative, videoId, live) : Number.isFinite(intent.preferredIndex) ? intent.preferredIndex : 0;
+        const index = nativeItem ? call(preferredIndex, videoId, live, { assertCurrent: guard }) : Number.isFinite(intent.preferredIndex) ? intent.preferredIndex : 0;
         call(assertNative, live);
-        const changed = call(addMember, candidate, index, nativeItem ? reason + "-native" : reason + "-captured", correlationId);
+        const changed = call(add, candidate, index, nativeItem ? reason + "-native" : reason + "-captured", correlationId, { assertCurrent: guard });
         if (changed || call(hasMember, videoId)) {
           live = call(refreshNative) || live;
-          if (live?.track) call(alignVisible, live);
+          if (live?.track) call(reconcileOrder, live, { assertCurrent: guard });
           disposeMutation(videoId, intent);
           return true;
         }
@@ -3034,6 +3060,187 @@
       for (const entry of entries.values()) if (!latest || entry.removedAt > latest.removedAt) latest = entry;
       return latest;
     }
+    function nextCorrelation() {
+      return `undo:${readSession()}:${++sequence}`;
+    }
+    function publicationOwner({ assertCurrent = () => {
+    } } = {}) {
+      const token = readSession(), parent = readParent();
+      if (!isAdmitted(token) || !parent) return null;
+      const epoch = ++publicationGeneration;
+      const parentGuard = () => {
+        assertSession(token);
+        assertCurrent();
+        if (!isAdmitted(token) || readParent() !== parent || publicationGeneration !== epoch) throw createCancelledError();
+      };
+      parentGuard();
+      const membership = readMembership(parent);
+      parentGuard();
+      let records = membership.records, revision = membership.revision;
+      const guard = () => {
+        parentGuard();
+        if (membership.records !== records || membership.revision !== revision) throw createCancelledError();
+      };
+      return {
+        membership,
+        parent,
+        guard,
+        call(operation, ...args) {
+          guard();
+          const result = operation(...args);
+          guard();
+          return result;
+        },
+        accept(operation) {
+          guard();
+          const result = operation();
+          parentGuard();
+          records = membership.records;
+          revision = membership.revision;
+          guard();
+          return result;
+        }
+      };
+    }
+    function reindexOwned(owner, reason) {
+      const { membership, guard, parent } = owner, records = membership.records;
+      const layout = owner.call(readLayout, parent);
+      const assertLayout = () => {
+        guard();
+        layout.assertCurrent();
+        guard();
+      };
+      const columns = Math.max(1, layout.columns || 1), logical = layout.mode === "logical";
+      owner.call(sample, () => records.forEach((record, index) => {
+        assertLayout();
+        if (!logical || reason === "mutation-reindex" || !Number.isFinite(owner.call(readPage, record))) {
+          owner.call(writePage, record, Math.floor(index / columns), { parent, assertCurrent: assertLayout });
+        }
+        owner.call(updateCard, record, index, { parent, assertCurrent: assertLayout });
+        assertLayout();
+      }));
+      assertLayout();
+      owner.accept(() => membership.observeCount({ totalCount: records.length, collectedCount: records.length }, { assertCurrent: assertLayout }));
+      if (logical) owner.call(refreshMapping, reason, { parent, assertCurrent: guard });
+      owner.call(onReindexed, Object.freeze({ records, count: records.length, empty: records.length === 0, logical, reason }), { parent, assertCurrent: guard });
+    }
+    function reindex(reason = "delta-reindex", admission = {}) {
+      const owner = publicationOwner(admission);
+      if (!owner) return false;
+      reindexOwned(owner, reason);
+      return true;
+    }
+    function remove(videoId, reason = "click-delta", admission = {}) {
+      const owner = publicationOwner(admission);
+      if (!owner) return false;
+      const { membership, guard, parent } = owner, key = "v:" + videoId;
+      const record = membership.lookup.get(key);
+      if (!record) return false;
+      const index = membership.records.indexOf(record);
+      const correlationId = owner.call(hasCard, record) ? nextCorrelation() : null;
+      let accepted = false;
+      try {
+        owner.call(retireCard, record, { correlationId, parent, assertCurrent: guard, onAccepted() {
+          if (accepted) {
+            guard();
+            return;
+          }
+          owner.accept(() => membership.remove(key, { assertCurrent: guard }));
+          accepted = true;
+        } });
+        if (!accepted) throw createError("LIST_PUBLICATION_REJECTED", "Card retirement did not accept membership");
+        owner.call(rememberUndo, record, index, correlationId);
+        reindexOwned(owner, "mutation-reindex");
+        owner.call(onChanged, Object.freeze({ kind: "remove", reason, record, index, count: membership.records.length }), { parent, assertCurrent: guard });
+        return true;
+      } finally {
+        const entry = entries.get(String(record.videoId)), intent = readPending(record.videoId);
+        const retained = entry?.item === record && entry?.correlationId === correlationId || intent?.fallbackItem === record && intent?.correlationId === correlationId;
+        if (correlationId && !retained) cleanup(() => releaseRetained(correlationId));
+      }
+    }
+    function add(input, preferred = 0, reason = "click-delta", correlationId = correlationFor(input), admission = {}) {
+      const owner = publicationOwner(admission);
+      if (!owner || !input?.videoId) return false;
+      const { membership, guard, parent } = owner;
+      if (!owner.call(hasMaterial, input, correlationId) || membership.lookup.has("v:" + input.videoId)) return false;
+      if (!owner.call(canInsertCard, { parent, assertCurrent: guard })) return false;
+      const index = Math.max(0, Math.min(membership.records.length, Number.isFinite(preferred) ? Math.floor(preferred) : 0));
+      guard();
+      const transfer = prepareRecords([input], { assertCurrent: guard });
+      let record, accepted = false;
+      try {
+        guard();
+        record = transfer.records[0];
+        const layout = owner.call(readLayout, parent, { positionOnly: true });
+        const assertLayout = () => {
+          guard();
+          layout.assertCurrent();
+          guard();
+        };
+        assertLayout();
+        const page = Math.floor(index / Math.max(1, layout.columns || 1));
+        owner.call(insertCard, record, {
+          index,
+          correlationId,
+          parent,
+          page,
+          material: transfer.readMaterial(record),
+          releaseMaterial: transfer.release,
+          assertCurrent: assertLayout,
+          onAccepted() {
+            if (accepted) {
+              assertLayout();
+              return;
+            }
+            owner.call(writePage, record, page, { parent, assertCurrent: assertLayout });
+            owner.accept(() => membership.insert(record, index, { assertCurrent: assertLayout }));
+            accepted = true;
+          }
+        });
+        if (!accepted) throw createError("LIST_PUBLICATION_REJECTED", "Card insertion did not accept membership");
+      } finally {
+        transfer.discard();
+      }
+      owner.call(forgetUndo, record.videoId);
+      reindexOwned(owner, "mutation-reindex");
+      owner.call(onChanged, Object.freeze({ kind: "add", reason, record, index, count: membership.records.length }), { parent, assertCurrent: guard });
+      return true;
+    }
+    function visibleFacts(owner, live, options = {}) {
+      const facts = owner.call(readVisible, live, owner.parent, options);
+      owner.call(facts.assertCurrent);
+      return facts;
+    }
+    function preferredIndex(videoId, live, admission = {}) {
+      const owner = publicationOwner(admission);
+      if (!owner) return 0;
+      const facts = visibleFacts(owner, live), position = facts.ids.indexOf(String(videoId));
+      if (position < 0) return 0;
+      const columns = Math.max(1, facts.columns || facts.ids.length || 1);
+      return Math.min(owner.membership.records.length, (facts.page || 0) * columns + position);
+    }
+    function reconcileOrder(live, admission = {}) {
+      const owner = publicationOwner(admission);
+      if (!owner || !owner.membership.records.length) return false;
+      const facts = visibleFacts(owner, live, { order: true });
+      if (!facts.available) return false;
+      const { membership, guard, parent } = owner;
+      const columns = Math.max(1, facts.columns || facts.ids.length || 1);
+      const base = Math.min(membership.records.length, (facts.page || 0) * columns);
+      const assertVisible = () => {
+        guard();
+        facts.assertCurrent();
+        guard();
+      };
+      const change = owner.accept(() => membership.alignVisible(facts.ids, base, { assertCurrent: assertVisible }));
+      if (!change) return false;
+      owner.call(onOrder, change, { parent, assertCurrent: assertVisible });
+      assertVisible();
+      reindexOwned(owner, "delta-reindex");
+      owner.call(onChanged, Object.freeze({ kind: "order", page: facts.page, ids: Object.freeze([...facts.ids]) }), { parent, assertCurrent: guard });
+      return true;
+    }
     return Object.freeze({
       start,
       deferReconciliation,
@@ -3045,6 +3252,11 @@
       reconcileMutation,
       disposeMutation,
       clearPending,
+      remove,
+      add,
+      reindex,
+      preferredIndex,
+      reconcileOrder,
       scheduleMutationTimeout,
       retryMutations,
       deferPending,
@@ -3052,7 +3264,7 @@
       pendingMutation: readPending,
       pendingIntents: () => Object.freeze([...pending.values()]),
       pendingDiagnostics,
-      nextCorrelation: () => `undo:${readSession()}:${++sequence}`,
+      nextCorrelation,
       rememberUndo,
       forgetUndo,
       pruneUndo,
@@ -3655,7 +3867,7 @@
     }
     const collection = createCollection({ ...options, toRecord });
     return Object.freeze({
-      createMutations,
+      createMutations: (mutationOptions) => createMutations({ ...mutationOptions, prepareRecords: collection.prepareRecords }),
       createMembership,
       toRecord,
       prepareEntry: collection.prepareEntry,
@@ -11483,13 +11695,25 @@
       hasMember: (id) => sourceState.itemMap?.has("v:" + id),
       refreshNative: refreshNativeSectionAfterDelta,
       observeNative: nativeDiscoveryObservation,
-      removeMember: applyLegacyRemoval,
-      addMember: applyLegacyAddition,
-      alignVisible: alignLegacyVisiblePageOrder,
       captureNative: findNativeMyListItemByVideoId,
-      hasMaterial: cardSourceForItem,
-      preferredIndexForNative: preferredIndexForNativeItem,
+      hasMaterial: (item, correlationId) => gridView.materialFor(item, correlationId),
       assertNative: (observation) => nativeCarousel.assertObservation(observation),
+      readMembership: ensureListMembership,
+      readLayout: readMutationLayout,
+      readVisible: readMutationVisibleFacts,
+      hasCard: (record) => Boolean(gridView.getCard(record)),
+      retireCard: retireMutationCard,
+      canInsertCard: prepareMutationInsertion,
+      insertCard: insertMutationCard,
+      readPage: pageForItem,
+      writePage: (record, page, { parent, assertCurrent }) => setPageForItem(record, page, parent, { assertCurrent }),
+      updateCard: updateMutationCard,
+      sample: (operation) => nativeCarousel.sample(operation),
+      refreshMapping: syncLogicalPageModelAfterDelta,
+      onReindexed: presentListChange,
+      onOrder: presentListOrder,
+      onChanged: reportListChange,
+      createCancelledError: createRouteSessionCancelledError,
       findFallback: findAnyStandardCardItemByVideoId,
       queueMicrotask,
       observeChanges(callback) {
@@ -11519,7 +11743,7 @@
         syncMode: "event-driven",
         undo: intent.undo,
         preferredIndex: intent.preferredIndex,
-        hasFallbackSnapshot: Boolean(cardSourceForItem(intent.fallbackItem))
+        hasFallbackSnapshot: Boolean(gridView.materialFor(intent.fallbackItem, intent.correlationId))
       }),
       normalizeTitle: normalizeNetflixUiText,
       onCounter: (name, amount) => {
@@ -11568,7 +11792,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.50";
+    const SCRIPT_VERSION = "1.4.51";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -14082,32 +14306,6 @@
     function normalizeNetflixUiText(value) {
       return String(value || "").replace(/[\u200b-\u200f\u2060\ufeff]/g, "").replace(/\s+/g, "").trim();
     }
-    function forgetUndoEntry(videoId) {
-      listMutations.forgetUndo(videoId);
-    }
-    function pruneUndoEntries(now = performance.now()) {
-      listMutations.pruneUndo(now);
-    }
-    function rememberUndoEntry(item, index, correlationId) {
-      listMutations.rememberUndo(item, index, correlationId);
-    }
-    function findNativeMyListItemByVideoId(videoId, liveState = null) {
-      const discovery = liveState || nativeDiscoveryObservation();
-      return nativeCarousel.captureMountedItem({ discovery, videoId });
-    }
-    function findAnyStandardCardItemByVideoId(videoId) {
-      const wanted = String(videoId);
-      for (const card of document.querySelectorAll(NETFLIX_DOM_SELECTORS.standardCardWithHref)) {
-        if (card.closest(`#${GRID_ID}`)) continue;
-        const href = card.href || card.getAttribute("href") || "";
-        if (videoIdFromHref(href) !== wanted) continue;
-        const slot = card.closest(NETFLIX_DOM_SELECTORS.virtualSlot);
-        if (!slot) continue;
-        const item = itemFromSlot(slot, 0);
-        if (item?.videoId === wanted) return item;
-      }
-      return null;
-    }
     function installEmptyFrameResizeObserver(section) {
       const state = sourceState, sessionToken = sessionScope.token;
       const binding = nativeCarousel.borrowBinding(section, state?.scroller, state?.track);
@@ -14341,135 +14539,6 @@
       nativeCarousel.assertMapping(result);
       return true;
     }
-    function reindexLegacyItemsAfterDelta(reason = "delta-reindex") {
-      if (!sourceState) return;
-      const state = sourceState;
-      const membership = ensureListMembership(state);
-      const items = state.items || [];
-      const columns = Math.max(1, state.layout?.columns || 1);
-      const runtime = nativeSourceObservation(state);
-      const logicalMode = runtime?.mode === "logical";
-      const resetLogicalPages = reason === "mutation-reindex";
-      const itemMap = state.itemMap;
-      const assertCurrent = () => {
-        nativeCarousel.assertObservation(runtime);
-        if (sourceState !== state || state.itemMap !== itemMap || state.items && state.items !== items) throw createRouteSessionCancelledError();
-      };
-      nativeCarousel.sample(() => items.forEach((item, index) => {
-        assertCurrent();
-        if (!logicalMode || resetLogicalPages || !Number.isFinite(pageForItem(item))) {
-          setPageForItem(item, Math.floor(index / columns), state, { assertCurrent });
-        }
-        const key = itemKey(item);
-        const clone = state.cloneMap?.get(key);
-        if (clone?.isConnected) copyItemAttributes(clone, item, index);
-        assertCurrent();
-      }));
-      assertCurrent();
-      membership.observeCount({ totalCount: items.length, collectedCount: items.length }, { assertCurrent });
-      sourceState.empty = items.length === 0;
-      if (logicalMode) {
-        syncLogicalPageModelAfterDelta(reason);
-        if (items.length) scheduleResponsiveRefresh(140, "my-list-delta");
-      }
-      gridView.setEmpty(items.length === 0);
-      if (items.length) {
-        waitingForNativeEmpty = false;
-        clearLegacyEmptyState();
-      } else {
-        waitingForNativeEmpty = true;
-        syncLegacyEmptyState(sourceState.section, { allowProvisional: true });
-      }
-      invalidateGridReact();
-      if (sourceState.watchStatus) syncWatchGroups(sourceState);
-      const elapsed = sourceState.initializationElapsedMs;
-      sourceState.status = updateStatus(formatHeaderParts(items.length, items.length, elapsed, true));
-      if (sourceState.status && sourceState.layout) {
-        layoutFrameStatus(sourceState.status, null, viewOriginalMyList && !sourceState.empty ? sourceState.layout.rowGap || 0 : 0);
-      }
-    }
-    function applyLegacyRemoval(videoId, reason = "click-delta") {
-      if (!sourceState?.items) return false;
-      const key = `v:${videoId}`;
-      const index = sourceState.items.findIndex((item) => itemKey(item) === key);
-      if (index < 0) return false;
-      const state = sourceState;
-      const membership = ensureListMembership(state), items = state.items, removed = items[index];
-      const assertCurrent = () => {
-        if (sourceState !== state || state.items !== items || items[index] !== removed) throw createRouteSessionCancelledError();
-      };
-      const clone = sourceState.cloneMap?.get(key);
-      if (activeVideoId === String(videoId) || activeClone === clone) {
-        advanceHoverToken("source");
-        clearSourceAlignment();
-        activeVideoId = null;
-        activeClone = null;
-        activePage = null;
-      }
-      const handle = gridView.getCard(removed);
-      const correlationId = handle ? listMutations.nextCorrelation() : null;
-      if (handle) {
-        gridView.removeCard(handle, { correlationId, assertCurrent });
-      }
-      assertCurrent();
-      membership.remove(key, { assertCurrent });
-      rememberUndoEntry(removed, index, correlationId);
-      reindexLegacyItemsAfterDelta("mutation-reindex");
-      mutationSourceRecoveryPending = true;
-      if (!sourceState.items.length) {
-        waitingForNativeEmpty = true;
-      }
-      log(tLog("legacyItemRemovedByDifferentialUpdate"), {
-        reason,
-        removed: itemSummary(removed),
-        remaining: sourceState.items.length
-      });
-      return true;
-    }
-    function applyLegacyAddition(item, preferredIndex = 0, reason = "click-delta", correlationId = undoCorrelationForItem(item)) {
-      if (!sourceState || !item?.videoId || !cardSourceForItem(item, correlationId)) return false;
-      const key = itemKey(item);
-      if (sourceState.itemMap?.has(key) || sourceState.items?.some((existing) => itemKey(existing) === key)) return false;
-      const state = sourceState;
-      const membership = ensureListMembership(state), items = state.items;
-      const assertCurrent = () => {
-        if (sourceState !== state || state.items !== items || state.itemMap?.has(key)) throw createRouteSessionCancelledError();
-      };
-      const grid = sourceState.grid || document.getElementById(GRID_ID);
-      if (!grid) return false;
-      ensureGridHoverBehavior(grid);
-      const index = Math.max(0, Math.min(items.length, Number.isFinite(preferredIndex) ? Math.floor(preferredIndex) : 0));
-      const transfer = listView.prepareRecords([item], { assertCurrent });
-      item = transfer.records[0];
-      setPageForItem(item, Math.floor(index / Math.max(1, state.layout?.columns || 1)), state, { assertCurrent });
-      const before = sourceState.watchStatus ? null : grid.children[index] || null;
-      try {
-        gridView.insertCard(item, {
-          index,
-          before,
-          material: transfer.readMaterial(item),
-          releaseMaterial: transfer.release,
-          onAccepted: () => membership.insert(item, index, { assertCurrent }),
-          correlationId,
-          assertCurrent
-        });
-      } finally {
-        transfer.discard();
-      }
-      forgetUndoEntry(item.videoId);
-      waitingForNativeEmpty = false;
-      sourceState.empty = false;
-      gridView.setEmpty(false);
-      reindexLegacyItemsAfterDelta("mutation-reindex");
-      mutationSourceRecoveryPending = true;
-      log(tLog("legacyItemAddedByDifferentialUpdate"), {
-        reason,
-        index,
-        added: itemSummary(item),
-        total: sourceState.items.length
-      });
-      return true;
-    }
     function visibleNativeItems(live) {
       if (!live?.scroller || !live?.track) return [];
       const state = sourceState;
@@ -14489,47 +14558,145 @@
         return items;
       });
     }
-    function preferredIndexForNativeItem(videoId, live) {
-      const items = visibleNativeItems(live);
-      const position = items.findIndex((item) => item.videoId === String(videoId));
-      if (position < 0) return 0;
-      const columns = Math.max(1, sourceState?.layout?.columns || items.length || 1);
-      return Math.min(sourceState?.items?.length ?? 0, (live.selectedPage || 0) * columns + position);
-    }
-    function alignLegacyVisiblePageOrder(live) {
-      if (!sourceState?.items?.length || !live?.pageSignature) return false;
-      const state = sourceState, membership = ensureListMembership(state), recordOwner = state.items;
-      const nativeItems = visibleNativeItems(live), nativeIds = nativeItems.map((item) => item.videoId);
-      const columns = Math.max(1, state.layout?.columns || nativeIds.length);
-      const base = Math.min(state.items.length, (live.selectedPage || 0) * columns);
-      const assertParent = () => {
-        nativeCarousel.assertObservation(live);
-        if (sourceState !== state) throw createRouteSessionCancelledError();
-      };
-      const change = membership.alignVisible(nativeIds, base, { assertCurrent() {
-        assertParent();
-        if (state.items !== recordOwner) throw createRouteSessionCancelledError();
+    function readMutationLayout(parent, { positionOnly = false } = {}) {
+      const runtime = positionOnly ? null : nativeSourceObservation(parent), layout = parent.layout, columns = layout?.columns;
+      const sessionToken = sessionScope.token;
+      return Object.freeze({ mode: runtime?.mode, columns, assertCurrent() {
+        assertRouteSession(sessionToken);
+        if (runtime) nativeCarousel.assertObservation(runtime);
+        if (sourceState !== parent || parent.layout !== layout || parent.layout?.columns !== columns) throw createRouteSessionCancelledError();
       } });
-      if (!change) return false;
-      const guard = () => {
-        assertParent();
-        if (state.items !== change.records) throw createRouteSessionCancelledError();
+    }
+    function readMutationVisibleFacts(live, parent, { order = false } = {}) {
+      const sessionToken = sessionScope.token, layout = parent.layout, columns = layout?.columns;
+      const assertCurrent = () => {
+        assertRouteSession(sessionToken);
+        if (live) nativeCarousel.assertObservation(live);
+        if (sourceState !== parent || parent.layout !== layout || parent.layout?.columns !== columns) throw createRouteSessionCancelledError();
       };
-      const grid = state.grid;
-      if (grid && !state.watchStatus) {
-        for (let i = 0; i < change.ordered.length; i++) {
-          guard();
-          const item = change.ordered[i], clone = state.cloneMap?.get(itemKey(item));
-          if (!clone) continue;
-          const reference = grid.children[change.index + i] || null;
-          if (reference !== clone) gridView.moveCard(gridView.getCard(item), grid, reference);
-          guard();
-        }
+      assertCurrent();
+      const ids = order && !live?.pageSignature ? [] : visibleNativeItems(live).map((item) => item.videoId);
+      assertCurrent();
+      return Object.freeze({
+        ids: Object.freeze(ids),
+        page: live?.selectedPage || 0,
+        columns,
+        available: Boolean(live?.pageSignature),
+        assertCurrent
+      });
+    }
+    function retireMutationCard(record, { correlationId, parent, assertCurrent, onAccepted }) {
+      assertCurrent();
+      const clone = parent.cloneMap?.get(itemKey(record));
+      if (activeVideoId === String(record.videoId) || activeClone === clone) {
+        advanceHoverToken("source");
+        assertCurrent();
+        clearSourceAlignment();
+        assertCurrent();
+        activeVideoId = null;
+        activeClone = null;
+        activePage = null;
       }
-      guard();
-      reindexLegacyItemsAfterDelta();
-      log(tLog("legacyVisibleOrderAligned"), { page: live.selectedPage, ids: nativeIds });
+      const handle = gridView.getCard(record);
+      if (handle) gridView.removeCard(handle, { correlationId, assertCurrent, onAccepted });
+      else onAccepted();
+      assertCurrent();
+    }
+    function prepareMutationInsertion({ parent, assertCurrent }) {
+      assertCurrent();
+      const grid = parent.grid || document.getElementById(GRID_ID);
+      if (!grid) return false;
+      ensureGridHoverBehavior(grid);
+      assertCurrent();
       return true;
+    }
+    function insertMutationCard(record, options) {
+      const { parent, index, assertCurrent } = options;
+      assertCurrent();
+      const grid = parent.grid || document.getElementById(GRID_ID);
+      const before = parent.watchStatus ? null : grid.children[index] || null;
+      return gridView.insertCard(record, { ...options, before });
+    }
+    function updateMutationCard(record, index, { parent, assertCurrent }) {
+      assertCurrent();
+      const clone = parent.cloneMap?.get(itemKey(record));
+      if (clone?.isConnected) copyItemAttributes(clone, record, index);
+      assertCurrent();
+    }
+    function presentListOrder(change, { parent, assertCurrent }) {
+      assertCurrent();
+      const grid = parent.grid;
+      if (grid && !parent.watchStatus) for (let index = 0; index < change.ordered.length; index++) {
+        assertCurrent();
+        const record = change.ordered[index], clone = parent.cloneMap?.get(itemKey(record));
+        if (!clone) continue;
+        const before = grid.children[change.index + index] || null;
+        if (before !== clone) gridView.moveCard(gridView.getCard(record), grid, before);
+        assertCurrent();
+      }
+    }
+    function presentListChange({ count, empty, logical }, { parent, assertCurrent }) {
+      assertCurrent();
+      parent.empty = empty;
+      if (logical && count) {
+        scheduleResponsiveRefresh(140, "my-list-delta");
+        assertCurrent();
+      }
+      gridView.setEmpty(empty);
+      assertCurrent();
+      waitingForNativeEmpty = empty;
+      if (empty) syncLegacyEmptyState(parent.section, { allowProvisional: true });
+      else clearLegacyEmptyState();
+      assertCurrent();
+      invalidateGridReact();
+      assertCurrent();
+      if (parent.watchStatus) {
+        syncWatchGroups(parent);
+        assertCurrent();
+      }
+      const status = updateStatus(formatHeaderParts(count, count, parent.initializationElapsedMs, true));
+      assertCurrent();
+      parent.status = status;
+      if (status && parent.layout) {
+        layoutFrameStatus(status, null, viewOriginalMyList && !empty ? parent.layout.rowGap || 0 : 0);
+        assertCurrent();
+      }
+    }
+    function reportListChange(change, { assertCurrent }) {
+      assertCurrent();
+      if (change.kind === "order") log(tLog("legacyVisibleOrderAligned"), { page: change.page, ids: change.ids });
+      else {
+        mutationSourceRecoveryPending = true;
+        if (change.kind === "remove") log(tLog("legacyItemRemovedByDifferentialUpdate"), {
+          reason: change.reason,
+          removed: itemSummary(change.record),
+          remaining: change.count
+        });
+        else log(tLog("legacyItemAddedByDifferentialUpdate"), {
+          reason: change.reason,
+          index: change.index,
+          added: itemSummary(change.record),
+          total: change.count
+        });
+      }
+      assertCurrent();
+    }
+    function findNativeMyListItemByVideoId(videoId, liveState = null) {
+      const discovery = liveState || nativeDiscoveryObservation();
+      return nativeCarousel.captureMountedItem({ discovery, videoId });
+    }
+    function findAnyStandardCardItemByVideoId(videoId) {
+      const wanted = String(videoId);
+      for (const card of document.querySelectorAll(NETFLIX_DOM_SELECTORS.standardCardWithHref)) {
+        if (card.closest(`#${GRID_ID}`)) continue;
+        const href = card.href || card.getAttribute("href") || "";
+        if (videoIdFromHref(href) !== wanted) continue;
+        const slot = card.closest(NETFLIX_DOM_SELECTORS.virtualSlot);
+        if (!slot) continue;
+        const item = itemFromSlot(slot, 0);
+        if (item?.videoId === wanted) return item;
+      }
+      return null;
     }
     function restartInitializationForPopulatedNativeMyList(live, reason = "late-populated-source") {
       if (!sourceState?.empty || !live?.section || !live?.scroller || !live?.track) return false;
@@ -14871,12 +15038,6 @@
     }
     function waitStableCurrentPage(...args) {
       return nativeCarousel.stablePage(...args);
-    }
-    function undoCorrelationForItem(item) {
-      return listMutations.correlationFor(item);
-    }
-    function cardSourceForItem(item, correlationId = undoCorrelationForItem(item)) {
-      return gridView.materialFor(item, correlationId);
     }
     function itemKey(item) {
       return item.videoId ? `v:${item.videoId}` : `h:${item.href}`;

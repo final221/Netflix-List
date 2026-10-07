@@ -128,25 +128,26 @@ export function createCards({ markup, keyFor, createError, prepareCard, onRetire
         }
         return next;
     }
-    function removeCard(expected, { correlationId = null, assertCurrent = () => {} } = {}) {
+    function removeCard(expected, { correlationId = null, onAccepted = () => {}, assertCurrent = () => {} } = {}) {
         assertCurrent(); assertCard(expected);
         const entry = handles.get(expected);
         onRetire(expected, { reason: 'removal', attempt: null });
         assertCurrent(); assertCard(expected);
         entries.delete(expected.key);
         revision++;
-        entry.node.remove();
         if (correlationId !== null) retained.set(correlationId, { item: entry.item, node: entry.node });
+        onAccepted();
+        try { entry.node.remove(); } catch (_) { retirementFailures++; }
         return true;
     }
-    function insertCard(item, { index = 0, correlationId = null, before = null, material = null,
+    function insertCard(item, { index = 0, correlationId = null, before = null, material = null, page = undefined,
         onAccepted = () => {}, releaseMaterial = null, assertCurrent = () => {} } = {}) {
         assertCurrent();
         if (entries.has(keyFor(item))) throw createError('GRID_DUPLICATE_CARD', 'Card is already displayed');
         const root = readRoot();
         if (!root?.isConnected) throw createError('GRID_FRAME_RETIRED', 'Grid is not mounted');
         const node = createClone(item, correlationId, material);
-        prepare(node, item, index);
+        prepare(node, item, index, {}, page);
         assertCurrent();
         if (readRoot() !== root || entries.has(keyFor(item))) throw createError('GRID_FRAME_RETIRED', 'Grid changed during insertion');
         root.insertBefore(node, before);

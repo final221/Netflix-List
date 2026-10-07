@@ -43,6 +43,15 @@ test('grid publishes complete cards, releases startup material and exposes only 
     }
 });
 
+test('retirement accepts registry and correlation before cleanup and reports host cleanup failure', async () => {
+    const e=await fixture(),item=e.item();await e.publish([item]);const handle=e.grid.getCard(item);let accepted=0;
+    handle.node.remove=()=>{assert.equal(accepted,1);assert.equal(e.grid.getCard(item),null);
+        assert.equal(e.grid.hasRetained('removed',item),true);throw new Error('host cleanup');};
+    assert.equal(e.grid.removeCard(handle,{correlationId:'removed',onAccepted(){accepted++;}}),true);
+    assert.equal(e.grid.cards.size,0);assert.equal(e.grid.diagnostics().retirementFailures,1);
+    e.grid.releaseRetained('removed');assert.equal(e.grid.hasRetained('removed',item),false);
+});
+
 test('failed obsolete-root cleanup keeps the accepted frame and registry consistent', async () => {
     const e = await fixture(), oldItem = e.item('1');
     const oldRoot = await e.publish([oldItem]), old = e.grid.getCard(oldItem);

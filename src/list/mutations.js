@@ -4,13 +4,18 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
     isBlocked = () => false, applyMutation = null,
     readParent = () => null, canApply = () => false, assertSession = () => {}, isCancelled = () => false,
     createError = (code, message) => Object.assign(new Error(message), { code }),
-    hasMember, refreshNative, observeNative, removeMember, addMember, alignVisible,
-    captureNative, hasMaterial, preferredIndexForNative, assertNative,
+    hasMember, refreshNative, observeNative,
+    captureNative, hasMaterial, assertNative,
+    readMembership, prepareRecords, readLayout, readVisible, sample = operation => operation(),
+    hasCard, retireCard, canInsertCard, insertCard, readPage, writePage, updateCard,
+    refreshMapping = () => {}, onReindexed = () => {}, onOrder = () => {}, onChanged = () => {},
+    createCancelledError = () => createError('NATIVE_SOURCE_REPLACED', 'Mutation publication was replaced'),
     findFallback = () => null, observeChanges = () => null, queueMicrotask = () => {},
     mutationTimeout = 1800, onQueued = () => {}, onTimeout = () => {},
     onCounter = () => {}, onExpired = () => {} }) {
     let entries = new Map(), timer = null, generation = 0;
     let pending = new Map(), sequence = 0;
+    let publicationGeneration = 0;
     let deferralEpoch = 0, disposedToken = null, cleanupFailures = 0;
     function cleanup(operation) { try { operation(); } catch (_) { cleanupFailures++; } }
     const isAdmitted = token => token !== disposedToken && isSessionActive(token);
@@ -31,7 +36,7 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
     function dispose() {
         const oldPending = pending, oldEntries = entries, oldTimer = timer;
         pending = new Map(); entries = new Map(); timer = null;
-        deferrals.clear(); deferralEpoch++; sequence++; generation++; disposedToken = readSession();
+        deferrals.clear(); deferralEpoch++; sequence++; generation++; publicationGeneration++; disposedToken = readSession();
         if (oldTimer) cleanup(() => clearTimeout(oldTimer.id));
         cleanup(() => onCounter('cleared', oldEntries.size));
         for (const intent of oldPending.values()) releaseIntent(intent, oldEntries);
@@ -100,11 +105,11 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
             const videoId = intent.videoId;
             let live = call(refreshNative) || call(observeNative);
             if (intent.action === 'remove') {
-                const changed = call(removeMember, videoId, reason);
+                const changed = call(remove, videoId, reason, { assertCurrent: guard });
                 if (!changed && !call(hasMember, videoId)) { disposeMutation(videoId, intent); return true; }
                 if (!changed) return false;
                 live = call(refreshNative) || live;
-                if (live?.track) call(alignVisible, live);
+                if (live?.track) call(reconcileOrder, live, { assertCurrent: guard });
                 disposeMutation(videoId, intent); return true;
             }
             if (call(hasMember, videoId)) { disposeMutation(videoId, intent); return true; }
@@ -112,13 +117,13 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
             const candidate = nativeItem || intent.fallbackItem || call(findFallback, videoId);
             const correlationId = candidate === intent.fallbackItem ? intent.correlationId : null;
             if (!call(hasMaterial, candidate, correlationId)) return false;
-            const index = nativeItem ? call(preferredIndexForNative, videoId, live)
+            const index = nativeItem ? call(preferredIndex, videoId, live, { assertCurrent: guard })
                 : (Number.isFinite(intent.preferredIndex) ? intent.preferredIndex : 0);
             call(assertNative, live);
-            const changed = call(addMember, candidate, index, nativeItem ? reason + '-native' : reason + '-captured', correlationId);
+            const changed = call(add, candidate, index, nativeItem ? reason + '-native' : reason + '-captured', correlationId, { assertCurrent: guard });
             if (changed || call(hasMember, videoId)) {
                 live = call(refreshNative) || live;
-                if (live?.track) call(alignVisible, live);
+                if (live?.track) call(reconcileOrder, live, { assertCurrent: guard });
                 disposeMutation(videoId, intent); return true;
             }
             return false;
@@ -286,12 +291,135 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         for (const entry of entries.values()) if (!latest || entry.removedAt > latest.removedAt) latest = entry;
         return latest;
     }
+    function nextCorrelation() { return `undo:${readSession()}:${++sequence}`; }
+    function publicationOwner({ assertCurrent = () => {} } = {}) {
+        const token = readSession(), parent = readParent();
+        if (!isAdmitted(token) || !parent) return null;
+        const epoch = ++publicationGeneration;
+        const parentGuard = () => {
+            assertSession(token); assertCurrent();
+            if (!isAdmitted(token) || readParent() !== parent || publicationGeneration !== epoch) throw createCancelledError();
+        };
+        parentGuard();
+        const membership = readMembership(parent); parentGuard();
+        let records = membership.records, revision = membership.revision;
+        const guard = () => {
+            parentGuard();
+            if (membership.records !== records || membership.revision !== revision) throw createCancelledError();
+        };
+        return { membership, parent, guard, call(operation, ...args) { guard(); const result = operation(...args); guard(); return result; },
+            accept(operation) { guard(); const result = operation(); parentGuard(); records = membership.records; revision = membership.revision; guard(); return result; } };
+    }
+    function reindexOwned(owner, reason) {
+        const { membership, guard, parent } = owner, records = membership.records;
+        const layout = owner.call(readLayout, parent);
+        const assertLayout = () => { guard(); layout.assertCurrent(); guard(); };
+        const columns = Math.max(1, layout.columns || 1), logical = layout.mode === 'logical';
+        owner.call(sample, () => records.forEach((record, index) => {
+            assertLayout();
+            if (!logical || reason === 'mutation-reindex' || !Number.isFinite(owner.call(readPage, record))) {
+                owner.call(writePage, record, Math.floor(index / columns), { parent, assertCurrent: assertLayout });
+            }
+            owner.call(updateCard, record, index, { parent, assertCurrent: assertLayout });
+            assertLayout();
+        }));
+        assertLayout();
+        owner.accept(() => membership.observeCount({ totalCount: records.length, collectedCount: records.length }, { assertCurrent: assertLayout }));
+        if (logical) owner.call(refreshMapping, reason, { parent, assertCurrent: guard });
+        owner.call(onReindexed, Object.freeze({ records, count: records.length, empty: records.length === 0, logical, reason }), { parent, assertCurrent: guard });
+    }
+    function reindex(reason = 'delta-reindex', admission = {}) {
+        const owner = publicationOwner(admission); if (!owner) return false;
+        reindexOwned(owner, reason); return true;
+    }
+    function remove(videoId, reason = 'click-delta', admission = {}) {
+        const owner = publicationOwner(admission); if (!owner) return false;
+        const { membership, guard, parent } = owner, key = 'v:' + videoId;
+        const record = membership.lookup.get(key); if (!record) return false;
+        const index = membership.records.indexOf(record);
+        const correlationId = owner.call(hasCard, record) ? nextCorrelation() : null;
+        let accepted = false;
+        try {
+            owner.call(retireCard, record, { correlationId, parent, assertCurrent: guard, onAccepted() {
+                if (accepted) { guard(); return; }
+                owner.accept(() => membership.remove(key, { assertCurrent: guard })); accepted = true;
+            } });
+            if (!accepted) throw createError('LIST_PUBLICATION_REJECTED', 'Card retirement did not accept membership');
+            owner.call(rememberUndo, record, index, correlationId);
+            reindexOwned(owner, 'mutation-reindex');
+            owner.call(onChanged, Object.freeze({ kind: 'remove', reason, record, index, count: membership.records.length }), { parent, assertCurrent: guard });
+            return true;
+        } finally {
+            const entry = entries.get(String(record.videoId)), intent = readPending(record.videoId);
+            const retained = (entry?.item === record && entry?.correlationId === correlationId) ||
+                (intent?.fallbackItem === record && intent?.correlationId === correlationId);
+            if (correlationId && !retained) cleanup(() => releaseRetained(correlationId));
+        }
+    }
+    function add(input, preferred = 0, reason = 'click-delta', correlationId = correlationFor(input), admission = {}) {
+        const owner = publicationOwner(admission); if (!owner || !input?.videoId) return false;
+        const { membership, guard, parent } = owner;
+        if (!owner.call(hasMaterial, input, correlationId) || membership.lookup.has('v:' + input.videoId)) return false;
+        if (!owner.call(canInsertCard, { parent, assertCurrent: guard })) return false;
+        const index = Math.max(0, Math.min(membership.records.length, Number.isFinite(preferred) ? Math.floor(preferred) : 0));
+        guard();
+        const transfer = prepareRecords([input], { assertCurrent: guard });
+        let record, accepted = false;
+        try {
+            guard();
+            record = transfer.records[0];
+            const layout = owner.call(readLayout, parent, { positionOnly: true });
+            const assertLayout = () => { guard(); layout.assertCurrent(); guard(); };
+            assertLayout();
+            const page = Math.floor(index / Math.max(1, layout.columns || 1));
+            owner.call(insertCard, record, { index, correlationId, parent, page, material: transfer.readMaterial(record),
+                releaseMaterial: transfer.release, assertCurrent: assertLayout,
+                onAccepted() {
+                    if (accepted) { assertLayout(); return; }
+                    owner.call(writePage, record, page, { parent, assertCurrent: assertLayout });
+                    owner.accept(() => membership.insert(record, index, { assertCurrent: assertLayout })); accepted = true;
+                } });
+            if (!accepted) throw createError('LIST_PUBLICATION_REJECTED', 'Card insertion did not accept membership');
+        } finally { transfer.discard(); }
+        owner.call(forgetUndo, record.videoId);
+        reindexOwned(owner, 'mutation-reindex');
+        owner.call(onChanged, Object.freeze({ kind: 'add', reason, record, index, count: membership.records.length }), { parent, assertCurrent: guard });
+        return true;
+    }
+    function visibleFacts(owner, live, options = {}) {
+        const facts = owner.call(readVisible, live, owner.parent, options);
+        owner.call(facts.assertCurrent); return facts;
+    }
+    function preferredIndex(videoId, live, admission = {}) {
+        const owner = publicationOwner(admission); if (!owner) return 0;
+        const facts = visibleFacts(owner, live), position = facts.ids.indexOf(String(videoId));
+        if (position < 0) return 0;
+        const columns = Math.max(1, facts.columns || facts.ids.length || 1);
+        return Math.min(owner.membership.records.length, (facts.page || 0) * columns + position);
+    }
+    function reconcileOrder(live, admission = {}) {
+        const owner = publicationOwner(admission); if (!owner || !owner.membership.records.length) return false;
+        const facts = visibleFacts(owner, live, { order: true }); if (!facts.available) return false;
+        const { membership, guard, parent } = owner;
+        const columns = Math.max(1, facts.columns || facts.ids.length || 1);
+        const base = Math.min(membership.records.length, (facts.page || 0) * columns);
+        const assertVisible = () => { guard(); facts.assertCurrent(); guard(); };
+        const change = owner.accept(() => membership.alignVisible(facts.ids, base, { assertCurrent: assertVisible }));
+        if (!change) return false;
+        owner.call(onOrder, change, { parent, assertCurrent: assertVisible });
+        assertVisible(); reindexOwned(owner, 'delta-reindex');
+        // Native remapping may retire the consumed observation; publication now
+        // follows the accepted membership owner rather than that old receipt.
+        owner.call(onChanged, Object.freeze({ kind: 'order', page: facts.page, ids: Object.freeze([...facts.ids]) }), { parent, assertCurrent: guard });
+        return true;
+    }
     return Object.freeze({ start, deferReconciliation, dispose,
         deferralDiagnostics: () => ({ cleanupFailures, active: [...deferrals.values()].filter(owner => isAdmitted(owner.token)).map(owner => owner.reason) }),
         observeMembership, observeClick, queueMutation, reconcileMutation, disposeMutation, clearPending,
+        remove, add, reindex, preferredIndex, reconcileOrder,
         scheduleMutationTimeout, retryMutations, deferPending, isMutationCurrent, pendingMutation: readPending,
         pendingIntents: () => Object.freeze([...pending.values()]), pendingDiagnostics,
-        nextCorrelation: () => `undo:${readSession()}:${++sequence}`, rememberUndo, forgetUndo, pruneUndo, clearUndo, latestUndo, correlationFor,
+        nextCorrelation, rememberUndo, forgetUndo, pruneUndo, clearUndo, latestUndo, correlationFor,
         undoEntries: () => Object.freeze([...entries.values()]),
         undoDiagnostics: () => ({ entries: entries.size, expiryScheduled: Boolean(timer),
             nextExpiryInMs: timer ? Math.max(0, Math.round(timer.dueAt - now())) : null }) });

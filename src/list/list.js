@@ -15,7 +15,7 @@ export function createList(options) {
         return record;
     }
     const collection = createCollection({ ...options, toRecord });
-    return Object.freeze({ createMutations, createMembership, toRecord, prepareEntry: collection.prepareEntry, prepareRecords: collection.prepareRecords,
+    return Object.freeze({ createMutations: mutationOptions => createMutations({ ...mutationOptions, prepareRecords: collection.prepareRecords }), createMembership, toRecord, prepareEntry: collection.prepareEntry, prepareRecords: collection.prepareRecords,
         waitForInitialCount: collection.waitForInitialCount,
         collectForPublication: collection.collectForPublication,
         preparePreferred: collection.preparePreferred,
