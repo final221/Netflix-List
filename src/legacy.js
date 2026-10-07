@@ -1355,14 +1355,6 @@ export function startLegacy() {
         return gap;
     }
 
-    function describeMyListToggleClick(event) {
-        const decoded = netflixDom.describeMembershipClick(event, { activeVideoId });
-        if (!decoded) return null;
-        // Current membership owns the action; Netflix's Undo UI can advertise remove on an add.
-        const wasInLegacy = Boolean(sourceState?.itemMap?.has(`v:${decoded.videoId}`));
-        return { ...decoded, action: wasInLegacy ? 'remove' : 'add', wasInLegacy };
-    }
-
     function nativeLayoutObservation(section, scroller = null, track = null, mode = 'auto', state = sourceState) {
         const sessionToken = sessionScope.token;
         const ownerSection = state?.section, ownerScroller = state?.scroller, ownerTrack = state?.track;
@@ -2374,37 +2366,6 @@ export function startLegacy() {
     function pruneUndoEntries(now = performance.now()) { listMutations.pruneUndo(now); }
     function rememberUndoEntry(item, index, correlationId) { listMutations.rememberUndo(item, index, correlationId); }
 
-    function describeMyListUndoClick(event) {
-        const target = event.target instanceof Element ? event.target : null;
-        const button = target?.closest?.('button');
-        if (!button) return null;
-        const toast = button.closest('#toastRoot [aria-label="toast"], #toastRoot [role="alert"]');
-        if (!toast) return null;
-
-        const toastButtons = [...toast.querySelectorAll('button')];
-        if (toastButtons.length !== 1 || toastButtons[0] !== button) return null;
-
-        const entry = listMutations.latestUndo();
-        if (!entry) return null;
-
-        // A single action button inside a recent-removal toast is treated as Undo.
-        // The most recent remembered removal identifies the affected video. No
-        // localized toast text participates in detection or state decisions.
-        return {
-            button,
-            videoId: entry.videoId,
-            action: 'add',
-            uiaAction: 'undo',
-            wasInLegacy: false,
-            uia: 'toast-undo',
-            trackingContext: null,
-            fallbackItem: entry.item,
-            correlationId: entry.correlationId,
-            preferredIndex: entry.index,
-            undo: true
-        };
-    }
-
     function findNativeMyListItemByVideoId(videoId, liveState = null) {
         const discovery = liveState || nativeDiscoveryObservation();
         return nativeCarousel.captureMountedItem({ discovery, videoId });
@@ -2975,9 +2936,10 @@ export function startLegacy() {
 
     function handleObservedMyListToggleClick(event) {
         if (!isTargetPage() || !sourceState) return;
-        const descriptor = describeMyListToggleClick(event) || describeMyListUndoClick(event);
-        if (!descriptor) return;
-        listMutations.queueMutation(descriptor);
+        listMutations.observeClick(() => {
+            const membership = netflixDom.describeMembershipClick(event, { activeVideoId });
+            return { membership, toastAction: !membership && netflixDom.describeToastActionClick(event) };
+        });
     }
 
     function updateStatus(content) {

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.49
+// @version      1.4.50
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -256,6 +256,14 @@
       const uiaAction = /remove-from-my-list/i.test(uia) ? "remove" : /add-to-my-list/i.test(uia) ? "add" : "unknown";
       return { button, videoId, uiaAction, uia, trackingContext };
     }
+    function describeToastActionClick(event) {
+      const target = event.target instanceof Element2 ? event.target : null;
+      const button = target?.closest?.("button");
+      const toast = button?.closest?.('#toastRoot [aria-label="toast"], #toastRoot [role="alert"]');
+      if (!toast) return false;
+      const buttons = [...toast.querySelectorAll("button")];
+      return buttons.length === 1 && buttons[0] === button;
+    }
     const netflixDom = Object.freeze({
       selectors: NETFLIX_DOM_SELECTORS,
       sectionVideoIds(section) {
@@ -418,6 +426,7 @@
       videoIdFromHref,
       decodeTrackingContext,
       describeMembershipClick,
+      describeToastActionClick,
       readHeadingTypography,
       readSyntheticPlacement,
       readEmptyContent,
@@ -2853,11 +2862,40 @@
     function deferPending() {
       for (const intent of pending.values()) phases.get(intent).deferred = true;
     }
+    function observeClick(readFacts) {
+      const token = readSession(), parent = readParent(), owner = sequence, undoOwner = generation;
+      const admitted = () => isAdmitted(token) && readParent() === parent && sequence === owner;
+      if (!admitted() || !canApply() || !admitted()) return null;
+      const facts = readFacts();
+      if (!admitted() || generation !== undoOwner) return null;
+      let descriptor;
+      if (facts?.membership?.videoId) {
+        const { videoId, uia, uiaAction } = facts.membership;
+        const present = Boolean(hasMember(videoId));
+        if (!admitted() || generation !== undoOwner) return null;
+        descriptor = { videoId, uia, uiaAction, action: present ? "remove" : "add" };
+      } else if (facts?.toastAction) {
+        const entry = latestUndo();
+        if (!entry || !admitted()) return null;
+        descriptor = {
+          videoId: entry.videoId,
+          action: "add",
+          uiaAction: "undo",
+          uia: "toast-undo",
+          fallbackItem: entry.item,
+          correlationId: entry.correlationId,
+          preferredIndex: entry.index,
+          undo: true
+        };
+      }
+      if (!descriptor || !admitted()) return null;
+      return queueMutation(descriptor);
+    }
     function queueMutation(descriptor) {
       if (!descriptor?.videoId) return null;
-      const token = readSession(), owner = sequence;
+      const token = readSession(), owner = sequence, parent = readParent();
       const fallbackItem = descriptor.action === "add" ? descriptor.fallbackItem || findFallback(String(descriptor.videoId)) : null;
-      if (sequence !== owner || !isAdmitted(token)) return null;
+      if (sequence !== owner || !isAdmitted(token) || readParent() !== parent) return null;
       const intent = observeMembership({
         ...descriptor,
         fallbackItem,
@@ -2991,7 +3029,7 @@
       return pending2?.fallbackItem === item ? pending2.correlationId || null : null;
     }
     function latestUndo() {
-      pruneUndo();
+      if (!pruneUndo()) return null;
       let latest = null;
       for (const entry of entries.values()) if (!latest || entry.removedAt > latest.removedAt) latest = entry;
       return latest;
@@ -3002,6 +3040,7 @@
       dispose,
       deferralDiagnostics: () => ({ cleanupFailures, active: [...deferrals.values()].filter((owner) => isAdmitted(owner.token)).map((owner) => owner.reason) }),
       observeMembership,
+      observeClick,
       queueMutation,
       reconcileMutation,
       disposeMutation,
@@ -11529,7 +11568,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.49";
+    const SCRIPT_VERSION = "1.4.50";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -12999,12 +13038,6 @@
       if (sourceState !== state) throw createRouteSessionCancelledError();
       return gap;
     }
-    function describeMyListToggleClick(event) {
-      const decoded = netflixDom.describeMembershipClick(event, { activeVideoId });
-      if (!decoded) return null;
-      const wasInLegacy = Boolean(sourceState?.itemMap?.has(`v:${decoded.videoId}`));
-      return { ...decoded, action: wasInLegacy ? "remove" : "add", wasInLegacy };
-    }
     function nativeLayoutObservation(section, scroller = null, track = null, mode = "auto", state = sourceState) {
       const sessionToken = sessionScope.token;
       const ownerSection = state?.section, ownerScroller = state?.scroller, ownerTrack = state?.track;
@@ -14058,30 +14091,6 @@
     function rememberUndoEntry(item, index, correlationId) {
       listMutations.rememberUndo(item, index, correlationId);
     }
-    function describeMyListUndoClick(event) {
-      const target = event.target instanceof Element ? event.target : null;
-      const button = target?.closest?.("button");
-      if (!button) return null;
-      const toast = button.closest('#toastRoot [aria-label="toast"], #toastRoot [role="alert"]');
-      if (!toast) return null;
-      const toastButtons = [...toast.querySelectorAll("button")];
-      if (toastButtons.length !== 1 || toastButtons[0] !== button) return null;
-      const entry = listMutations.latestUndo();
-      if (!entry) return null;
-      return {
-        button,
-        videoId: entry.videoId,
-        action: "add",
-        uiaAction: "undo",
-        wasInLegacy: false,
-        uia: "toast-undo",
-        trackingContext: null,
-        fallbackItem: entry.item,
-        correlationId: entry.correlationId,
-        preferredIndex: entry.index,
-        undo: true
-      };
-    }
     function findNativeMyListItemByVideoId(videoId, liveState = null) {
       const discovery = liveState || nativeDiscoveryObservation();
       return nativeCarousel.captureMountedItem({ discovery, videoId });
@@ -14636,9 +14645,10 @@
     }
     function handleObservedMyListToggleClick(event) {
       if (!isTargetPage() || !sourceState) return;
-      const descriptor = describeMyListToggleClick(event) || describeMyListUndoClick(event);
-      if (!descriptor) return;
-      listMutations.queueMutation(descriptor);
+      listMutations.observeClick(() => {
+        const membership = netflixDom.describeMembershipClick(event, { activeVideoId });
+        return { membership, toastAction: !membership && netflixDom.describeToastActionClick(event) };
+      });
     }
     function updateStatus(content) {
       return gridView.updateStatus(content);

@@ -55,6 +55,66 @@ function queueFixture(extra={}) {
         queueMicrotask:fn=>microtasks.push(fn),onTimeout:detail=>warnings.push(detail),...extra});
     return {owner,timers,observers,microtasks,warnings,setDeferred(value) { if(value)ticket=owner.deferReconciliation('test');else { ticket?.release({resume:false});ticket=null; } }};
 }
+
+test('observed clicks use membership rather than the advertised Netflix action and retain no DOM facts',()=>{
+    let present=false;const e=queueFixture({canApply:()=>true,hasMember:()=>present});
+    const facts={videoId:'1',uiaAction:'remove',uia:'remove-from-my-list',button:{},trackingContext:{}};
+    const added=e.owner.observeClick(()=>({membership:facts}));
+    assert.equal(added.action,'add');assert.equal(added.button,undefined);assert.equal(added.trackingContext,undefined);
+    present=true;const removed=e.owner.observeClick(()=>({membership:{...facts,uiaAction:'add'}}));
+    assert.equal(removed.action,'remove');assert.equal(e.observers.length,2);assert.equal(e.timers.size,1);
+});
+
+test('toast click selects the latest valid canonical Undo entry and copies its exact correlation and index',()=>{
+    let now=0;const e=queueFixture({now:()=>now,canApply:()=>true,hasMember:()=>false});
+    const first={videoId:'1'},second={videoId:'2'};
+    e.owner.rememberUndo(first,4,'one');now=1;e.owner.rememberUndo(second,7,'two');
+    assert.equal(e.owner.observeClick(()=>({toastAction:false})),null);
+    const intent=e.owner.observeClick(()=>({toastAction:true}));
+    assert.equal(intent.fallbackItem,second);assert.equal(intent.correlationId,'two');assert.equal(intent.preferredIndex,7);
+    assert.equal(intent.undo,true);assert.equal(intent.uiaAction,'undo');
+    now=31;e.owner.pruneUndo();assert.equal(e.owner.observeClick(()=>({toastAction:true})),null);
+    assert.equal(e.owner.pendingMutation('2'),intent);
+});
+
+test('click admission rejects parent replacement, session retirement and newer intents during interpretation',()=>{
+    let parent={},replace=false,e;
+    e=queueFixture({canApply:()=>true,readParent:()=>parent,hasMember(){if(replace)parent={};return false;}});
+    assert.equal(e.owner.observeClick(()=>{parent={};return {membership:{videoId:'1'}};}),null);
+    replace=true;assert.equal(e.owner.observeClick(()=>({membership:{videoId:'1'}})),null);replace=false;
+    assert.equal(e.owner.observeClick(()=>{e.owner.queueMutation({videoId:'2',action:'remove'});return {membership:{videoId:'1'}};}),null);
+    assert.equal(e.owner.pendingMutation('2').action,'remove');assert.equal(e.owner.pendingMutation('1'),null);
+    e.owner.dispose();let reads=0;assert.equal(e.owner.observeClick(()=>{reads++;return {membership:{videoId:'1'}};}),null);
+    assert.equal(reads,0);
+});
+
+test('Undo click does not borrow a reentrant replacement removal during expiry cleanup',()=>{
+    let now=0,replace=false,e;const old={videoId:'1'},fresh={videoId:'2'};
+    e=queueFixture({now:()=>now,canApply:()=>true,releaseRetained(){if(replace){replace=false;e.owner.rememberUndo(fresh,3,'fresh');}}});
+    e.owner.rememberUndo(old,0,'old');now=30;replace=true;
+    assert.equal(e.owner.observeClick(()=>({toastAction:true})),null);
+    assert.equal(e.owner.pendingIntents().length,0);assert.equal(e.owner.latestUndo().item,fresh);
+});
+
+test('click fallback capture cannot queue on a replacement parent and membership controls take precedence over toast facts',()=>{
+    let parent={},e;
+    e=queueFixture({canApply:()=>true,readParent:()=>parent,hasMember:()=>false,
+        findFallback(){parent={};return {videoId:'1'};}});
+    assert.equal(e.owner.observeClick(()=>({membership:{videoId:'1'}})),null);
+    assert.equal(e.timers.size,0);assert.equal(e.observers.length,0);
+    const valid=queueFixture({canApply:()=>true,hasMember:()=>true});
+    valid.owner.rememberUndo({videoId:'2'},5,'undo');
+    const intent=valid.owner.observeClick(()=>({membership:{videoId:'1',uiaAction:'add'},toastAction:true}));
+    assert.equal(intent.videoId,'1');assert.equal(intent.action,'remove');assert.equal(intent.undo,false);
+});
+
+test('toast interpretation rejects a newer removal and still admits surviving entries after normal expiry',()=>{
+    let now=0;const e=queueFixture({now:()=>now,canApply:()=>true});
+    e.owner.rememberUndo({videoId:'1'},0,'old');
+    assert.equal(e.owner.observeClick(()=>{now=1;e.owner.rememberUndo({videoId:'2'},2,'new');return {toastAction:true};}),null);
+    now=30;const intent=e.owner.observeClick(()=>({toastAction:true}));
+    assert.equal(intent.videoId,'2');assert.equal(intent.correlationId,'new');
+});
 test('list queue owns immutable intents and replaces exact observer/timer resources',()=>{
     const e=queueFixture(),first=e.owner.queueMutation({videoId:'1',action:'remove'});
     assert.equal(Object.isFrozen(first),true);assert.equal(first.observer,undefined);assert.equal(first.timeoutId,undefined);

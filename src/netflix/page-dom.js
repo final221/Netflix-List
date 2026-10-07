@@ -106,6 +106,15 @@ export function createNetflixPageDom({ document, Element, location, readGraphqlI
         return { button, videoId, uiaAction, uia, trackingContext };
     }
 
+    function describeToastActionClick(event) {
+        const target = event.target instanceof Element ? event.target : null;
+        const button = target?.closest?.('button');
+        const toast = button?.closest?.('#toastRoot [aria-label="toast"], #toastRoot [role="alert"]');
+        if (!toast) return false;
+        const buttons = [...toast.querySelectorAll('button')];
+        return buttons.length === 1 && buttons[0] === button;
+    }
+
     const netflixDom = Object.freeze({
         selectors: NETFLIX_DOM_SELECTORS,
 
@@ -293,5 +302,5 @@ export function createNetflixPageDom({ document, Element, location, readGraphqlI
         return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
     }
     return Object.freeze({ ...netflixDom, findMyListSection, readMyListAnchor, nativeCardIdentity, videoIdFromHref,
-        decodeTrackingContext, describeMembershipClick, readHeadingTypography, readSyntheticPlacement, readEmptyContent, readEmptyShell, readRowGap });
+        decodeTrackingContext, describeMembershipClick, describeToastActionClick, readHeadingTypography, readSyntheticPlacement, readEmptyContent, readEmptyShell, readRowGap });
 }

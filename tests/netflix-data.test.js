@@ -181,6 +181,29 @@ test('membership decoding returns UI identity facts while the caller owns curren
     assert.equal(e.dom.describeMembershipClick({ target: {} }), null);
 });
 
+test('toast action decoding accepts one button in a Netflix toast without localized text or list decisions', () => {
+    // The shared DOM fixture does not implement descendant selectors.
+    class DescendantElement extends Element {
+        matches(selector) {
+            return selector.split(',').some(part => {
+                const descendant=part.trim().match(/^(#[\w-]+)\s+(.+)$/);
+                return descendant ? super.matches(descendant[2]) && Boolean(this.parentElement?.closest(descendant[1])) : super.matches(part);
+            });
+        }
+    }
+    const e=environment(),root=e.document.body.appendChild(new Element('div'));root.id='toastRoot';
+    const toast=root.appendChild(new DescendantElement('div'));toast.setAttribute('aria-label','toast');
+    const button=toast.appendChild(new Element('button')),child=button.appendChild(new Element('span'));
+    button.textContent='Zurück';
+    assert.equal(e.dom.describeToastActionClick({target:child}),true);
+    const other=toast.appendChild(new Element('button'));
+    assert.equal(e.dom.describeToastActionClick({target:button}),false);other.remove();
+    toast.setAttribute('aria-label','other');assert.equal(e.dom.describeToastActionClick({target:button}),false);
+    toast.setAttribute('role','alert');assert.equal(e.dom.describeToastActionClick({target:button}),true);
+    root.id='unrelated';assert.equal(e.dom.describeToastActionClick({target:button}),false);
+    assert.equal(e.dom.describeToastActionClick({target:{}}),false);
+});
+
 test('markup capture and shared-template cloning preserve identity and clear inherited preparation state', () => {
     const e = environment();
     const source = slot('123');

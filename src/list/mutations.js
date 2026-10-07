@@ -161,11 +161,33 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         }
     }
     function deferPending() { for (const intent of pending.values()) phases.get(intent).deferred = true; }
+    function observeClick(readFacts) {
+        const token = readSession(), parent = readParent(), owner = sequence, undoOwner = generation;
+        const admitted = () => isAdmitted(token) && readParent() === parent && sequence === owner;
+        if (!admitted() || !canApply() || !admitted()) return null;
+        const facts = readFacts();
+        if (!admitted() || generation !== undoOwner) return null;
+        let descriptor;
+        if (facts?.membership?.videoId) {
+            const { videoId, uia, uiaAction } = facts.membership;
+            // Netflix's Undo control can advertise remove while restoring an absent title.
+            const present = Boolean(hasMember(videoId));
+            if (!admitted() || generation !== undoOwner) return null;
+            descriptor = { videoId, uia, uiaAction, action: present ? 'remove' : 'add' };
+        } else if (facts?.toastAction) {
+            const entry = latestUndo();
+            if (!entry || !admitted()) return null;
+            descriptor = { videoId: entry.videoId, action: 'add', uiaAction: 'undo', uia: 'toast-undo',
+                fallbackItem: entry.item, correlationId: entry.correlationId, preferredIndex: entry.index, undo: true };
+        }
+        if (!descriptor || !admitted()) return null;
+        return queueMutation(descriptor);
+    }
     function queueMutation(descriptor) {
         if (!descriptor?.videoId) return null;
-        const token = readSession(), owner = sequence;
+        const token = readSession(), owner = sequence, parent = readParent();
         const fallbackItem = descriptor.action === 'add' ? (descriptor.fallbackItem || findFallback(String(descriptor.videoId))) : null;
-        if (sequence !== owner || !isAdmitted(token)) return null;
+        if (sequence !== owner || !isAdmitted(token) || readParent() !== parent) return null;
         const intent = observeMembership({ ...descriptor, fallbackItem,
             correlationId: descriptor.correlationId || correlationFor(fallbackItem) });
         if (!intent) return null;
@@ -259,13 +281,14 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         return pending?.fallbackItem === item ? pending.correlationId || null : null;
     }
     function latestUndo() {
-        pruneUndo(); let latest = null;
+        if (!pruneUndo()) return null;
+        let latest = null;
         for (const entry of entries.values()) if (!latest || entry.removedAt > latest.removedAt) latest = entry;
         return latest;
     }
     return Object.freeze({ start, deferReconciliation, dispose,
         deferralDiagnostics: () => ({ cleanupFailures, active: [...deferrals.values()].filter(owner => isAdmitted(owner.token)).map(owner => owner.reason) }),
-        observeMembership, queueMutation, reconcileMutation, disposeMutation, clearPending,
+        observeMembership, observeClick, queueMutation, reconcileMutation, disposeMutation, clearPending,
         scheduleMutationTimeout, retryMutations, deferPending, isMutationCurrent, pendingMutation: readPending,
         pendingIntents: () => Object.freeze([...pending.values()]), pendingDiagnostics,
         nextCorrelation: () => `undo:${readSession()}:${++sequence}`, rememberUndo, forgetUndo, pruneUndo, clearUndo, latestUndo, correlationFor,

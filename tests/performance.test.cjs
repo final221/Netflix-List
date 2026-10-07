@@ -4790,6 +4790,31 @@ test('expired Undo entries release their last retained snapshot reference when p
     assert.equal(retainedCardTrees(e.c.sourceState, e.c.recentRemovedMyListItems).has(removed), false);
 });
 
+test('actual membership listener feeds interpreted facts to list and queues exact retained Undo during initialization', async () => {
+    const e=constructionEnvironment();
+    e.c.queueMicrotask=queueMicrotask;
+    await e.c.buildGrid(e.section,e.scroller,e.items(2),e.layout,2,1);
+    vm.runInContext(declaration('handleObservedMyListToggleClick'),e.c);
+    let toastReads=0,received;const event={target:{}};
+    e.c.netflixDom={...e.c.netflixDom,describeMembershipClick(value){received=value;return {videoId:'1',uiaAction:'add',uia:'add-to-my-list'};},
+        describeToastActionClick(){toastReads++;return true;}};
+    e.c.handleObservedMyListToggleClick(event);
+    assert.equal(received,event);assert.equal(toastReads,0);
+    assert.equal(e.c.listMutations.pendingMutation('1').action,'remove');
+    e.c.listMutations.disposeMutation('1');e.c.applyLegacyRemoval('1');
+    const entry=e.c.listMutations.latestUndo();
+    e.c.netflixDom={...e.c.netflixDom,describeMembershipClick:()=>null};
+    e.c.handleObservedMyListToggleClick(event);
+    const intent=e.c.listMutations.pendingMutation('1');
+    assert.equal(toastReads,1);assert.equal(intent.action,'add');assert.equal(intent.undo,true);
+    assert.equal(intent.fallbackItem,entry.item);assert.equal(intent.correlationId,entry.correlationId);
+    assert.equal(intent.preferredIndex,entry.index);assert.ok(e.c.gridView.hasRetained(intent.correlationId,intent.fallbackItem));
+    await e.flush();assert.equal(e.c.listMutations.pendingMutation('1'),intent);
+    assert.equal(e.c.sourceState.items.length,1,'initialization ticket still defers publication');
+    e.c.listMutations.dispose();e.c.handleObservedMyListToggleClick(event);
+    assert.equal(e.c.listMutations.pendingIntents().length,0);assert.equal(toastReads,1);
+});
+
 test('Undo expiry releases idle snapshots at 30 seconds using one finite timer and aggregate diagnostics', async () => {
     const e = constructionEnvironment();
     await e.c.buildGrid(e.section, e.scroller, e.items(6), e.layout, 6, 1);
