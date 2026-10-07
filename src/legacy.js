@@ -13,6 +13,7 @@ import {
 import { createI18n } from './i18n/i18n.js';
 import { createListData } from './netflix/list-data.js';
 import { createViewingData } from './netflix/viewing-data.js';
+import { createViewing } from './viewing/viewing.js';
 import { createSessionScope } from './app/session-scope.js';
 import { createCarousel } from './netflix/carousel/carousel.js';
 
@@ -24,6 +25,9 @@ export function startLegacy() {
     const { getHtmlLanguage, getNetflixLanguage } = netflixContext;
     const viewingData = createViewingData({ context: netflixContext,
         fetch: (...args) => fetch(...args), createCancelledError: createRouteSessionCancelledError });
+    const viewing = createViewing({ activeProfile: () => netflixContext.activeProfile(), now: () => Date.now(), limits: viewingData.limits,
+        getValue: typeof GM_getValue === 'function' ? (...args) => GM_getValue(...args) : undefined,
+        setValue: typeof GM_setValue === 'function' ? (...args) => GM_setValue(...args) : undefined });
     const netflixDom = createNetflixPageDom({ document, Element, HTMLElement, location, getComputedStyle,
         readGraphqlIdentity: () => listData.myListDomIdentity() });
     const { nativeCardIdentity, videoIdFromHref, decodeTrackingContext } = netflixDom;
@@ -109,7 +113,7 @@ export function startLegacy() {
     // Controlled overlap experiment; compare completion timing and failures in Copy Logs.
     const VIEWING_REQUEST_CONCURRENCY = 2;
     const VIEWING_TIMEOUT_MS = 30000;
-    const VIEWING_COMPLETION_RATIO = 0.90;
+    const VIEWING_COMPLETION_RATIO = viewing.completionRatio;
     // Read-only, on-demand Copy Logs samples; no work is added to scrolling.
     const THUMBNAIL_DIAGNOSTIC_LIMITS = Object.freeze({
         cards: 600, geometry: 24, resourceEntries: 2000
@@ -131,9 +135,6 @@ export function startLegacy() {
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = 'legacyMyListForNetflix.settings.v3';
-    const VIEWING_CHOICES_STORAGE_KEY = 'legacyMyListForNetflix.viewingChoices.v1.';
-    const VIEWING_CACHE_STORAGE_KEY = 'legacyMyListForNetflix.viewingCache.v1.';
-    const VIEWING_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
     const logger = createLogger({ name: SCRIPT_NAME, version: SCRIPT_VERSION, Element, console,
         isTraceEnabled: () => VERBOSE_INTERACTION_LOGS });
@@ -1491,70 +1492,6 @@ export function startLegacy() {
         return kinds;
     }
 
-    function classifyViewingVideo(record) {
-        if (!record || !['movie', 'episode'].includes(record.type)) return 'unknown';
-        if (record.watched === true) return 'complete';
-        // Stopping at the credits can leave Netflix's flag false. Accept enough
-        // playback independently of that flag, with a small allowance for credits.
-        if (record.runtime > 0 && record.bookmark !== null) {
-            const creditsBoundary = record.creditsOffset > 0 && record.creditsOffset <= record.runtime
-                ? record.creditsOffset : record.runtime;
-            const boundary = Math.min(creditsBoundary, record.runtime * VIEWING_COMPLETION_RATIO);
-            if (record.bookmark >= boundary) return 'complete';
-        }
-        if (record.bookmark > 0) return 'in-progress';
-        if (record.watched === false && record.bookmark === 0) return 'not-started';
-        return 'unknown';
-    }
-
-    function classifyViewingSeries(plan) {
-        if (!plan) return 'unknown';
-        const ids = new Set();
-        const statuses = [];
-        for (const season of plan.seasons) {
-            for (let index = 0; index < season.count; index++) {
-                const episode = season.episodes.get(index);
-                if (!episode?.id || ids.has(episode.id) || episode.status === 'unknown') return 'unknown';
-                ids.add(episode.id);
-                statuses.push(episode.status);
-            }
-        }
-        if (statuses.length !== plan.expected || !statuses.length) return 'unknown';
-        if (statuses.every(status => status === 'complete')) return 'complete';
-        return statuses.every(status => status === 'not-started') ? 'not-started' : 'in-progress';
-    }
-
-    function viewingLatestEpisode(plan) {
-        for (let seasonIndex = plan.seasons.length - 1; seasonIndex >= 0; seasonIndex--) {
-            const season = plan.seasons[seasonIndex];
-            if (season.count > 0) return { season, seasonNumber: seasonIndex + 1, index: season.count - 1,
-                episode: season.episodes.get(season.count - 1) };
-        }
-        return null;
-    }
-
-    function viewingProgressSummary(record) {
-        const status = classifyViewingVideo(record);
-        const percent = record?.runtime > 0 && record.bookmark !== null
-            ? Math.round(Math.min(100, record.bookmark / record.runtime * 100) * 10) / 10 : null;
-        const creditsReached = Boolean(record?.runtime > 0 && record.creditsOffset > 0 &&
-            record.creditsOffset <= record.runtime && record.bookmark !== null && record.bookmark >= record.creditsOffset);
-        return { status, percent, thresholdPercent: VIEWING_COMPLETION_RATIO * 100,
-            watched: typeof record?.watched === 'boolean' ? record.watched : null, creditsReached,
-            reason: status === 'complete' ? record.watched === true ? 'watched-flag'
-                : creditsReached ? 'credits-reached' : 'completion-threshold'
-                : percent === null ? 'progress-unavailable' : 'below-completion-threshold' };
-    }
-
-    function viewingSeriesResult(plan) {
-        const latest = viewingLatestEpisode(plan)?.episode;
-        const ids = plan.seasons.flatMap(season => [...season.episodes.values()]).filter(episode => episode.id).map(episode => episode.id);
-        // The user selected this inference even when older progress is absent or
-        // reset. A validated season plan identifies the latest returned episode.
-        if (latest?.id && latest.status === 'complete' && new Set(ids).size === ids.length) return 'complete';
-        return classifyViewingSeries(plan);
-    }
-
     function assertViewingJob(job) {
         assertRouteSession(job.sessionToken);
         if (sourceState !== job.state || job.state.watchStatus !== job.watch ||
@@ -1663,54 +1600,6 @@ export function startLegacy() {
         }
     }
 
-    function readViewingCache(state, profile) {
-        const cached = { results: new Map(), types: new Map() };
-        if (!profile || typeof GM_getValue !== 'function') return cached;
-        try {
-            const stored = GM_getValue(VIEWING_CACHE_STORAGE_KEY + encodeURIComponent(profile), null);
-            const age = Date.now() - stored?.savedAt;
-            if (stored?.version !== 1 || stored.completionRatio !== VIEWING_COMPLETION_RATIO ||
-                !Number.isFinite(stored.savedAt) || age < 0 || age > VIEWING_CACHE_MAX_AGE_MS ||
-                !stored.entries || typeof stored.entries !== 'object' || Array.isArray(stored.entries) ||
-                Object.keys(stored.entries).length > 5000) return cached;
-            for (const item of state.items || []) {
-                const id = String(item.videoId);
-                const entry = stored.entries[id];
-                if (!/^\d+$/.test(id) || !Array.isArray(entry) || entry.length !== 2 ||
-                    !['movie', 'series'].includes(entry[0]) ||
-                    !['complete', 'in-progress', 'not-started', 'unknown'].includes(entry[1])) continue;
-                cached.types.set(id, entry[0]);
-                cached.results.set(id, entry[1]);
-            }
-        } catch (_) { /* Optional startup reuse must not block the grid. */ }
-        return cached;
-    }
-
-    function clearCachedViewingStatus(watch) {
-        watch.cachedResults?.clear();
-        watch.cachedTypes?.clear();
-    }
-
-    function writeViewingCache(job) {
-        if (typeof GM_setValue !== 'function') return;
-        try {
-            assertViewingJob(job);
-            const entries = {};
-            for (const item of job.state.items || []) {
-                const id = String(item.videoId);
-                const type = job.types.get(id);
-                if (/^\d+$/.test(id) && ['movie', 'series'].includes(type)) {
-                    entries[id] = [type, job.results.get(id) || 'unknown'];
-                }
-            }
-            if (Object.keys(entries).length > 5000) return;
-            // Save only fresh scan data once, never extending unverified cache
-            // entries or persisting a manual choice as an automatic result.
-            GM_setValue(VIEWING_CACHE_STORAGE_KEY + encodeURIComponent(job.context.profileGuid),
-                { version: 1, completionRatio: VIEWING_COMPLETION_RATIO, savedAt: Date.now(), entries });
-        } catch (_) { /* A cache failure leaves fresh grouping and corrections usable. */ }
-    }
-
     function publishViewingProgress(job, changedIds) {
         assertViewingJob(job);
         job.watch.results = job.results;
@@ -1734,9 +1623,9 @@ export function startLegacy() {
             for (const id of batch) {
                 const record = records.get(id);
                 let pendingSeries = false;
-                job.watch.cachedTypes.delete(id);
-                if (record?.type === 'movie') job.types.set(id, 'movie');
-                else if (['show', 'series', 'tvshow', 'episode'].includes(record?.type)) job.types.set(id, 'series');
+                viewing.invalidateCache(job.watch, id, { type: true });
+                const type = viewing.recordType(record);
+                if (type) job.types.set(id, type);
                 if (record && ['show', 'series', 'tvshow'].includes(record.type)) {
                     job.seriesStats.found++;
                     if ((record.seasonCount === null || (Number.isSafeInteger(record.seasonCount) &&
@@ -1751,8 +1640,8 @@ export function startLegacy() {
                 // A show-level flag cannot replace a cached finale result.
                 // Keep that provisional result only until its episode check.
                 if (!pendingSeries) {
-                    job.watch.cachedResults.delete(id);
-                    job.results.set(id, classifyViewingVideo(record));
+                    viewing.invalidateCache(job.watch, id);
+                    job.results.set(id, viewing.classifyVideo(record));
                 }
             }
             publishViewingProgress(job, batch);
@@ -1792,14 +1681,14 @@ export function startLegacy() {
         const plannedIds = new Set(plans.map(plan => plan.videoId));
         for (const record of records) {
             if (!plannedIds.has(record.videoId)) {
-                job.watch.cachedResults.delete(record.videoId);
+                viewing.invalidateCache(job.watch, record.videoId);
                 job.results.set(record.videoId, 'unknown');
                 job.seriesDetails.set(record.videoId, { reason: 'season-metadata-incomplete-or-inconsistent' });
             }
         }
         for (const plan of plans) job.watch.seriesCoverage.set(plan.videoId, plan.seasons.map(season => [season.id, season.count]));
         // Coverage can expire a manual correction even before the finale arrives.
-        const metadataChanges = records.filter(record => !plannedIds.has(record.videoId) || job.watch.manualChoices.has(record.videoId));
+        const metadataChanges = records.filter(record => !plannedIds.has(record.videoId) || viewing.hasChoice(job.watch, record.videoId));
         if (metadataChanges.length) publishViewingProgress(job, metadataChanges.map(record => record.videoId));
         await collectViewingEpisodePlans(plans, job);
     }
@@ -1807,7 +1696,7 @@ export function startLegacy() {
     async function collectViewingEpisodePlans(plans, job) {
         const segments = [];
         for (const plan of plans) {
-            const latest = viewingLatestEpisode(plan);
+            const latest = viewing.latestEpisode(plan);
             if (latest && !latest.episode) segments.push({ plan, season: latest.season, from: latest.index, to: latest.index });
         }
         // Request one episode per series. Older progress cannot change the
@@ -1829,12 +1718,12 @@ export function startLegacy() {
                 batch.map(({ season, from, to }) => ({ seasonId: season.id, from, to })), job.context, owner));
             for (let batchIndex = 0; batchIndex < batch.length; batchIndex++) {
                 const { plan, season, from, to } = batch[batchIndex];
-                const latest = viewingLatestEpisode(plan);
+                const latest = viewing.latestEpisode(plan);
                 for (let index = from; index <= to; index++) {
                     const { id, record, kinds } = ranges[batchIndex].episodes[index - from];
-                    const status = classifyViewingVideo(record);
+                    const status = viewing.classifyVideo(record);
                     season.episodes.set(index, { id, status, ...(status === 'unknown' ? { record } : {}) });
-                    if (latest?.season === season && latest.index === index) season.episodes.get(index).progress = viewingProgressSummary(record);
+                    if (latest?.season === season && latest.index === index) season.episodes.get(index).progress = viewing.progress(record);
                     job.seriesStats.episodesChecked++;
                     if (!id) job.seriesStats.missingEpisodeRefs++;
                     if (status === 'unknown') {
@@ -1850,7 +1739,7 @@ export function startLegacy() {
                 if (plan.finished) continue;
                 const full = plan.seasons.every(season => season.episodes.size === season.count);
                 const observed = plan.seasons.flatMap(season => [...season.episodes.values()]);
-                const result = viewingSeriesResult(plan);
+                const result = viewing.seriesResult(plan);
                 if (result === 'complete' || full || observed.some(episode => !episode.id || episode.status !== 'complete')) {
                     const status = result === 'complete' ? result : full ? result
                         : observed.some(episode => !episode.id || episode.status === 'unknown') ? 'unknown' : 'in-progress';
@@ -1868,12 +1757,12 @@ export function startLegacy() {
         job.seriesStats[bucket(status)]++;
         plan.status = status;
         plan.finished = true;
-        job.watch.cachedResults.delete(plan.videoId);
+        viewing.invalidateCache(job.watch, plan.videoId);
         job.results.set(plan.videoId, status);
         saveViewingSeriesDetails(plan, job);
         if (status === 'unknown') {
             const observed = plan.seasons.flatMap(season => [...season.episodes.values()]);
-            const latest = viewingLatestEpisode(plan)?.episode;
+            const latest = viewing.latestEpisode(plan)?.episode;
             if ((latest?.id && latest.status === 'unknown') ||
                 (observed.every(episode => episode.id && ['complete', 'unknown'].includes(episode.status)) &&
                 new Set(observed.map(episode => episode.id)).size === observed.length)) {
@@ -1895,8 +1784,8 @@ export function startLegacy() {
             if (episode.status !== 'unknown' || !episode.kinds) continue;
             for (const [key, kind] of Object.entries(episode.kinds)) fields[key][kind] = (fields[key][kind] || 0) + 1;
         }
-        const latest = viewingLatestEpisode(plan);
-        const reason = plan.status === 'complete' ? classifyViewingSeries(plan) === 'complete'
+        const latest = viewing.latestEpisode(plan);
+        const reason = plan.status === 'complete' ? viewing.classifySeries(plan) === 'complete'
             ? 'verified-complete' : 'latest-episode-complete' : unfinished ? 'unfinished-episodes'
             : missing || duplicates ? 'invalid-episode-references' : unknown ? 'unavailable-episode-progress' : 'episode-coverage-incomplete';
         job.seriesDetails.set(plan.videoId, { reason, seasons: plan.seasons.length, expectedEpisodes: plan.expected,
@@ -1914,12 +1803,12 @@ export function startLegacy() {
         if (!watch) return [];
         // Only Copy Logs expands these compact per-series summaries. Ordinary
         // runtime snapshots, scroll and hover never build title-level reports.
-        return (state.items || []).filter(item => viewingTitleType(watch, String(item.videoId)) === 'series').map(item => {
+        return (state.items || []).filter(item => viewing.titleType(watch, String(item.videoId)) === 'series').map(item => {
             const id = String(item.videoId);
-            return { title: item.ariaLabel || '(untitled)', status: effectiveViewingStatus(watch, id),
-                automaticStatus: watch.results.get(id) || watch.cachedResults?.get(id) || 'unknown',
-                cachedStatus: !watch.results.has(id) && Boolean(watch.cachedResults?.has(id)),
-                manualChoice: watch.manualChoices.get(id)?.status || null,
+            return { title: item.ariaLabel || '(untitled)', status: viewing.placement(watch, id).status,
+                automaticStatus: viewing.automatic(watch, id),
+                cachedStatus: !watch.results.has(id) && Boolean(viewing.cachedStatus(watch, id)),
+                manualChoice: viewing.manualStatus(watch, id) || null,
                 ...(watch.seriesDetails.get(id) || { reason: watch.loading ? 'checking' : 'series-metadata-unavailable-or-unprocessed' }) };
         });
     }
@@ -1931,7 +1820,7 @@ export function startLegacy() {
             const targets = new Map();
             for (const plan of job.unresolvedSeries) {
                 if (plan.status !== 'unknown' || plan.recheckBlocked) continue;
-                const latest = viewingLatestEpisode(plan)?.episode;
+                const latest = viewing.latestEpisode(plan)?.episode;
                 const onlyLatest = plan.seasons.some(season => [...season.episodes.values()].some(episode =>
                     ['not-started', 'in-progress'].includes(episode.status)));
                 for (const season of plan.seasons) {
@@ -1971,8 +1860,8 @@ export function startLegacy() {
                         runtime: direct.runtime > 0 ? direct.runtime : previous?.runtime ?? null,
                         creditsOffset: direct.creditsOffset ?? previous?.creditsOffset ?? null
                     } : previous;
-                    episode.status = classifyViewingVideo(record);
-                    if (episode === viewingLatestEpisode(plan)?.episode) episode.progress = viewingProgressSummary(record);
+                    episode.status = viewing.classifyVideo(record);
+                    if (episode === viewing.latestEpisode(plan)?.episode) episode.progress = viewing.progress(record);
                     if (episode.status === 'unknown') {
                         job.recheckStats.unknownEpisodes++;
                         episode.kinds = recordViewingFieldKinds(kinds, job.recheckStats.remainingUnknownFields);
@@ -1984,7 +1873,7 @@ export function startLegacy() {
             }
             for (const plan of affected) {
                 const full = plan.seasons.every(season => season.episodes.size === season.count);
-                const result = viewingSeriesResult(plan);
+                const result = viewing.seriesResult(plan);
                 if (result === 'complete' || full) finishViewingSeriesPlan(plan, result, job);
                 saveViewingSeriesDetails(plan, job);
                 if (plan.status === 'complete') job.recheckStats.recoveredSeries++;
@@ -1993,150 +1882,24 @@ export function startLegacy() {
         }
     }
 
-    function validViewingCoverage(value) {
-        return Array.isArray(value) && value.length > 0 && value.length <= VIEWING_MAX_SEASONS &&
-            value.every(pair => Array.isArray(pair) && pair.length === 2 && /^\d+$/.test(pair[0]) &&
-                Number.isSafeInteger(pair[1]) && pair[1] >= 0 && pair[1] <= VIEWING_MAX_EPISODES) &&
-            new Set(value.map(pair => pair[0])).size === value.length &&
-            value.reduce((sum, pair) => sum + pair[1], 0) > 0 &&
-            value.reduce((sum, pair) => sum + pair[1], 0) <= VIEWING_MAX_EPISODES;
-    }
-
-    function readManualViewingChoices(profile) {
-        if (typeof GM_getValue !== 'function' || typeof GM_setValue !== 'function') throw new Error('storage-unavailable');
-        const choices = new Map();
-        const stored = GM_getValue(VIEWING_CHOICES_STORAGE_KEY + encodeURIComponent(profile), null);
-        if (stored == null) return choices;
-        if (stored.version !== 1 || !stored.choices || typeof stored.choices !== 'object' ||
-            Array.isArray(stored.choices) || Object.keys(stored.choices).length > 5000) throw new Error('invalid-storage');
-        for (const [id, choice] of Object.entries(stored.choices)) {
-            if (!/^\d+$/.test(id) || !choice || !['complete', 'main'].includes(choice.status) ||
-                !['movie', 'series', 'unknown'].includes(choice.type) ||
-                (choice.coverage !== null && !validViewingCoverage(choice.coverage))) continue;
-            choices.set(id, { status: choice.status, type: choice.type, coverage: choice.coverage });
-        }
-        return choices;
-    }
-
-    function syncManualViewingProfile(watch) {
-        const profile = netflixContext.activeProfile();
-        const active = typeof profile === 'string' && profile ? profile : null;
-        if (watch.manualProfileGuid === active) return false;
-        if (watch.manualProfileGuid !== undefined) {
-            clearCachedViewingStatus(watch);
-            watch.results = new Map();
-            watch.types = new Map();
-            watch.seriesDetails = new Map();
-            watch.seriesCoverage = new Map();
-        }
-        watch.manualProfileGuid = active;
-        watch.manualChoices = new Map();
-        watch.manualFailure = false;
-        if (!active) return true;
-        try { watch.manualChoices = readManualViewingChoices(active); }
-        catch (_) { watch.manualFailure = true; }
-        return true;
-    }
-
-    function saveManualViewingChoices(watch, changes, conditional = false) {
-        try {
-            if (!watch.manualProfileGuid || netflixContext.activeProfile() !== watch.manualProfileGuid) throw new Error('storage-unavailable');
-            // Apply only this action's changes to the newest saved map, so an
-            // older tab does not erase unrelated corrections from another tab.
-            const choices = readManualViewingChoices(watch.manualProfileGuid);
-            let applied = false;
-            for (const [id, choice] of changes) {
-                if (conditional && JSON.stringify(choices.get(id)) !== JSON.stringify(watch.manualChoices.get(id))) continue;
-                if (choice) choices.set(id, choice);
-                else choices.delete(id);
-                applied = true;
-            }
-            if (choices.size > 5000) throw new Error('storage-full');
-            if (applied) GM_setValue(VIEWING_CHOICES_STORAGE_KEY + encodeURIComponent(watch.manualProfileGuid),
-                { version: 1, choices: Object.fromEntries(choices) });
-            watch.manualFailure = false;
-            return choices;
-        } catch (_) { watch.manualFailure = true; return null; }
-    }
-
-    function changedManualViewingIds(previous, next) {
-        const changed = new Set();
-        for (const id of new Set([...previous.keys(), ...next.keys()])) {
-            if (JSON.stringify(previous.get(id)) !== JSON.stringify(next.get(id))) changed.add(id);
-        }
-        return changed;
-    }
-
-    function reconcileManualViewingCoverage(watch, ids = null) {
-        const changes = new Map();
-        const candidates = ids === null ? watch.manualChoices.keys() : ids;
-        for (const id of candidates) {
-            const choice = watch.manualChoices.get(id);
-            if (!choice) continue;
-            if (choice.status !== 'complete') continue;
-            const coverage = watch.seriesCoverage.get(id);
-            if (!coverage) continue;
-            if (!choice.coverage) {
-                changes.set(id, { ...choice, type: 'series', coverage });
-            } else {
-                const previous = new Map(choice.coverage);
-                if (coverage.some(([season, count]) => count > 0 && (!previous.has(season) || count > previous.get(season)))) {
-                    changes.set(id, null);
-                }
-            }
-        }
-        if (changes.size) {
-            const previous = watch.manualChoices;
-            const saved = saveManualViewingChoices(watch, changes, true);
-            if (saved) watch.manualChoices = saved;
-            else for (const [id, choice] of changes) {
-                // New episodes must remain visible even if saving the expiry fails.
-                if (choice) watch.manualChoices.set(id, choice);
-                else watch.manualChoices.delete(id);
-            }
-            return saved ? changedManualViewingIds(previous, saved) : new Set(changes.keys());
-        }
-        return new Set();
-    }
-
-    function effectiveViewingStatus(watch, id) {
-        const manual = watch.manualChoices.get(id);
-        return manual ? manual.status === 'complete' ? 'complete' : 'in-progress'
-            : watch.results.get(id) || watch.cachedResults?.get(id) || 'unknown';
-    }
-
-    function viewingTitleType(watch, id) {
-        return watch.types.get(id) || watch.cachedTypes?.get(id) || watch.manualChoices.get(id)?.type;
-    }
-
     function applyManualViewingChoice(state, item) {
-        const watch = state.watchStatus;
-        if (netflixContext.activeProfile() !== watch.manualProfileGuid) {
-            syncWatchGroups(state);
-            return;
+        const watch = state.watchStatus, grid = state.grid;
+        const assertCurrent = () => {
+            assertRouteSession(watch.sessionToken);
+            if (sourceState !== state || state.watchStatus !== watch || state.grid !== grid || !grid?.isConnected || !state.items.includes(item)) throw createRouteSessionCancelledError();
+        };
+        if (netflixContext.activeProfile() !== viewing.presentation(watch).profile) {
+            syncWatchGroups(state); return;
         }
-        syncManualViewingProfile(watch);
-        const id = String(item.videoId);
-        const status = effectiveViewingStatus(watch, id) === 'complete' ? 'main' : 'complete';
-        const automatic = watch.results.get(id) || watch.cachedResults?.get(id) || 'unknown';
-        // Returning to an agreed automatic group also clears the old override.
-        // Unknown/in-flight data cannot establish agreement: keep that explicit
-        // placement, just as when automatic classification would undo the move.
-        const restoreAutomatic = automatic !== 'unknown' && (automatic === 'complete') === (status === 'complete');
-        const choice = restoreAutomatic ? null : { status, type: viewingTitleType(watch, id) || 'unknown',
-            coverage: status === 'complete' ? watch.seriesCoverage.get(id) || null : null };
-        const changes = new Map([[id, choice]]);
-        const saved = saveManualViewingChoices(watch, changes);
-        const changed = saved ? changedManualViewingIds(watch.manualChoices, saved) : new Set();
-        if (saved) watch.manualChoices = saved;
+        const result = viewing.place(watch, String(item.videoId), { assertCurrent });
+        assertCurrent();
         const beforeWork = { ...gridView.groupDiagnostics() };
-        syncWatchGroups(state, changed, 'manual-choice');
+        syncWatchGroups(state, result.changed, 'manual-choice');
         log(tLog('viewingChoiceApplied'), {
-            saved: Boolean(saved), action: 'toggle',
-            targetGroup: status === 'complete' ? 'watched' : 'main', automaticStatus: automatic,
-            placement: choice ? 'manual' : 'automatic', restoredAutomatic: Boolean(saved) && restoreAutomatic,
-            manualMarkerVisible: watch.manualChoices.has(id),
-            changedTitles: changed.size, completed: gridView.presentation().completedCount,
+            saved: result.saved, action: result.action, targetGroup: result.targetGroup,
+            automaticStatus: result.automaticStatus, placement: result.placement,
+            restoredAutomatic: result.restoredAutomatic, manualMarkerVisible: result.manualMarkerVisible,
+            changedTitles: result.changedTitles, completed: gridView.presentation().completedCount,
             work: Object.fromEntries(Object.entries(gridView.groupDiagnostics())
                 .filter(([, value]) => typeof value === 'number').map(([key, value]) => [key, value - beforeWork[key]]))
         });
@@ -2157,19 +1920,22 @@ export function startLegacy() {
             if (sourceState !== state || state.watchStatus !== watch || state.grid !== grid || gridView.root !== grid) throw createRouteSessionCancelledError();
         };
         guard();
-        const profileChanged = syncManualViewingProfile(watch);
+        const profileChange = viewing.syncProfile(watch, guard, () => {
+            watch.results = new Map(); watch.types = new Map();
+            watch.seriesDetails = new Map(); watch.seriesCoverage = new Map();
+        });
+        const profileChanged = profileChange.changed;
         const full = changedIds === null || profileChanged || !gridView.presentation().initialized;
         const ids = full ? null : new Set([...changedIds].map(String));
-        for (const id of reconcileManualViewingCoverage(watch, ids)) ids?.add(id);
+        for (const id of viewing.reconcileCoverage(watch, ids, guard)) ids?.add(id);
         guard();
         gridView.applyViewingChange({ items: state.items || [], changedIds: ids, reason, assertCurrent: guard,
-            metadata: { disabled: !watch.manualProfileGuid || watch.manualFailure, loading: watch.loading,
-                manualFailure: watch.manualFailure, locale: getUiLocale(), totalCount: state.totalCount,
+            metadata: { disabled: viewing.presentation(watch).disabled, loading: watch.loading,
+                manualFailure: viewing.presentation(watch).manualFailure, locale: getUiLocale(), totalCount: state.totalCount,
                 initializationElapsedMs: state.initializationElapsedMs },
             readPlacement(item, classify) {
                 const id = String(item.videoId);
-                return { ...(classify ? { status: effectiveViewingStatus(watch, id), type: viewingTitleType(watch, id) } : {}),
-                    manual: watch.manualChoices.has(id) };
+                return classify ? viewing.placement(watch, id) : { manual: viewing.hasChoice(watch, id) };
             },
             onAction: item => applyManualViewingChoice(state, item), onRefresh: () => refreshViewingStatus(state),
             onRequest: request => syncWatchGroups(state, [], request), onHoverChanged: cancelGroupHover,
@@ -2184,14 +1950,19 @@ export function startLegacy() {
     function initializeWatchGroups(state, sessionToken) {
         const active = netflixContext.activeProfile();
         const profile = typeof active === 'string' && active ? active : null;
-        const cached = readViewingCache(state, profile);
         state.watchStatus = {
             sessionToken, results: new Map(), types: new Map(), seriesDetails: new Map(),
-            cachedResults: cached.results, cachedTypes: cached.types, cachedTitles: cached.types.size, publications: 0,
-            seriesCoverage: new Map(), manualChoices: new Map(), manualProfileGuid: undefined, manualFailure: false,
+            publications: 0, seriesCoverage: new Map(),
             loading: false, promise: null, requests: 0, passes: 0, failure: null, profileGuid: profile,
             network: null
         };
+        const watch = state.watchStatus, grid = state.grid;
+        const guard = () => {
+            assertRouteSession(sessionToken);
+            if (sourceState !== state || state.watchStatus !== watch || state.grid !== grid || !grid?.isConnected) throw createRouteSessionCancelledError();
+        };
+        watch.cachedTitles = viewing.initialize(watch, state.items, profile, guard);
+        guard();
         gridView.resetViewing();
         syncWatchGroups(state);
         refreshViewingStatus(state);
@@ -2203,7 +1974,7 @@ export function startLegacy() {
         if (watch.loading) return watch.promise;
         const context = viewingData.beginRead();
         if (!context || !isRouteSessionActive(watch.sessionToken)) {
-            clearCachedViewingStatus(watch);
+            viewing.clearCache(watch);
             watch.results = new Map();
             watch.types = new Map();
             watch.seriesDetails = new Map();
@@ -2214,15 +1985,14 @@ export function startLegacy() {
             return;
         }
         if (watch.profileGuid !== context.profileGuid) {
-            clearCachedViewingStatus(watch);
+            viewing.clearCache(watch);
             watch.results = new Map();
             watch.types = new Map();
             watch.seriesDetails = new Map();
         } else {
             // Keep the current grouping while refreshing unresolved series,
             // using the same provisional fallback as a warm list entry.
-            for (const [id, status] of watch.results) watch.cachedResults.set(id, status);
-            for (const [id, type] of watch.types) watch.cachedTypes.set(id, type);
+            viewing.promoteCache(watch);
         }
         watch.profileGuid = context.profileGuid;
         watch.loading = true;
@@ -2244,7 +2014,7 @@ export function startLegacy() {
         log(tLog('viewingStatusStarted'), {
             titles: state.items.length, endpointType: context.endpointType, endpointPath: context.endpointPath,
             completionRatio: VIEWING_COMPLETION_RATIO, maxPasses: VIEWING_MAX_PASSES,
-            maxRequests: VIEWING_MAX_REQUESTS * VIEWING_MAX_PASSES, cachedTitles: watch.cachedTypes.size,
+            maxRequests: VIEWING_MAX_REQUESTS * VIEWING_MAX_PASSES, cachedTitles: viewing.cacheCount(watch),
             concurrencyLimit: VIEWING_REQUEST_CONCURRENCY
         });
         watch.promise = (async () => {
@@ -2258,7 +2028,7 @@ export function startLegacy() {
                         network: collectViewingNetworkDiagnostics(job.network) });
                     // A profile switch in the same grid invalidates old results.
                     if (sourceState === state && state.watchStatus === watch && isRouteSessionActive(job.sessionToken)) {
-                        clearCachedViewingStatus(watch);
+                        viewing.clearCache(watch);
                         watch.results = new Map();
                         watch.types = new Map();
                         watch.seriesDetails = new Map();
@@ -2287,10 +2057,10 @@ export function startLegacy() {
             watch.requests = job.requests;
             watch.passes = job.passes;
             watch.loading = false;
-            const unresolvedCachedIds = new Set([...watch.cachedResults.keys(), ...watch.cachedTypes.keys()]);
-            clearCachedViewingStatus(watch);
+            const unresolvedCachedIds = viewing.cachedIds(watch);
+            viewing.clearCache(watch);
             syncWatchGroups(state, unresolvedCachedIds, 'scan-complete');
-            writeViewingCache(job);
+            viewing.writeCache({ items: job.state.items, profile: job.context.profileGuid, results: job.results, types: job.types, assertCurrent: () => assertViewingJob(job) });
             log(tLog('viewingStatusCompleted'), {
                 completed: gridView.presentation().completedCount, unknown: gridView.presentation().unknownCount,
                 requests: watch.requests, passes: watch.passes, failure: watch.failure, publications: watch.publications,
@@ -2303,7 +2073,7 @@ export function startLegacy() {
             // Optional grouping must never reject Netflix's grid initialization.
             if (sourceState !== state || state.watchStatus !== watch) return;
             watch.loading = false;
-            clearCachedViewingStatus(watch);
+            viewing.clearCache(watch);
             watch.results = new Map();
             watch.types = new Map();
             watch.seriesDetails = new Map();

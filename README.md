@@ -29,6 +29,8 @@ Any pushed change to the distributable requires a version greater than the newes
 
 ## Architecture and migration
 
+Viewing completion, manual placement/coverage expiry and profile-scoped automatic cache now live behind `src/viewing/viewing.js`. Saved choice/cache maps are private; the current scan supplies normalized results until P16. Grid actions call the admitted placement capability and render its semantic results. Storage keys/schema and scan/request limits remain unchanged.
+
 Membership and toast clicks are interpreted by the Netflix page-DOM adapter; list owns add/remove publication, insertion positions, visible-order reconciliation, counts and exact Undo record/correlation selection. Grid and membership accept removals before DOM cleanup and additions before material release. Global click wiring keeps its existing route lifetime in transitional application composition.
 
 [docs/architecture.md](docs/architecture.md) describes the implemented structure. [Migration.md](Migration.md) defines the destination and ownership contracts; [MigrationPlan.md](MigrationPlan.md) defines the ordered steps and verification. [findings.md](findings.md) records selections, evidence and remaining work.

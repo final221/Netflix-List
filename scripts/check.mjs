@@ -18,6 +18,7 @@ const legacyImports = new Map([
     ['src/legacy.js -> src/list/list.js', 'P20: application composes list collection and membership'],
     ['src/legacy.js -> src/grid/grid.js', 'P20: application composes grid and its remaining callbacks'],
     ['src/legacy.js -> src/netflix/list-data.js', 'P20: application injects list data into collection and count consumers'],
+    ['src/legacy.js -> src/viewing/viewing.js', 'P16: scan delivery bridge; P20: application composes viewing'],
     ['src/legacy.js -> src/netflix/viewing-data.js', 'P20: application injects typed viewing data into the scan'],
     ['src/legacy.js -> src/app/session-scope.js', 'P20: application composes the session scope'],
     ['src/legacy.js -> src/netflix/carousel/carousel.js', 'P20: application composes the carousel and remaining native consumers']

@@ -14,6 +14,7 @@ const { createGrid } = require('../src/grid/grid.js');
 const { createList } = require('../src/list/list.js');
 const { GRID_ID: OWNED_GRID_ID } = require('../src/dom-names.js');
 const { createListData } = require('../src/netflix/list-data.js');
+const { createViewing } = require('../src/viewing/viewing.js');
 const { createViewingData } = require('../src/netflix/viewing-data.js');
 const { createSessionScope } = require('../src/app/session-scope.js');
 const { createCarousel } = require('../src/netflix/carousel/carousel.js');
@@ -5721,6 +5722,7 @@ test('HTTP failure cleanup aborts the unread response body and releases its cont
     assert.equal(e.timers.size, 0);
 });
 
+const migratedViewingFunctions = new Set(['classifyViewingVideo', 'classifyViewingSeries', 'viewingLatestEpisode', 'viewingProgressSummary', 'viewingSeriesResult', 'readViewingCache', 'clearCachedViewingStatus', 'writeViewingCache', 'validViewingCoverage', 'readManualViewingChoices', 'syncManualViewingProfile', 'saveManualViewingChoices', 'changedManualViewingIds', 'reconcileManualViewingCoverage', 'effectiveViewingStatus', 'viewingTitleType']);
 const viewingFunctions = [
     'unwrapViewingAtom', 'readViewingGraph', 'readViewingGraphReference', 'viewingNumber', 'viewingCount', 'viewingVideoRecord',
     'classifyViewingVideo', 'viewingFieldKind', 'recordViewingFieldKinds', 'viewingReferenceId', 'viewingSeasonPlan', 'classifyViewingSeries',
@@ -5812,7 +5814,15 @@ async function viewingEnvironment(count = 7, existing = null, storage = new Map(
     Object.assign(e.c, { tUi: i18n.tUi, tUiPlural: i18n.tUiPlural, formatItemCount: i18n.formatItemCount });
     e.c.viewingData = createViewingData({ context: e.c.netflixContext,
         fetch: (...args) => e.c.fetch(...args), createCancelledError: () => e.c.createRouteSessionCancelledError() });
-    for (const name of viewingFunctions) if (!migratedAdapterFunctions.has(name)) vm.runInContext(declaration(name), e.c);
+    e.c.viewing = createViewing({ activeProfile: () => e.c.netflixContext.activeProfile(), now: () => e.c.Date.now(),
+        choicesKey: e.c.VIEWING_CHOICES_STORAGE_KEY, storageKey: e.c.VIEWING_CACHE_STORAGE_KEY,
+        getValue: (...args) => e.c.GM_getValue(...args), setValue: (...args) => e.c.GM_setValue(...args) });
+    for (const [old, method] of Object.entries({ classifyViewingVideo: 'classifyVideo', classifyViewingSeries: 'classifySeries',
+        viewingLatestEpisode: 'latestEpisode', viewingProgressSummary: 'progress', viewingSeriesResult: 'seriesResult' })) {
+        e.c[old] = (...args) => e.c.viewing[method](...args);
+    }
+    e.c.readViewingCache = (state, profile) => e.c.viewing.readCache(state.items, profile);
+    for (const name of viewingFunctions) if (!migratedAdapterFunctions.has(name) && !migratedViewingFunctions.has(name)) vm.runInContext(declaration(name), e.c);
     return { ...e, models, requests, storage, storageCalls, items, state: e.c.sourceState,
         fixtures: () => fixtures, setFixtures: value => { fixtures = value; },
         setCacheTime: value => { cacheTime = value; },
@@ -7857,19 +7867,19 @@ test('manual choices survive reloads and refresh and the move button restores au
     viewingUi(next).details.open = true;
     clickManualViewing(next, '2');
     assert.ok(mainViewingIds(next).includes('2'));
-    assert.equal(next.state.watchStatus.manualChoices.has('2'), false, 'returning to the automatic main group clears the correction');
+    assert.equal(Boolean(next.c.viewing.choice(next.state.watchStatus, '2')), false, 'returning to the automatic main group clears the correction');
     assert.equal(viewingControls(next.state.cloneMap.get('v:2')).marker.hidden, true);
     next.fixtures().titles.videos[2] = viewingVideo('movie', true);
     await next.c.refreshViewingStatus(next.state);
     assert.ok(completedViewingIds(next).includes('2'), 'automatic classification resumes after clearing the override');
     clickManualViewing(next, '2');
-    assert.equal(next.state.watchStatus.manualChoices.get('2').status, 'main');
+    assert.equal(next.c.viewing.choice(next.state.watchStatus, '2').status, 'main');
     assert.equal(viewingControls(next.state.cloneMap.get('v:2')).marker.hidden, false);
     await next.c.refreshViewingStatus(next.state);
     assert.ok(mainViewingIds(next).includes('2'), 'an explicit main-list choice outweighs automatic completion');
     clickManualViewing(next, '2');
     assert.ok(completedViewingIds(next).includes('2'));
-    assert.equal(next.state.watchStatus.manualChoices.has('2'), false);
+    assert.equal(Boolean(next.c.viewing.choice(next.state.watchStatus, '2')), false);
     assert.equal(viewingControls(next.state.cloneMap.get('v:2')).marker.hidden, true);
 });
 
@@ -7910,7 +7920,7 @@ test('moving back with unknown automatic progress retains the explicit main choi
     viewingUi(e).details.open = true;
     clickViewingFilter(e, 'watched', 'all');
     clickManualViewing(e, '7');
-    assert.equal(e.state.watchStatus.manualChoices.get('7').status, 'main');
+    assert.equal(e.c.viewing.choice(e.state.watchStatus, '7').status, 'main');
     assert.equal(viewingControls(e.state.cloneMap.get('v:7')).marker.hidden, false);
     assert.equal(e.requests.length, requests);
     e.fixtures().titles.videos[7] = viewingVideo('movie', true);
@@ -7927,15 +7937,16 @@ test('moving back with unknown automatic progress retains the explicit main choi
 test('the move button can restore an agreed cached classification without a live result or a new request', async () => {
     const e = await viewingEnvironment();
     await e.start();
+    e.state.watchStatus.results = new Map([['1', 'complete'], ['2', 'in-progress']]);
+    e.c.viewing.promoteCache(e.state.watchStatus);
     e.state.watchStatus.results = new Map();
-    e.state.watchStatus.cachedResults = new Map([['1', 'complete'], ['2', 'in-progress']]);
     e.c.syncWatchGroups(e.state);
     viewingUi(e).details.open = true;
     const requests = e.requests.length;
     clickManualViewing(e, '1');
-    assert.equal(e.state.watchStatus.manualChoices.get('1').status, 'main');
+    assert.equal(e.c.viewing.choice(e.state.watchStatus, '1').status, 'main');
     clickManualViewing(e, '1');
-    assert.equal(e.state.watchStatus.manualChoices.has('1'), false);
+    assert.equal(Boolean(e.c.viewing.choice(e.state.watchStatus, '1')), false);
     assert.ok(completedViewingIds(e).includes('1'));
     assert.equal(viewingControls(e.state.cloneMap.get('v:1')).marker.hidden, true);
     const action = e.logs.filter(row => row.name === 'viewingChoiceApplied').at(-1).details;
@@ -7954,7 +7965,7 @@ test('failed automatic restoration keeps the saved placement and marker and the 
     e.c.GM_setValue = () => { throw new Error('storage denied'); };
     clickManualViewing(e, '2');
     assert.ok(completedViewingIds(e).includes('2'));
-    assert.equal(e.state.watchStatus.manualChoices.get('2').status, 'complete');
+    assert.equal(e.c.viewing.choice(e.state.watchStatus, '2').status, 'complete');
     const controls = viewingControls(e.state.cloneMap.get('v:2'));
     assert.equal(controls.marker.hidden, false);
     assert.equal(controls.toggle.disabled, true);
@@ -7995,7 +8006,7 @@ test('a manual series correction expires for an added episode and the change is 
     e.fixtures().episodes.videos[502] = viewingVideo('episode', false, 0);
     await e.c.refreshViewingStatus(e.state);
     assert.ok(mainViewingIds(e).includes('5'));
-    assert.equal(e.state.watchStatus.manualChoices.has('5'), false);
+    assert.equal(Boolean(e.c.viewing.choice(e.state.watchStatus, '5')), false);
     assert.equal(Object.hasOwn(e.storage.get('test.viewingChoices.active-profile').choices, '5'), false);
 });
 
@@ -8012,7 +8023,7 @@ test('manual series corrections detect a new season without relying on a larger 
     e.fixtures().episodes.videos[510] = viewingVideo('episode', false, 0);
     await e.c.refreshViewingStatus(e.state);
     assert.ok(mainViewingIds(e).includes('5'));
-    assert.equal(e.state.watchStatus.manualChoices.has('5'), false);
+    assert.equal(Boolean(e.c.viewing.choice(e.state.watchStatus, '5')), false);
 });
 
 test('unavailable or conflicting season metadata preserves a manual correction until reliable new coverage arrives', async () => {
@@ -8023,7 +8034,7 @@ test('unavailable or conflicting season metadata preserves a manual correction u
     e.fixtures().titles.videos[5].episodeCount = atom(3);
     await e.c.refreshViewingStatus(e.state);
     assert.ok(completedViewingIds(e).includes('5'));
-    assert.deepEqual(structuredClone(e.state.watchStatus.manualChoices.get('5').coverage), [['50', 2]]);
+    assert.deepEqual(structuredClone(e.c.viewing.choice(e.state.watchStatus, '5').coverage), [['50', 2]]);
     assert.equal(e.storageCalls.writes, 1);
 });
 
@@ -8041,10 +8052,10 @@ test('a correction made before season metadata arrives captures its first reliab
     for (let attempt = 0; attempt < 10 && !release; attempt++) await e.flush();
     clickViewingFilter(e, 'main', 'series');
     clickManualViewing(e, '5');
-    assert.equal(e.state.watchStatus.manualChoices.get('5').coverage, null);
+    assert.equal(e.c.viewing.choice(e.state.watchStatus, '5').coverage, null);
     await release();
     await e.state.watchStatus.promise;
-    assert.deepEqual(structuredClone(e.state.watchStatus.manualChoices.get('5').coverage), [['50', 2]]);
+    assert.deepEqual(structuredClone(e.c.viewing.choice(e.state.watchStatus, '5').coverage), [['50', 2]]);
     assert.equal(e.storageCalls.writes, 2);
     for (let i = 0; i < 10; i++) e.c.syncWatchGroups(e.state);
     assert.equal(e.storageCalls.writes, 2, 'stable synchronization performs no repeated writes');
@@ -8057,7 +8068,7 @@ test('profile switching isolates manual choices and stale controls cannot write 
     e.models.userInfo.userGuid = 'second-profile';
     clickManualViewing(e, '3');
     assert.equal(e.storageCalls.writes, 1, 'the click on the previous profile is rejected');
-    assert.equal(e.state.watchStatus.manualChoices.size, 0);
+    assert.equal(e.c.viewing.choiceIds(e.state.watchStatus).length, 0);
     await e.c.refreshViewingStatus(e.state);
     assert.ok(mainViewingIds(e).includes('2'));
     clickManualViewing(e, '3');
@@ -8077,7 +8088,7 @@ test('storage read/write failures surface without pretending a correction was re
         if (mode === 'write') e.c.GM_setValue = () => { throw new Error('denied'); };
         clickManualViewing(e, '2');
         assert.ok(mainViewingIds(e).includes('2'));
-        assert.equal(e.state.watchStatus.manualChoices.has('2'), false);
+        assert.equal(Boolean(e.c.viewing.choice(e.state.watchStatus, '2')), false);
         assert.equal([...e.storage.keys()].filter(key => key.startsWith('test.viewingChoices.')).length, 0);
         assert.match(viewingUi(e).note.textContent, /Could not save viewing choices/);
         assert.equal(viewingControls(e.state.cloneMap.get('v:2')).toggle.disabled, true);
@@ -8093,13 +8104,13 @@ test('malformed persisted choices are ignored and missing profile identity never
     } }]]);
     const e = await viewingEnvironment(7, null, storage);
     await e.start();
-    assert.deepEqual([...e.state.watchStatus.manualChoices.keys()], ['2']);
+    assert.deepEqual([...e.c.viewing.choiceIds(e.state.watchStatus)], ['2']);
     const writes = e.storageCalls.writes;
     delete e.models.userInfo.userGuid;
     e.c.syncWatchGroups(e.state);
     clickManualViewing(e, '3');
     assert.equal(e.storageCalls.writes, writes);
-    assert.equal(e.state.watchStatus.manualChoices.size, 0);
+    assert.equal(e.c.viewing.choiceIds(e.state.watchStatus).length, 0);
 });
 
 test('rebuilds and card replacements keep one working action row and reject obsolete controls', async () => {
@@ -8211,9 +8222,9 @@ test('new episodes are revealed in the current grid even if saving manual expiry
     };
     await e.c.refreshViewingStatus(e.state);
     assert.ok(mainViewingIds(e).includes('5'));
-    assert.equal(e.state.watchStatus.manualChoices.has('5'), false);
+    assert.equal(Boolean(e.c.viewing.choice(e.state.watchStatus, '5')), false);
     assert.equal(attempts, 1);
-    assert.equal(e.state.watchStatus.manualFailure, true);
+    assert.equal(e.c.viewing.presentation(e.state.watchStatus).manualFailure, true);
     for (let index = 0; index < 5; index++) e.c.syncWatchGroups(e.state);
     assert.equal(attempts, 1, 'failed persistence does not create a repeated write loop');
 });
@@ -8254,7 +8265,7 @@ test('late automatic baseline capture preserves an override cleared by the move 
     clickManualViewing(next, '5');
     await release();
     await e.state.watchStatus.promise;
-    assert.equal(e.state.watchStatus.manualChoices.has('5'), false);
+    assert.equal(Boolean(e.c.viewing.choice(e.state.watchStatus, '5')), false);
     assert.ok(mainViewingIds(e).includes('5'));
     assert.equal(Object.hasOwn(e.storage.get('test.viewingChoices.active-profile').choices, '5'), false);
 });
@@ -8305,7 +8316,7 @@ test('reversing and resetting a correction preserve the viewport when the destin
     clickManualViewing(e, '2');
     assert.deepEqual(viewport, { x: 0, y: 2200 });
     assert.ok(completedViewingIds(e).includes('2'));
-    assert.equal(e.state.watchStatus.manualChoices.has('2'), false);
+    assert.equal(Boolean(e.c.viewing.choice(e.state.watchStatus, '2')), false);
 });
 
 function holdViewingResponse(e, matches = () => true) {
@@ -8389,7 +8400,7 @@ test('a recent same-profile cache groups titles before the first response and re
     await gate.release();
     await next.state.watchStatus.promise;
     assert.deepEqual(completedViewingIds(next), ['1', '4']);
-    assert.equal(next.state.watchStatus.cachedResults.size, 0);
+    assert.equal(next.c.viewing.cachedIds(next.state.watchStatus).size, 0);
     assert.equal(next.c.collectViewingSeriesDiagnostics(next.state)[0].cachedStatus, false);
     assert.equal(next.storageCalls.cacheWrites, 1);
     assert.equal(next.requests.length, first.requests.length, 'startup reuse adds no requests and still revalidates');
@@ -8449,7 +8460,7 @@ test('a failed verification reveals cached automatic titles but retains explicit
     assert.deepEqual(completedViewingIds(next), ['1', '2', '4']);
     await next.state.watchStatus.promise;
     assert.deepEqual(completedViewingIds(next), ['2']);
-    assert.equal(next.state.watchStatus.cachedResults.size, 0);
+    assert.equal(next.c.viewing.cachedIds(next.state.watchStatus).size, 0);
     assert.equal(next.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
     assert.deepEqual(Object.keys(next.storage.get('test.viewingCache.active-profile').entries), []);
     assert.equal(next.storage.get('test.viewingChoices.active-profile').choices[2].status, 'complete');
@@ -8488,7 +8499,7 @@ test('optional cache storage errors preserve fresh grouping and working manual c
         await e.start();
         assert.deepEqual(completedViewingIds(e), ['1', '4']);
         assert.equal(e.state.watchStatus.failure, null);
-        assert.equal(e.state.watchStatus.manualFailure, false);
+        assert.equal(e.c.viewing.presentation(e.state.watchStatus).manualFailure, false);
         clickManualViewing(e, '2');
         assert.ok(completedViewingIds(e).includes('2'));
         assert.equal(e.storage.get('test.viewingChoices.active-profile').choices[2].status, 'complete');
@@ -8525,7 +8536,7 @@ test('cache reuse is isolated by the active profile and a cancelled response can
         assert.equal(next.storageCalls.cacheWrites, 0);
         if (mode === 'profile') {
             assert.deepEqual(completedViewingIds(next), []);
-            assert.equal(next.state.watchStatus.cachedResults.size, 0);
+            assert.equal(next.c.viewing.cachedIds(next.state.watchStatus).size, 0);
             assert.equal(next.state.watchStatus.failure, 'VIEWING_STATUS_PROFILE_CHANGED');
         } else assert.equal(next.c.sourceState.watchStatus.newer, true);
         assert.equal(next.c.sessionScope.requestCount(), 0);
@@ -8578,7 +8589,7 @@ test('refresh keeps the current series grouping until its new finale result arri
     await promise;
     assert.deepEqual(completedViewingIds(e), ['1']);
     assert.equal(e.storageCalls.cacheWrites, 2);
-    assert.equal(e.state.watchStatus.cachedResults.size, 0);
+    assert.equal(e.c.viewing.cachedIds(e.state.watchStatus).size, 0);
 });
 
 test('a warm 500-series scan initializes card controls once and performs no further work while browsing', async () => {
@@ -8681,8 +8692,8 @@ test('unchanged publication avoids card and layout reads, and filters reuse stor
     assert.equal(e.c.activeClone, clone);
     e.c.activeClone = null;
     const controls = e.c.gridView.groupDiagnostics().controlsUpdated;
-    e.c.effectiveViewingStatus = () => { throw new Error('A filter must reuse established status'); };
-    e.c.viewingTitleType = () => { throw new Error('A filter must reuse established type'); };
+    e.c.viewing = { ...e.c.viewing, placement() { throw new Error('A filter must reuse established status'); },
+        titleType() { throw new Error('A filter must reuse established type'); } };
     clickViewingFilter(e, 'main', 'series');
     assert.deepEqual(filteredViewingIds(e), ['5', '6']);
     assert.equal(e.c.gridView.groupDiagnostics().controlsUpdated, controls);
