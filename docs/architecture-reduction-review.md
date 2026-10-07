@@ -120,3 +120,6 @@ Deliberately removing scheduler identity admission causes the new obsolete-callb
 Final source: **16,346 lines / 933,901 LF-normalized UTF-8 bytes**, versus 1.4.60's 16,433 / 937,518. Generated userscript: **19,173 lines / 884,182 bytes**, versus 19,276 / 887,612. Net removal: **87 authored lines / 3,617 bytes** and **103 generated lines / 3,430 bytes**. Runtime file count remains 42; no relocated implementation, feature removal or minification supplies these savings. The collection change primarily removes per-item representations rather than many source lines; no latency/allocation benchmark improvement is claimed.
 
 Deterministic build, committed-output/dependency checks, userscript syntax and diff whitespace review pass. Package/lock and generated metadata/internal version agree at **1.4.61**. Tests are offline evidence; the existing Tampermonkey main URL supplies the release after publication for the user's live Netflix check.
+
+
+Published implementation: `fbc037a3f6ecfc1559d0e349491118b4bbb6a9aa` on origin/main. [Windows CI run 37703892421](https://github.com/final221/Netflix-List/actions/runs/37703892421) completed successfully for that exact commit, including all declared release gates and unchanged generated output. The existing main installation URL delivers 1.4.61. Recording this result changes documentation only.
