@@ -304,3 +304,15 @@ test('unaccepted Undo insertion preserves the accepted hint and abandoned remova
     e=publicationFixture({retireCard(record,{onAccepted,correlationId}){e.retained.set(correlationId,record);abandoned=correlationId;onAccepted();e.replaceParent();}});
     assert.throws(()=>e.owner.remove('1'),{code:'NATIVE_SOURCE_REPLACED'});assert.equal(e.retained.has(abandoned),false);
 });
+
+
+test('pre-publication click uses explicit native action without treating an accepted absent title as removal', () => {
+    let present = null; const e = queueFixture({ canApply: () => true, hasMember: () => present });
+    const membership = { videoId: '1', uiaAction: 'remove', uia: 'remove-from-my-list-with-undo' };
+    assert.equal(e.owner.observeClick(() => ({ membership })).action, 'remove');
+    present = false;
+    assert.equal(e.owner.observeClick(() => ({ membership })).action, 'add');
+    present = null;
+    assert.equal(e.owner.observeClick(() => ({ membership: { ...membership, uiaAction: 'add' } })).action, 'add');
+    e.owner.dispose();
+});

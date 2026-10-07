@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.58
+// @version      1.4.59
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -5796,7 +5796,7 @@
         const changed = call(add, candidate, index, nativeItem ? reason + "-native" : reason + "-captured", correlationId, { assertCurrent: guard });
         if (changed || call(hasMember, videoId)) {
           live = call(refreshNative) || live;
-          if (live?.track) call(reconcileOrder, live, { assertCurrent: guard });
+          if (live?.track && (nativeItem || !correlationId)) call(reconcileOrder, live, { assertCurrent: guard });
           disposeMutation(videoId, intent);
           return true;
         }
@@ -5858,9 +5858,10 @@
       let descriptor;
       if (facts?.membership?.videoId) {
         const { videoId, uia, uiaAction } = facts.membership;
-        const present = Boolean(hasMember(videoId));
+        const present = hasMember(videoId);
         if (!admitted() || generation !== undoOwner) return null;
-        descriptor = { videoId, uia, uiaAction, action: present ? "remove" : "add" };
+        const remove2 = present == null ? uiaAction === "remove" : Boolean(present);
+        descriptor = { videoId, uia, uiaAction, action: remove2 ? "remove" : "add" };
       } else if (facts?.toastAction) {
         const entry = latestUndo();
         if (!entry || !admitted()) return null;
@@ -14885,7 +14886,7 @@
       assertSession: assertRouteSession,
       isCancelled: isRouteSessionCancelledError,
       createError: (code, message) => initializationError(code, "native-discovery", message),
-      hasMember: (id) => sourceState.itemMap?.has("v:" + id),
+      hasMember: (id) => sourceState.grid ? sourceState.itemMap.has("v:" + id) : null,
       refreshNative: refreshNativeSectionAfterDelta,
       observeNative: nativeDiscoveryObservation,
       captureNative: findNativeMyListItemByVideoId,
@@ -15682,8 +15683,8 @@
       nativePresentationLease = lease;
       return lease;
     }
-    function markOriginalHeader(section) {
-      return nativeSourcePresentation(section)?.anchor || null;
+    function markOriginalHeader(section, scroller, track) {
+      return nativeSourcePresentation(section, scroller, track)?.anchor || null;
     }
     function applyOriginalMyListVisibility() {
       if (!sourceState?.section && !isTargetPage()) return;
@@ -16043,7 +16044,7 @@
       nativePopup.invalidate();
       nativeCarousel.assertObservation(observed);
       clearLegacyEmptyState({ restoreGrid: false });
-      markOriginalHeader(live.section);
+      markOriginalHeader(live.section, live.scroller, live.track);
       nativeCarousel.assertObservation(observed);
       nativeCarousel.assertObservation(live);
       parkSource(live.section, live.scroller, live.track);
@@ -16092,10 +16093,10 @@
       nativeCarousel.assertObservation(observed);
       nativePopup.invalidate();
       nativeCarousel.assertObservation(observed);
-      markOriginalHeader(live.section);
+      markOriginalHeader(live.section, null, null);
       nativeCarousel.assertObservation(observed);
       nativeCarousel.assertObservation(live);
-      const originalAnchor = markOriginalHeader(live.section);
+      const originalAnchor = markOriginalHeader(live.section, null, null);
       nativeCarousel.assertObservation(observed);
       nativeCarousel.assertObservation(live);
       const geometry = currentGridGeometry(live.section, layout);
@@ -17997,7 +17998,13 @@
         scheduleRun(0, sessionScope.token);
       },
       preferencesChanged() {
-        if (started && !disposed) applyOriginalMyListVisibility();
+        if (!started || disposed) return;
+        try {
+          applyOriginalMyListVisibility();
+        } catch (error) {
+          if (error?.code !== "NATIVE_SOURCE_REPLACED") throw error;
+          scheduleRun(0, sessionScope.token);
+        }
       },
       diagnostics: () => Object.freeze({
         active: targetSessionActive,
@@ -19295,7 +19302,7 @@
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.4.58";
+  var SCRIPT_VERSION = "1.4.59";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

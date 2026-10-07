@@ -84,7 +84,7 @@ export function createMyListSession({ environment = globalThis, version, context
         readParent: () => sourceState, canApply: () => Boolean(sourceState && isTargetPage()),
         assertSession: assertRouteSession, isCancelled: isRouteSessionCancelledError,
         createError: (code, message) => initializationError(code, 'native-discovery', message),
-        hasMember: id => sourceState.itemMap?.has('v:' + id),
+        hasMember: id => sourceState.grid ? sourceState.itemMap.has('v:' + id) : null,
         refreshNative: refreshNativeSectionAfterDelta, observeNative: nativeDiscoveryObservation,
         captureNative: findNativeMyListItemByVideoId, hasMaterial: (item, correlationId) => gridView.materialFor(item, correlationId),
         assertNative: observation => nativeCarousel.assertObservation(observation),
@@ -714,8 +714,8 @@ export function createMyListSession({ environment = globalThis, version, context
         return lease;
     }
 
-    function markOriginalHeader(section) {
-        return nativeSourcePresentation(section)?.anchor || null;
+    function markOriginalHeader(section, scroller, track) {
+        return nativeSourcePresentation(section, scroller, track)?.anchor || null;
     }
 
     function applyOriginalMyListVisibility() {
@@ -1069,7 +1069,7 @@ export function createMyListSession({ environment = globalThis, version, context
         nativePopup.invalidate();
         nativeCarousel.assertObservation(observed);
         clearLegacyEmptyState({ restoreGrid: false });
-        markOriginalHeader(live.section);
+        markOriginalHeader(live.section, live.scroller, live.track);
         nativeCarousel.assertObservation(observed);
         nativeCarousel.assertObservation(live);
         parkSource(live.section, live.scroller, live.track);
@@ -1115,11 +1115,11 @@ export function createMyListSession({ environment = globalThis, version, context
         nativeCarousel.assertObservation(observed);
         nativePopup.invalidate();
         nativeCarousel.assertObservation(observed);
-        markOriginalHeader(live.section);
+        markOriginalHeader(live.section, null, null);
 
         nativeCarousel.assertObservation(observed);
         nativeCarousel.assertObservation(live);
-        const originalAnchor = markOriginalHeader(live.section);
+        const originalAnchor = markOriginalHeader(live.section, null, null);
         nativeCarousel.assertObservation(observed);
         nativeCarousel.assertObservation(live);
         const geometry = currentGridGeometry(live.section, layout);
@@ -2925,7 +2925,16 @@ export function createMyListSession({ environment = globalThis, version, context
     }
     return Object.freeze({ start, dispose,
         check() { if (!started || disposed) return; resetDetachedTargetState(); scheduleRun(0, sessionScope.token); },
-        preferencesChanged() { if (started && !disposed) applyOriginalMyListVisibility(); },
+        preferencesChanged() {
+            if (!started || disposed) return;
+            try { applyOriginalMyListVisibility(); }
+            catch (error) {
+                if (error?.code !== 'NATIVE_SOURCE_REPLACED') throw error;
+                // The saved preference is applied by the next admitted source.
+                // A menu click can arrive between Netflix detaching and replacing it.
+                scheduleRun(0, sessionScope.token);
+            }
+        },
         diagnostics: () => Object.freeze({ active: targetSessionActive, token: sessionScope.token,
             running, completed: Boolean(completedSection), blocked: initializationBlockedSessionToken === sessionScope.token, cleanupFailures: sessionCleanupFailures }) });
 }

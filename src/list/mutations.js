@@ -125,7 +125,10 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
             const changed = call(add, candidate, index, nativeItem ? reason + '-native' : reason + '-captured', correlationId, { assertCurrent: guard });
             if (changed || call(hasMember, videoId)) {
                 live = call(refreshNative) || live;
-                if (live?.track) call(reconcileOrder, live, { assertCurrent: guard });
+                // Retained Undo material can be restored before Netflix mounts the
+                // title again. That incomplete native window cannot supersede its
+                // saved insertion position. A mounted candidate can supply order.
+                if (live?.track && (nativeItem || !correlationId)) call(reconcileOrder, live, { assertCurrent: guard });
                 disposeMutation(videoId, intent); return true;
             }
             return false;
@@ -178,9 +181,12 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         if (facts?.membership?.videoId) {
             const { videoId, uia, uiaAction } = facts.membership;
             // Netflix's Undo control can advertise remove while restoring an absent title.
-            const present = Boolean(hasMember(videoId));
+            const present = hasMember(videoId);
             if (!admitted() || generation !== undoOwner) return null;
-            descriptor = { videoId, uia, uiaAction, action: present ? 'remove' : 'add' };
+            // Before publication, explicit native removal is the available proof.
+            // An accepted empty membership still means Add, including native Undo.
+            const remove = present == null ? uiaAction === 'remove' : Boolean(present);
+            descriptor = { videoId, uia, uiaAction, action: remove ? 'remove' : 'add' };
         } else if (facts?.toastAction) {
             const entry = latestUndo();
             if (!entry || !admitted()) return null;

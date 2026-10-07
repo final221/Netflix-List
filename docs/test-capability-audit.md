@@ -21,7 +21,7 @@ Scope of this checkpoint: branch creation, baseline verification, test/fixture/a
 - V8 source-file line/branch coverage: my-list-session 49.03% / 60.21%; responsive 64.27% / 72.22%; hover 80.25% / 72.83%; native-popup 87.03% / 72.56%; list mutations 97.90% / 79.63%; viewing scan 99.42% / 94.34%. These are executed-code indicators, not semantic adequacy scores. Generated VM bundle execution is separate from authored-file reporting; do not infer that every reported uncovered authored line is globally unexecuted. The overall report includes helpers/tooling and is deliberately not a product coverage score.
 - Fixtures execute unmodified owners, but the offline DOM models structure and ownership, not browser layout, event propagation, React rendering, image decoding or accessibility. Test clocks model scheduling rather than real latency.
 
-## Capability-to-evidence map
+## Capability-to-evidence map — initial audit
 
 "Owner" means focused public-capability/policy tests. "Composed" means actual owners are connected for the stated workflow; it does not imply the entire real application is used.
 
@@ -58,9 +58,9 @@ Sensitivity checks temporarily changed the complete generated artifact to (a) de
 
 Verification: **497/497 offline tests pass**, zero failed/cancelled/skipped; check before rebuilding, deterministic rebuild, check after rebuilding, userscript syntax and git diff --check pass. Authored runtime, generated artifact, package/lock versions remain unchanged at 1.4.58. Groups 2–5 remain pending; group 6 has initial sensitivity evidence for this checkpoint and must be repeated against later affected contracts. Broad simplification remains premature. Next checkpoint: real-application membership/Undo and empty transitions (group 2).
 
-## Ordered coverage-strengthening work
+## Ordered coverage-strengthening work — all six groups complete
 
-The completion record below identifies the implemented checkpoint. Remaining groups are follow-up prerequisites, not claims of completed tests. Add observable assertions using real owners and narrow native inputs; do not expose private session fields or alter production source to make tests possible.
+The list below preserves the selected scope. The completion record added below supersedes the initial matrix and group-1 checkpoint limitations: all six automated coverage groups are complete. Add observable assertions using real owners and narrow native inputs; do not expose private session fields or alter production source to make tests possible.
 
 1. **Completed generated-bundle journey.** Start the shipped artifact against a populated native source; assert exact IDs/order/count, UI and independent filter defaults, source toggle, route exit cleanup and fresh reentry without duplicate listeners/menus/cards. Check that optional viewing failure leaves a usable list. Reuse only browser-input setup if a shared helper is needed.
 2. **Membership and empty transitions through the real app.** Drive document click handling and modeled native updates. Assert removal, exact Undo reinsertion/order, expiry rejection, deferred action during initialization/refresh, last-item removal, delayed native empty adoption and first addition/repopulation. Observe current DOM, counts and resource release rather than helper invocation order.
@@ -70,6 +70,31 @@ The completion record below identifies the implemented checkpoint. Remaining gro
 6. **Validate assertion sensitivity for each prospective reduction.** In disposable fixtures/checkouts, deliberately break the relevant contract (for example, omit hover preparation, reverse membership order, ignore a stale owner, skip empty adoption) and confirm the selected test fails for the expected observable reason. Restore the perturbation. Do not weaken guards or tests to obtain a smaller passing implementation. Build/source-text rejection is not behavior sensitivity evidence.
 
 After each group, run its focused suite and the existing full check/test gates. Any discovered runtime defect needs a separately reviewed fix with normal versioning. Retain useful tests; merge duplicates only when contract, input class and failure mode are demonstrably equivalent, and update scenario-transfer references when names change.
+
+## Coverage groups 2–6 — complete (2026-10-08)
+
+`tests/session-workflows.test.js` adds **33 real-application cases**. `tests/helpers/session-browser.js` supplies only modeled browser/native DOM, React inputs, timers, storage and wire responses. Application, session, list, viewing, carousel, responsive, grid, hover and native-popup owners remain unmodified production imports. Assertions observe cards, exact IDs/order/counts, page attributes, visibility, native event identity, storage, public diagnostics and resource retirement. No private session fields or production test hooks were added.
+
+| Group | Completed observable coverage |
+| --- | --- |
+| 2: membership and empty | Native remove/Undo; retained toast Undo before and after native convergence; exact order/count/card ownership; expiry; delayed addition; unavailable material timeout; a click during native collection; a click during responsive work; initial empty, last removal, same-section native empty adoption and repopulation. |
+| 3: hover and mismatch | Mounted and off-page exact-title native replay and fresh card handoff; departure/scroll/route cancellation; hidden/control exclusion; waiting-hover revalidation; mismatched native order cannot replay; accept rebuilds from page zero; cancel preserves the grid; obsolete acceptance cannot change reentry. |
+| 4: responsive and recovery | Indicator remapping and logical wrapped tails; exact rendered page attributes; count disagreement retains accepted mapping; one retry waits at least 400 ms, then either commits after convergence or stops; deferred membership; route retirement of active responsive work; same-section track replacement; blocked initialization cannot retry unchanged input, recovers once after replacement, and exhausts further recovery. |
+| 5: viewing and settings | A 51-title scan publishes confirmed completion before its final batch resolves; new-episode refresh and manual-series expiry; per-profile manual placement/automatic restoration/persistence, request-free placement, modeled focus/scroll retention; profile replacement during body read rejects stale publication and cache writing; source visibility changes during actual replacement reach the admitted source. |
+| Collection entry | Successful authoritative logical wire collection without native paging; an actual failed HTTP 503 preferred request falls back to complete native collection; failed native movement stops with an explicit bounded failure and no partial grid. Existing owners retain detailed bootstrap/adapter permutations. |
+
+Four narrowly scoped runtime defects were exposed by these workflows and fixed, with release version **1.4.59**:
+
+1. Same-section track/empty handoff decorated stale source references. Adoption now supplies the incoming scroller/track explicitly, including null for native empty content.
+2. Captured Undo could lose its saved insertion position to a native window that did not yet contain the restored title. Immediate order reconciliation requires a mounted candidate for correlated Undo; ordinary native additions retain reconciliation.
+3. A visibility menu click during source replacement could throw on the retired presentation lease. The preference remains saved; only native-source replacement is handled by scheduling normal admission, which applies that preference. Other errors retain their original behavior.
+4. Before initial membership publication, a native Remove click was inferred as Add from the empty staging collection. Composition now reports unknown membership until the grid is accepted; mutations uses the explicit native action during that interval. Accepted absent membership still takes precedence for Netflix Undo. A focused owner test covers the distinction as well as the application journey.
+
+Group 6 sensitivity: temporarily perturbing each contract made the selected behavior test fail: incoming track references, empty adoption, saved Undo order, preference handoff, hover preparation, mismatch rebuilding, the one-retry bound, its 400 ms delay, the one-replacement recovery bound, Undo expiry, responsive and initialization deferral, pre-publication click interpretation, and incremental viewing publication. Failures included wrong order/membership, early busy publication, missing native replay/adoption/rebuild, extra recovery/retry and expired Undo reuse. Syntax was checked for the initial perturbation set; experiments restore original bytes in unconditional cleanup. No perturbation remains. The first initialization timing probe proved insensitive, so it was replaced with a click during actual native collection; both disabling deferral and treating unpublished membership as absent now fail that journey.
+
+Final local verification: **531/531 tests pass**, zero failures/cancellations/skips; reproducible build, output/version/architecture checks, distributable syntax and whitespace checks pass. An informational V8 run reports session lines/branches **82.35% / 64.69%**, responsive **86.30% / 77.20%**, and mutations **99.77% / 83.68%**. These improve the original session/consumer blind spots; they do not represent 100% line coverage or certify every browser/Netflix input. The capability prerequisite is the semantic evidence above together with existing owner cases and completed bundle journeys, not a percentage target.
+
+All identified automated prerequisite groups are complete. Broad code reduction has **not** begun; prospective reductions still need their own contract/guard review and relevant sensitivity evidence. Live Netflix layout, native React compatibility, physical pointer behavior, actual focus/viewport movement and performance remain the separate live boundary below.
 
 ## Simplification acceptance
 
