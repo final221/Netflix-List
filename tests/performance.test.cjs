@@ -14,6 +14,8 @@ const { createGrid } = require('../src/grid/grid.js');
 const { createList } = require('../src/list/list.js');
 const { GRID_ID: OWNED_GRID_ID } = require('../src/dom-names.js');
 const { createListData } = require('../src/netflix/list-data.js');
+const { createCompletion } = require('../src/viewing/completion.js');
+const { createCache } = require('../src/viewing/cache.js');
 const { createViewing } = require('../src/viewing/viewing.js');
 const { createViewingData } = require('../src/netflix/viewing-data.js');
 const { createSessionScope } = require('../src/app/session-scope.js');
@@ -161,7 +163,7 @@ function environment(names, overrides = {}) {
         assertRouteSession: () => {}, isRouteSessionCancelledError: () => false,
         ensureLiveNativeBinding: () => {},
         log: () => {}, warn: () => {}, tLog: value => value, itemSummary: item => item,
-        initializeWatchGroups: () => {},
+        initializeWatchGroups: () => {}, viewing: { dispose() {} },
         ...overrides
     });
     c.sessionScope = createSessionScope({ isTargetPage: () => c.targetSessionActive && c.isTargetPage(), AbortController,
@@ -172,7 +174,7 @@ function environment(names, overrides = {}) {
     vm.runInContext(source.match(/^    const HOVER_PREVIEW_DIAGNOSTIC_LIMITS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_INTERRUPTION_LOG_LIMIT = \d+;/m)?.[0] || '', c);
     vm.runInContext(source.match(/^    const HOVER_CANCELLATION_REASONS = Object.freeze\([\s\S]*?\);/m)?.[0] || '', c);
-    for (const name of ['publishSourceState', 'ensurePageHints', 'pageForItem', 'setPageForItem', 'ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
+    for (const name of ['publishSourceState', 'bindViewingSession', 'ensurePageHints', 'pageForItem', 'setPageForItem', 'ensureListMembership', 'attachNativeBinding', 'attachGridRegistry', 'cancelPendingGridHover', 'copyItemAttributes', 'onGridCardReplaced', 'retireGridCard', 'withNativeReadScope', 'invalidateNativeReadScope', 'nativeRect', 'gridOwnsClone',
         'beginRunningSession', 'createPerformanceDiagnostics', 'collectPerformanceDiagnostics', 'forgetUndoEntry',
         'recordHoverTiming', 'releaseNativeHover', 'nativeHoverSourceMatches',
         'hoverScrollElapsed', 'recordHoverCancellation', 'advanceHoverToken', 'hoverIntentDiagnosticSnapshot', 'hoverScrollStateSnapshot',
@@ -5723,6 +5725,7 @@ test('HTTP failure cleanup aborts the unread response body and releases its cont
 });
 
 const migratedViewingFunctions = new Set(['classifyViewingVideo', 'classifyViewingSeries', 'viewingLatestEpisode', 'viewingProgressSummary', 'viewingSeriesResult', 'readViewingCache', 'clearCachedViewingStatus', 'writeViewingCache', 'validViewingCoverage', 'readManualViewingChoices', 'syncManualViewingProfile', 'saveManualViewingChoices', 'changedManualViewingIds', 'reconcileManualViewingCoverage', 'effectiveViewingStatus', 'viewingTitleType']);
+for (const name of ['recordViewingFieldKinds', 'assertViewingJob', 'createViewingNetworkDiagnostics', 'collectViewingNetworkDiagnostics', 'runViewingRequest', 'runViewingBatches', 'publishViewingProgress', 'collectViewingStatuses', 'collectViewingSeriesBatch', 'collectViewingEpisodePlans', 'finishViewingSeriesPlan', 'saveViewingSeriesDetails', 'recheckViewingSeries']) migratedViewingFunctions.add(name);
 const viewingFunctions = [
     'unwrapViewingAtom', 'readViewingGraph', 'readViewingGraphReference', 'viewingNumber', 'viewingCount', 'viewingVideoRecord',
     'classifyViewingVideo', 'viewingFieldKind', 'recordViewingFieldKinds', 'viewingReferenceId', 'viewingSeasonPlan', 'classifyViewingSeries',
@@ -5816,19 +5819,30 @@ async function viewingEnvironment(count = 7, existing = null, storage = new Map(
         fetch: (...args) => e.c.fetch(...args), createCancelledError: () => e.c.createRouteSessionCancelledError() });
     e.c.viewing = createViewing({ activeProfile: () => e.c.netflixContext.activeProfile(), now: () => e.c.Date.now(),
         choicesKey: e.c.VIEWING_CHOICES_STORAGE_KEY, storageKey: e.c.VIEWING_CACHE_STORAGE_KEY,
+        data: e.c.viewingData, performanceNow: () => e.c.performance.now(),
+        beginRequest: token => e.c.createRouteFetch(token), finishRequest: request => e.c.finishRouteFetch(request),
+        setRequestTimeout: (request, delay) => e.c.sessionScope.setRequestTimeout(request, delay),
+        isCancelled: error => e.c.isRouteSessionCancelledError(error), createCancelledError: () => e.c.createRouteSessionCancelledError(),
+        log: (...args) => e.c.log(...args), warn: (...args) => e.c.warn(...args),
+        scanLimits: () => ({ concurrency: e.c.VIEWING_REQUEST_CONCURRENCY, requests: e.c.VIEWING_MAX_REQUESTS,
+            passes: e.c.VIEWING_MAX_PASSES, timeout: e.c.VIEWING_TIMEOUT_MS, episodeBatch: e.c.VIEWING_EPISODE_BATCH_SIZE }),
         getValue: (...args) => e.c.GM_getValue(...args), setValue: (...args) => e.c.GM_setValue(...args) });
+    const completion = createCompletion();
     for (const [old, method] of Object.entries({ classifyViewingVideo: 'classifyVideo', classifyViewingSeries: 'classifySeries',
         viewingLatestEpisode: 'latestEpisode', viewingProgressSummary: 'progress', viewingSeriesResult: 'seriesResult' })) {
-        e.c[old] = (...args) => e.c.viewing[method](...args);
+        e.c[old] = (...args) => completion[method](...args);
     }
-    e.c.readViewingCache = (state, profile) => e.c.viewing.readCache(state.items, profile);
+    const cache = createCache({ activeProfile: () => e.c.netflixContext.activeProfile(), now: () => e.c.Date.now(),
+        storageKey: e.c.VIEWING_CACHE_STORAGE_KEY, getValue: (...args) => e.c.GM_getValue(...args), setValue: (...args) => e.c.GM_setValue(...args) });
+    e.c.readViewingCache = (state, profile) => cache.read(state.items, profile);
+    e.c.collectViewingNetworkDiagnostics = network => structuredClone(network);
     for (const name of viewingFunctions) if (!migratedAdapterFunctions.has(name) && !migratedViewingFunctions.has(name)) vm.runInContext(declaration(name), e.c);
     return { ...e, models, requests, storage, storageCalls, items, state: e.c.sourceState,
         fixtures: () => fixtures, setFixtures: value => { fixtures = value; },
         setCacheTime: value => { cacheTime = value; },
         async start() {
             e.c.initializeWatchGroups(e.c.sourceState, 1);
-            await e.c.sourceState.watchStatus.promise;
+            await e.c.viewing.settled(e.c.sourceState.watchStatus);
         }
     };
 }
@@ -5950,14 +5964,14 @@ test('viewing overlap publishes a later title batch promptly and preserves nativ
     assert.equal(pending.length, 2, 'two independent title reads start together');
     pending[1].release();
     await e.flush();
-    assert.equal(e.state.watchStatus.loading, true);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).loading, true);
     assert.deepEqual(completedViewingIds(e), Array.from({ length: 50 }, (_, index) => String(index + 51)));
     assert.equal(pending.length, 2, 'the next bounded wave waits for both owners');
     pending[0].release();
     for (let attempt = 0; attempt < 10 && pending.length < 3; attempt++) await e.flush();
     assert.equal(pending.length, 3);
     pending[2].release();
-    await e.state.watchStatus.promise;
+    await e.c.viewing.settled(e.state.watchStatus);
     assert.deepEqual(completedViewingIds(e), Array.from({ length: 150 }, (_, index) => String(index + 1)));
     assert.equal(e.storageCalls.cacheWrites, 1);
     assert.equal(e.c.sessionScope.requestCount(), 0);
@@ -5980,7 +5994,7 @@ test('viewing overlap shortens modeled network wait without increasing requests'
             active.forEach(entry => entry.release());
             for (let attempt = 0; attempt < 10; attempt++) await e.flush();
         }
-        await e.state.watchStatus.promise;
+        await e.c.viewing.settled(e.state.watchStatus);
         assert.equal(e.requests.length, 2);
         const network = e.logs.find(entry => entry.details?.series).details.network;
         assert.equal(network.peakInFlight, concurrency);
@@ -5991,11 +6005,11 @@ test('viewing overlap shortens modeled network wait without increasing requests'
         assert.equal(network.maxRequestMs, 100);
         assert.equal(network.meanRequestMs, 100);
         assert.equal(network.overlapMs, concurrency === 2 ? 100 : 0);
-        const copy = e.c.collectViewingNetworkDiagnostics(e.state.watchStatus.network);
+        const copy = e.c.collectViewingNetworkDiagnostics(e.c.viewing.diagnostics(e.state.watchStatus).network);
         copy.succeeded = -1;
         await e.advance(60000);
-        assert.equal(e.c.collectViewingNetworkDiagnostics(e.state.watchStatus.network).elapsedMs, network.elapsedMs);
-        assert.equal(e.c.collectViewingNetworkDiagnostics(e.state.watchStatus.network).succeeded, 2);
+        assert.equal(e.c.collectViewingNetworkDiagnostics(e.c.viewing.diagnostics(e.state.watchStatus).network).elapsedMs, network.elapsedMs);
+        assert.equal(e.c.collectViewingNetworkDiagnostics(e.c.viewing.diagnostics(e.state.watchStatus).network).succeeded, 2);
         runs.push(network.elapsedMs);
     }
     assert.deepEqual(runs, [200, 100], 'fake-clock overlap is evidence of scheduling, not Netflix latency');
@@ -6026,11 +6040,11 @@ test('viewing overlap keeps series dependencies ordered and drains valid partial
     };
     pending[3].release();
     for (let attempt = 0; attempt < 10 && !e.warnings.length; attempt++) await e.flush();
-    assert.equal(e.state.watchStatus.loading, true, 'failure cannot finalize before the valid in-flight finale drains');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).loading, true, 'failure cannot finalize before the valid in-flight finale drains');
     pending[4].release();
-    await e.state.watchStatus.promise;
+    await e.c.viewing.settled(e.state.watchStatus);
     assert.deepEqual(completedViewingIds(e), Array.from({ length: 50 }, (_, index) => String(index + 1)));
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_429');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_HTTP_429');
     const network = e.logs.find(entry => entry.details?.series).details.network;
     assert.equal(network.rateLimited, 1);
     assert.equal(network.failed, 1);
@@ -6058,9 +6072,9 @@ test('viewing overlap aborts both owned reads after route or profile cancellatio
             e.models.userInfo.userGuid = 'other-profile';
             pending[0].release();
         }
-        await e.state.watchStatus.promise;
+        await e.c.viewing.settled(e.state.watchStatus);
         assert.ok(pending.every(entry => entry.signal.aborted));
-        assert.equal(e.state.watchStatus.network.aborted, reason === 'route' ? 2 : 1,
+        assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).network.aborted, reason === 'route' ? 2 : 1,
             'transport aborts remain visible even when their session is obsolete');
         if (reason === 'profile') {
             assert.equal(unrelated.controller.signal.aborted, false, 'a viewing-job cancellation leaves unrelated route requests owned');
@@ -6071,7 +6085,7 @@ test('viewing overlap aborts both owned reads after route or profile cancellatio
         assert.equal(e.c.sessionScope.requestCount(), 0);
         assert.equal(e.timers.size, 0);
         assert.equal(e.warnings.length, 0);
-        if (reason === 'profile') assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_PROFILE_CHANGED');
+        if (reason === 'profile') assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_PROFILE_CHANGED');
     }
 });
 
@@ -6093,7 +6107,7 @@ test('viewing overlap stops allocating after a failed wave and shares the finite
         await e.start();
         assert.equal(e.requests.length, fail ? 2 : 3);
         assert.equal(completedViewingIds(e).length, fail ? 50 : 150);
-        assert.equal(e.state.watchStatus.failure, fail ? 'VIEWING_STATUS_HTTP_503' : 'VIEWING_STATUS_BUDGET');
+        assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, fail ? 'VIEWING_STATUS_HTTP_503' : 'VIEWING_STATUS_BUDGET');
         assert.equal(e.c.sessionScope.requestCount(), 0);
         assert.equal(e.timers.size, 0);
     }
@@ -6118,10 +6132,10 @@ test('viewing overlap does not start a peer finale after a known metadata failur
     assert.equal(pending[2].paths[0][1], '51');
     await e.flush();
     pending[2].release();
-    await e.state.watchStatus.promise;
+    await e.c.viewing.settled(e.state.watchStatus);
     assert.equal(e.requests.length, 4);
     assert.ok(e.requests.every(request => request.paths[0][0] !== 'seasons'));
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_HTTP_503');
     assert.equal(completedViewingIds(e).length, 0);
     assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
@@ -6137,12 +6151,12 @@ test('viewing overlap honors request timeouts and the combined deadline without 
         await e.flush();
         assert.equal(pending.length, 2);
         await e.advance(deadline ? 5 : 8000);
-        await e.state.watchStatus.promise;
+        await e.c.viewing.settled(e.state.watchStatus);
         assert.equal(e.requests.length, 2);
-        assert.equal(e.state.watchStatus.failure, deadline ? 'VIEWING_STATUS_BUDGET' : 'VIEWING_STATUS_FAILED');
-        assert.equal(e.state.watchStatus.network.aborted, 2);
-        assert.equal(e.state.watchStatus.network.failed, 2);
-        assert.equal(e.state.watchStatus.network.inFlight, 0);
+        assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, deadline ? 'VIEWING_STATUS_BUDGET' : 'VIEWING_STATUS_FAILED');
+        assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).network.aborted, 2);
+        assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).network.failed, 2);
+        assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).network.inFlight, 0);
         assert.equal(e.c.sessionScope.requestCount(), 0);
         assert.equal(e.timers.size, 0);
         await e.advance(120000);
@@ -6258,6 +6272,42 @@ test('group synchronization is idempotent and rebuild preserves expansion, membe
     assert.deepEqual(e.items.map(item => e.state.cloneMap.get('v:' + item.videoId).getAttribute('data-tm-item-order')), originalIndices);
 });
 
+test('actual grid replacement transfers accepted viewing facts and rejects the old pending scan', async () => {
+    const e = await viewingEnvironment(); await e.start();
+    const old = e.state.watchStatus, gate = holdViewingResponse(e, () => true);
+    const pending = e.c.refreshViewingStatus(e.state); await e.flush();
+    const requests = e.requests.length, cacheWrites = e.storageCalls.cacheWrites;
+    await e.c.buildGrid(e.section, e.scroller, e.items, e.layout, 7, 1);
+    const next = e.state.watchStatus;
+    assert.notEqual(next, old);
+    assert.deepEqual(completedViewingIds(e), ['1', '4']);
+    assert.equal(e.c.viewing.diagnostics(next).network, null);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
+    gate.release(); await pending;
+    assert.deepEqual(completedViewingIds(e), ['1', '4']);
+    assert.equal(e.c.viewing.diagnostics(next).failure, null);
+    assert.equal(e.requests.length, requests);
+    assert.equal(e.storageCalls.cacheWrites, cacheWrites);
+    assert.equal(e.timers.size, 0);
+});
+
+test('reentrant viewing retirement cannot reset presentation owned by a newer initialization', async () => {
+    const e = await viewingEnvironment(); await e.start();
+    const old = e.state.watchStatus, viewing = e.c.viewing, grid = e.c.gridView;
+    let armed = true, resets = 0;
+    e.c.gridView = { ...grid, resetViewing() { resets++; grid.resetViewing(); } };
+    e.c.viewing = { ...viewing, dispose(session) {
+        viewing.dispose(session);
+        if (session === old && armed) { armed = false; e.c.initializeWatchGroups(e.state, 1); }
+    } };
+    assert.throws(() => e.c.initializeWatchGroups(e.state, 1), error => e.c.isRouteSessionCancelledError(error));
+    assert.equal(resets, 1, 'only the admitted initialization resets grid presentation');
+    await e.c.viewing.settled(e.state.watchStatus);
+    assert.deepEqual(completedViewingIds(e), ['1', '4']);
+    assert.equal(e.c.sessionScope.requestCount(), 0);
+    assert.equal(e.timers.size, 0);
+});
+
 test('remove and Undo work inside watched groups and new titles stay visible until classified', async () => {
     const e = await viewingEnvironment();
     await e.start();
@@ -6311,7 +6361,7 @@ test('missing active-profile identity or unsafe endpoint leaves all titles visib
         assert.equal(e.requests.length, 0);
         assert.equal(mainViewingIds(e).length, 7);
         assert.equal(completedViewingIds(e).length, 0);
-        assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_CONTEXT');
+        assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_CONTEXT');
         assert.match(viewingUi(e).note.textContent, /7 titles/);
     }
 });
@@ -6329,11 +6379,11 @@ test('viewing HTTP/JSON failures preserve the grid and never turn absent data in
         };
         e.c.initializeWatchGroups(e.state, 1);
         if (mode === 'timeout') await e.advance(8000);
-        await e.state.watchStatus.promise;
+        await e.c.viewing.settled(e.state.watchStatus);
         assert.equal(mainViewingIds(e).length, 7);
         assert.equal(completedViewingIds(e).length, 0);
-        assert.equal(e.state.watchStatus.loading, false);
-        assert.ok(e.state.watchStatus.failure);
+        assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).loading, false);
+        assert.ok(e.c.viewing.diagnostics(e.state.watchStatus).failure);
         assert.equal(e.c.sessionScope.requestCount(), 0);
         assert.equal(e.timers.size, 0);
         assert.equal(e.state.grid.isConnected, true);
@@ -6400,7 +6450,7 @@ test('viewing request budget preserves confirmed movies and leaves unverified se
     assert.equal(e.requests.length, 1);
     assert.deepEqual(completedViewingIds(e), ['1']);
     assert.ok(mainViewingIds(e).includes('4'));
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_BUDGET');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_BUDGET');
     assert.equal(e.c.sessionScope.requestCount(), 0);
 });
 
@@ -6409,7 +6459,7 @@ test('a large short-series list is fully covered within the original single-pass
     useCompleteSeriesResponses(e);
     await e.start();
     assert.equal(e.requests.length, 30);
-    assert.equal(e.state.watchStatus.failure, null);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, null);
     assert.deepEqual(completedViewingIds(e), Array.from({ length: 500 }, (_, index) => String(index + 1)));
     assert.equal(mainViewingIds(e).length, 0);
     assert.equal(e.c.gridView.presentation().unknownCount, 0);
@@ -6431,7 +6481,7 @@ test('completed series results survive a budget limit inside the current episode
     e.c.VIEWING_MAX_PASSES = 1;
     await e.start();
     assert.equal(e.requests.length, 3);
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_BUDGET');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_BUDGET');
     assert.deepEqual(completedViewingIds(e), ['1']);
     assert.deepEqual(mainViewingIds(e), ['2']);
     assert.equal(e.c.gridView.presentation().unknownCount, 1);
@@ -6453,7 +6503,7 @@ test('a later series-group HTTP failure preserves fully verified series results'
     };
     await e.start();
     assert.equal(e.requests.length, 6);
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_HTTP_503');
     assert.deepEqual(completedViewingIds(e), Array.from({ length: 50 }, (_, index) => String(index + 1)));
     assert.deepEqual(mainViewingIds(e), ['51']);
     assert.equal(e.c.gridView.presentation().unknownCount, 1);
@@ -6469,7 +6519,7 @@ test('route leave aborts viewing requests and stale completion cannot update a n
         signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
     });
     e.c.initializeWatchGroups(e.state, 1);
-    const promise = e.state.watchStatus.promise;
+    const promise = e.c.viewing.settled(e.state.watchStatus);
     const newer = { grid: { isConnected: true }, watchStatus: { marker: 'new' } };
     e.c.sourceState = newer;
     e.c.isRouteSessionActive = token => token === 2;
@@ -6494,8 +6544,8 @@ test('profile changes during body reads discard results and refreshing a new pro
     completeBody({ jsonGraph: e.fixtures().titles });
     await promise;
     assert.equal(completedViewingIds(e).length, 0);
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_PROFILE_CHANGED');
-    assert.equal(e.state.watchStatus.loading, false);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_PROFILE_CHANGED');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).loading, false);
     const next = e.c.refreshViewingStatus(e.state);
     assert.equal(completedViewingIds(e).length, 0);
     await e.flush();
@@ -6517,7 +6567,7 @@ test('simultaneous manual refreshes share the current viewing scan', async () =>
     const second = e.c.refreshViewingStatus(e.state);
     assert.equal(calls, 1);
     release({ jsonGraph: {} });
-    await Promise.all([e.state.watchStatus.promise, second]);
+    await Promise.all([e.c.viewing.settled(e.state.watchStatus), second]);
     assert.equal(calls, 1);
     assert.equal(viewingUi(e).refresh.disabled, false);
 });
@@ -6533,7 +6583,7 @@ test('full Netflix initialization publishes the ordinary grid before optional vi
     assert.equal(state.grid.isConnected, true);
     assert.equal(state.items.length, 6);
     assert.ok(state.watchStatus);
-    await state.watchStatus.promise;
+    await e.c.viewing.settled(state.watchStatus);
     assert.deepEqual(completedViewingIds({ state }), ['1', '4']);
     assert.deepEqual(mainViewingIds({ state }), ['2', '3', '5', '6']);
     assert.equal(e.warnings.length, 0);
@@ -6552,7 +6602,7 @@ test('viewing collection stops at its elapsed-time budget without hiding unverif
     };
     await e.start();
     assert.equal(e.requests.length, 1);
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_BUDGET');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_BUDGET');
     assert.deepEqual(completedViewingIds(e), ['1']);
     assert.ok(mainViewingIds(e).includes('4'));
     assert.equal(e.timers.size, 0);
@@ -6567,7 +6617,7 @@ test('failed refresh reveals old completion results instead of hiding titles usi
     assert.equal(completedViewingIds(e).length, 0);
     assert.equal(mainViewingIds(e).length, 7);
     assert.equal(e.c.gridView.presentation().unknownCount, 7);
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_HTTP_503');
 });
 
 test('completion accepts 90 percent or earlier credits even when Netflix still reports unwatched', async () => {
@@ -6627,7 +6677,7 @@ test('viewing requests resolve structured member API addresses before fetching',
             return mockFetch(url, options);
         };
         await e.start();
-        assert.equal(e.state.watchStatus.failure, null);
+        assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, null);
         assert.deepEqual(completedViewingIds(e), ['1', '4']);
         assert.equal(e.requests.length, 3);
         assert.equal(e.timers.size, 0);
@@ -6647,7 +6697,7 @@ test('viewing request addresses preserve string and build fallback support', asy
         }
         if (mode === 'build') delete e.models.services.memberapi;
         await e.start();
-        assert.equal(e.state.watchStatus.failure, null);
+        assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, null);
         assert.ok(e.requests.every(request => new URL(request.url).pathname === expected));
         assert.ok(e.logs.some(entry => entry.details?.endpointPath === expected));
         assert.ok(!JSON.stringify([...e.logs, ...e.warnings]).includes('test-auth-token'));
@@ -6671,7 +6721,7 @@ test('malformed or unsafe structured viewing endpoints do not send requests', as
         e.models.services.memberapi = memberapi;
         await e.start();
         assert.equal(e.requests.length, 0);
-        assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_CONTEXT');
+        assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_CONTEXT');
         assert.equal(mainViewingIds(e).length, 7);
         assert.equal(completedViewingIds(e).length, 0);
         assert.equal(e.timers.size, 0);
@@ -6691,8 +6741,8 @@ test('rejected viewing batches are attempted once and stop subsequent requests w
     await e.start();
     assert.equal(attempts, 2, 'only the initially allocated wave is attempted');
     assert.equal(new Set(batches).size, 2, 'neither failed batch is retried');
-    assert.equal(e.state.watchStatus.requests, 2);
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_400');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).requests, 2);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_HTTP_400');
     assert.equal(e.c.gridView.presentation().unknownCount, 500);
     assert.equal(mainViewingIds(e).length, 500);
     assert.equal(completedViewingIds(e).length, 0);
@@ -6773,7 +6823,7 @@ test('film filters default independently below the heading and inside watched de
 test('All includes unknown title types without assigning them to films or series', async () => {
     const e = await viewingEnvironment();
     await e.start();
-    assert.ok(!e.state.watchStatus.types.has('7'));
+    assert.ok(!e.c.viewing.freshType(e.state.watchStatus, '7'));
     assert.match(viewingUi(e).note.textContent, /Choose All/);
     clickViewingFilter(e, 'main', 'all');
     assert.deepEqual(filteredViewingIds(e), ['2', '3', '5', '6', '7']);
@@ -6796,7 +6846,7 @@ test('unavailable metadata keeps every title reachable through All and displays 
     clickViewingFilter(e, 'main', 'all');
     assert.deepEqual(filteredViewingIds(e), ['1', '2', '3', '4', '5', '6', '7']);
     assert.equal(viewingUi(e).empty.hidden, true);
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_400');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_HTTP_400');
     assert.equal(attempts, 1);
     assert.equal(e.timers.size, 0);
 });
@@ -6866,13 +6916,13 @@ test('type filtering is available while series episode requests are still loadin
     e.c.initializeWatchGroups(e.state, 1);
     for (let attempt = 0; attempt < 10 && !release; attempt++) await e.flush();
     assert.equal(typeof release, 'function');
-    assert.equal(e.state.watchStatus.loading, true);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).loading, true);
     assert.deepEqual(filteredViewingIds(e), ['2', '3']);
     assert.deepEqual(completedViewingIds(e), ['1'], 'confirmed movies move before episode requests return');
     clickViewingFilter(e, 'main', 'series');
     assert.deepEqual(filteredViewingIds(e), ['4', '5', '6']);
     release();
-    await e.state.watchStatus.promise;
+    await e.c.viewing.settled(e.state.watchStatus);
     assert.deepEqual(filteredViewingIds(e), ['5', '6']);
     assert.equal(e.c.gridView.presentation().filters.main, 'series');
     assert.equal(e.requests.length, 3);
@@ -6952,7 +7002,7 @@ test('small series batches fill the existing episode allowance without cutting o
     await e.start();
     assert.equal(completedViewingIds(e).length, 120);
     assert.equal(e.requests.length, 9);
-    assert.equal(e.state.watchStatus.failure, null);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, null);
 });
 
 test('a missing-count series requires validated season coverage and a usable completed latest episode', async () => {
@@ -6998,8 +7048,8 @@ test('bounded additional passes continue the same queue without reloading title 
     await e.start();
     assert.deepEqual(completedViewingIds(e), ['1', '2', '3']);
     assert.equal(e.requests.length, 7);
-    assert.equal(e.state.watchStatus.passes, 3);
-    assert.equal(e.state.watchStatus.failure, null);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).passes, 3);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, null);
     assert.equal(e.requests.filter(request => Array.isArray(request.paths[0][2])).length, 1);
     const episodePaths = e.requests.filter(request => request.paths[0][0] === 'seasons').flatMap(request => request.paths);
     assert.equal(new Set(episodePaths.map(path => JSON.stringify(path))).size, episodePaths.length);
@@ -7015,7 +7065,7 @@ test('a latest range can continue across a pass boundary without fetching older 
     await e.start();
     assert.deepEqual(completedViewingIds(e), ['1']);
     assert.equal(e.requests.length, 3);
-    assert.equal(e.state.watchStatus.passes, 2);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).passes, 2);
     const ranges = e.requests.filter(request => request.paths[0][0] === 'seasons').map(request => request.paths[0][3]);
     assert.deepEqual(ranges, [{ from: 499, to: 499 }]);
 });
@@ -7028,8 +7078,8 @@ test('the total continuation request cap is finite and leaves unprocessed series
     e.c.VIEWING_MAX_PASSES = 2;
     await e.start();
     assert.equal(e.requests.length, 6);
-    assert.equal(e.state.watchStatus.passes, 2);
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_BUDGET');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).passes, 2);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_BUDGET');
     assert.deepEqual(completedViewingIds(e), ['1', '2']);
     assert.deepEqual(mainViewingIds(e), ['3', '4']);
     const diagnostic = e.logs.find(entry => entry.details?.series)?.details.series;
@@ -7052,8 +7102,8 @@ test('the combined scan time cap bounds a scan even when few requests consume th
     };
     await e.start();
     assert.equal(e.requests.length, 2);
-    assert.equal(e.state.watchStatus.passes, 1);
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_BUDGET');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).passes, 1);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_BUDGET');
     assert.deepEqual(completedViewingIds(e), ['1']);
     assert.equal(e.timers.size, 0);
 });
@@ -7064,7 +7114,7 @@ test('slow successful requests can use the total time allowance without aborting
     e.c.VIEWING_EPISODE_BATCH_SIZE = 1;
     const pending = delayViewingBodies(e);
     e.c.initializeWatchGroups(e.state, 1);
-    for (let wave = 0; wave < 7 && e.state.watchStatus.loading; wave++) {
+    for (let wave = 0; wave < 7 && e.c.viewing.diagnostics(e.state.watchStatus).loading; wave++) {
         for (let attempt = 0; attempt < 10; attempt++) await e.flush();
         const active = pending.filter(entry => !entry.released);
         if (!active.length) break;
@@ -7073,12 +7123,12 @@ test('slow successful requests can use the total time allowance without aborting
         await e.advance(7000);
         active.forEach(entry => entry.release());
     }
-    await e.state.watchStatus.promise;
+    await e.c.viewing.settled(e.state.watchStatus);
     assert.deepEqual(completedViewingIds(e), ['1', '2', '3']);
     assert.equal(e.requests.length, 7);
-    assert.equal(e.state.watchStatus.failure, null);
-    assert.equal(e.state.watchStatus.network.totalRequestMs, 49000);
-    assert.equal(e.c.collectViewingNetworkDiagnostics(e.state.watchStatus.network).elapsedMs, 35000);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, null);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).network.totalRequestMs, 49000);
+    assert.equal(e.c.collectViewingNetworkDiagnostics(e.c.viewing.diagnostics(e.state.watchStatus).network).elapsedMs, 35000);
     assert.equal(e.timers.size, 0);
 });
 
@@ -7130,7 +7180,7 @@ test('verified groups appear before a later request completes while filters rema
     e.c.initializeWatchGroups(e.state, 1);
     for (let attempt = 0; attempt < 10 && (!release || completedViewingIds(e).length !== 50); attempt++) await e.flush();
     assert.equal(typeof release, 'function');
-    assert.equal(e.state.watchStatus.loading, true);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).loading, true);
     assert.equal(completedViewingIds(e).length, 50);
     clickViewingFilter(e, 'main', 'series');
     assert.deepEqual(filteredViewingIds(e), ['51']);
@@ -7139,7 +7189,7 @@ test('verified groups appear before a later request completes while filters rema
     clickViewingFilter(e, 'watched', 'series');
     assert.equal(filteredViewingIds(e, 'watched').length, 50);
     release();
-    await e.state.watchStatus.promise;
+    await e.c.viewing.settled(e.state.watchStatus);
     assert.equal(filteredViewingIds(e, 'watched').length, 51);
     assert.equal(e.c.gridView.presentation().filters.watched, 'series');
     assert.equal(e.c.gridView.presentation().filters.main, 'series');
@@ -7168,7 +7218,7 @@ test('route and profile cancellation stop an additional pass without changing a 
         for (let attempt = 0; attempt < 10 && (!release || !completedViewingIds(e).includes('1')); attempt++) await e.flush();
         assert.equal(typeof release, 'function');
         assert.deepEqual(completedViewingIds(e), ['1']);
-        const promise = e.state.watchStatus.promise;
+        const promise = e.c.viewing.settled(e.state.watchStatus);
         if (mode === 'route') {
             e.c.sourceState = { grid: { isConnected: true }, watchStatus: { newer: true } };
             e.c.isRouteSessionActive = token => token === 2;
@@ -7181,8 +7231,8 @@ test('route and profile cancellation stop an additional pass without changing a 
         if (mode === 'route') assert.equal(e.c.sourceState.watchStatus.newer, true);
         else {
             assert.deepEqual(completedViewingIds(e), []);
-            assert.equal(e.state.watchStatus.types.size, 0);
-            assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_PROFILE_CHANGED');
+            assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).typeCount, 0);
+            assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_PROFILE_CHANGED');
         }
         assert.equal(signal.aborted, true);
         assert.equal(e.c.sessionScope.requestCount(), 0);
@@ -7325,7 +7375,7 @@ test('repair budget exhaustion preserves known series and leaves an unknown late
     await e.start();
     assert.deepEqual(completedViewingIds(e), ['2']);
     assert.equal(e.requests.length, 3);
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_BUDGET');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_BUDGET');
     const report = e.c.collectViewingSeriesDiagnostics(e.state);
     assert.equal(report[0].checkedEpisodes, 1);
     assert.equal(report[0].expectedEpisodes, 500);
@@ -7347,7 +7397,7 @@ test('a failed direct request retains known watched titles and never retries the
     };
     await e.start();
     assert.deepEqual(completedViewingIds(e), ['1']);
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_HTTP_503');
     assert.equal(e.requests.length, 4);
     assert.equal(e.logs.find(entry => entry.details?.recheck)?.details.recheck.requests, 1);
     assert.equal(e.c.sessionScope.requestCount(), 0);
@@ -7444,7 +7494,8 @@ function imageResourceEnvironment() {
     }
     const e = environment(['startImageResourceDiagnostics', 'stopImageResourceDiagnostics', 'recordImageResourceEntries'], {
         PerformanceObserver: Observer, imageResourceObserver: null,
-        sourceState: { watchStatus: { network: { finishedAt: 100 } } }
+        viewing: { diagnostics: () => ({ network: { finishedAt: 100 } }), dispose() {} },
+        sourceState: { watchStatus: Object.freeze({}) }
     });
     vm.runInContext(source.match(/^    const IMAGE_RESOURCE_DIAGNOSTIC_MAX_ENTRIES = \d+;/m)?.[0] || '', e.c);
     return { ...e, observers, Observer, start: () => e.c.startImageResourceDiagnostics(e.c.routeSessionToken),
@@ -7727,7 +7778,7 @@ test('profile and route changes cancel direct episode reads and discard profile-
         for (let attempt = 0; attempt < 10 && !release; attempt++) await e.flush();
         assert.equal(typeof release, 'function');
         assert.deepEqual(completedViewingIds(e), ['1']);
-        const promise = e.state.watchStatus.promise;
+        const promise = e.c.viewing.settled(e.state.watchStatus);
         if (mode === 'profile') { e.models.userInfo.userGuid = 'different-profile'; release(); }
         else {
             e.c.sourceState = { watchStatus: { newer: true } };
@@ -7736,8 +7787,8 @@ test('profile and route changes cancel direct episode reads and discard profile-
         }
         await promise;
         if (mode === 'profile') {
-            assert.equal(e.state.watchStatus.seriesDetails.size, 0);
-            assert.equal(e.state.watchStatus.types.size, 0);
+            assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).seriesDetailsCount, 0);
+            assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).typeCount, 0);
             assert.equal(completedViewingIds(e).length, 0);
         } else assert.equal(e.c.sourceState.watchStatus.newer, true);
         assert.equal(signal.aborted, true);
@@ -7914,7 +7965,7 @@ test('moving back with unknown automatic progress retains the explicit main choi
     const e = await viewingEnvironment();
     await e.start();
     clickViewingFilter(e, 'main', 'all');
-    assert.equal(e.state.watchStatus.results.get('7'), 'unknown');
+    assert.equal(e.c.viewing.freshStatus(e.state.watchStatus, '7'), 'unknown');
     const requests = e.requests.length;
     clickManualViewing(e, '7');
     viewingUi(e).details.open = true;
@@ -7935,12 +7986,12 @@ test('moving back with unknown automatic progress retains the explicit main choi
 });
 
 test('the move button can restore an agreed cached classification without a live result or a new request', async () => {
-    const e = await viewingEnvironment();
-    await e.start();
-    e.state.watchStatus.results = new Map([['1', 'complete'], ['2', 'in-progress']]);
-    e.c.viewing.promoteCache(e.state.watchStatus);
-    e.state.watchStatus.results = new Map();
-    e.c.syncWatchGroups(e.state);
+    const first = await viewingEnvironment();
+    await first.start();
+    const e = await viewingEnvironment(7, null, first.storage);
+    const gate = holdViewingResponse(e, () => true);
+    e.c.initializeWatchGroups(e.state, 1);
+    await e.flush();
     viewingUi(e).details.open = true;
     const requests = e.requests.length;
     clickManualViewing(e, '1');
@@ -7955,6 +8006,7 @@ test('the move button can restore an agreed cached classification without a live
     assert.equal(action.restoredAutomatic, true);
     assert.equal(action.manualMarkerVisible, false);
     assert.equal(e.requests.length, requests);
+    gate.release(); await e.c.viewing.settled(e.state.watchStatus);
 });
 
 test('failed automatic restoration keeps the saved placement and marker and the diagnostic reports that actual state', async () => {
@@ -7989,7 +8041,7 @@ test('manual corrections remain available when optional viewing requests fail', 
     assert.ok(completedViewingIds(e).includes('2'));
     await e.c.refreshViewingStatus(e.state);
     assert.ok(completedViewingIds(e).includes('2'));
-    assert.equal(e.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_HTTP_503');
 });
 
 test('a manual series correction expires for an added episode and the change is persisted', async () => {
@@ -8054,7 +8106,7 @@ test('a correction made before season metadata arrives captures its first reliab
     clickManualViewing(e, '5');
     assert.equal(e.c.viewing.choice(e.state.watchStatus, '5').coverage, null);
     await release();
-    await e.state.watchStatus.promise;
+    await e.c.viewing.settled(e.state.watchStatus);
     assert.deepEqual(structuredClone(e.c.viewing.choice(e.state.watchStatus, '5').coverage), [['50', 2]]);
     assert.equal(e.storageCalls.writes, 2);
     for (let i = 0; i < 10; i++) e.c.syncWatchGroups(e.state);
@@ -8264,7 +8316,7 @@ test('late automatic baseline capture preserves an override cleared by the move 
     clickViewingFilter(next, 'watched', 'series');
     clickManualViewing(next, '5');
     await release();
-    await e.state.watchStatus.promise;
+    await e.c.viewing.settled(e.state.watchStatus);
     assert.equal(Boolean(e.c.viewing.choice(e.state.watchStatus, '5')), false);
     assert.ok(mainViewingIds(e).includes('5'));
     assert.equal(Object.hasOwn(e.storage.get('test.viewingChoices.active-profile').choices, '5'), false);
@@ -8349,14 +8401,14 @@ test('confirmed movies publish after the first title batch while later title res
     e.c.initializeWatchGroups(e.state, 1);
     for (let attempt = 0; attempt < 10 && !gate.release; attempt++) await e.flush();
     assert.equal(typeof gate.release, 'function');
-    assert.equal(e.state.watchStatus.loading, true);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).loading, true);
     assert.equal(completedViewingIds(e).length, 50);
-    assert.equal(e.state.watchStatus.publications, 1);
-    assert.equal(e.state.watchStatus.requests, 2, 'the pending independent peer has already reserved its request');
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).publications, 1);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).requests, 2, 'the pending independent peer has already reserved its request');
     assert.equal(mainViewingIds(e).length, 70);
     assert.equal(e.storageCalls.cacheWrites, 0, 'batch publication does not write storage');
     await gate.release();
-    await e.state.watchStatus.promise;
+    await e.c.viewing.settled(e.state.watchStatus);
     assert.equal(completedViewingIds(e).length, 120);
     assert.equal(e.requests.length, 3);
     assert.equal(e.storageCalls.cacheWrites, 1);
@@ -8389,7 +8441,7 @@ test('a recent same-profile cache groups titles before the first response and re
     assert.deepEqual(completedViewingIds(next), ['1', '4']);
     assert.deepEqual(filteredViewingIds(next), ['2', '3']);
     assert.equal(viewingUi(next).details.open, false);
-    assert.equal(next.state.watchStatus.cachedTitles, 6);
+    assert.equal(next.c.viewing.diagnostics(next.state.watchStatus).cachedTitles, 6);
     const row = next.c.collectViewingSeriesDiagnostics(next.state)[0];
     assert.equal(row.automaticStatus, 'complete');
     assert.equal(row.cachedStatus, true);
@@ -8398,9 +8450,9 @@ test('a recent same-profile cache groups titles before the first response and re
     assert.equal(next.storageCalls.cacheWrites, 0);
     await next.flush();
     await gate.release();
-    await next.state.watchStatus.promise;
+    await next.c.viewing.settled(next.state.watchStatus);
     assert.deepEqual(completedViewingIds(next), ['1', '4']);
-    assert.equal(next.c.viewing.cachedIds(next.state.watchStatus).size, 0);
+    assert.equal(next.c.viewing.diagnostics(next.state.watchStatus).cachedCount, 0);
     assert.equal(next.c.collectViewingSeriesDiagnostics(next.state)[0].cachedStatus, false);
     assert.equal(next.storageCalls.cacheWrites, 1);
     assert.equal(next.requests.length, first.requests.length, 'startup reuse adds no requests and still revalidates');
@@ -8423,9 +8475,9 @@ test('fresh movies replace cache immediately and a newly unfinished finale retur
     for (let attempt = 0; attempt < 10 && !gate.release; attempt++) await next.flush();
     assert.equal(typeof gate.release, 'function');
     assert.deepEqual(completedViewingIds(next), ['4'], 'show-level progress does not prematurely remove a cached finale result');
-    assert.equal(next.state.watchStatus.results.get('1'), 'not-started');
+    assert.equal(next.c.viewing.freshStatus(next.state.watchStatus, '1'), 'not-started');
     await gate.release();
-    await next.state.watchStatus.promise;
+    await next.c.viewing.settled(next.state.watchStatus);
     assert.deepEqual(completedViewingIds(next), []);
     assert.ok(mainViewingIds(next).includes('4'));
     assert.equal(next.c.collectViewingSeriesDiagnostics(next.state)[0].latestEpisode.episode, 3);
@@ -8444,7 +8496,7 @@ test('manual main-list choices outweigh initial cached completion and never ente
     assert.deepEqual(completedViewingIds(next), ['4']);
     await next.flush();
     await gate.release();
-    await next.state.watchStatus.promise;
+    await next.c.viewing.settled(next.state.watchStatus);
     assert.ok(mainViewingIds(next).includes('1'));
     assert.equal(next.storage.get('test.viewingCache.active-profile').entries[1][1], 'complete');
     assert.equal(next.storage.get('test.viewingChoices.active-profile').choices[1].status, 'main');
@@ -8458,10 +8510,10 @@ test('a failed verification reveals cached automatic titles but retains explicit
     next.c.fetch = async () => ({ ok: false, status: 503 });
     next.c.initializeWatchGroups(next.state, 1);
     assert.deepEqual(completedViewingIds(next), ['1', '2', '4']);
-    await next.state.watchStatus.promise;
+    await next.c.viewing.settled(next.state.watchStatus);
     assert.deepEqual(completedViewingIds(next), ['2']);
-    assert.equal(next.c.viewing.cachedIds(next.state.watchStatus).size, 0);
-    assert.equal(next.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
+    assert.equal(next.c.viewing.diagnostics(next.state.watchStatus).cachedCount, 0);
+    assert.equal(next.c.viewing.diagnostics(next.state.watchStatus).failure, 'VIEWING_STATUS_HTTP_503');
     assert.deepEqual(Object.keys(next.storage.get('test.viewingCache.active-profile').entries), []);
     assert.equal(next.storage.get('test.viewingChoices.active-profile').choices[2].status, 'complete');
 });
@@ -8498,7 +8550,7 @@ test('optional cache storage errors preserve fresh grouping and working manual c
         };
         await e.start();
         assert.deepEqual(completedViewingIds(e), ['1', '4']);
-        assert.equal(e.state.watchStatus.failure, null);
+        assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, null);
         assert.equal(e.c.viewing.presentation(e.state.watchStatus).manualFailure, false);
         clickManualViewing(e, '2');
         assert.ok(completedViewingIds(e).includes('2'));
@@ -8514,10 +8566,10 @@ test('cache reuse is isolated by the active profile and a cancelled response can
     const otherGate = holdViewingResponse(other);
     other.c.initializeWatchGroups(other.state, 1);
     assert.deepEqual(completedViewingIds(other), []);
-    assert.equal(other.state.watchStatus.cachedTitles, 0);
+    assert.equal(other.c.viewing.diagnostics(other.state.watchStatus).cachedTitles, 0);
     await other.flush();
     await otherGate.release();
-    await other.state.watchStatus.promise;
+    await other.c.viewing.settled(other.state.watchStatus);
     assert.equal(other.storageCalls.cacheWrites, 1);
     assert.ok(other.storage.has('test.viewingCache.other-profile'));
     for (const mode of ['profile', 'route']) {
@@ -8532,12 +8584,12 @@ test('cache reuse is isolated by the active profile and a cancelled response can
             next.c.isRouteSessionActive = token => token === 2;
         }
         await gate.release();
-        await next.state.watchStatus.promise;
+        await next.c.viewing.settled(next.state.watchStatus);
         assert.equal(next.storageCalls.cacheWrites, 0);
         if (mode === 'profile') {
             assert.deepEqual(completedViewingIds(next), []);
-            assert.equal(next.c.viewing.cachedIds(next.state.watchStatus).size, 0);
-            assert.equal(next.state.watchStatus.failure, 'VIEWING_STATUS_PROFILE_CHANGED');
+            assert.equal(next.c.viewing.diagnostics(next.state.watchStatus).cachedCount, 0);
+            assert.equal(next.c.viewing.diagnostics(next.state.watchStatus).failure, 'VIEWING_STATUS_PROFILE_CHANGED');
         } else assert.equal(next.c.sourceState.watchStatus.newer, true);
         assert.equal(next.c.sessionScope.requestCount(), 0);
         assert.equal(next.timers.size, 0);
@@ -8566,12 +8618,12 @@ test('a later startup failure preserves fresh movie results and drops only unver
     };
     next.c.initializeWatchGroups(next.state, 1);
     assert.equal(completedViewingIds(next).length, 60);
-    await next.state.watchStatus.promise;
+    await next.c.viewing.settled(next.state.watchStatus);
     assert.equal(completedViewingIds(next).length, 50);
     assert.deepEqual(mainViewingIds(next), Array.from({ length: 10 }, (_, index) => String(index + 51)));
     assert.equal(Object.keys(next.storage.get('test.viewingCache.active-profile').entries).length, 50);
     assert.equal(next.storageCalls.cacheWrites, 1);
-    assert.equal(next.state.watchStatus.failure, 'VIEWING_STATUS_HTTP_503');
+    assert.equal(next.c.viewing.diagnostics(next.state.watchStatus).failure, 'VIEWING_STATUS_HTTP_503');
 });
 
 test('refresh keeps the current series grouping until its new finale result arrives without rereading storage', async () => {
@@ -8589,7 +8641,7 @@ test('refresh keeps the current series grouping until its new finale result arri
     await promise;
     assert.deepEqual(completedViewingIds(e), ['1']);
     assert.equal(e.storageCalls.cacheWrites, 2);
-    assert.equal(e.c.viewing.cachedIds(e.state.watchStatus).size, 0);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).cachedCount, 0);
 });
 
 test('a warm 500-series scan initializes card controls once and performs no further work while browsing', async () => {
@@ -8611,7 +8663,7 @@ test('a warm 500-series scan initializes card controls once and performs no furt
     assert.equal(controls, 500, 'the previous warm scan revisited controls 11,500 times');
     assert.equal(visibilityReads, 500, 'unchanged batches avoid card attribute reads after initial grouping');
     assert.equal(e.requests.length, 30);
-    assert.equal(e.state.watchStatus.publications, 20);
+    assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).publications, 20);
     assert.equal(completedViewingIds(e).length, 500);
     const work = e.c.collectPerformanceDiagnostics();
     assert.equal(work.viewingGroups.fullSyncs, 1);

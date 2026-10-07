@@ -99,7 +99,7 @@ The target test files are created or deepened with the owner they exercise. This
 | tests/carousel.test.js | P08–P10 | Binding replacement, shared reads, readiness, page mapping, serialized movement and native collection |
 | tests/grid.test.js; tests/grid-cards.test.js; tests/grid-frame.test.js; tests/grid-empty.test.js; tests/grid-controls.test.js; tests/grid-groups.test.js | P03 resource checks; P11 ownership suites; P12 controls and groups | Frame/card lifetime, complete replacement, native/provisional/synthetic empty transitions, exact disposal, groups, controls, filters and focus |
 | tests/list.test.js | P13–P14 | Collection strategy, validated membership/order, pending changes, deferral and Undo |
-| tests/viewing.test.js | P15–P16 | Completion/cache use, bounded scan, partial results, repairs and incremental publication |
+| tests/viewing.test.js; tests/viewing-scan.test.js | P15–P16 | Completion/cache use, bounded scan, partial results, repairs and incremental publication |
 | tests/viewing-choices.test.js | P15 | Profile-scoped manual placement, persistence, precedence and coverage expiry |
 | tests/hover.test.js | P17–P18 | Native interaction/card handoff first, then composed intent, cancellation, replay and dismissal |
 | tests/responsive.test.js | P19 | Coalesced refresh, native/grid publication, deferred membership and stale-owner rejection |

@@ -1,6 +1,6 @@
 export function createChoices({ activeProfile, getValue, setValue,
-    limits = { seasons: 40, episodes: 500 }, storageKey = 'legacyMyListForNetflix.viewingChoices.v1.' }) {
-    let profile, choices = new Map(), failure = false, generation = 0;
+    limits = { seasons: 40, episodes: 500 }, storageKey = 'legacyMyListForNetflix.viewingChoices.v1.', initial = null }) {
+    let profile = initial?.profile, choices = initial?.choices || new Map(), failure = initial?.failure || false, generation = 0;
     function validViewingCoverage(value) {
         return Array.isArray(value) && value.length > 0 && value.length <= limits.seasons &&
             value.every(pair => Array.isArray(pair) && pair.length === 2 && /^\d+$/.test(pair[0]) &&
@@ -105,6 +105,9 @@ export function createChoices({ activeProfile, getValue, setValue,
         return value ? Object.freeze({ ...value, coverage: value.coverage ? Object.freeze(value.coverage.map(pair => Object.freeze([...pair]))) : null }) : null;
     }
     return Object.freeze({ sync, save, reconcile, choice,
+        retire() { generation++; profile = undefined; choices = new Map(); failure = false; },
+        fork() { return createChoices({ activeProfile, getValue, setValue, limits, storageKey,
+            initial: { profile, failure, choices: new Map([...choices.keys()].map(id => [id, choice(id)])) } }); },
         has: id => choices.has(id), status: id => choices.get(id)?.status, type: id => choices.get(id)?.type,
         ids: () => Object.freeze([...choices.keys()]),
         presentation: () => Object.freeze({ profile, manualFailure: failure, disabled: !profile || failure }) });

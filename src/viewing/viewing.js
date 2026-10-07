@@ -1,9 +1,10 @@
 import { createCompletion, completionRatio } from './completion.js';
 import { createChoices } from './choices.js';
 import { createCache } from './cache.js';
+import { createScan } from './scan.js';
 
-// P16 supplies scan ownership; only normalized scan facts are borrowed here.
-export function createViewing(options) {
+// Internal policy access stays inside the viewing capability.
+function createPolicy(options) {
     const completion = createCompletion(), cache = createCache(options), owners = new WeakMap();
     function owner(watch) {
         if (!owners.has(watch)) owners.set(watch, { choices: createChoices({ ...options, storageKey: options.choicesKey }),
@@ -55,6 +56,9 @@ export function createViewing(options) {
             manualMarkerVisible: current.choices.has(id), changedTitles: result.changed.size });
     }
     return Object.freeze({ ...completion, completionRatio, initialize, syncProfile, place, placement, automatic, titleType,
+        retire: watch => owner(watch).choices.retire(),
+        fork(from, to) { const current = owner(from); owners.set(to, { choices: current.choices.fork(),
+            cached: { results: new Map(current.cached.results), types: new Map(current.cached.types) }, cacheGeneration: 0 }); },
         choiceIds: watch => isProfileCurrent(watch) ? owner(watch).choices.ids() : Object.freeze([]),
         hasChoice: (watch, id) => isProfileCurrent(watch) && owner(watch).choices.has(id),
         manualStatus: (watch, id) => isProfileCurrent(watch) ? owner(watch).choices.status(id) : undefined,
@@ -65,12 +69,56 @@ export function createViewing(options) {
         clearCache, readCache: cache.read, writeCache: cache.write,
         invalidateCache(watch, id, { type = false } = {}) { const current = owner(watch); current.cacheGeneration++;
             (type ? current.cached.types : current.cached.results).delete(id); },
-        cacheCount: watch => owner(watch).cached.types.size,
+        cacheCount: watch => owner(watch).cached.types.size, cacheResultCount: watch => owner(watch).cached.results.size,
         cachedStatus: (watch, id) => isProfileCurrent(watch) ? owner(watch).cached.results.get(id) : undefined,
         cachedIds: watch => new Set([...owner(watch).cached.results.keys(), ...owner(watch).cached.types.keys()]),
         promoteCache(watch) { const current = owner(watch); current.cacheGeneration++; const cached = current.cached;
             for (const [id, status] of watch.results) cached.results.set(id, status);
             for (const [id, type] of watch.types) cached.types.set(id, type);
+        }
+    });
+}
+
+
+export function createViewing(options) {
+    const policy = createPolicy(options), sessions = new WeakMap();
+    function resolve(session) {
+        const owned = sessions.get(session);
+        if (!owned) throw new Error('VIEWING_SESSION_INVALID');
+        return owned;
+    }
+    function createSession(config) {
+        const session = Object.freeze({}), watch = { results: new Map(), types: new Map(), seriesDetails: new Map(),
+            seriesCoverage: new Map(), loading: false, failure: null, requests: 0, passes: 0, publications: 0,
+            profileGuid: options.activeProfile(), network: null, cachedTitles: 0, promise: null };
+        if (config.previous && sessions.has(config.previous)) {
+            const previous = resolve(config.previous).watch;
+            for (const key of ['results', 'types']) watch[key] = new Map(previous[key]);
+            watch.seriesDetails = new Map([...previous.seriesDetails].map(([id, summary]) => [id, JSON.parse(JSON.stringify(summary))]));
+            watch.seriesCoverage = new Map([...previous.seriesCoverage].map(([id, coverage]) => [id, coverage.map(pair => [...pair])]));
+            for (const key of ['requests', 'passes', 'publications', 'profileGuid', 'failure', 'cachedTitles']) watch[key] = previous[key];
+            watch.network = !previous.loading && previous.network ? { ...previous.network } : null;
+            policy.fork(previous, watch);
+        }
+        const scan = createScan({ ...options, ...config, watch, viewing: policy,
+            scanLimits: typeof options.scanLimits === 'function' ? options.scanLimits() : options.scanLimits });
+        sessions.set(session, { watch, scan }); return session;
+    }
+    function read(session, operation, ...args) { const { watch } = resolve(session); return policy[operation](watch, ...args); }
+    return Object.freeze({ createSession,
+        assertCurrent: session => resolve(session).scan.guard(),
+        start: session => resolve(session).scan.start(), refresh: session => resolve(session).scan.refresh(),
+        settled: session => resolve(session).scan.settled(), dispose(session) { if (sessions.has(session)) resolve(session).scan.dispose(); },
+        reconcile: (session, ids = null) => resolve(session).scan.reconcile(ids),
+        diagnostics: session => resolve(session).scan.diagnostics(), seriesDiagnostics: session => resolve(session).scan.seriesDiagnostics(),
+        freshStatus: (session, id) => resolve(session).scan.freshStatus(id), freshType: (session, id) => resolve(session).scan.freshType(id),
+        placement: (session, id) => read(session, 'placement', id), titleType: (session, id) => read(session, 'titleType', id),
+        automatic: (session, id) => read(session, 'automatic', id), hasChoice: (session, id) => read(session, 'hasChoice', id),
+        choice: (session, id) => read(session, 'choice', id), choiceIds: session => read(session, 'choiceIds'),
+        presentation(session) { return Object.freeze({ ...read(session, 'presentation'), loading: resolve(session).scan.diagnostics().loading }); },
+        place(session, id, { assertCurrent = () => {} } = {}) {
+            const { scan, watch } = resolve(session); const guard = () => { scan.guard(); assertCurrent(); scan.guard(); };
+            return policy.place(watch, id, { assertCurrent: guard });
         }
     });
 }
