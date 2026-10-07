@@ -94,6 +94,8 @@ Group 6 sensitivity: temporarily perturbing each contract made the selected beha
 
 Final local verification: **531/531 tests pass**, zero failures/cancellations/skips; reproducible build, output/version/architecture checks, distributable syntax and whitespace checks pass. An informational V8 run reports session lines/branches **82.35% / 64.69%**, responsive **86.30% / 77.20%**, and mutations **99.77% / 83.68%**. These improve the original session/consumer blind spots; they do not represent 100% line coverage or certify every browser/Netflix input. The capability prerequisite is the semantic evidence above together with existing owner cases and completed bundle journeys, not a percentage target.
 
+Exact hosted verification: coverage/fix commit `b5a3ba25a14d512bc3b144966d756c3b2807d133` passes [Windows CI run 37697587565](https://github.com/final221/Netflix-List/actions/runs/37697587565), including all regression/bundle tests and reproducible-output gates.
+
 All identified automated prerequisite groups are complete. Broad code reduction has **not** begun; prospective reductions still need their own contract/guard review and relevant sensitivity evidence. Live Netflix layout, native React compatibility, physical pointer behavior, actual focus/viewport movement and performance remain the separate live boundary below.
 
 ## Simplification acceptance
