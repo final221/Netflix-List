@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.48
+// @version      1.4.49
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -11529,7 +11529,7 @@
       other: "Other"
     });
     const SCRIPT_NAME = "My List for Netflix";
-    const SCRIPT_VERSION = "1.4.48";
+    const SCRIPT_VERSION = "1.4.49";
     const VERBOSE_INTERACTION_LOGS = false;
     const SETTINGS_STORAGE_KEY = "legacyMyListForNetflix.settings.v3";
     const VIEWING_CHOICES_STORAGE_KEY = "legacyMyListForNetflix.viewingChoices.v1.";
@@ -14309,7 +14309,10 @@
         columns: Math.max(1, state.layout?.columns || 1),
         sessionToken: sessionScope.token,
         assertCurrent: assertOwner,
-        pageHintForVideoId: (id) => itemMap?.get("v:" + id)?.page
+        pageHintForVideoId: (id) => {
+          const item = itemMap?.get("v:" + id);
+          return item ? pageForItem(item) : void 0;
+        }
       });
       if (result.status !== "anchored") return false;
       nativeCarousel.assertMapping(result);

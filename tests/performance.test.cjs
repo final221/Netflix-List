@@ -9690,3 +9690,18 @@ test('responsive setup and cleanup failures cannot strand their exact reconcilia
         assert.equal(e.c.listMutations.deferralDiagnostics().active.length,0);
     }
 });
+
+
+test('delta anchoring consumes native-owned preferred hints when canonical slot indices are absent',()=>{
+    const e=remappingBridgeEnvironment();
+    for(const item of e.items)e.c.setPageForItem(item,1);
+    for(const slot of e.slots)slot.index=null;
+    assert.equal(e.c.nativeSourceObservation(e.c.sourceState,{position:true}).position.page,0);
+    assert.equal(e.c.syncLogicalPageModelAfterDelta('missing-canonical-index'),true);
+    assert.equal(e.c.nativeSourceObservation(e.c.sourceState,{position:true}).position.page,1);
+    assert.ok(e.items.every(item=>!Object.hasOwn(item,'page')));
+    publishMembershipForTest(e.c,[e.items[0],...Array.from({length:7},(_,index)=>({videoId:String(100+index)}))],8);
+    assert.equal(e.c.syncLogicalPageModelAfterDelta('unknown-native-titles'),true);
+    assert.equal(e.c.nativeSourceObservation(e.c.sourceState,{position:true}).position.page,1,
+        'unknown titles must not outvote the exact known hint with invented page-zero votes');
+});

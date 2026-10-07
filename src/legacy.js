@@ -2623,7 +2623,10 @@ export function startLegacy() {
         };
         const result = nativeCarousel.refreshMapping({ mode: 'delta', section, scroller, track,
             totalCount, columns: Math.max(1, state.layout?.columns || 1), sessionToken: sessionScope.token,
-            assertCurrent: assertOwner, pageHintForVideoId: id => itemMap?.get('v:' + id)?.page });
+            assertCurrent: assertOwner, pageHintForVideoId: id => {
+                const item = itemMap?.get('v:' + id);
+                return item ? pageForItem(item) : undefined;
+            } });
         if (result.status !== 'anchored') return false;
         nativeCarousel.assertMapping(result);
         myListCountConvergencePending = true;
