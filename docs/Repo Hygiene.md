@@ -6,13 +6,13 @@ Best practices for keeping a repository understandable and easy to change. Use s
 
 Measure authored source using readable physical lines. Include comments and blank lines in the inventory, but distinguish them from logic when assessing complexity. Review generated output separately.
 
-| Lines | Assessment | Still viable when |
+| Lines | Assessment | Concern when |
 | ---: | --- | --- |
-| Up to 200 | Usually manageable. Small files can still have confusing ownership or excessive indirection. | The responsibility and interface are clear, and the file does useful work without unnecessary indirection. |
-| 201–400 | Generally viable for one cohesive responsibility. | Its operations serve one capability, state ownership is clear, and routine changes stay local without coordinating unrelated concerns. |
-| 401–600 | Increasing concern for behavioral code. | The workflows share a cohesive responsibility and lifetime; functions remain understandable, and callers need little knowledge of internal state or sequencing. |
-| 601–800 | Strong review signal. Multiple workflows or ownership domains become harder to navigate. | The code has clearly navigable internal sections, explicit invariants and focused tests; separating it would scatter tightly coupled state or force more coordination through interfaces. |
-| Over 800 | High-priority architectural review for behavioral code. | A concrete review shows that the responsibility remains cohesive, representative changes remain local and testable, and proposed splits would increase coupling or expose internals. These conditions justify retention; size alone does not. |
+| Up to 200 | Usually manageable. | The purpose is unclear, unrelated concerns are mixed, or the file mainly forwards calls and adds navigation without a useful boundary. |
+| 201–400 | Generally viable for one cohesive responsibility. | Operations change for different reasons, state has competing owners, or a routine change requires coordinating unrelated sections or files. |
+| 401–600 | Increasing concern for behavioral code. | Workflows have distinct responsibilities or lifetimes, long functions obscure decisions, or callers must understand internal state and execution order. |
+| 601–800 | Strong review signal. | Understanding one operation requires tracing many flags and distant mutations; tests need broad fixtures, or independent responsibilities can be separated without exposing shared internals. |
+| Over 800 | High-priority architectural review for behavioral code. | The module coordinates several capabilities, ownership and cleanup are difficult to trace, or representative changes repeatedly affect unrelated paths. Retention lacks justification when review identifies a simpler structure with clearer ownership. |
 
 Translation catalogs, schemas, stylesheets and declarative tables may reasonably exceed these ranges. Generated files should be changed through their source. Test files should be assessed by scenario cohesion and fixture complexity, not divided merely to pass a size check. Functions need their own review: one deeply nested workflow can be difficult even inside a small file.
 
