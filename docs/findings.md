@@ -2,15 +2,51 @@
 
 Updated: 2026-10-08
 
-This file records the code-review findings and the agreed follow-up plan for My List for Netflix. It is a working record; the plan does not authorize extra code changes beyond the step the user has chosen to pursue. Entries record chronological checkpoints; later completion records supersede earlier pending-work statements.
+This file records the code-review findings and the agreed follow-up plan for My List for Netflix. It is a working record; the plan does not authorize extra code changes beyond the step the user has chosen to pursue. Current release and remaining work come first. Historical checkpoints follow; later completion records supersede earlier pending-work statements.
 
 ## User live-test evidence
 
 User-supplied Netflix evidence is distilled in [logs/knowledge.md](../logs/knowledge.md), with capture provenance and version-specific limitations. This file owns actionable interpretation, decisions and follow-up; raw exports are removed after completed review under AGENTS.md's retention workflow. Automated acceptance remains separate.
 
+## Current work and deferred items
+
+Release **1.4.62** is published; packaging verification is recorded below. The modular migration P01–P21 and selected R01–R03/D01–D03 reductions are complete. No further runtime patch is selected.
+
+- **Current live checks:** adopt the new Tampermonkey installation URL and test the current release; remaining evidence gaps and conditional investigations are listed below.
+- **Deferred by the user:** original point E, limiting copied title/URL/video-ID details. Keep detailed diagnostics until selected; the original A–G table retains the decision.
+- **Optional work:** further hardening, fallback behavior or performance changes need a concrete current issue and a selected scope. Historical proposal lists are not the current implementation queue.
+
+## Live-log findings and remaining validation
+
+Evidence: [logs/knowledge.md](../logs/knowledge.md), sessions 1.4.52–1.4.58. The raw captures are retired after distillation. Historical count reconciliation with successful native fallback does not imply partial-list publication. The 1.4.53 routeSessionToken failure was fixed in P17/1.4.54 with an actual-caller regression; the residual fixture had masked it.
+
+**Mapping warning:** 1.4.54 hover preparation reports “Observed native page mapping changed”. Later sessions show native interaction without that warning, but do not demonstrate resolution in every relevant case. Treat recurrence as an investigation against the current release; do not infer that the historical defect persists in the current release.
+
+**Hover delay:** 1.4.58 preparation reaches about 1.6 seconds, with substantial issued-move acknowledgement and queue wait; graft/alignment/replay work is small in that session. If current user testing still shows delay, investigate issued-move acknowledgement and cancelled-work queue admission while preserving settlement ownership. No performance fix is selected by reviewing or distilling logs.
+
+**Live acceptance gap:** the supplied sessions do not establish real resize/zoom/remapping, route exit/reentry/retirement, membership/Undo, manual viewing or exact construction/readiness timer retirement. Unknown viewing metadata remains unresolved despite successful requests. No supplied capture tests 1.4.59–1.4.62; automated acceptance and older activity cannot replace current-version user observations.
+
+## Release artifact relocation — 1.4.62, 2026-10-08
+
+The user selected moving/renaming the generated userscript into dist/My List for Netflix.user.js and providing the new Tampermonkey installation URL. Build creates dist/, checker/bundle fixtures and Windows CI use that path, and metadata pins updateURL/downloadURL to the published raw GitHub file while retaining name/namespace/grants/storage identity. README provides the one-time installation transition; root output is removed. Runtime algorithms are unchanged; package/lock/generated version advances to 1.4.62. Context reviewed without a durable change; live installation remains user-owned.
+
+Local acceptance: all 537 tests pass, including generated update/download URL assertions and rejection of changed installation identity/URLs. Build/check, syntax, local links and whitespace pass; generated runtime body matches 1.4.61 after normalizing the injected version. Exact publication and Windows CI evidence follow separately.
+
+Published runtime revision 7ffcdc2581a893a47f484f4d3a5d81dc07345288 passes [Windows CI run 37765074907](https://github.com/final221/Netflix-List/actions/runs/37765074907): locked install, committed-output check, all regression/bundle tests, reproducible build, dependency/output checks, syntax, whitespace and unchanged tracked build files. The new raw dist URL returns HTTP 200 with version 1.4.62 and the new download URL. This verifies publication/build; the user still performs the one-time Tampermonkey installation transition and live Netflix check.
+
+## Findings ordering and retired-file deletion — 2026-10-08
+
+Current work, live-evidence limits and latest release verification now precede historical checkpoints. Older plan/result headings explicitly identify their historical scope. The user deleted all seven retired files from ready-to-delete/ after contract/evidence extraction; this change records those deletions in Git. README and AGENTS no longer describe a pending retirement folder. Original documents remain recoverable from Git history. Documentation/evidence only; release remains 1.4.62.
+
+Validation: generated-output/dependency check, local documentation links and whitespace pass; retained historical sections and release evidence are preserved. Context reviewed without a durable change.
+
+## Historical checkpoints
+
+The following records describe their stated versions and dates, including proposals that were later completed or superseded. Use the current-work section above for the present queue and docs/architecture.md for implemented ownership.
+
 ## G — Netflix-specific dependencies
 
-### Current result
+### Result at the original review
 
 The agreed G scope is complete in the first adapter pass (`91b2c09`). Netflix GraphQL access and response handling are grouped in `netflixGraphql`; browse-row and carousel DOM discovery are grouped in `netflixDom`; private React carousel metadata and cloned-card hover behavior are grouped in `netflixReactCarousel` and `netflixReactHover`.
 
@@ -30,7 +66,7 @@ The diagnostic entries are kept in a page-memory circular buffer capped at 5,000
 
 Changing this would affect diagnostics, not Netflix's list or server behavior. Keeping detailed logs is useful for troubleshooting; any runtime cost comes from formatting, retaining, and writing log messages, and reducing copied details is not a meaningful grid-performance improvement. The user chose to defer E while keeping the option on the plan.
 
-## Plan
+## Original A–G plan
 
 | Point | Status | Planned work or result |
 | --- | --- | --- |
@@ -264,9 +300,9 @@ The four local probes above exercised shipped functions using the existing DOM/t
 
 The existing conditional factors remain conditional: full-grid layout/paint and final synchronous attachment, page-wide React grafting, image request/decode timing and inherited image dimensions, and resize events that might not require remapping. GraphQL snapshots are now compact, but materialization still assigns artwork before clone normalization, so eager-request timing has not been proven resolved. No blanket virtualization/containment, aspect-ratio change, resize suppression, guessed popup acknowledgement, or new adapter fallback is justified by local tests alone. The eight-page collection cap remains a bounded fallback policy; avoiding pagination that cannot fit that budget could be assessed for very large lists if the response page-size contract is established. Visible native popup acknowledgement and browser frame/heap behavior remain user-owned verification. E copied-log details stays deferred; maintenance-only G expansion stays outside the active performance list.
 
-## Prioritized open performance and reliability work
+## Historical performance and reliability priorities — superseded
 
-The user requested a filtered priority list focused on performance and reliability. Completed work, deferred work, and maintenance-only proposals are excluded from this view; their history remains above. Rounds 1, 2, 3a, 3b, and 4 are implemented in 1.0.9 through 1.0.13. The ordered proposals below come from that whole-plan review and remain unselected. The global 1.3.2 review at the end of this document supersedes this ordering with current recurring costs and reconfirmed gaps.
+The user requested a filtered priority list focused on performance and reliability. Completed work, deferred work, and maintenance-only proposals are excluded from this view; their history remains above. Rounds 1, 2, 3a, 3b, and 4 are implemented in 1.0.9 through 1.0.13. The ordered proposals below come from that whole-plan review and remain unselected. The later global 1.3.2 review superseded this ordering; subsequent implementation records below give completion evidence.
 
 | Priority | Work | Benefit and next scope |
 | --- | --- | --- |
@@ -277,7 +313,7 @@ The user requested a filtered priority list focused on performance and reliabili
 
 Thumbnail request timing, reserved image geometry, height-only resize filtering, and row virtualization/containment remain unselected conditional proposals in the performance review, outside this filtered priority list. The image/resize changes depend on establishing unnecessary requests, missing inherited dimensions, or irrelevant refreshes in Netflix; those conditions have not been confirmed. Virtualization/containment needs evidence of significant remaining layout/paint cost and can affect hover geometry, focus, browser find/accessibility, and scroll position. Additional adapter centralization or speculative fallbacks are also outside this list; the concrete hover reliability work is retained because reliability is an explicit priority.
 
-### Recommended patch rounds
+### Patch rounds proposed at that checkpoint
 
 The original four rounds comprise five completed patches. Reject one combined patch for all original priorities: hover recovery, interaction work, card construction, and fetch lifecycle change different behavior, and a combined release would make regressions difficult to attribute. All original selected rounds are implemented. For the new review proposals, combine only the two native-binding lifecycle gaps; keep expiry, short-list entry, and native-scan capture as separate small patches because their ownership/membership checks differ.
 
@@ -291,7 +327,7 @@ The original four rounds comprise five completed patches. Reject one combined pa
 
 The useful combined round is recurring interaction work (priorities 2 and 4). Hover reliability, the two grid changes, and bootstrap/fetch work should ship as separate patches with local checks and user-owned browser comparison between them. The round order preserves the reported reliability fix first and then targets frequent runtime work before larger construction changes and startup-only work.
 
-### Browser validation needed
+### Browser validation requested at that checkpoint
 
 User-owned validation, not a prerequisite for the authorized first implementation pass: use the same list, viewport, and browser for comparisons. Record fast downward/upward scrolling with the pointer over cards, then over an empty margin; compare the script enabled/disabled and cold/warm thumbnails. Record deliberate same-page/distant-page hover, resize, add/remove/undo, and SPA leave/re-entry separately.
 
@@ -827,16 +863,6 @@ Final acceptance: runtime commit **860d713cbf25bb9de29c2ee022466aafc211da91**, [
 
 The final state audit froze accepted scalar records, including direct insertion, and gave session pauses/carousel readiness waits exact cancellation and settlement owners. Already-issued navigation settlement retained its separate lifetime. tests/scenario-transfers.json records all **372** residual scenarios from baseline 60f0df8: **105** retain original names and **267** have named owner-boundary replacements. It verifies named references, not one-to-one assertion equivalence or exhaustive capability coverage. The later capability audit and reductions below supersede the final migration baseline without reopening the completed plan.
 
-### Live-log findings and remaining validation
-
-Evidence: [logs/knowledge.md](../logs/knowledge.md), sessions 1.4.52–1.4.58. The raw captures are retired after distillation. Historical count reconciliation with successful native fallback does not imply partial-list publication. The 1.4.53 routeSessionToken failure was fixed in P17/1.4.54 with an actual-caller regression; the residual fixture had masked it.
-
-**Mapping warning:** 1.4.54 hover preparation reports “Observed native page mapping changed”. Later sessions show native interaction without that warning, but do not demonstrate resolution in every relevant case. Treat recurrence as an investigation against the current release; do not infer that the historical defect persists in 1.4.61.
-
-**Hover delay:** 1.4.58 preparation reaches about 1.6 seconds, with substantial issued-move acknowledgement and queue wait; graft/alignment/replay work is small in that session. If current user testing still shows delay, investigate issued-move acknowledgement and cancelled-work queue admission while preserving settlement ownership. No performance fix is selected by reviewing or distilling logs.
-
-**Live acceptance gap:** the supplied sessions do not establish real resize/zoom/remapping, route exit/reentry/retirement, membership/Undo, manual viewing or exact construction/readiness timer retirement. Unknown viewing metadata remains unresolved despite successful requests. No capture tests 1.4.59–1.4.61; automated acceptance and older activity cannot replace current-version user observations.
-
 ## Simplification branch — test readiness audit (2026-10-08)
 
 Selected checkpoint: create a separate branch for reducing code to essential behavior, first assessing capability coverage. Created the managed worktree and branch `codex/essential-code` from `220e175` (release 1.4.58). The audit identified application-composition coverage gaps; its retained evidence is consolidated in the completed prerequisite below. The audit checkpoint is complete; coverage strengthening and runtime simplification remain pending.
@@ -942,11 +968,3 @@ The user selected evaluation and restructuring of document locations. README.md 
 ## README and agent-instruction cleanup — 2026-10-08
 
 At the user's request, README is reduced to introduction/installation, runnable verification, repository map and documentation links. Versioning, retention and change rules remain in AGENTS.md; architecture/verification detail remains in docs/architecture.md. Local-link/anchor, artifact and whitespace checks pass. Runtime/version stays 1.4.61. Context was reviewed without a durable change.
-
-## Release artifact relocation — 1.4.62, 2026-10-08
-
-The user selected moving/renaming the generated userscript into dist/My List for Netflix.user.js and providing the new Tampermonkey installation URL. Build creates dist/, checker/bundle fixtures and Windows CI use that path, and metadata pins updateURL/downloadURL to the published raw GitHub file while retaining name/namespace/grants/storage identity. README provides the one-time installation transition; root output is removed. Runtime algorithms are unchanged; package/lock/generated version advances to 1.4.62. Context reviewed without a durable change; live installation remains user-owned.
-
-Local acceptance: all 537 tests pass, including generated update/download URL assertions and rejection of changed installation identity/URLs. Build/check, syntax, local links and whitespace pass; generated runtime body matches 1.4.61 after normalizing the injected version. Exact publication and Windows CI evidence follow separately.
-
-Published runtime revision 7ffcdc2581a893a47f484f4d3a5d81dc07345288 passes [Windows CI run 37765074907](https://github.com/final221/Netflix-List/actions/runs/37765074907): locked install, committed-output check, all regression/bundle tests, reproducible build, dependency/output checks, syntax, whitespace and unchanged tracked build files. The new raw dist URL returns HTTP 200 with version 1.4.62 and the new download URL. This verifies publication/build; the user still performs the one-time Tampermonkey installation transition and live Netflix check.

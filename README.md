@@ -53,6 +53,4 @@ dist/
   My List for Netflix.user.js        Generated, committed installable release
 ```
 
-An optional ready-to-delete/ folder contains retired documents awaiting deletion.
-
 Read [docs/architecture.md](docs/architecture.md) for implemented ownership, source composition and verification boundaries, [docs/findings.md](docs/findings.md) for findings and progress, and [AGENTS.md](AGENTS.md) for working instructions.
