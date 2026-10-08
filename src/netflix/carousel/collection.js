@@ -174,12 +174,12 @@ export function createCollection({ native, navigation, scope, performance, reque
         const binding = native.borrowBinding(section, scroller, track);
         assertRouteSession(sessionToken);
         native.assertBinding(binding);
-        const operation = { binding, sessionToken, counters: currentCounters(), onProgress, material: new Set(), initialPage: null,
+        const operation = { binding, sessionToken, section, scroller, track, totalCount, counters: currentCounters(), onProgress, material: new Set(), initialPage: null,
             columns: columns || currentPageSlots(scroller, track).length || 1 };
         assertOperation(operation);
         operations.add(operation);
         try {
-            const items = await collectAllItems(section, scroller, track, totalCount, sessionToken, operation);
+            const items = await collectAllItems(operation);
             assertOperation(operation);
             operation.material.clear(); // Successful return transfers material to the caller.
             return Object.freeze({ items, initialPage: operation.initialPage, collectedCount: items.length,
@@ -190,10 +190,9 @@ export function createCollection({ native, navigation, scope, performance, reque
         } finally { operations.delete(operation); }
     }
 
-    async function collectAllItemsLogical(section, scroller, track, totalCount, sessionToken = null, operation) {
-        assertRouteSession(sessionToken);
-        const bindingOwner = native.borrowBinding(section, scroller, track);
-        native.assertBinding(bindingOwner);
+    async function collectAllItemsLogical(operation) {
+        const { section, scroller, track, totalCount, sessionToken } = operation;
+        assertOperation(operation);
         const snapshotWork = operation.counters;
         if (!Number.isFinite(totalCount) || totalCount < 0) {
             throw initializationError(
@@ -209,7 +208,6 @@ export function createCollection({ native, navigation, scope, performance, reque
         const goal = totalCount;
         const itemsByLogicalIndex = new Map();
         const videoIndex = new Map();
-        const seenKeys = new Set();
         const visitedSignatures = new Set();
         const responsiveColumns = operation.columns || currentPageSlots(scroller, track).length || 1;
         const estimatedPages = Math.max(1, Math.ceil(totalCount / Math.max(1, responsiveColumns)));
@@ -282,11 +280,10 @@ export function createCollection({ native, navigation, scope, performance, reque
                     previousSignature: previousPageSignature,
                     minimumSlots: expectedSlots,
                     minimumNewItems: 1,
-                    seenKeys,
+                    seenKeys: videoIndex,
                     sessionToken
                 });
-                assertRouteSession(sessionToken);
-                native.assertBinding(bindingOwner);
+                assertOperation(operation);
                 let stabilizedSignature = visibleSignature(slots);
                 let stabilizedTransform = trackTransformValue(track);
                 let pageState = nativeLogicalPageState(
@@ -316,13 +313,12 @@ export function createCollection({ native, navigation, scope, performance, reque
                         previousSignature: '',
                         minimumSlots: fullWindowSlots,
                         minimumNewItems: 1,
-                        seenKeys,
+                        seenKeys: videoIndex,
                         requiredStableFrames: 2,
                         timeout: PARTIAL_PAGE_RECOVERY_TIMEOUT_MS,
                         sessionToken
                     });
-                    assertRouteSession(sessionToken);
-                    native.assertBinding(bindingOwner);
+                    assertOperation(operation);
                     stabilizedSignature = visibleSignature(recoveredSlots);
                     stabilizedTransform = trackTransformValue(track);
                     pageState = requireNativeLogicalPageState(
@@ -380,7 +376,7 @@ export function createCollection({ native, navigation, scope, performance, reque
                 for (const position of pageState.positions) {
                     const card = position.slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
                     const key = itemKeyFromCard(card);
-                    if (key && !seenKeys.has(key)) newKeys.add(key);
+                    if (key && !videoIndex.has(key)) newKeys.add(key);
                 }
 
                 log(tLog('collectionPageStabilized'), {
@@ -459,7 +455,6 @@ export function createCollection({ native, navigation, scope, performance, reque
                     item.logicalIndex = logicalIndex;
                     itemsByLogicalIndex.set(logicalIndex, item);
                     videoIndex.set(key, logicalIndex);
-                    seenKeys.add(key);
                     added.push(item);
                 }
 
@@ -492,8 +487,7 @@ export function createCollection({ native, navigation, scope, performance, reque
 
                 const beforeSignature = stabilizedSignature;
                 await moveOnePage(section, scroller, 1, null, sessionToken);
-                assertRouteSession(sessionToken);
-                native.assertBinding(bindingOwner);
+                assertOperation(operation);
                 const afterSignature = visibleSignature(currentPageSlots(scroller, track));
                 if (!afterSignature || afterSignature === beforeSignature) {
                     incomplete('advance-right', 'enabled-control-did-not-change-page', {
@@ -521,12 +515,7 @@ export function createCollection({ native, navigation, scope, performance, reque
                 });
             }
 
-            const items = Array.from({ length: totalCount }, (_, logicalIndex) => {
-                const item = itemsByLogicalIndex.get(logicalIndex);
-                item.logicalIndex = logicalIndex;
-                item.page = Math.min(estimatedPages - 1, Math.floor(logicalIndex / responsiveColumns));
-                return item;
-            });
+            const items = Array.from({ length: totalCount }, (_, logicalIndex) => itemsByLogicalIndex.get(logicalIndex));
             const uniqueKeys = new Set(items.map(itemKey).filter(Boolean));
             if (uniqueKeys.size !== totalCount) {
                 incomplete('validate-logical-index-range', 'duplicate-item-key-across-logical-indices', {
@@ -567,8 +556,7 @@ export function createCollection({ native, navigation, scope, performance, reque
                     canonicalTargetTransform,
                     sessionToken
                 );
-                assertRouteSession(sessionToken);
-                native.assertBinding(bindingOwner);
+                assertOperation(operation);
                 log(tLog('nativeRestorationResult'), {
                     from: endingPage,
                     target: initialPage,
@@ -586,8 +574,7 @@ export function createCollection({ native, navigation, scope, performance, reque
                 }
             }
 
-            assertRouteSession(sessionToken);
-            native.assertBinding(bindingOwner);
+            assertOperation(operation);
             log(tLog('fullCollectionCompleted'), {
                 collected: items.length,
                 totalCount,
@@ -609,16 +596,14 @@ export function createCollection({ native, navigation, scope, performance, reque
         }
     }
 
-    async function collectAllItems(section, scroller, track, totalCount, sessionToken = null, operation) {
-        assertRouteSession(sessionToken);
-        const bindingOwner = native.borrowBinding(section, scroller, track);
-        native.assertBinding(bindingOwner);
+    async function collectAllItems(operation) {
+        const { section, scroller, track, totalCount, sessionToken } = operation;
+        assertOperation(operation);
         const profile = getCarouselDomRuntime(section)?.profile || detectCarouselDomProfile(section);
         if (profile.pageMode === 'logical') {
-            return collectAllItemsLogical(section, scroller, track, totalCount, sessionToken, operation);
+            return collectAllItemsLogical(operation);
         }
-        assertRouteSession(sessionToken);
-        native.assertBinding(bindingOwner);
+        assertOperation(operation);
         const snapshotWork = operation.counters;
         const items = [];
         const seen = new Set();
@@ -661,12 +646,10 @@ export function createCollection({ native, navigation, scope, performance, reque
         const motionLease = native.suppressMotion(section, track);
 
         try {
-            assertRouteSession(sessionToken);
-            native.assertBinding(bindingOwner);
+            assertOperation(operation);
             const signatureBeforeStartMove = visibleSignature(currentPageSlots(scroller, track));
             await goToPage(section, scroller, 0, null, sessionToken);
-            assertRouteSession(sessionToken);
-            native.assertBinding(bindingOwner);
+            assertOperation(operation);
             let previousPageSignature = initialPage === 0 ? '' : signatureBeforeStartMove;
 
             for (let page = 0; page < pages && (!Number.isFinite(goal) || items.length < goal); page++) {
@@ -692,8 +675,7 @@ export function createCollection({ native, navigation, scope, performance, reque
                     seenKeys: seen,
                     sessionToken
                 });
-                assertRouteSession(sessionToken);
-                native.assertBinding(bindingOwner);
+                assertOperation(operation);
                 const stabilizedSignature = visibleSignature(slots);
                 const stabilizedTransform = trackTransformValue(track);
                 stablePageTransforms.set(actualPage, stabilizedTransform);
@@ -757,8 +739,7 @@ export function createCollection({ native, navigation, scope, performance, reque
                 if ((Number.isFinite(goal) && items.length >= goal) || actualPage >= pages - 1) break;
                 previousPageSignature = stabilizedSignature;
                 const next = await moveOnePage(section, scroller, 1, null, sessionToken);
-                assertRouteSession(sessionToken);
-                native.assertBinding(bindingOwner);
+                assertOperation(operation);
                 if (next === actualPage) {
                     warn(tLog('couldNotAdvanceDuringFullCollection'), {
                         actualPage,
@@ -792,8 +773,7 @@ export function createCollection({ native, navigation, scope, performance, reque
                     canonicalTargetTransform,
                     sessionToken
                 );
-                assertRouteSession(sessionToken);
-                native.assertBinding(bindingOwner);
+                assertOperation(operation);
 
                 log(tLog('nativeRestorationResult'), {
                     from: endingPage,
@@ -807,19 +787,16 @@ export function createCollection({ native, navigation, scope, performance, reque
                 // page is mounted so deferred Netflix writes cannot animate on release.
                 if (restorationComplete && selectedPage(section) === initialPage) {
                     await nextFrame(operation);
-                    assertRouteSession(sessionToken);
-                    native.assertBinding(bindingOwner);
+                    assertOperation(operation);
                     await nextFrame(operation);
-                    assertRouteSession(sessionToken);
-                    native.assertBinding(bindingOwner);
+                    assertOperation(operation);
                 }
             }
         } finally {
             motionLease.release();
         }
 
-        assertRouteSession(sessionToken);
-        native.assertBinding(bindingOwner);
+        assertOperation(operation);
         log(tLog('fullCollectionCompleted'), {
             collected: items.length,
             totalCount,

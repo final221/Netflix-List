@@ -95,7 +95,7 @@ export function createMyListSession({ environment = globalThis, version, context
         updateCard: updateMutationCard, sample: operation => nativeCarousel.sample(operation),
         refreshMapping: syncLogicalPageModelAfterDelta, onReindexed: presentListChange, onOrder: presentListOrder,
         onChanged: reportListChange, createCancelledError: createRouteSessionCancelledError,
-        findFallback: findAnyStandardCardItemByVideoId,
+        findFallback: videoId => nativeCarousel.captureFallbackItem(videoId),
         queueMicrotask, observeChanges(callback) {
             const root = document.body || document.documentElement;
             if (!root) return null;
@@ -109,14 +109,13 @@ export function createMyListSession({ environment = globalThis, version, context
         onQueued: intent => log(tLog('myListMutationQueued'), { seq: intent.seq, videoId: intent.videoId, action: intent.action,
             uiaAction: intent.uiaAction, uia: intent.uia, syncMode: 'event-driven', undo: intent.undo,
             preferredIndex: intent.preferredIndex, hasFallbackSnapshot: Boolean(gridView.materialFor(intent.fallbackItem, intent.correlationId)) }),
-        normalizeTitle: normalizeNetflixUiText,
+        normalizeTitle: netflixDom.normalizeTitle,
         onExpired: detail => log(tLog('undoEntriesExpired'), detail) });
 
     const BUILD_CHUNK_MAX_ITEMS = 24;
     const BUILD_CHUNK_BUDGET_MS = 6;
     // Short, coalesced callback-gap samples; never a continuous FPS/paint monitor.
 
-    const SCRIPT_NAME = 'My List for Netflix';
     const SCRIPT_VERSION = version;
     // Enable temporarily when detailed source-card traces are needed for diagnosis.
 
@@ -771,10 +770,6 @@ export function createMyListSession({ environment = globalThis, version, context
         return { status, grid, geometry };
     }
 
-    function clearLegacyEmptyState(options) {
-        return gridView.clearEmpty(options);
-    }
-
     function applyLegacyEmptyStateGeometry(section, layout) {
         if (!gridView.emptyPresentation().connected || !section || !layout) return;
         const state = sourceState, sessionToken = sessionScope.token;
@@ -794,10 +789,6 @@ export function createMyListSession({ environment = globalThis, version, context
             if (sourceState !== state) throw createRouteSessionCancelledError();
             if (binding) nativeCarousel.assertBinding(binding);
         } });
-    }
-
-    function waitForNativeSource(...args) {
-        return nativeCarousel.waitForSource(...args);
     }
 
     function finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, reason = 'empty', admission = null) {
@@ -973,12 +964,6 @@ export function createMyListSession({ environment = globalThis, version, context
         } });
     }
 
-    function normalizeNetflixUiText(value) {
-        return netflixDom.normalizeTitle(value);
-    }
-
-
-    function installEmptyFrameResizeObserver() { responsive.observe('empty'); }
 
     function ensureSyntheticMyListSection(admission) {
         const state = sourceState, sessionToken = sessionScope.token;
@@ -998,7 +983,7 @@ export function createMyListSession({ environment = globalThis, version, context
         const state = sourceState;
         const live = nativeDiscoveryObservation();
         if (live.section && !live.scroller && !live.track) {
-            return adoptLiveEmptyMyListSection(live);
+            return adoptLiveMyListSection(live, true);
         }
         const synthetic = ensureSyntheticMyListSection(live);
         if (!synthetic) return false;
@@ -1010,7 +995,7 @@ export function createMyListSession({ environment = globalThis, version, context
         const layout = { ...observed.layout };
         layout.rowGap = measureNativeCarouselGap(synthetic);
         nativeCarousel.assertObservation(observed);
-        clearLegacyEmptyState({ restoreGrid: false });
+        gridView.clearEmpty({ restoreGrid: false });
         nativeCarousel.assertObservation(observed);
         const geometry = currentGridGeometry(synthetic, layout);
         gridView.mount({ section: synthetic, status, geometry, layout, visible: false,
@@ -1026,109 +1011,63 @@ export function createMyListSession({ environment = globalThis, version, context
         syncLegacyEmptyState(synthetic, { allowProvisional: true });
         completedSection = synthetic;
         applyOriginalMyListVisibility();
-        installEmptyFrameResizeObserver(synthetic);
+        responsive.observe('empty');
         log(tLog('legacyFrameMovedToEmptyAnchor'), {
             items: sourceState.items?.length ?? 0
         });
         return true;
     }
 
-    function adoptLiveMyListSection(live) {
-        if (!sourceState || !live?.section || !live?.scroller || !live?.track) return false;
-        if (sourceState.section === live.section && sourceState.scroller === live.scroller && sourceState.track === live.track) return false;
+    function adoptLiveMyListSection(live, empty = false) {
+        if (!sourceState || !live?.section || (empty ? live.scroller || live.track : !live.scroller || !live.track)) return false;
+        if (!empty && sourceState.section === live.section && sourceState.scroller === live.scroller && sourceState.track === live.track) return false;
         nativeCarousel.assertObservation(live);
         const state = sourceState;
         const status = state.status || document.getElementById(STATUS_ID);
         const grid = state.grid || document.getElementById(GRID_ID);
         if (!status || !grid) return false;
-        const observed = nativeLayoutObservation(live.section, live.scroller, live.track, 'auto', state);
-        const layout = { ...observed.layout };
-        layout.rowGap = measureNativeCarouselGap(live.section);
+        const observed = nativeLayoutObservation(live.section, live.scroller, live.track, empty ? 'empty' : 'auto', state);
+        const layout = { ...observed.layout, rowGap: measureNativeCarouselGap(live.section) };
         nativeCarousel.assertObservation(observed);
         clearSourceAlignment();
         nativeCarousel.assertObservation(observed);
         nativePopup.invalidate();
         nativeCarousel.assertObservation(observed);
-        clearLegacyEmptyState({ restoreGrid: false });
-        markOriginalHeader(live.section, live.scroller, live.track);
+        if (!empty) gridView.clearEmpty({ restoreGrid: false });
+        const originalAnchor = markOriginalHeader(live.section, live.scroller, live.track);
         nativeCarousel.assertObservation(observed);
         nativeCarousel.assertObservation(live);
-        parkSource(live.section, live.scroller, live.track);
+        if (!empty) nativeSourcePresentation(live.section, live.scroller, live.track, { phase: 'parked' });
         const geometry = currentGridGeometry(live.section, layout);
-        gridView.mount({ section: live.section, anchor: live.scroller, status, geometry, layout, visible: settings.preferences().viewOriginalMyList,
+        gridView.mount({ section: live.section, anchor: empty ? originalAnchor : live.scroller,
+            status, geometry, layout, visible: settings.preferences().viewOriginalMyList,
             assertCurrent: () => nativeCarousel.assertObservation(observed) });
         if (sourceState !== state) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-layout', 'Incoming layout parent was replaced');
         attachNativeBinding(state, live.section, live.scroller, live.track);
-        sourceState.layout = layout;
-        sourceState.status = status;
-        sourceState.grid = grid;
-        sourceState.empty = (sourceState.items?.length ?? 0) === 0;
-        if (!sourceState.empty) waitingForNativeEmpty = false;
-
+        state.layout = layout;
+        state.status = status;
+        state.grid = grid;
+        state.empty = empty || (state.items?.length ?? 0) === 0;
+        if (empty || !state.empty) waitingForNativeEmpty = false;
+        if (empty) {
+            gridView.setEmpty(true);
+            syncLegacyEmptyState(live.section, { allowProvisional: true });
+            applyLegacyEmptyStateGeometry(live.section, layout);
+        }
         syncStatusTypography(live.section, status);
         completedSection = live.section;
         gridView.removeSynthetic(live.section);
         applyOriginalMyListVisibility();
-
-        responsive.observe();
-
-        log(tLog('nativeMyListSourceAdoptedWithoutRescan'), {
-            pages: live.pages,
-            selectedPage: live.selectedPage,
-            layout: layoutSummary(layout)
-        });
-        nativeCarousel.invalidateReads();
-        return true;
-    }
-
-    function adoptLiveEmptyMyListSection(live) {
-        if (!sourceState || !live?.section || live.scroller || live.track) return false;
-        nativeCarousel.assertObservation(live);
-        const status = sourceState.status || document.getElementById(STATUS_ID);
-        const grid = sourceState.grid || document.getElementById(GRID_ID);
-        if (!status || !grid) return false;
-        const state = sourceState;
-        const observed = nativeLayoutObservation(live.section, null, null, 'empty', state);
-        const layout = { ...observed.layout };
-        layout.rowGap = measureNativeCarouselGap(live.section);
-        nativeCarousel.assertObservation(observed);
-        clearSourceAlignment();
-        nativeCarousel.assertObservation(observed);
-        nativePopup.invalidate();
-        nativeCarousel.assertObservation(observed);
-        markOriginalHeader(live.section, null, null);
-
-        nativeCarousel.assertObservation(observed);
-        nativeCarousel.assertObservation(live);
-        const originalAnchor = markOriginalHeader(live.section, null, null);
-        nativeCarousel.assertObservation(observed);
-        nativeCarousel.assertObservation(live);
-        const geometry = currentGridGeometry(live.section, layout);
-        gridView.mount({ section: live.section, anchor: originalAnchor, status, geometry, layout, visible: settings.preferences().viewOriginalMyList,
-            assertCurrent: () => nativeCarousel.assertObservation(observed) });
-
-        if (sourceState !== state) throw initializationError('NATIVE_SOURCE_REPLACED', 'native-layout', 'Incoming empty layout parent was replaced');
-        attachNativeBinding(state, live.section);
-        sourceState.layout = layout;
-        sourceState.empty = true;
-        sourceState.status = status;
-        sourceState.grid = grid;
-        gridView.setEmpty(true);
-        waitingForNativeEmpty = false;
-        syncLegacyEmptyState(live.section, { allowProvisional: true });
-
-        applyLegacyEmptyStateGeometry(live.section, layout);
-        syncStatusTypography(live.section, status);
-
-        completedSection = live.section;
-        gridView.removeSynthetic(live.section);
-        applyOriginalMyListVisibility();
-        installEmptyFrameResizeObserver(live.section);
-
-        log(tLog('nativeEmptyMyListSectionAdopted'), {
-            layout: layoutSummary(layout),
-            originalVisible: settings.preferences().viewOriginalMyList
-        });
+        responsive.observe(empty ? 'empty' : undefined);
+        if (empty) {
+            log(tLog('nativeEmptyMyListSectionAdopted'), {
+                layout: layoutSummary(layout), originalVisible: settings.preferences().viewOriginalMyList
+            });
+        } else {
+            log(tLog('nativeMyListSourceAdoptedWithoutRescan'), {
+                pages: live.pages, selectedPage: live.selectedPage, layout: layoutSummary(layout)
+            });
+        }
         nativeCarousel.invalidateReads();
         return true;
     }
@@ -1253,7 +1192,7 @@ export function createMyListSession({ environment = globalThis, version, context
         gridView.setEmpty(empty); assertCurrent();
         waitingForNativeEmpty = empty;
         if (empty) syncLegacyEmptyState(parent.section, { allowProvisional: true });
-        else clearLegacyEmptyState();
+        else gridView.clearEmpty();
         assertCurrent(); nativePopup.invalidate(); assertCurrent();
         if (parent.watchStatus) { syncWatchGroups(parent); assertCurrent(); }
         const status = updateStatus(formatHeaderParts(count, count, parent.initializationElapsedMs, true));
@@ -1281,8 +1220,6 @@ export function createMyListSession({ environment = globalThis, version, context
         const discovery = liveState || nativeDiscoveryObservation();
         return nativeCarousel.captureMountedItem({ discovery, videoId });
     }
-
-    function findAnyStandardCardItemByVideoId(videoId) { return nativeCarousel.captureFallbackItem(videoId); }
 
     function restartInitializationForPopulatedNativeMyList(live, reason = 'late-populated-source') {
         if (!sourceState?.empty || !live?.section || !live?.scroller || !live?.track) return false;
@@ -1336,7 +1273,7 @@ export function createMyListSession({ environment = globalThis, version, context
                         !sourceState.track &&
                         emptyState.source === 'native'
                     );
-                    if (!alreadyNative) adoptLiveEmptyMyListSection(live);
+                    if (!alreadyNative) adoptLiveMyListSection(live, true);
                     assertParent(); live = nativeDiscoveryObservation();
                     return live;
                 }
@@ -1393,7 +1330,7 @@ export function createMyListSession({ environment = globalThis, version, context
                     emptyState.source === 'native'
                 );
                 if (!alreadyNative) {
-                    adoptLiveEmptyMyListSection(live);
+                    adoptLiveMyListSection(live, true);
                     assertParent(); live = nativeDiscoveryObservation();
                 }
             } else if (!live.section && (sourceState.items?.length ?? 0) === 0 && sourceState.section?.id !== SYNTHETIC_SECTION_ID) {
@@ -1620,11 +1557,6 @@ export function createMyListSession({ environment = globalThis, version, context
         return new Set(items.filter(item => pageForItem(item) === page).map(itemKey).filter(Boolean));
     }
 
-    async function ensureFreshIndicatorPageZeroAnchor(section, scroller, track, firstVideoId, sessionToken = null) {
-        return nativeCarousel.anchorPageZero({ section, scroller, track, firstVideoId, sessionToken,
-            columns: sourceState?.layout?.columns });
-    }
-
     async function collectAllItems(section, scroller, track, totalCount, sessionToken = null) {
         const state = sourceState;
         const result = await nativeCarousel.collect({ section, scroller, track, totalCount,
@@ -1653,16 +1585,12 @@ export function createMyListSession({ environment = globalThis, version, context
     }
 
 
-    function findMountedSourceSlot(track, item, activeOnly = false) {
-        return nativeCarousel.sample(() => nativeCarousel.mountedCard({ section: sourceState?.section,
-            scroller: sourceState?.scroller, track, item: { href: item.href, videoId: item.videoId }, activeOnly,
-            sessionToken: sessionScope.token })?.slot || null);
-    }
-
     function findActiveSourceSlot(item) {
         ensureLiveNativeBinding('hover-source-direct');
         if (!sourceState?.track?.isConnected || !sourceState?.scroller?.isConnected) return null;
-        return findMountedSourceSlot(sourceState.track, item, true);
+        return nativeCarousel.sample(() => nativeCarousel.mountedCard({ section: sourceState.section,
+            scroller: sourceState.scroller, track: sourceState.track, item: { href: item.href, videoId: item.videoId },
+            activeOnly: true, sessionToken: sessionScope.token })?.slot || null);
     }
 
     function nativePositionDeviation(item, source) {
@@ -1721,11 +1649,11 @@ export function createMyListSession({ environment = globalThis, version, context
         return identity && sourceState?.itemMap ? sourceState.itemMap.get(itemKey(identity)) || null : null;
     }
 
-    async function prepareMountedPage(page, targetItem = null, triggerEvent = null, token = null, sessionToken = null) {
+    async function prepareMountedPage(page, targetItem, triggerEvent = null, token = null, sessionToken = null) {
         assertRouteSession(sessionToken);
         if (hover.isCancelled(token)) return null;
-        let targetCard = targetItem ? gridView.getCard(targetItem) : null;
-        if (targetItem) gridView.assertCard(targetCard);
+        let targetCard = gridView.getCard(targetItem);
+        gridView.assertCard(targetCard);
         hover.count('hoverPreparation', 'calls');
         const hoverTiming = hover.captureTiming();
         ensureLiveNativeBinding('hover-prepare-start');
@@ -1754,7 +1682,7 @@ export function createMyListSession({ environment = globalThis, version, context
                 ? 'hover-stale-refresh-start' : 'hover-expected-page-start';
             ensureLiveNativeBinding(reason);
             assertCurrent();
-            if (targetItem) gridView.assertCard(targetCard);
+            gridView.assertCard(targetCard);
             if (!mode) hover.releaseInteraction();
             const result = await nativeCarousel.resolveCard({ mode, section, scroller, track,
                 item: itemSummary(targetItem), totalCount: records.length, columns: state.layout?.columns || 1,
@@ -1813,10 +1741,6 @@ export function createMyListSession({ environment = globalThis, version, context
                 located.visibleIds || []
             );
         };
-        const beforeView = targetItem ? null : nativeCarousel.pageCards({ section, scroller, track,
-            binding: nativeOwner, totalCount: state.totalCount, columns: state.layout?.columns, sessionToken, assertCurrent });
-        const beforeSignature = beforeView?.signature || '';
-        if (beforeView) nativeCarousel.assertObservation(beforeView);
         const started = performance.now();
 
         log(tLog('nativePagePreparationStarted'), {
@@ -1832,132 +1756,118 @@ export function createMyListSession({ environment = globalThis, version, context
         let actualPage = page;
         let staleSourceRecovery = false;
 
-        if (targetItem) {
-            let located = await resolveSource();
-            if (token !== null && token !== hover.intent().token) {
-                log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-expected-page-check', token, hoverToken: hover.intent().token });
+        let located = await resolveSource();
+        if (token !== null && token !== hover.intent().token) {
+            log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-expected-page-check', token, hoverToken: hover.intent().token });
+            return null;
+        }
+
+        if (located?.status === 'mismatch') {
+            if (located.positionMismatch) {
+                reportPositionMismatch(located);
                 return null;
             }
+            // Immediately after a manual reinitialization, Hawkins can expose a
+            // stable adjacent-page window for one render cycle. Give the target
+            // one bounded re-resolution before treating it as a real order change.
+            log('Retrying expected native page after transient page mismatch', {
+                targetItem: itemSummary(targetItem),
+                requestedPage: page,
+                visibleIds: located.visibleIds || []
+            });
+            await sleep(120);
+            located = await resolveSource();
+            if (token !== null && token !== hover.intent().token) {
+                log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-mismatch-retry', token, hoverToken: hover.intent().token });
+                return null;
+            }
+            if (located?.positionMismatch) {
+                reportPositionMismatch(located);
+                return null;
+            }
+        }
 
-            if (located?.status === 'mismatch') {
-                if (located.positionMismatch) {
-                    reportPositionMismatch(located);
-                    return null;
-                }
-                // Immediately after a manual reinitialization, Hawkins can expose a
-                // stable adjacent-page window for one render cycle. Give the target
-                // one bounded re-resolution before treating it as a real order change.
-                log('Retrying expected native page after transient page mismatch', {
+        assertCurrent();
+        if (located?.status === 'found' && located.slot) {
+            if (rejectLargeNativePositionDeviation(targetItem, located.source, page)) return null;
+            mutationSourceRecoveryPending = false;
+            targetSourceSlot = located.slot;
+            resolvedSource = located.source || null;
+            actualPage = located.page;
+        } else {
+            const runtime = nativeSourceObservation();
+            const staleLogicalMapping = runtime?.mode === 'logical' && runtime.needsRemapping;
+            const mutationRecoveryPending = mutationSourceRecoveryPending;
+            const expectedPageMismatch = located?.status === 'mismatch';
+            if (staleLogicalMapping || mutationRecoveryPending || expectedPageMismatch) {
+                log('Hover expected-page mapping is stale; searching live native source', {
                     targetItem: itemSummary(targetItem),
                     requestedPage: page,
-                    visibleIds: located.visibleIds || []
+                    locatedStatus: located?.status || null,
+                    locatedReason: located?.reason || null,
+                    mutationRecoveryPending,
+                    expectedPageMismatch,
+                    visibleIds: located?.visibleIds || []
                 });
-                await sleep(120);
-                located = await resolveSource();
+                let repaired = await resolveSource('preferred-refresh');
                 if (token !== null && token !== hover.intent().token) {
-                    log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-mismatch-retry', token, hoverToken: hover.intent().token });
+                    log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-stale-page-refresh', token, hoverToken: hover.intent().token });
                     return null;
                 }
-                if (located?.positionMismatch) {
-                    reportPositionMismatch(located);
+                if (!repaired?.slot) {
+                    repaired = await resolveSource('search', { repairLogicalMapping: expectedPageMismatch || mutationRecoveryPending,
+                        maxRadius: mutationSourceRecoveryPending ? null : 2 });
+                }
+                if (token !== null && token !== hover.intent().token) {
+                    log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-stale-page-search', token, hoverToken: hover.intent().token });
                     return null;
                 }
-            }
-
-            assertCurrent();
-            if (located?.status === 'found' && located.slot) {
-                if (rejectLargeNativePositionDeviation(targetItem, located.source, page)) return null;
-                mutationSourceRecoveryPending = false;
-                targetSourceSlot = located.slot;
-                resolvedSource = located.source || null;
-                actualPage = located.page;
-            } else {
-                const runtime = nativeSourceObservation();
-                const staleLogicalMapping = runtime?.mode === 'logical' && runtime.needsRemapping;
-                const mutationRecoveryPending = mutationSourceRecoveryPending;
-                const expectedPageMismatch = located?.status === 'mismatch';
-                if (staleLogicalMapping || mutationRecoveryPending || expectedPageMismatch) {
-                    log('Hover expected-page mapping is stale; searching live native source', {
+                assertCurrent();
+                if (repaired?.slot) {
+                    if (rejectLargeNativePositionDeviation(targetItem, repaired.source, page, located?.visibleIds || [])) return null;
+                    mutationSourceRecoveryPending = false;
+                    staleSourceRecovery = true;
+                    targetSourceSlot = repaired.slot;
+                    actualPage = repaired.page;
+                    resolvedSource = repaired.source || null;
+                    trace(() => ['Hover source recovered from stale logical page mapping', {
                         targetItem: itemSummary(targetItem),
                         requestedPage: page,
-                        locatedStatus: located?.status || null,
-                        locatedReason: located?.reason || null,
-                        mutationRecoveryPending,
-                        expectedPageMismatch,
-                        visibleIds: located?.visibleIds || []
-                    });
-                    let repaired = await resolveSource('preferred-refresh');
-                    if (token !== null && token !== hover.intent().token) {
-                        log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-stale-page-refresh', token, hoverToken: hover.intent().token });
-                        return null;
-                    }
-                    if (!repaired?.slot) {
-                        repaired = await resolveSource('search', { repairLogicalMapping: expectedPageMismatch || mutationRecoveryPending,
-                            maxRadius: mutationSourceRecoveryPending ? null : 2 });
-                    }
-                    if (token !== null && token !== hover.intent().token) {
-                        log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-stale-page-search', token, hoverToken: hover.intent().token });
-                        return null;
-                    }
-                    assertCurrent();
-                    if (repaired?.slot) {
-                        if (rejectLargeNativePositionDeviation(targetItem, repaired.source, page, located?.visibleIds || [])) return null;
-                        mutationSourceRecoveryPending = false;
-                        staleSourceRecovery = true;
-                        targetSourceSlot = repaired.slot;
-                        actualPage = repaired.page;
-                        resolvedSource = repaired.source || null;
-                        trace(() => ['Hover source recovered from stale logical page mapping', {
-                            targetItem: itemSummary(targetItem),
-                            requestedPage: page,
-                            actualPage,
-                            source: slotDescriptor(targetSourceSlot)
-                        }]);
-                    } else {
-                        const promptSuppression = responsive.suppression();
-                        if (promptSuppression.suppress) {
-                            log(tLog('nativePagePreparationCancelled'), {
-                                reason: 'logical-page-mapping-stale-source-not-found-transient',
-                                targetItem: itemSummary(targetItem),
-                                requestedPage: page,
-                                locatedReason: located?.reason || null,
-                                visibleIds: located?.visibleIds || [],
-                                promptSuppression
-                            });
-                            return null;
-                        }
-
-                        log('Stale logical page recovery exhausted; escalating to reinitialization prompt', {
+                        actualPage,
+                        source: slotDescriptor(targetSourceSlot)
+                    }]);
+                } else {
+                    const promptSuppression = responsive.suppression();
+                    if (promptSuppression.suppress) {
+                        log(tLog('nativePagePreparationCancelled'), {
+                            reason: 'logical-page-mapping-stale-source-not-found-transient',
                             targetItem: itemSummary(targetItem),
                             requestedPage: page,
                             locatedReason: located?.reason || null,
                             visibleIds: located?.visibleIds || [],
                             promptSuppression
                         });
-                        showOrderMismatchDialog(targetItem, page, located?.visibleIds || []);
                         return null;
                     }
-                } else {
-                    log(tLog('nativePagePreparationCancelled'), {
-                        reason: located?.reason || 'expected-page-check-inconclusive',
+
+                    log('Stale logical page recovery exhausted; escalating to reinitialization prompt', {
                         targetItem: itemSummary(targetItem),
-                        requestedPage: page
+                        requestedPage: page,
+                        locatedReason: located?.reason || null,
+                        visibleIds: located?.visibleIds || [],
+                        promptSuppression
                     });
+                    showOrderMismatchDialog(targetItem, page, located?.visibleIds || []);
                     return null;
                 }
+            } else {
+                log(tLog('nativePagePreparationCancelled'), {
+                    reason: located?.reason || 'expected-page-check-inconclusive',
+                    targetItem: itemSummary(targetItem),
+                    requestedPage: page
+                });
+                return null;
             }
-        } else {
-            await nativeCarousel.navigateTo(section, scroller, page, token, sessionToken, true);
-            if (token !== null && token !== hover.intent().token) return null;
-            await nativeCarousel.stablePage(scroller, track, {
-                previousSignature: beforeSignature,
-                minElapsed: 160,
-                sessionToken,
-                hoverToken: token
-            });
-            if (hover.isCancelled(token)) return null;
-            assertCurrent();
-            actualPage = nativeSourceObservation(state, { position: true }).position.page;
         }
 
         trace(() => {
@@ -1977,7 +1887,7 @@ export function createMyListSession({ environment = globalThis, version, context
 
         const pageView = nativeCarousel.pageCards({ section, scroller, track, binding: nativeOwner,
             source: resolvedSource, page: actualPage, totalCount: records?.length || 0,
-            columns: state.layout?.columns || 1, window: targetItem ? 'viewport' : 'current',
+            columns: state.layout?.columns || 1, window: 'viewport',
             sessionToken, assertCurrent });
 
         let freshTarget = null;
@@ -2005,14 +1915,14 @@ export function createMyListSession({ environment = globalThis, version, context
                     nativeCarousel.assertObservation(pageView);
                 }
 
-                if (targetItem && itemKey(pageItem) !== itemKey(targetItem)) {
+                if (itemKey(pageItem) !== itemKey(targetItem)) {
                     neighborsSkipped++;
                     hover.count('hoverPreparation', 'neighborsSkipped');
                     continue;
                 }
 
-                if (targetItem) gridView.assertCard(targetCard);
-                const oldClone = targetItem ? targetCard.node : findGridClone(pageItem);
+                gridView.assertCard(targetCard);
+                const oldClone = targetCard.node;
                 if (!oldClone?.isConnected) continue;
 
                 const graftStarted = performance.now();
@@ -2020,7 +1930,8 @@ export function createMyListSession({ environment = globalThis, version, context
                 try { ({ fresh, stats, handle } = makeLiveClone(sourceSlot, pageItem, oldClone, actualPage,
                     () => nativeCarousel.assertObservation(pageView), token, sessionToken)); }
                 finally { hoverTiming('graft', graftStarted); }
-                if (targetItem) { hover.acceptReplacement(targetCard, handle, token, sessionToken); targetCard = handle; }
+                hover.acceptReplacement(targetCard, handle, token, sessionToken);
+                targetCard = handle;
                 nativeCarousel.assertObservation(pageView);
                 refreshedCount++;
                 hover.count('hoverPreparation', 'clonesRebuilt');
@@ -2029,7 +1940,7 @@ export function createMyListSession({ environment = globalThis, version, context
 
                 nativeCarousel.assertObservation(pageView);
 
-                if (targetItem && itemKey(pageItem) === itemKey(targetItem)) {
+                if (itemKey(pageItem) === itemKey(targetItem)) {
                     hover.observeReplacement(handle);
                     freshTarget = fresh;
                     targetSourceSlot = sourceSlot;
@@ -2042,7 +1953,7 @@ export function createMyListSession({ environment = globalThis, version, context
         log(tLog('nativePageClonesUpdated'), {
             actualPage,
             refreshedCount,
-            preparationScope: targetItem ? 'target-card' : 'mounted-page',
+            preparationScope: 'target-card',
             slotsConsidered: pageView.cards.length,
             neighborsSkipped,
             fiberAssignments,
@@ -2053,7 +1964,7 @@ export function createMyListSession({ environment = globalThis, version, context
         });
 
         nativeCarousel.assertObservation(pageView);
-        if (targetItem && !freshTarget) {
+        if (!freshTarget) {
             // Do not use off-screen slots from adjacent pages as hover sources.
             warn(tLog('nativePagePreparationFailed'), {
                 reason: 'target-not-in-current-page-slots',
@@ -2108,7 +2019,7 @@ export function createMyListSession({ environment = globalThis, version, context
                     if (buildState.watchStatus) bindViewingSession(buildState, sessionToken, true);
                 } });
         } finally { pageHints.discard(); transfer.discard(); }
-        clearLegacyEmptyState({ restoreGrid: false });
+        gridView.clearEmpty({ restoreGrid: false });
         if (sourceState.watchStatus) syncWatchGroups(sourceState);
 
         responsive.acceptLayout(layout);
@@ -2127,18 +2038,6 @@ export function createMyListSession({ environment = globalThis, version, context
         });
 
         return grid;
-    }
-
-    function beginSourceScan(section, scroller, track) {
-        return nativeSourcePresentation(section, scroller, track, { phase: 'scan' });
-    }
-
-    function parkSource(section, scroller, track) {
-        return nativeSourcePresentation(section, scroller, track, { phase: 'parked' });
-    }
-
-    function realignActiveSource() {
-        nativePopup.checkDetached();
     }
 
     function handleRelevantTargetDocumentMutation(sessionToken) {
@@ -2313,6 +2212,30 @@ export function createMyListSession({ environment = globalThis, version, context
         let fastCollection = null;
         let fastCollectionSource = 'graphql';
         const entryParent = sourceState;
+        function blockFailure(error, stage, timeoutMs, totalCount) {
+            blockedInitialization = { sessionToken };
+            reportInitializationFailure(error, { stage: error?.stage || stage,
+                timeoutMs: error?.details?.timeoutMs ?? timeoutMs, details: error?.details || null });
+            updateStatus(formatInitializationErrorMeta(error, totalCount));
+        }
+        function finishEmpty(reason, preparation = null) {
+            try {
+                if (preparation) nativeCarousel.assertPreparation(preparation);
+                nativeCarousel.sample(() => {
+                    const observed = nativeLayoutObservation(section, scroller, track);
+                    const layout = { ...observed.layout, rowGap: measureNativeCarouselGap(section) };
+                    nativeCarousel.assertObservation(observed);
+                    finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted,
+                        preparation ? preparation.reason : reason, observed);
+                });
+            } catch (error) {
+                if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
+                clearRunningSession(sessionToken, false, initializationOwner);
+                if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
+                return;
+            }
+            clearRunningSession(sessionToken, true, initializationOwner);
+        }
         try {
             entryCollection = await listView.prepareEntry({ entryKind: targetSessionEntryKind, sessionToken,
                 hasNativeSource: Boolean(scroller && track),
@@ -2339,34 +2262,12 @@ export function createMyListSession({ environment = globalThis, version, context
                 return;
             }
             if (!isRouteSessionCancelledError(error)) {
-                blockedInitialization = { sessionToken };
-                reportInitializationFailure(error, {
-                    stage: error?.stage || 'total-count-detection',
-                    timeoutMs: error?.details?.timeoutMs ?? TOTAL_COUNT_TIMEOUT_MS,
-                    details: error?.details || null,
-                });
-                updateStatus(formatInitializationErrorMeta(error, null));
+                blockFailure(error, 'total-count-detection', TOTAL_COUNT_TIMEOUT_MS, null);
             }
             clearRunningSession(sessionToken, true, initializationOwner);
             return;
         }
-        if (earlyTotalCount === 0) {
-            try {
-                nativeCarousel.sample(() => {
-                    const observed = nativeLayoutObservation(section, scroller, track);
-                    const layout = { ...observed.layout, rowGap: measureNativeCarouselGap(section) };
-                    nativeCarousel.assertObservation(observed);
-                    finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, 'totalCount-0', observed);
-                });
-            } catch (error) {
-                if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
-                clearRunningSession(sessionToken, false, initializationOwner);
-                if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
-                return;
-            }
-            clearRunningSession(sessionToken, true, initializationOwner);
-            return;
-        }
+        if (earlyTotalCount === 0) return finishEmpty('totalCount-0');
 
         // The My List heading can exist before the carousel itself. totalCount is
         // already authoritative here: a positive count must produce a native source,
@@ -2374,7 +2275,7 @@ export function createMyListSession({ environment = globalThis, version, context
         if (!scroller || !track) {
             let sourceWait;
             try {
-                sourceWait = await waitForNativeSource(section, NATIVE_READY_TIMEOUT_MS, sessionToken);
+                sourceWait = await nativeCarousel.waitForSource(section, NATIVE_READY_TIMEOUT_MS, sessionToken);
             } catch (error) {
                 if (!isRouteSessionCancelledError(error)) {
                     warn(tLog('nativeSourceWaitFailed'), error);
@@ -2450,24 +2351,7 @@ export function createMyListSession({ environment = globalThis, version, context
             updateStatus(formatInitializationErrorMeta(readinessError, earlyTotalCount));
             return;
         }
-        if (readiness.empty) {
-            try {
-                nativeCarousel.assertPreparation(readiness);
-                nativeCarousel.sample(() => {
-                    const observed = nativeLayoutObservation(section, scroller, track);
-                    const emptyLayout = { ...observed.layout, rowGap: measureNativeCarouselGap(section) };
-                    nativeCarousel.assertObservation(observed);
-                    finalizeEmptyLegacyList(section, scroller, track, emptyLayout, initializationStarted, readiness.reason, observed);
-                });
-            } catch (error) {
-                if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
-                clearRunningSession(sessionToken, false, initializationOwner);
-                if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
-                return;
-            }
-            clearRunningSession(sessionToken, true, initializationOwner);
-            return;
-        }
+        if (readiness.empty) return finishEmpty(null, readiness);
         const mountedMode = nativeSourceObservation()?.mode || 'unknown';
 
         // A manual/order-mismatch reinitialization can start while Netflix still has
@@ -2478,16 +2362,11 @@ export function createMyListSession({ environment = globalThis, version, context
         {
             try {
                 await entryCollection.prepareAnchor({ mode: mountedMode, normalize: firstVideoId =>
-                    ensureFreshIndicatorPageZeroAnchor(section, scroller, track, firstVideoId, sessionToken) });
+                    nativeCarousel.anchorPageZero({ section, scroller, track, firstVideoId, sessionToken,
+                        columns: sourceState?.layout?.columns }) });
             } catch (error) {
                 if (!isRouteSessionCancelledError(error)) {
-                    blockedInitialization = { sessionToken };
-                    reportInitializationFailure(error, {
-                        stage: error?.stage || 'normalize-native-page-zero',
-                        timeoutMs: error?.details?.timeoutMs ?? null,
-                        details: error?.details || null,
-                    });
-                    updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
+                    blockFailure(error, 'normalize-native-page-zero', null, earlyTotalCount);
                 }
                 clearRunningSession(sessionToken, true, initializationOwner);
                 return;
@@ -2526,13 +2405,7 @@ export function createMyListSession({ environment = globalThis, version, context
                     return;
                 }
                 if (!isRouteSessionCancelledError(error)) {
-                    blockedInitialization = { sessionToken };
-                    reportInitializationFailure(error, {
-                        stage: error?.stage || 'native-react-total-count',
-                        timeoutMs: error?.details?.timeoutMs ?? null,
-                        details: error?.details || null,
-                    });
-                    updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
+                    blockFailure(error, 'native-react-total-count', null, earlyTotalCount);
                 }
                 clearRunningSession(sessionToken, true, initializationOwner);
                 return;
@@ -2645,7 +2518,7 @@ export function createMyListSession({ environment = globalThis, version, context
             layoutFrameStatus(status, initialStatusGeometry, layout.rowGap);
             nativeCarousel.assertObservation(layoutObservation);
 
-            // Fast collection skips beginSourceScan(), but hover-driven native
+            // Fast collection skips source-scan presentation, but hover-driven native
             // moves still need the track marker used by the animation suppression CSS.
             nativeSourcePresentation(section, scroller, track, { phase: 'mounted' });
             waitingForNativeEmpty = false;
@@ -2672,7 +2545,7 @@ export function createMyListSession({ environment = globalThis, version, context
                 },
                 beforeNative() {
                     // Keep native layout and slot detection intact while scanning.
-                    beginSourceScan(section, scroller, track);
+                    nativeSourcePresentation(section, scroller, track, { phase: 'scan' });
                     const scanNative = nativeSourceDiagnostics(section, scroller, track);
                     log(tLog('nativeCarouselScanModeStarted'), {
                         selectedPage: scanNative?.selectedPage ?? null, pages: scanNative?.pageCount ?? null,
@@ -2717,7 +2590,7 @@ export function createMyListSession({ environment = globalThis, version, context
             assertCollectionCurrent();
 
             // Keep the native carousel at its normal position and size for React resynchronization.
-            parkSource(section, scroller, track);
+            nativeSourcePresentation(section, scroller, track, { phase: 'parked' });
             const standbyNative = nativeSourceDiagnostics(section, scroller, track);
             log(tLog('nativeCarouselStandbyMode'), {
                 selectedPage: standbyNative?.selectedPage ?? null,
@@ -2773,13 +2646,7 @@ export function createMyListSession({ environment = globalThis, version, context
                 completedSection = null;
                 retryGridBuild = true;
             } else {
-                blockedInitialization = { sessionToken };
-                reportInitializationFailure(error, {
-                    stage: error?.stage || null,
-                    timeoutMs: error?.details?.timeoutMs ?? null,
-                    details: error?.details || null,
-                });
-                updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
+                blockFailure(error, null, null, earlyTotalCount);
             }
         } finally {
             // Keep queued deltas deferred until the replacement source has a

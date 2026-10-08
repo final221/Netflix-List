@@ -2257,21 +2257,42 @@ test('hover hydration stops before the next geometry read after cancellation', a
 });
 
 test('collection stability waits for unseen content even when the previous page is stable', async () => {
+    for (const seenKeys of [new Set(['v:1']), new Map([['v:1', 0]])]) {
+        const e = navigationEnvironment({ mode: 'indicator' });
+        let completed = false;
+        const pending = e.carousel.stablePage(e.scroller, e.track, {
+            sessionToken: e.scope.token,
+            seenKeys,
+            minimumNewItems: 1,
+            minimumSlots: 1
+        });
+        pending.then(() => { completed = true; });
+        await e.scheduler.frame(); await e.scheduler.frame();
+        assert.equal(completed, false);
+        e.setPage(1);
+        const slots = await e.settle(pending);
+        assert.equal(slots[0], e.pages[1][0]);
+        assert.deepEqual(e.directions, []);
+        assert.deepEqual(e.carousel.diagnostics().navigation, { pendingMoves: 0, pendingWaits: 0, motionLeases: 0 });
+    }
+});
+
+test('stable readiness requires the target keys as well as unseen content', async () => {
     const e = navigationEnvironment({ mode: 'indicator' });
     let completed = false;
     const pending = e.carousel.stablePage(e.scroller, e.track, {
         sessionToken: e.scope.token,
-        seenKeys: new Set(['v:1']),
+        seenKeys: new Map([['v:1', 0]]),
         minimumNewItems: 1,
-        minimumSlots: 1
+        requiredKeys: new Set(['v:3'])
     });
     pending.then(() => { completed = true; });
+    e.setPage(1);
     await e.scheduler.frame(); await e.scheduler.frame();
     assert.equal(completed, false);
-    e.setPage(1);
+    e.setPage(2);
     const slots = await e.settle(pending);
-    assert.equal(slots[0], e.pages[1][0]);
-    assert.deepEqual(e.directions, []);
+    assert.equal(slots[0], e.pages[2][0]);
     assert.deepEqual(e.carousel.diagnostics().navigation, { pendingMoves: 0, pendingWaits: 0, motionLeases: 0 });
 });
 

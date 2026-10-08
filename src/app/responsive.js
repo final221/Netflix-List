@@ -1,7 +1,7 @@
 export function createResponsive(options) {
     const { acceptLayoutChange, acceptInitialPage, acceptViewportSignature, window, ResizeObserver, performance, setTimeout, clearTimeout, nativeCarousel, gridView, hover, listMutations, readState, readSessionToken, isRouteSessionActive, assertRouteSession, createRouteSessionCancelledError, isRouteSessionCancelledError, nativeSourceObservation, nativeLayoutObservation, nativeSourceDiagnostics, ensureLiveNativeBinding, applyGridGeometry, layoutFrameStatus, updateStatus, formatHeaderParts, measureNativeCarouselGap, pageForItem, setPageForItem, itemKey, copyItemAttributes, currentGridGeometry, realignActiveSource, layoutSummary, collectRuntimeSnapshot, sleep, log, warn, trace, tLog, tUi, readOriginalVisibility, applyLegacyEmptyStateGeometry } = options;
     let resizeObserver = null, responsiveRefreshTimer = null, responsiveRefreshPromise = null, responsiveRefreshing = false;
-    let responsiveDeferral = null, activeResponsiveReason = "", lastResponsiveReason = "", lastResponsiveSignature = "", lastPageShape = "";
+    let responsiveDeferral = null, activeResponsiveReason = "", lastResponsiveReason = "", lastResponsiveSignature = "";
     let myListCountConvergencePending = false, responsiveSequence = 0, lifecycleRevision = 0, listeners = null;
     let counters = createCounters();
     function createCounters() { return { events: 0, checks: 0, unchanged: 0, refreshes: 0, hoverPreserved: 0, hoverCancelled: 0, parkedHeightChangesIgnored: 0, parkedHeightHoverPreserved: 0 }; }
@@ -45,14 +45,7 @@ export function createResponsive(options) {
     }
 
 
-    function responsivePageShape(layout) {
-        if (!readState()) return '';
-        const observation = nativeSourceObservation(readState(), { position: true });
-        const shape = `${Math.max(1, layout.columns)}|${observation.position.pages}`;
-        nativeCarousel.assertObservation(observation);
-        return shape;
-    }
-
+    function responsivePageShape(signature) { return signature.split('|').slice(0, 2).join('|'); }
 
     function updateResponsiveStatus(layout, note = '') {
         if (!readState()?.status || !readState()?.items) return;
@@ -238,12 +231,12 @@ export function createResponsive(options) {
             const liveLayout = await waitResponsiveLayoutSettled(1200, sessionToken);
             assertOwner();
             const signature = responsiveSignature(liveLayout);
-            const pageShape = responsivePageShape(liveLayout);
+            const pageShape = responsivePageShape(signature);
 
             acceptLayoutChange(state, liveLayout);
             updateResponsiveStatus(liveLayout, tUi('relayoutInProgress'));
 
-            const pageShapeChanged = pageShape !== lastPageShape;
+            const pageShapeChanged = pageShape !== responsivePageShape(lastResponsiveSignature);
             const sourceObservation = nativeSourceObservation(state);
             const logicalMappingStale = Boolean(sourceObservation?.needsRemapping);
             log(tLog('responsiveMeasurementResolved'), {
@@ -252,7 +245,7 @@ export function createResponsive(options) {
                 liveLayout: layoutSummary(liveLayout),
                 signature,
                 pageShape,
-                previousPageShape: lastPageShape,
+                previousPageShape: responsivePageShape(lastResponsiveSignature),
                 pageShapeChanged,
                 logicalMappingStale
             });
@@ -288,9 +281,8 @@ export function createResponsive(options) {
             }
 
             const finalSignature = responsiveSignature(liveLayout);
-            const finalPageShape = responsivePageShape(liveLayout);
+            const finalPageShape = responsivePageShape(finalSignature);
             lastResponsiveSignature = finalSignature;
-            lastPageShape = finalPageShape;
             updateResponsiveStatus(liveLayout);
             log(tLog('responsiveRefreshCompleted'), {
                 seq,
@@ -444,7 +436,6 @@ export function createResponsive(options) {
                         const previousSignature = lastResponsiveSignature;
                         acceptLayoutChange(state, measured);
                         lastResponsiveSignature = sig;
-                        lastPageShape = responsivePageShape(measured);
                         realignActiveSource();
                         counters.unchanged++;
                         if (hover.hasInteraction()) counters.hoverPreserved++;
@@ -579,7 +570,7 @@ export function createResponsive(options) {
         clearTimeout(responsiveRefreshTimer); responsiveRefreshTimer = null;
         const deferral = responsiveDeferral; responsiveDeferral = null;
         responsiveRefreshPromise = null; responsiveRefreshing = false;
-        activeResponsiveReason = ''; lastResponsiveReason = ''; lastResponsiveSignature = ''; lastPageShape = '';
+        activeResponsiveReason = ''; lastResponsiveReason = ''; lastResponsiveSignature = '';
         myListCountConvergencePending = false;
         try { observer?.disconnect(); }
         finally {
@@ -589,7 +580,7 @@ export function createResponsive(options) {
         }
     }
     function acceptLayout(layout) {
-        lastResponsiveSignature = responsiveSignature(layout); lastPageShape = responsivePageShape(layout);
+        lastResponsiveSignature = responsiveSignature(layout);
         if (readState()) acceptViewportSignature(readState(), responsiveViewportSignature());
     }
     // Public capability: owns timers, observers, tickets and transaction admission.
@@ -599,5 +590,5 @@ export function createResponsive(options) {
         expectCountConvergence: () => { myListCountConvergencePending = true; },
         resetDiagnostics: () => { counters = createCounters(); },
         diagnostics: () => Object.freeze({ resize: { ...counters }, responsiveRefreshing,
-            responsiveSignature: lastResponsiveSignature, responsivePageShape: lastPageShape, responsiveReason: lastResponsiveReason }) });
+            responsiveSignature: lastResponsiveSignature, responsivePageShape: responsivePageShape(lastResponsiveSignature), responsiveReason: lastResponsiveReason }) });
 }
