@@ -527,6 +527,54 @@ test('normalization keeps native order and metadata while skipping malformed and
     assert.ok(result.records.every(record => !Object.hasOwn(record, 'page') && !Object.hasOwn(record, 'cardTemplate')));
 });
 
+test('artwork requests retain every family, dimension, flag and direction variant', async () => {
+    const expected = {
+        StandardBoxart: ['SDP', { width: 342, height: 192 }, { enableLockBadgeChecks: true, fallbackStrategy: 'STILL' }],
+        StandardBoxartHighRes: ['SDP', { width: 665, height: 375 }, { enableLockBadgeChecks: true, fallbackStrategy: 'STILL' }],
+        ContinueWatchingBoxart: ['SDP', { width: 342, height: 192 }, { fallbackStrategy: 'STILL' }],
+        ContinueWatchingBoxartHighRes: ['SDP', { width: 665, height: 375 }, { fallbackStrategy: 'STILL' }],
+        CloudGameBoxart: ['SDP', { width: 342, height: 192 }, { fallbackStrategy: 'STILL' }],
+        CloudGameBoxartHighRes: ['SDP', { width: 665, height: 375 }, { fallbackStrategy: 'STILL' }],
+        PodcastEpisodicStill: ['SEGMENT_STILL', { width: 342, height: 192, scaleStrategy: 'COVER' }, { graybox: false }],
+        PodcastEpisodicStillHighRes: ['SEGMENT_STILL', { width: 665, height: 375, scaleStrategy: 'COVER' }, { graybox: false }],
+        PodcastEpisodicLogo: ['LOGO_HORIZONTAL_CROPPED', { width: 800, height: 126, scaleStrategy: 'CONTAIN' }, { tone: 'LIGHT' }],
+        RankedBoxart: ['BOXSHOT', { width: 426, height: 607 }, { fallbackStrategy: 'STILL', suppressTop10Badge: true }],
+        MobileGameBoxart: ['APP_ICON', { width: 200, height: 200 }, ['WEBP', 'JPG', 'PNG']],
+        CharacterCircle: ['SQUAREHEADSHOT_1000x1000', { width: 200, height: 200 }, ['WEBP', 'JPG', 'PNG']],
+        ChannelLogo: ['CHANNEL_LOGO_COLOR_CROPPED', { height: 44 }, ['WEBP', 'PNG']],
+        EntryPointLogo: ['LOGO_STACKED_CROPPED', { height: 260 }, ['WEBP', 'JPG', 'PNG']]
+    };
+    for (const direction of ['ltr', 'rtl']) {
+        const e = dataEnvironment();
+        e.document.documentElement.dir = direction;
+        e.responses.push(e.page(4, [1, 2, 3, 4]));
+        await e.adapter.fetchBootstrap(1);
+        const artwork = Object.fromEntries(Object.entries(e.requests[0].body.variables)
+            .filter(([key]) => key.startsWith('imageParamsFor')));
+        const variants = { ...expected,
+            Channel: ['CHANNEL_TILE_BACKGROUND' + (direction === 'rtl' ? '_RTL' : ''), { width: 342, height: 192 }, ['WEBP', 'JPG', 'PNG']],
+            EntryPointBackground: ['MLP_ENTRY_POINT_BACKGROUND' + (direction === 'rtl' ? '_RTL' : ''), { width: 1024 }, { fallbackStrategy: 'STILL' }] };
+        assert.deepEqual(artwork, Object.fromEntries(Object.entries(variants).map(([key, [artworkType, dimension, options]]) =>
+            ['imageParamsFor' + key, { artworkType, dimension, [Array.isArray(options) ? 'formats' : 'features']: options }])));
+    }
+});
+
+test('normalization retains preferred fields, ordered fallback and separate text/image depth limits', async () => {
+    const nest = (value, depth) => { while (depth--) value = { nested: value }; return value; };
+    const e = dataEnvironment(3), payload = carouselPayload(3, []);
+    payload.data.node.entities.edges = [
+        carouselEdge(1, { displayString: { unrelated: 'Fallback title', text: 'Preferred title' },
+            contextualArtwork: { other: 'https://images.test/other.png', url: 'https://images.test/preferred.webp' } }),
+        carouselEdge(2, { displayString: nest('Deep title', 5), contextualArtwork: nest('https://images.test/deep.jpg', 7) }),
+        { node: { videoId: '3', displayString: nest('Too deep', 6), contextualArtwork: nest('https://images.test/too-deep.jpg', 8) } }
+    ];
+    e.responses.push({ payload });
+    const result = await e.collect(await e.adapter.fetchBootstrap(1));
+    assert.deepEqual(result.records.map(record => [record.ariaLabel, record.imageUrl]), [
+        ['Preferred title', 'https://images.test/preferred.webp'], ['Deep title', 'https://images.test/deep.jpg'], ['3', '']
+    ]);
+});
+
 test('page anchor fallbacks and direction/header facts use the current page without translated text', async () => {
     const e = dataEnvironment();
     e.graph.MyList.eventListeners = [];

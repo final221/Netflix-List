@@ -1,37 +1,3 @@
-export const NETFLIX_PRIMARY_UI_LOCALES = new Set([
-    'da',
-    'de',
-    'en',
-    'es',
-    'fil',
-    'fr',
-    'hr',
-    'id',
-    'it',
-    'hu',
-    'ms',
-    'nl',
-    'nb',
-    'pl',
-    'pt',
-    'ro',
-    'fi',
-    'sv',
-    'vi',
-    'tr',
-    'cs',
-    'el',
-    'ru',
-    'uk',
-    'he',
-    'ar',
-    'hi',
-    'th',
-    'zh',
-    'ja',
-    'ko'
-]);
-
 export const UI_MESSAGES = {
     'da': {
         legacyMyList: 'Klassisk Min liste',
@@ -676,3 +642,5 @@ for (const [locale, values] of Object.entries(MANUAL_VIEWING_UI_MESSAGES)) {
         'manualViewingChoiceDescription'];
     keys.forEach((key, index) => { UI_MESSAGES[locale][key] = values[index]; });
 }
+
+export const NETFLIX_PRIMARY_UI_LOCALES = new Set(Object.keys(UI_MESSAGES));

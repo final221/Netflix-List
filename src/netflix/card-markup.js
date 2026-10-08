@@ -42,15 +42,8 @@ export function createCardMarkup({ location, document }) {
     }
 
     function normalize(slot) {
-        slot.style.removeProperty('flex');
-        slot.style.removeProperty('width');
-        slot.style.removeProperty('min-width');
-        slot.style.removeProperty('max-width');
-        slot.style.removeProperty('transform');
-        slot.style.removeProperty('translate');
-        slot.style.removeProperty('opacity');
-        slot.style.removeProperty('visibility');
-        slot.style.removeProperty('pointer-events');
+        for (const property of ['flex', 'width', 'min-width', 'max-width', 'transform', 'translate',
+            'opacity', 'visibility', 'pointer-events']) slot.style.removeProperty(property);
 
         const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
         if (card) {

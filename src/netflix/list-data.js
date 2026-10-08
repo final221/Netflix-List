@@ -128,91 +128,34 @@ export function createListData({ context, pageDom, location, fetch, performance,
     }
 
     function carouselArtworkVariables() {
-        const standard = { width: 342, height: 192 };
-        const standardHighRes = { width: 665, height: 375 };
-        const formats = ['WEBP', 'JPG', 'PNG'];
-        const dir = context.pageDirection();
-        return {
-            imageParamsForStandardBoxart: {
-                artworkType: 'SDP',
-                dimension: standard,
-                features: { enableLockBadgeChecks: true, fallbackStrategy: 'STILL' }
-            },
-            imageParamsForStandardBoxartHighRes: {
-                artworkType: 'SDP',
-                dimension: standardHighRes,
-                features: { fallbackStrategy: 'STILL', enableLockBadgeChecks: true }
-            },
-            imageParamsForPodcastEpisodicStill: {
-                artworkType: 'SEGMENT_STILL',
-                dimension: { ...standard, scaleStrategy: 'COVER' },
-                features: { graybox: false }
-            },
-            imageParamsForPodcastEpisodicStillHighRes: {
-                artworkType: 'SEGMENT_STILL',
-                dimension: { ...standardHighRes, scaleStrategy: 'COVER' },
-                features: { graybox: false }
-            },
-            imageParamsForPodcastEpisodicLogo: {
-                artworkType: 'LOGO_HORIZONTAL_CROPPED',
-                dimension: { width: 800, height: 126, scaleStrategy: 'CONTAIN' },
-                features: { tone: 'LIGHT' }
-            },
-            imageParamsForRankedBoxart: {
-                artworkType: 'BOXSHOT',
-                dimension: { width: 426, height: 607 },
-                features: { fallbackStrategy: 'STILL', suppressTop10Badge: true }
-            },
-            imageParamsForContinueWatchingBoxart: {
-                artworkType: 'SDP',
-                dimension: standard,
-                features: { fallbackStrategy: 'STILL' }
-            },
-            imageParamsForContinueWatchingBoxartHighRes: {
-                artworkType: 'SDP',
-                dimension: standardHighRes,
-                features: { fallbackStrategy: 'STILL' }
-            },
-            imageParamsForCloudGameBoxart: {
-                artworkType: 'SDP',
-                dimension: standard,
-                features: { fallbackStrategy: 'STILL' }
-            },
-            imageParamsForCloudGameBoxartHighRes: {
-                artworkType: 'SDP',
-                dimension: standardHighRes,
-                features: { fallbackStrategy: 'STILL' }
-            },
-            imageParamsForMobileGameBoxart: {
-                artworkType: 'APP_ICON',
-                dimension: { width: 200, height: 200 },
-                formats
-            },
-            imageParamsForCharacterCircle: {
-                artworkType: 'SQUAREHEADSHOT_1000x1000',
-                dimension: { width: 200, height: 200 },
-                formats
-            },
-            imageParamsForChannel: {
-                artworkType: dir === 'rtl' ? 'CHANNEL_TILE_BACKGROUND_RTL' : 'CHANNEL_TILE_BACKGROUND',
-                dimension: standard,
-                formats
-            },
-            imageParamsForChannelLogo: {
-                artworkType: 'CHANNEL_LOGO_COLOR_CROPPED',
-                dimension: { height: 44 },
-                formats: ['WEBP', 'PNG']
-            },
-            imageParamsForEntryPointBackground: {
-                artworkType: dir === 'rtl' ? 'MLP_ENTRY_POINT_BACKGROUND_RTL' : 'MLP_ENTRY_POINT_BACKGROUND',
-                dimension: { width: 1024 },
-                features: { fallbackStrategy: 'STILL' }
-            },
-            imageParamsForEntryPointLogo: {
-                artworkType: 'LOGO_STACKED_CROPPED',
-                dimension: { height: 260 },
-                formats
+        const standard = { width: 342, height: 192 }, highRes = { width: 665, height: 375 };
+        const formats = ['WEBP', 'JPG', 'PNG'], rtl = context.pageDirection() === 'rtl';
+        const artwork = (artworkType, dimension, options) => ({ artworkType, dimension, ...options });
+        const variables = {};
+        const families = {
+            StandardBoxart: ['SDP', { fallbackStrategy: 'STILL', enableLockBadgeChecks: true }],
+            ContinueWatchingBoxart: ['SDP', { fallbackStrategy: 'STILL' }],
+            CloudGameBoxart: ['SDP', { fallbackStrategy: 'STILL' }],
+            PodcastEpisodicStill: ['SEGMENT_STILL', { graybox: false }, 'COVER']
+        };
+        for (const [family, [type, features, scaleStrategy]] of Object.entries(families)) {
+            for (const [suffix, size] of [['', standard], ['HighRes', highRes]]) {
+                variables['imageParamsFor' + family + suffix] = artwork(type,
+                    scaleStrategy ? { ...size, scaleStrategy } : size, { features });
             }
+        }
+        return { ...variables,
+            imageParamsForPodcastEpisodicLogo: artwork('LOGO_HORIZONTAL_CROPPED',
+                { width: 800, height: 126, scaleStrategy: 'CONTAIN' }, { features: { tone: 'LIGHT' } }),
+            imageParamsForRankedBoxart: artwork('BOXSHOT', { width: 426, height: 607 },
+                { features: { fallbackStrategy: 'STILL', suppressTop10Badge: true } }),
+            imageParamsForMobileGameBoxart: artwork('APP_ICON', { width: 200, height: 200 }, { formats }),
+            imageParamsForCharacterCircle: artwork('SQUAREHEADSHOT_1000x1000', { width: 200, height: 200 }, { formats }),
+            imageParamsForChannel: artwork(rtl ? 'CHANNEL_TILE_BACKGROUND_RTL' : 'CHANNEL_TILE_BACKGROUND', standard, { formats }),
+            imageParamsForChannelLogo: artwork('CHANNEL_LOGO_COLOR_CROPPED', { height: 44 }, { formats: ['WEBP', 'PNG'] }),
+            imageParamsForEntryPointBackground: artwork(rtl ? 'MLP_ENTRY_POINT_BACKGROUND_RTL' : 'MLP_ENTRY_POINT_BACKGROUND',
+                { width: 1024 }, { features: { fallbackStrategy: 'STILL' } }),
+            imageParamsForEntryPointLogo: artwork('LOGO_STACKED_CROPPED', { height: 260 }, { formats })
         };
     }
 
@@ -240,46 +183,28 @@ export function createListData({ context, pageDom, location, fetch, performance,
         return '';
     }
 
-    function firstGraphqlText(value, depth = 0, seen = new Set()) {
-        if (depth > 5 || value === null || value === undefined) return '';
-        if (typeof value === 'string') {
-            const text = value.trim();
-            if (!text || /^https?:\/\//i.test(text) || text.length > 240) return '';
-            return text;
-        }
+    function firstGraphqlString(value, keys, accepts, maxDepth, depth = 0, seen = new Set()) {
+        if (depth > maxDepth || value == null) return '';
+        if (typeof value === 'string') { const text = value.trim(); return accepts(text) ? text : ''; }
         if (typeof value !== 'object' || seen.has(value)) return '';
         seen.add(value);
-        for (const key of ['text', 'value', 'title', 'name', 'label', 'displayString']) {
-            const result = firstGraphqlText(value[key], depth + 1, seen);
+        for (const key of keys) {
+            const result = firstGraphqlString(value[key], keys, accepts, maxDepth, depth + 1, seen);
             if (result) return result;
         }
         for (const child of Object.values(value)) {
-            const result = firstGraphqlText(child, depth + 1, seen);
+            const result = firstGraphqlString(child, keys, accepts, maxDepth, depth + 1, seen);
             if (result) return result;
         }
         return '';
     }
-
-    function firstGraphqlImageUrl(value, depth = 0, seen = new Set()) {
-        if (depth > 7 || value === null || value === undefined) return '';
-        if (typeof value === 'string') {
-            const text = value.trim();
-            if (/^https?:\/\//i.test(text) && (/(?:\.webp|\.jpe?g|\.png)(?:[?#]|$)/i.test(text) || /nflxso\.net|nflximg\.net/i.test(text))) {
-                return text;
-            }
-            return '';
-        }
-        if (typeof value !== 'object' || seen.has(value)) return '';
-        seen.add(value);
-        for (const key of ['url', 'imageUrl', 'artwork', 'image', 'src', 'uri']) {
-            const result = firstGraphqlImageUrl(value[key], depth + 1, seen);
-            if (result) return result;
-        }
-        for (const child of Object.values(value)) {
-            const result = firstGraphqlImageUrl(child, depth + 1, seen);
-            if (result) return result;
-        }
-        return '';
+    function firstGraphqlText(value) {
+        return firstGraphqlString(value, ['text', 'value', 'title', 'name', 'label', 'displayString'],
+            text => Boolean(text) && !/^https?:\/\//i.test(text) && text.length <= 240, 5);
+    }
+    function firstGraphqlImageUrl(value) {
+        return firstGraphqlString(value, ['url', 'imageUrl', 'artwork', 'image', 'src', 'uri'],
+            text => /^https?:\/\//i.test(text) && (/(?:\.webp|\.jpe?g|\.png)(?:[?#]|$)/i.test(text) || /nflxso\.net|nflximg\.net/i.test(text)), 7);
     }
 
     async function fetchMyListCarouselPage(request, cursor, signal, sessionToken) {
@@ -328,23 +253,27 @@ export function createListData({ context, pageDom, location, fetch, performance,
         };
     }
 
-    function carouselFetchError(error, sessionToken) {
-        // Route aborts must never become a timeout warning or start a fallback.
-        assertCurrent(sessionToken);
-        if (isCancelled(error) || (error?.code && error?.stage)) return error;
-        const aborted = error?.name === 'AbortError';
-        return createError(
-            aborted ? 'FRESH_MY_LIST_CAROUSEL_TIMEOUT' : 'FRESH_MY_LIST_CAROUSEL_FAILED',
-            'fresh-my-list-carousel',
-            aborted
-                ? 'Netflix CarouselPage timed out after ' + FRESH_MY_LIST_FETCH_TIMEOUT_MS + ' ms'
-                : 'Netflix CarouselPage failed: ' + (error?.message || error),
-            {
-                timeoutMs: aborted ? FRESH_MY_LIST_FETCH_TIMEOUT_MS : null,
-                errorName: error?.name || null,
-                errorMessage: error?.message || String(error || '')
-            }
-        );
+    async function withFreshRequest(sessionToken, carousel, operation) {
+        const fetchState = beginRequest(sessionToken);
+        const started = performance.now();
+        try {
+            return await operation(fetchState.controller.signal, started);
+        } catch (error) {
+            // Route aborts must never become a timeout warning or start a fallback.
+            assertCurrent(sessionToken);
+            if (isCancelled(error) || (error?.code && error?.stage)) throw error;
+            const aborted = error?.name === 'AbortError';
+            const prefix = carousel ? 'FRESH_MY_LIST_CAROUSEL' : 'FRESH_MY_LIST_FETCH';
+            const label = carousel ? 'Netflix CarouselPage' : 'Netflix My List refresh';
+            throw createError(prefix + (aborted ? '_TIMEOUT' : '_FAILED'),
+                carousel ? 'fresh-my-list-carousel' : 'fresh-my-list-fetch',
+                aborted ? label + ' timed out after ' + FRESH_MY_LIST_FETCH_TIMEOUT_MS + ' ms'
+                    : label + ' failed: ' + (error?.message || error),
+                { timeoutMs: aborted ? FRESH_MY_LIST_FETCH_TIMEOUT_MS : null,
+                    errorName: error?.name || null, errorMessage: error?.message || String(error || '') });
+        } finally {
+            finishRequest(fetchState);
+        }
     }
 
     async function fetchFreshMyListBootstrapViaCarousel(sessionToken = null) {
@@ -376,12 +305,10 @@ export function createListData({ context, pageDom, location, fetch, performance,
         if (appVersion) request.headers['x-netflix.context.app-version'] = String(appVersion);
         if (locale) request.headers['x-netflix.context.locales'] = String(locale).toLowerCase();
 
-        const fetchState = beginRequest(sessionToken);
-        const started = performance.now();
-        try {
+        return withFreshRequest(sessionToken, true, async (signal, started) => {
             // Count and first-title bootstrap needs one page in every mode.
             // Keep its continuation for logical collection after native readiness.
-            const page = await fetchMyListCarouselPage(request, null, fetchState.controller.signal, sessionToken);
+            const page = await fetchMyListCarouselPage(request, null, signal, sessionToken);
             assertCurrent(sessionToken);
             const fresh = {
                 totalCount: page.totalCount,
@@ -401,19 +328,13 @@ export function createListData({ context, pageDom, location, fetch, performance,
                 hasNextPage: fresh.graphqlHasNextPage
             });
             return fresh;
-        } catch (error) {
-            throw carouselFetchError(error, sessionToken);
-        } finally {
-            finishRequest(fetchState);
-        }
+        });
     }
 
     async function collectFreshMyListCarouselItems(bootstrap, sessionToken = null) {
         assertCurrent(sessionToken);
         if (!bootstrap?.graphqlHasNextPage) return bootstrap;
-        const fetchState = beginRequest(sessionToken);
-        const started = performance.now();
-        try {
+        return withFreshRequest(sessionToken, true, async (signal, started) => {
             const edges = [...bootstrap.graphqlEdges];
             const seenCursors = new Set();
             let cursor = bootstrap.graphqlEndCursor;
@@ -432,7 +353,7 @@ export function createListData({ context, pageDom, location, fetch, performance,
                         { graphqlPageCount, edgeCount: edges.length });
                 }
                 seenCursors.add(cursor);
-                const page = await fetchMyListCarouselPage(bootstrap.graphqlRequest, cursor, fetchState.controller.signal, sessionToken);
+                const page = await fetchMyListCarouselPage(bootstrap.graphqlRequest, cursor, signal, sessionToken);
                 if (page.totalCount !== bootstrap.totalCount) {
                     throw createError('FRESH_MY_LIST_CAROUSEL_TOTAL_COUNT_UNAVAILABLE', 'fresh-my-list-carousel',
                         'Netflix CarouselPage returned inconsistent My List pagination data',
@@ -452,21 +373,14 @@ export function createListData({ context, pageDom, location, fetch, performance,
                 ...bootstrap, graphqlEdges: edges, graphqlPageCount,
                 graphqlHasNextPage: false, graphqlEndCursor: cursor, graphqlRequest: null
             };
-        } catch (error) {
-            throw carouselFetchError(error, sessionToken);
-        } finally {
-            finishRequest(fetchState);
-        }
+        });
     }
 
     async function fetchFreshMyListBootstrapViaPage(sessionToken = null) {
         assertCurrent(sessionToken);
         const requestUrl = new URL('/browse/my-list', location.origin);
         requestUrl.searchParams.set('_tm_legacy_mylist_refresh', `${now()}-${sessionToken ?? 0}`);
-        const fetchState = beginRequest(sessionToken);
-        const started = performance.now();
-
-        try {
+        return withFreshRequest(sessionToken, false, async (signal, started) => {
             const response = await fetch(requestUrl.href, {
                 method: 'GET',
                 credentials: 'include',
@@ -475,7 +389,7 @@ export function createListData({ context, pageDom, location, fetch, performance,
                 headers: {
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
                 },
-                signal: fetchState.controller.signal
+                signal
             });
             assertCurrent(sessionToken);
             if (!response.ok) {
@@ -509,26 +423,7 @@ export function createListData({ context, pageDom, location, fetch, performance,
                 fallback: true
             });
             return fresh;
-        } catch (error) {
-            assertCurrent(sessionToken);
-            if (isCancelled(error)) throw error;
-            if (error?.code && error?.stage) throw error;
-            const aborted = error?.name === 'AbortError';
-            throw createError(
-                aborted ? 'FRESH_MY_LIST_FETCH_TIMEOUT' : 'FRESH_MY_LIST_FETCH_FAILED',
-                'fresh-my-list-fetch',
-                aborted
-                    ? `Netflix My List refresh timed out after ${FRESH_MY_LIST_FETCH_TIMEOUT_MS} ms`
-                    : `Netflix My List refresh failed: ${error?.message || error}`,
-                {
-                    timeoutMs: aborted ? FRESH_MY_LIST_FETCH_TIMEOUT_MS : null,
-                    errorName: error?.name || null,
-                    errorMessage: error?.message || String(error || '')
-                }
-            );
-        } finally {
-            finishRequest(fetchState);
-        }
+        });
     }
 
     async function fetchFreshMyListBootstrap(sessionToken = null) {

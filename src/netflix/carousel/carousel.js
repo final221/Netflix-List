@@ -1432,32 +1432,22 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         let lastSignature = '';
         let stableSince = started;
         let lastState = nativeCarouselReadiness(section, scroller, track);
+        const outcome = (ready, reason, state, extra = {}) => ({ ready, reason,
+            elapsedMs: Math.round(performance.now() - started), state, ...extra });
+        const detached = () => outcome(false, 'detached', { ...lastState, connected: false });
 
-        log(tLog('waitingForNativeCarouselInitialization'), {
-            pages: lastState.pages,
-            slots: lastState.slots,
-            cards: lastState.cards,
-            currentCards: lastState.currentCards,
-            columns: lastState.columns,
-            controlsPresent: lastState.controlsPresent,
-            controlsEnabled: lastState.controlsEnabled,
-            trackInitialized: lastState.trackInitialized,
-            domGeneration: lastState.domGeneration,
-            navigationMode: lastState.navigationMode,
-            pageMode: lastState.pageMode,
-            capabilities: lastState.capabilities
-        });
+        const { connected, signature, ...initialDetails } = lastState;
+        log(tLog('waitingForNativeCarouselInitialization'), initialDetails);
         assertAdmission();
 
         while (performance.now() - started < NATIVE_READY_TIMEOUT_MS) {
             assertAdmission();
             assertRouteSession(sessionToken);
-            if (!isBindingCurrent(bindingOwner)) return { ready: false, reason: 'detached',
-                elapsedMs: Math.round(performance.now() - started), state: { ...lastState, connected: false } };
+            if (!isBindingCurrent(bindingOwner)) return detached();
             const state = nativeCarouselReadiness(section, scroller, track);
             lastState = state;
             if (!state.connected) {
-                return { ready: false, reason: 'detached', elapsedMs: Math.round(performance.now() - started), state };
+                return outcome(false, 'detached', state);
             }
 
             const now = performance.now();
@@ -1509,13 +1499,7 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                 stableMs >= NATIVE_EMPTY_STABLE_MS;
 
             if (emptyPageReady) {
-                return {
-                    ready: true,
-                    empty: true,
-                    reason: 'stable-empty-page',
-                    elapsedMs: Math.round(performance.now() - started),
-                    state
-                };
+                return outcome(true, 'stable-empty-page', state, { empty: true });
             }
 
             if (logicalCarouselReady || multiPageReady || singlePageReady) {
@@ -1525,18 +1509,11 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
                 await readinessFrame();
                 assertAdmission();
                 assertRouteSession(sessionToken);
-                if (!isBindingCurrent(bindingOwner)) return { ready: false, reason: 'detached',
-                    elapsedMs: Math.round(performance.now() - started), state: { ...lastState, connected: false } };
+                if (!isBindingCurrent(bindingOwner)) return detached();
                 const confirmed = nativeCarouselReadiness(section, scroller, track);
                 if (confirmed.connected && confirmed.signature === state.signature) {
-                    const result = {
-                        ready: true,
-                        reason: logicalCarouselReady
-                            ? 'logical-carousel'
-                            : (multiPageReady ? 'multi-page' : (fastSinglePageReady ? 'fast-single-page' : 'stable-single-page')),
-                        elapsedMs: Math.round(performance.now() - started),
-                        state: confirmed
-                    };
+                    const result = outcome(true, logicalCarouselReady ? 'logical-carousel'
+                        : (multiPageReady ? 'multi-page' : (fastSinglePageReady ? 'fast-single-page' : 'stable-single-page')), confirmed);
                     log(tLog('nativeCarouselInitializationReady'), result);
                     assertAdmission();
                     return result;
@@ -1552,17 +1529,10 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         }
 
         assertRouteSession(sessionToken);
-        if (!isBindingCurrent(bindingOwner)) return { ready: false, reason: 'detached',
-            elapsedMs: Math.round(performance.now() - started), state: { ...lastState, connected: false } };
+        if (!isBindingCurrent(bindingOwner)) return detached();
         const finalState = nativeCarouselReadiness(section, scroller, track);
-        const result = {
-            ready: false,
-            reason: 'timeout',
-            stage: 'native-carousel-readiness',
-            timeoutMs: NATIVE_READY_TIMEOUT_MS,
-            elapsedMs: Math.round(performance.now() - started),
-            state: finalState
-        };
+        const result = outcome(false, 'timeout', finalState,
+            { stage: 'native-carousel-readiness', timeoutMs: NATIVE_READY_TIMEOUT_MS });
         logOperationTimeout(result.stage, result.timeoutMs, {
             elapsedMs: result.elapsedMs,
             state: finalState
@@ -1594,6 +1564,14 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         return { columns, subtractPx, gap, paddingLeft, paddingRight, formulaSidePadding };
     }
 
+    function layoutResult({ columns, cardWidth, gap, gridLeft, gridWidth,
+        sidePaddingLeft, sidePaddingRight = sidePaddingLeft, scrollerWidth, scrollerHeight, formulaBased = false }) {
+        return { columns, cardWidth, gap, gridLeft, gridWidth, sidePaddingLeft, sidePaddingRight,
+            sidePadding: (sidePaddingLeft + sidePaddingRight) / 2,
+            scrollerWidth: Math.max(1, scrollerWidth), scrollerHeight: Math.max(1, scrollerHeight),
+            widthRatio: cardWidth / gridWidth, formulaBased };
+    }
+
     function measureVisibleLayout(section, scroller, track) {
         const sectionRect = nativeRect(section);
         const scrollerRect = nativeRect(scroller);
@@ -1609,25 +1587,12 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
             const explicitPadding = paddingLeft > 0.5 || paddingRight > 0.5;
             const sidePaddingLeft = explicitPadding ? paddingLeft : formulaSidePadding;
             const sidePaddingRight = explicitPadding ? paddingRight : formulaSidePadding;
-            const sidePadding = (sidePaddingLeft + sidePaddingRight) / 2;
             const gridWidth = Math.max(1, scrollerRect.width - sidePaddingLeft - sidePaddingRight);
             const cardWidth = Math.max(1, (gridWidth - gap * Math.max(0, columns - 1)) / columns);
             const gridLeft = Math.max(0, scrollerRect.left - sectionRect.left + sidePaddingLeft);
 
-            return {
-                columns,
-                cardWidth,
-                gap,
-                gridLeft,
-                gridWidth,
-                sidePadding,
-                sidePaddingLeft,
-                sidePaddingRight,
-                scrollerWidth: Math.max(1, scrollerRect.width),
-                scrollerHeight: Math.max(1, scrollerRect.height),
-                widthRatio: cardWidth / gridWidth,
-                formulaBased: true
-            };
+            return layoutResult({ columns, cardWidth, gap, gridLeft, gridWidth, sidePaddingLeft, sidePaddingRight,
+                scrollerWidth: scrollerRect.width, scrollerHeight: scrollerRect.height, formulaBased: true });
         }
 
         // Fallback: prefer the current page card count instead of the number visible in the viewport.
@@ -1653,20 +1618,8 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         const gridWidth = Math.max(1, scrollerRect.width - sidePadding * 2);
         const gridLeft = Math.max(0, scrollerRect.left - sectionRect.left + sidePadding);
 
-        return {
-            columns,
-            cardWidth,
-            gap,
-            gridLeft,
-            gridWidth,
-            sidePadding,
-            sidePaddingLeft: sidePadding,
-            sidePaddingRight: sidePadding,
-            scrollerWidth: Math.max(1, scrollerRect.width),
-            scrollerHeight: Math.max(1, scrollerRect.height),
-            widthRatio: cardWidth / gridWidth,
-            formulaBased: false
-        };
+        return layoutResult({ columns, cardWidth, gap, gridLeft, gridWidth, sidePaddingLeft: sidePadding,
+            scrollerWidth: scrollerRect.width, scrollerHeight: scrollerRect.height });
     }
 
     function measureEmptyLayout(section) {
@@ -1734,20 +1687,8 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
         const columns = Math.max(1, Math.round(gridWidth / 290));
         const gap = 8;
         const cardWidth = Math.max(1, (gridWidth - gap * Math.max(0, columns - 1)) / columns);
-        return {
-            columns,
-            cardWidth,
-            gap,
-            gridLeft,
-            gridWidth,
-            sidePadding: (sidePaddingLeft + sidePaddingRight) / 2,
-            sidePaddingLeft,
-            sidePaddingRight,
-            scrollerWidth: Math.max(1, sectionRect.width),
-            scrollerHeight: 1,
-            widthRatio: cardWidth / gridWidth,
-            formulaBased: false
-        };
+        return layoutResult({ columns, cardWidth, gap, gridLeft, gridWidth, sidePaddingLeft, sidePaddingRight,
+            scrollerWidth: sectionRect.width, scrollerHeight: 1 });
     }
 
     function readNativeMyListDomState() {

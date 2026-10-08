@@ -40,6 +40,13 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
     const motionOwners = new Map();
     const waits = new Set();
 
+    function bindingGuard(binding, sessionToken, assertOperation = () => {}) {
+        return () => {
+            assertRouteSession(sessionToken);
+            assertBinding(binding);
+            assertOperation();
+        };
+    }
     function diagnosticSink(token) {
         let sink;
         try { sink = diagnosticsFor(token); } catch (_) {}
@@ -234,6 +241,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
     async function waitLogicalPageChange(section, scroller, track, beforePage, direction, beforeTransform, beforeSignature, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
         assertRouteSession(sessionToken);
         const bindingOwner = borrowBinding(section, scroller, track);
+        const assertCurrent = bindingGuard(bindingOwner, sessionToken);
         assertBinding(bindingOwner);
         const runtime = getCarouselDomRuntime(section);
         const started = performance.now();
@@ -252,15 +260,13 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
                     let signalled = false;
                     try { if (signal) signalled = await signal.wait(); }
                     catch (_) { diagnostic.bump('logicalMoveObserverFailures'); }
-                    assertRouteSession(sessionToken);
-                    assertBinding(bindingOwner);
+                    assertCurrent();
                     if (!signalled) {
                         signal?.close(); signal = null;
                         await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
                     }
                 }
-                assertRouteSession(sessionToken);
-                assertBinding(bindingOwner);
+                assertCurrent();
                 if (token !== null) diagnostic.bump('logicalMoveReads');
                 const transform = track.style.getPropertyValue('transform') || getComputedStyle(track).transform;
                 const signature = visibleSignature(currentPageSlots(scroller, track));
@@ -287,8 +293,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
                     cycleDetected: Boolean(runtime?.cycleDetected)
                 };
             }
-            assertRouteSession(sessionToken);
-            assertBinding(bindingOwner);
+            assertCurrent();
             if (hoverPreparationCancelled(token)) {
                 return { page: beforePage, changed: false, transform: lastTransform, signature: lastSignature };
             }
@@ -310,25 +315,23 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
 
     async function waitPageByPolling(section, before, timeout, sessionToken = null, token = null) {
         const bindingOwner = borrowBinding(section);
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
+        const assertCurrent = bindingGuard(bindingOwner, sessionToken);
+        assertCurrent();
         const start = performance.now();
         while (performance.now() - start < timeout) {
             await sleep(hoverPreparationCancelled(token) ? CANCELLED_MOVE_POLL_MS : 12);
-            assertRouteSession(sessionToken);
-            assertBinding(bindingOwner);
+            assertCurrent();
             const now = selectedPage(section);
             if (now !== before) return now;
         }
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
+        assertCurrent();
         return selectedPage(section);
     }
 
     async function waitPage(section, before, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
         const bindingOwner = borrowBinding(section);
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
+        const assertCurrent = bindingGuard(bindingOwner, sessionToken);
+        assertCurrent();
         const immediate = selectedPage(section);
         if (immediate !== before) return immediate;
         if (timeout <= 0) return immediate;
@@ -360,7 +363,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
             waits.add(close);
             const check = () => {
                 if (finished) return;
-                try { assertRouteSession(sessionToken); assertBinding(bindingOwner); } catch (_) { close(); return; }
+                try { assertCurrent(); } catch (_) { close(); return; }
                 const now = selectedPage(section);
                 if (now !== before) finish(now);
             };
@@ -374,8 +377,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
             } catch (error) { reject(error); close(); }
         });
 
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
+        assertCurrent();
         if (observedPage !== null) return observedPage;
 
         const elapsed = performance.now() - started;
@@ -385,8 +387,8 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
 
     async function waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, timeout = SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken = null) {
         const bindingOwner = bindingForSource(scroller, track);
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
+        const assertCurrent = bindingGuard(bindingOwner, sessionToken);
+        assertCurrent();
         const started = performance.now();
         let currentTransform = track.style.getPropertyValue('transform') || getComputedStyle(track).transform;
         let currentSignature = visibleSignature(currentPageSlots(scroller, track));
@@ -397,8 +399,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
 
         while (performance.now() - started < timeout) {
             await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
-            assertRouteSession(sessionToken);
-            assertBinding(bindingOwner);
+            assertCurrent();
             currentTransform = track.style.getPropertyValue('transform') || getComputedStyle(track).transform;
             currentSignature = visibleSignature(currentPageSlots(scroller, track));
 
@@ -419,8 +420,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
         // Keep suppression through one additional paint opportunity after the native
         // content settles so a deferred Netflix transform write cannot animate.
         await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
+        assertCurrent();
         return {
             transform: currentTransform,
             signature: currentSignature,
@@ -591,9 +591,8 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
 
     async function goToPage(section, scroller, target, token = null, sessionToken = null, preferCyclicShortest = false, assertOperation = () => {}) {
         const bindingOwner = borrowBinding(section, scroller);
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
-        assertOperation();
+        const assertCurrent = bindingGuard(bindingOwner, sessionToken, assertOperation);
+        assertCurrent();
         const diagnostic = diagnosticSink(token);
         const total = pageCount(section);
         target = Math.max(0, Math.min(total - 1, target));
@@ -618,14 +617,10 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
         let forcedDirection = null;
         let pageChangeRetryCount = 0;
         while (true) {
-            assertRouteSession(sessionToken);
-            assertBinding(bindingOwner);
-            assertOperation();
+            assertCurrent();
             const current = selectedPage(section);
             if (current === target || guard-- <= 0) break;
-            assertRouteSession(sessionToken);
-            assertBinding(bindingOwner);
-            assertOperation();
+            assertCurrent();
             if (token !== null && token !== readHoverToken()) {
                 cancelled = true;
                 break;
@@ -654,16 +649,12 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
                         token
                     });
                     await sleep(120);
-                    assertRouteSession(sessionToken);
-                    assertBinding(bindingOwner);
-                    assertOperation();
+                    assertCurrent();
                     continue;
                 }
                 throw error;
             }
-            assertRouteSession(sessionToken);
-            assertBinding(bindingOwner);
-            assertOperation();
+            assertCurrent();
             if (token !== null && token !== readHoverToken()) {
                 cancelled = true;
                 break;
@@ -681,9 +672,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
                         token
                     });
                     const retried = await moveOnePage(section, scroller, directDirection, token, sessionToken, assertOperation);
-                    assertRouteSession(sessionToken);
-                    assertBinding(bindingOwner);
-                    assertOperation();
+                    assertCurrent();
                     if (token !== null && token !== readHoverToken()) {
                         cancelled = true;
                         break;
@@ -701,9 +690,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
             if (next === current) break;
         }
 
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
-        assertOperation();
+        assertCurrent();
         const result = selectedPage(section);
         if (startPage !== target || result !== target || cancelled) {
             log(tLog('pageMoveResult'), {
@@ -734,9 +721,8 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
         const sessionToken = options.sessionToken ?? null;
         const token = options.hoverToken ?? null;
         const bindingOwner = bindingForSource(scroller, track);
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
-        assertOperation();
+        const assertCurrent = bindingGuard(bindingOwner, sessionToken, assertOperation);
+        assertCurrent();
         if (hoverPreparationCancelled(token)) return [];
         const start = performance.now();
         let lastSignature = '';
@@ -748,9 +734,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
 
         while (performance.now() - start < timeout) {
             await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
-            assertRouteSession(sessionToken);
-            assertBinding(bindingOwner);
-            assertOperation();
+            assertCurrent();
             if (hoverPreparationCancelled(token)) return [];
             const slots = currentPageSlots(scroller, track);
             let newItems = 0, requiredMatches = 0;
@@ -796,9 +780,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
                 if (requiredStableFrames <= 1) return slots;
             }
         }
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
-        assertOperation();
+        assertCurrent();
         if (hoverPreparationCancelled(token)) return [];
         return best;
     }
@@ -829,10 +811,7 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
 
     function createRestoration(section, scroller, track, items, expectedPageSlots, sessionToken) {
         const bindingOwner = borrowBinding(section, scroller, track);
-        const assertCurrent = () => {
-            assertRouteSession(sessionToken);
-            assertBinding(bindingOwner);
-        };
+        const assertCurrent = bindingGuard(bindingOwner, sessionToken);
 
         function immediateRestoredPageState(targetPage) {
             const requiredPageKeys = pageItemKeys(items, targetPage);
@@ -968,124 +947,67 @@ export function createNavigation({ borrowBinding, assertBinding, bindingForSourc
         async function repairFastRestoredPage(targetPage, canonicalTargetTransform = '', reason = 'verification-failed') {
             assertCurrent();
             const started = performance.now();
+            const result = (complete, verification = null) => ({ complete, verification,
+                elapsedMs: Math.round(performance.now() - started) });
             const total = pageCount(section);
             const repairDirection = targetPage < total - 1 ? 1 : (targetPage > 0 ? -1 : 0);
-            if (repairDirection === 0) {
-                return {
-                    complete: false,
-                    verification: null,
-                    elapsedMs: Math.round(performance.now() - started)
-                };
-            }
-
+            if (repairDirection === 0) return result(false);
             const adjacentPage = targetPage + repairDirection;
             const beforeTransform = trackTransformValue(track);
             const beforeState = immediateRestoredPageState(targetPage);
             log(tLog('nativeFastRestorationPhaseRepairStarted'), {
-                reason,
-                target: targetPage,
-                adjacentPage,
-                direction: repairDirection < 0 ? 'left' : 'right',
-                selectedPage: selectedPage(section),
-                canonicalTargetTransform,
-                beforeTransform,
+                reason, target: targetPage, adjacentPage,
+                direction: repairDirection < 0 ? 'left' : 'right', selectedPage: selectedPage(section),
+                canonicalTargetTransform, beforeTransform,
                 transformMatchesCanonical: Boolean(canonicalTargetTransform) && beforeTransform === canonicalTargetTransform,
-                expectedKeys: beforeState.expectedKeys,
-                mountedKeys: beforeState.mountedKeys,
-                missingKeys: beforeState.missingKeys
+                expectedKeys: beforeState.expectedKeys, mountedKeys: beforeState.mountedKeys, missingKeys: beforeState.missingKeys
             });
 
-            const outwardSignature = visibleSignature(currentPageSlots(scroller, track));
-            const movedOut = await moveOnePage(section, scroller, repairDirection, null, sessionToken);
-            assertCurrent();
-            if (movedOut !== adjacentPage) {
-                warn(tLog('nativeFastRestorationPhaseRepairMoveFailed'), {
-                    reason,
-                    from: targetPage,
-                    target: adjacentPage,
-                    result: movedOut,
-                    transform: trackTransformValue(track)
-                });
-                return {
-                    complete: false,
-                    verification: null,
-                    elapsedMs: Math.round(performance.now() - started)
-                };
+            let adjacentVerification;
+            for (const [from, destination, direction] of [
+                [targetPage, adjacentPage, repairDirection], [adjacentPage, targetPage, -repairDirection]
+            ]) {
+                const signature = visibleSignature(currentPageSlots(scroller, track));
+                const moved = await moveOnePage(section, scroller, direction, null, sessionToken);
+                assertCurrent();
+                if (moved !== destination) {
+                    warn(tLog('nativeFastRestorationPhaseRepairMoveFailed'), {
+                        reason, from, target: destination, result: moved, transform: trackTransformValue(track)
+                    });
+                    return result(false);
+                }
+                const verification = await verifyRestoredPage(destination, signature, FAST_RESTORE_VERIFY_TIMEOUT_MS);
+                assertCurrent();
+                const transform = trackTransformValue(track);
+                if (destination === adjacentPage) {
+                    adjacentVerification = verification;
+                    log(tLog('nativeFastRestorationPhaseRepairAdjacentPageVerified'), {
+                        reason, requestedPage: adjacentPage, selectedPage: verification.selectedPage,
+                        complete: verification.ok, expectedKeys: verification.expectedKeys,
+                        mountedKeys: verification.mountedKeys, missingKeys: verification.missingKeys,
+                        transform, verificationElapsedMs: verification.elapsedMs
+                    });
+                    if (!verification.ok) {
+                        warn(tLog('nativeFastRestorationPhaseRepairAdjacentPageDidNotStabilize'), {
+                            requestedPage: adjacentPage, selectedPage: verification.selectedPage,
+                            expectedKeys: verification.expectedKeys, mountedKeys: verification.mountedKeys,
+                            missingKeys: verification.missingKeys
+                        });
+                        return result(false, verification);
+                    }
+                } else {
+                    log(tLog('nativeFastRestorationPhaseRepairCompleted'), {
+                        reason, target: targetPage, selectedPage: verification.selectedPage, complete: verification.ok,
+                        expectedKeys: verification.expectedKeys, mountedKeys: verification.mountedKeys,
+                        missingKeys: verification.missingKeys, canonicalTargetTransform, finalTransform: transform,
+                        transformMatchesCanonical: Boolean(canonicalTargetTransform) && transform === canonicalTargetTransform,
+                        adjacentVerificationElapsedMs: adjacentVerification.elapsedMs,
+                        targetVerificationElapsedMs: verification.elapsedMs,
+                        elapsedMs: Math.round(performance.now() - started)
+                    });
+                    return result(verification.ok, verification);
+                }
             }
-
-            const adjacentVerification = await verifyRestoredPage(adjacentPage, outwardSignature, FAST_RESTORE_VERIFY_TIMEOUT_MS);
-            assertCurrent();
-            const adjacentTransform = trackTransformValue(track);
-            log(tLog('nativeFastRestorationPhaseRepairAdjacentPageVerified'), {
-                reason,
-                requestedPage: adjacentPage,
-                selectedPage: adjacentVerification.selectedPage,
-                complete: adjacentVerification.ok,
-                expectedKeys: adjacentVerification.expectedKeys,
-                mountedKeys: adjacentVerification.mountedKeys,
-                missingKeys: adjacentVerification.missingKeys,
-                transform: adjacentTransform,
-                verificationElapsedMs: adjacentVerification.elapsedMs
-            });
-            if (!adjacentVerification.ok) {
-                warn(tLog('nativeFastRestorationPhaseRepairAdjacentPageDidNotStabilize'), {
-                    requestedPage: adjacentPage,
-                    selectedPage: adjacentVerification.selectedPage,
-                    expectedKeys: adjacentVerification.expectedKeys,
-                    mountedKeys: adjacentVerification.mountedKeys,
-                    missingKeys: adjacentVerification.missingKeys
-                });
-                return {
-                    complete: false,
-                    verification: adjacentVerification,
-                    elapsedMs: Math.round(performance.now() - started)
-                };
-            }
-
-            const returnSignature = visibleSignature(currentPageSlots(scroller, track));
-            const movedBack = await moveOnePage(section, scroller, -repairDirection, null, sessionToken);
-            assertCurrent();
-            if (movedBack !== targetPage) {
-                warn(tLog('nativeFastRestorationPhaseRepairMoveFailed'), {
-                    reason,
-                    from: adjacentPage,
-                    target: targetPage,
-                    result: movedBack,
-                    transform: trackTransformValue(track)
-                });
-                return {
-                    complete: false,
-                    verification: null,
-                    elapsedMs: Math.round(performance.now() - started)
-                };
-            }
-
-            const targetVerification = await verifyRestoredPage(targetPage, returnSignature, FAST_RESTORE_VERIFY_TIMEOUT_MS);
-            assertCurrent();
-            const complete = targetVerification.ok;
-            const finalTransform = trackTransformValue(track);
-
-            log(tLog('nativeFastRestorationPhaseRepairCompleted'), {
-                reason,
-                target: targetPage,
-                selectedPage: targetVerification.selectedPage,
-                complete,
-                expectedKeys: targetVerification.expectedKeys,
-                mountedKeys: targetVerification.mountedKeys,
-                missingKeys: targetVerification.missingKeys,
-                canonicalTargetTransform,
-                finalTransform,
-                transformMatchesCanonical: Boolean(canonicalTargetTransform) && finalTransform === canonicalTargetTransform,
-                adjacentVerificationElapsedMs: adjacentVerification.elapsedMs,
-                targetVerificationElapsedMs: targetVerification.elapsedMs,
-                elapsedMs: Math.round(performance.now() - started)
-            });
-
-            return {
-                complete,
-                verification: targetVerification,
-                elapsedMs: Math.round(performance.now() - started)
-            };
         }
 
         async function restoreNativePageFast(targetPage, canonicalTargetTransform = '') {

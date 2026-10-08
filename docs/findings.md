@@ -10,7 +10,7 @@ User-supplied Netflix evidence is distilled in [logs/knowledge.md](../logs/knowl
 
 ## Current work and deferred items
 
-Release **1.4.64** implements the selected simplifications and further reductions found during the same pass. The 1.4.63 review fixes, modular migration P01–P21 and selected R01–R03/D01–D03 reductions remain complete. The user authorizes continuing concrete behavior-preserving simplification directly, without repeated full assessments or disposable prototypes.
+Release **1.4.65** continues the authorized behavior-preserving simplification. The 2% benchmark applies primarily to authored runtime lines, with generated output reported separately. The 1.4.63 review fixes, modular migration P01–P21 and selected R01–R03/D01–D03 reductions remain complete. The user authorizes continuing concrete behavior-preserving simplification directly, without repeated full assessments or disposable prototypes.
 
 - **Current live checks:** adopt the new Tampermonkey installation URL and test the current release; remaining evidence gaps and conditional investigations are listed below.
 - **Deferred by the user:** original point E, limiting copied title/URL/video-ID details. Keep detailed diagnostics until selected; the original A–G table retains the decision.
@@ -24,13 +24,26 @@ Evidence: [logs/knowledge.md](../logs/knowledge.md), sessions 1.4.52–1.4.58. T
 
 **Hover delay:** 1.4.58 preparation reaches about 1.6 seconds, with substantial issued-move acknowledgement and queue wait; graft/alignment/replay work is small in that session. If current user testing still shows delay, investigate issued-move acknowledgement and cancelled-work queue admission while preserving settlement ownership. No performance fix is selected by reviewing or distilling logs.
 
-**Live acceptance gap:** the supplied sessions do not establish real resize/zoom/remapping, route exit/reentry/retirement, membership/Undo, manual viewing or exact construction/readiness timer retirement. Unknown viewing metadata remains unresolved despite successful requests. No supplied capture tests 1.4.59–1.4.64; automated acceptance and older activity cannot replace current-version user observations.
+**Live acceptance gap:** the supplied sessions do not establish real resize/zoom/remapping, route exit/reentry/retirement, membership/Undo, manual viewing or exact construction/readiness timer retirement. Unknown viewing metadata remains unresolved despite successful requests. No supplied capture tests 1.4.59–1.4.65; automated acceptance and older activity cannot replace current-version user observations.
 
 ## Review fixes — 1.4.63, 2026-10-08
 
 The user selected both empty-list defects and optional menu failure isolation together. List-data now shares one nonnegative-safe-integer parser across bootstrap/cache discovery and fresh GraphQL responses. Null, blank, boolean, object, fractional, negative and unsafe values remain unavailable; validated numeric/string zero remains zero. A positive-count collection cannot publish empty solely because one native page has no cards. Existing initialization failure/recovery paths retain the expected count and report NO_NATIVE_CARDS. Settings catches optional menu registration failures, emits a warning and still delivers saved preferences; startup and subsequent route entry remain functional.
 
 Four new tests cover uncached/cached discovery of malformed bootstrap values, actual application waiting/recovery after invalid initial counts, native cards disappearing during a positive-count collection, and throwing startup/replacement menus with preference delivery and route reentry. The earlier collection test now requires authoritative zero for a successful empty result. Before fixes, the invalid-count/menu tests and strengthened collection assertion failed against the corresponding defects; the additional disappearing-card scenario passes against the corrected real application. All 541 offline tests pass with no failures/cancellations/skips. Build/check, generated syntax and whitespace review pass. Package/lock and generated metadata/internal version agree at 1.4.63. Current live Netflix compatibility remains unverified by these offline checks.
+
+## Continued simplification — 1.4.65, 2026-10-08
+
+| Measure | 1.4.64 | 1.4.65 | Net reduction |
+| --- | --- | --- | --- |
+| Authored runtime (42 modules) | 16,070 lines / 923,897 bytes | 15,747 lines / 915,236 bytes | **323 lines (2.01%) / 8,661 bytes (0.94%)** |
+| Generated userscript | 18,919 lines / 874,988 bytes | 18,733 lines / 868,929 bytes | **186 lines (0.98%) / 6,059 bytes (0.69%)** |
+
+Use the same physical-line/LF-normalized-byte measure as the previous checkpoint; tooling, tests and documentation are excluded. Source meets the line benchmark; generated output and byte reductions are smaller. Shared result/diagnostic construction and shorter field wiring contribute to the line savings alongside removal of duplicated control flow; the percentage is not a measure of eliminated complexity.
+
+Fresh list requests share retirement/error classification; artwork families share standard/high-resolution definitions, and title/image normalization shares bounded ordered traversal. Navigation shares captured admission guards at existing checkpoints; adjacent phase repair shares outward/return move-and-verify logic. Layout/readiness share result construction. React grafting shares key classification/assignment while preserving order, remapping, container exclusions and failure diagnostics. Supported locales derive from the complete catalog; native style sanitization shares its property list. Hover preparation shares target/page diagnostic context and cancellation reporting. Preserve every existing strategy, timeout, fallback, complete-list guard and diagnostic field.
+
+Three added tests cover the complete artwork wire contract in both directions, normalization preference/depth limits, and legacy React key families/cyclic fibers/assignment order/failure isolation/retirement. All **546** offline tests pass; build/check, generated syntax, diff and whitespace review pass. Package/lock/metadata/internal versions agree at 1.4.65. Live Netflix acceptance remains unverified for this release.
 
 ## Implemented simplification — 1.4.64, 2026-10-08
 

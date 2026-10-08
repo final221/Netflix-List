@@ -1650,6 +1650,7 @@ export function createMyListSession({ environment = globalThis, version, context
     }
 
     async function prepareMountedPage(page, targetItem, triggerEvent = null, token = null, sessionToken = null) {
+        const preparationDetail = detail => ({ requestedPage: page, targetItem: itemSummary(targetItem), ...detail });
         assertRouteSession(sessionToken);
         if (hover.isCancelled(token)) return null;
         let targetCard = gridView.getCard(targetItem);
@@ -1660,11 +1661,9 @@ export function createMyListSession({ environment = globalThis, version, context
         const state = sourceState;
         const { section, scroller, track } = state || {};
         if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
-            warn(tLog('nativePagePreparationFailed'), {
-                reason: 'native-binding-unavailable',
-                targetItem: itemSummary(targetItem),
-                requestedPage: page
-            });
+            warn(tLog('nativePagePreparationFailed'), preparationDetail({
+                reason: 'native-binding-unavailable'
+            }));
             return null;
         }
         const nativeOwner = nativeCarousel.borrowBinding(section, scroller, track);
@@ -1724,6 +1723,11 @@ export function createMyListSession({ environment = globalThis, version, context
                 return { ...result, get slot() { return result.source.slot; } };
             });
         };
+        const preparationCancelled = reason => {
+            if (token === null || token === hover.intent().token) return false;
+            log(tLog('nativePagePreparationCancelled'), { reason, token, hoverToken: hover.intent().token });
+            return true;
+        };
         const reportPositionMismatch = located => {
             warn('Native My List position mismatch escalated without source search', {
                 targetItem: itemSummary(targetItem),
@@ -1743,13 +1747,11 @@ export function createMyListSession({ environment = globalThis, version, context
         };
         const started = performance.now();
 
-        log(tLog('nativePagePreparationStarted'), {
-            requestedPage: page,
-            targetItem: itemSummary(targetItem),
+        log(tLog('nativePagePreparationStarted'), preparationDetail({
             triggerEvent: triggerEvent?.type || '',
             token,
             hoverToken: hover.intent().token
-        });
+        }));
 
         let targetSourceSlot = null;
         let resolvedSource = null;
@@ -1757,10 +1759,7 @@ export function createMyListSession({ environment = globalThis, version, context
         let staleSourceRecovery = false;
 
         let located = await resolveSource();
-        if (token !== null && token !== hover.intent().token) {
-            log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-expected-page-check', token, hoverToken: hover.intent().token });
-            return null;
-        }
+        if (preparationCancelled('token-changed-after-expected-page-check')) return null;
 
         if (located?.status === 'mismatch') {
             if (located.positionMismatch) {
@@ -1770,17 +1769,12 @@ export function createMyListSession({ environment = globalThis, version, context
             // Immediately after a manual reinitialization, Hawkins can expose a
             // stable adjacent-page window for one render cycle. Give the target
             // one bounded re-resolution before treating it as a real order change.
-            log('Retrying expected native page after transient page mismatch', {
-                targetItem: itemSummary(targetItem),
-                requestedPage: page,
+            log('Retrying expected native page after transient page mismatch', preparationDetail({
                 visibleIds: located.visibleIds || []
-            });
+            }));
             await sleep(120);
             located = await resolveSource();
-            if (token !== null && token !== hover.intent().token) {
-                log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-mismatch-retry', token, hoverToken: hover.intent().token });
-                return null;
-            }
+            if (preparationCancelled('token-changed-after-mismatch-retry')) return null;
             if (located?.positionMismatch) {
                 reportPositionMismatch(located);
                 return null;
@@ -1800,28 +1794,20 @@ export function createMyListSession({ environment = globalThis, version, context
             const mutationRecoveryPending = mutationSourceRecoveryPending;
             const expectedPageMismatch = located?.status === 'mismatch';
             if (staleLogicalMapping || mutationRecoveryPending || expectedPageMismatch) {
-                log('Hover expected-page mapping is stale; searching live native source', {
-                    targetItem: itemSummary(targetItem),
-                    requestedPage: page,
+                log('Hover expected-page mapping is stale; searching live native source', preparationDetail({
                     locatedStatus: located?.status || null,
                     locatedReason: located?.reason || null,
                     mutationRecoveryPending,
                     expectedPageMismatch,
                     visibleIds: located?.visibleIds || []
-                });
+                }));
                 let repaired = await resolveSource('preferred-refresh');
-                if (token !== null && token !== hover.intent().token) {
-                    log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-stale-page-refresh', token, hoverToken: hover.intent().token });
-                    return null;
-                }
+                if (preparationCancelled('token-changed-after-stale-page-refresh')) return null;
                 if (!repaired?.slot) {
                     repaired = await resolveSource('search', { repairLogicalMapping: expectedPageMismatch || mutationRecoveryPending,
                         maxRadius: mutationSourceRecoveryPending ? null : 2 });
                 }
-                if (token !== null && token !== hover.intent().token) {
-                    log(tLog('nativePagePreparationCancelled'), { reason: 'token-changed-after-stale-page-search', token, hoverToken: hover.intent().token });
-                    return null;
-                }
+                if (preparationCancelled('token-changed-after-stale-page-search')) return null;
                 assertCurrent();
                 if (repaired?.slot) {
                     if (rejectLargeNativePositionDeviation(targetItem, repaired.source, page, located?.visibleIds || [])) return null;
@@ -1839,33 +1825,27 @@ export function createMyListSession({ environment = globalThis, version, context
                 } else {
                     const promptSuppression = responsive.suppression();
                     if (promptSuppression.suppress) {
-                        log(tLog('nativePagePreparationCancelled'), {
+                        log(tLog('nativePagePreparationCancelled'), preparationDetail({
                             reason: 'logical-page-mapping-stale-source-not-found-transient',
-                            targetItem: itemSummary(targetItem),
-                            requestedPage: page,
                             locatedReason: located?.reason || null,
                             visibleIds: located?.visibleIds || [],
                             promptSuppression
-                        });
+                        }));
                         return null;
                     }
 
-                    log('Stale logical page recovery exhausted; escalating to reinitialization prompt', {
-                        targetItem: itemSummary(targetItem),
-                        requestedPage: page,
+                    log('Stale logical page recovery exhausted; escalating to reinitialization prompt', preparationDetail({
                         locatedReason: located?.reason || null,
                         visibleIds: located?.visibleIds || [],
                         promptSuppression
-                    });
+                    }));
                     showOrderMismatchDialog(targetItem, page, located?.visibleIds || []);
                     return null;
                 }
             } else {
-                log(tLog('nativePagePreparationCancelled'), {
-                    reason: located?.reason || 'expected-page-check-inconclusive',
-                    targetItem: itemSummary(targetItem),
-                    requestedPage: page
-                });
+                log(tLog('nativePagePreparationCancelled'), preparationDetail({
+                    reason: located?.reason || 'expected-page-check-inconclusive'
+                }));
                 return null;
             }
         }
@@ -1976,13 +1956,11 @@ export function createMyListSession({ environment = globalThis, version, context
         }
 
         nativeCarousel.assertObservation(pageView);
-        log(tLog('nativePagePreparationCompleted'), {
-            requestedPage: page,
+        log(tLog('nativePagePreparationCompleted'), preparationDetail({
             actualPage,
-            targetItem: itemSummary(targetItem),
             targetReady: Boolean(freshTarget),
             elapsedMs: Math.round(performance.now() - started)
-        });
+        }));
         nativeCarousel.assertObservation(pageView);
         return freshTarget ? { card: targetCard, source: popupSource(targetSourceSlot, targetItem), page: actualPage } : null;
     }

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.64
+// @version      1.4.65
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -1884,16 +1884,6 @@
         const fiberMap = /* @__PURE__ */ new Map();
         let fiberAssignments = 0;
         let propsAssignments = 0;
-        function reactKeysForNode(node) {
-          const keys = Object.getOwnPropertyNames(node);
-          return {
-            fiberKeys: keys.filter((k) => k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$")),
-            propsKeys: keys.filter((k) => k.startsWith("__reactProps$") || k.startsWith("__reactEventHandlers$")),
-            otherKeys: keys.filter(
-              (k) => k.startsWith("__react") && !k.startsWith("__reactFiber$") && !k.startsWith("__reactInternalInstance$") && !k.startsWith("__reactProps$") && !k.startsWith("__reactEventHandlers$")
-            )
-          };
-        }
         function cloneFiberChain(sourceFiber) {
           if (!sourceFiber || typeof sourceFiber !== "object") return sourceFiber;
           if (fiberMap.has(sourceFiber)) return fiberMap.get(sourceFiber);
@@ -1908,31 +1898,38 @@
           clonedFiber.return = cloneFiberChain(sourceFiber.return);
           return clonedFiber;
         }
+        const groups = [
+          {
+            prefixes: ["__reactFiber$", "__reactInternalInstance$"],
+            copy: cloneFiberChain,
+            assigned: () => fiberAssignments++,
+            failure: "fiberGraftFailed"
+          },
+          {
+            prefixes: ["__reactProps$", "__reactEventHandlers$"],
+            copy: (value) => value,
+            assigned: () => propsAssignments++,
+            failure: "propsGraftFailed"
+          },
+          { prefixes: ["__react"], copy: (value) => value, assigned: () => {
+          }, failure: null }
+        ];
         for (const [source, clone] of pairs) {
-          const { fiberKeys, propsKeys, otherKeys } = reactKeysForNode(source);
-          for (const key of fiberKeys) {
-            try {
-              clone[key] = cloneFiberChain(source[key]);
-              fiberAssignments++;
-            } catch (error) {
-              warn(tLog("fiberGraftFailed"), key, error);
-            }
+          const keys = groups.map(() => []);
+          for (const key of Object.getOwnPropertyNames(source)) {
+            if (!key.startsWith("__react") || key.startsWith("__reactContainer$")) continue;
+            keys[groups.findIndex((group) => group.prefixes.some((prefix) => key.startsWith(prefix)))].push(key);
           }
-          for (const key of propsKeys) {
-            try {
-              clone[key] = source[key];
-              propsAssignments++;
-            } catch (error) {
-              warn(tLog("propsGraftFailed"), key, error);
+          groups.forEach((group, index) => {
+            for (const key of keys[index]) {
+              try {
+                clone[key] = group.copy(source[key]);
+                group.assigned();
+              } catch (error) {
+                if (group.failure) warn(tLog(group.failure), key, error);
+              }
             }
-          }
-          for (const key of otherKeys) {
-            if (key.startsWith("__reactContainer$")) continue;
-            try {
-              clone[key] = source[key];
-            } catch (_) {
-            }
-          }
+          });
         }
         cloneRoot.setAttribute("data-tm-react-grafted", "true");
         graftedGridClones.add(cloneRoot);
@@ -3387,15 +3384,17 @@
       return clone;
     }
     function normalize(slot) {
-      slot.style.removeProperty("flex");
-      slot.style.removeProperty("width");
-      slot.style.removeProperty("min-width");
-      slot.style.removeProperty("max-width");
-      slot.style.removeProperty("transform");
-      slot.style.removeProperty("translate");
-      slot.style.removeProperty("opacity");
-      slot.style.removeProperty("visibility");
-      slot.style.removeProperty("pointer-events");
+      for (const property of [
+        "flex",
+        "width",
+        "min-width",
+        "max-width",
+        "transform",
+        "translate",
+        "opacity",
+        "visibility",
+        "pointer-events"
+      ]) slot.style.removeProperty(property);
       const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
       if (card) {
         card.tabIndex = 0;
@@ -7324,91 +7323,47 @@
       return null;
     }
     function carouselArtworkVariables() {
-      const standard = { width: 342, height: 192 };
-      const standardHighRes = { width: 665, height: 375 };
-      const formats = ["WEBP", "JPG", "PNG"];
-      const dir = context.pageDirection();
-      return {
-        imageParamsForStandardBoxart: {
-          artworkType: "SDP",
-          dimension: standard,
-          features: { enableLockBadgeChecks: true, fallbackStrategy: "STILL" }
-        },
-        imageParamsForStandardBoxartHighRes: {
-          artworkType: "SDP",
-          dimension: standardHighRes,
-          features: { fallbackStrategy: "STILL", enableLockBadgeChecks: true }
-        },
-        imageParamsForPodcastEpisodicStill: {
-          artworkType: "SEGMENT_STILL",
-          dimension: { ...standard, scaleStrategy: "COVER" },
-          features: { graybox: false }
-        },
-        imageParamsForPodcastEpisodicStillHighRes: {
-          artworkType: "SEGMENT_STILL",
-          dimension: { ...standardHighRes, scaleStrategy: "COVER" },
-          features: { graybox: false }
-        },
-        imageParamsForPodcastEpisodicLogo: {
-          artworkType: "LOGO_HORIZONTAL_CROPPED",
-          dimension: { width: 800, height: 126, scaleStrategy: "CONTAIN" },
-          features: { tone: "LIGHT" }
-        },
-        imageParamsForRankedBoxart: {
-          artworkType: "BOXSHOT",
-          dimension: { width: 426, height: 607 },
-          features: { fallbackStrategy: "STILL", suppressTop10Badge: true }
-        },
-        imageParamsForContinueWatchingBoxart: {
-          artworkType: "SDP",
-          dimension: standard,
-          features: { fallbackStrategy: "STILL" }
-        },
-        imageParamsForContinueWatchingBoxartHighRes: {
-          artworkType: "SDP",
-          dimension: standardHighRes,
-          features: { fallbackStrategy: "STILL" }
-        },
-        imageParamsForCloudGameBoxart: {
-          artworkType: "SDP",
-          dimension: standard,
-          features: { fallbackStrategy: "STILL" }
-        },
-        imageParamsForCloudGameBoxartHighRes: {
-          artworkType: "SDP",
-          dimension: standardHighRes,
-          features: { fallbackStrategy: "STILL" }
-        },
-        imageParamsForMobileGameBoxart: {
-          artworkType: "APP_ICON",
-          dimension: { width: 200, height: 200 },
-          formats
-        },
-        imageParamsForCharacterCircle: {
-          artworkType: "SQUAREHEADSHOT_1000x1000",
-          dimension: { width: 200, height: 200 },
-          formats
-        },
-        imageParamsForChannel: {
-          artworkType: dir === "rtl" ? "CHANNEL_TILE_BACKGROUND_RTL" : "CHANNEL_TILE_BACKGROUND",
-          dimension: standard,
-          formats
-        },
-        imageParamsForChannelLogo: {
-          artworkType: "CHANNEL_LOGO_COLOR_CROPPED",
-          dimension: { height: 44 },
-          formats: ["WEBP", "PNG"]
-        },
-        imageParamsForEntryPointBackground: {
-          artworkType: dir === "rtl" ? "MLP_ENTRY_POINT_BACKGROUND_RTL" : "MLP_ENTRY_POINT_BACKGROUND",
-          dimension: { width: 1024 },
-          features: { fallbackStrategy: "STILL" }
-        },
-        imageParamsForEntryPointLogo: {
-          artworkType: "LOGO_STACKED_CROPPED",
-          dimension: { height: 260 },
-          formats
+      const standard = { width: 342, height: 192 }, highRes = { width: 665, height: 375 };
+      const formats = ["WEBP", "JPG", "PNG"], rtl = context.pageDirection() === "rtl";
+      const artwork = (artworkType, dimension, options) => ({ artworkType, dimension, ...options });
+      const variables = {};
+      const families = {
+        StandardBoxart: ["SDP", { fallbackStrategy: "STILL", enableLockBadgeChecks: true }],
+        ContinueWatchingBoxart: ["SDP", { fallbackStrategy: "STILL" }],
+        CloudGameBoxart: ["SDP", { fallbackStrategy: "STILL" }],
+        PodcastEpisodicStill: ["SEGMENT_STILL", { graybox: false }, "COVER"]
+      };
+      for (const [family, [type, features, scaleStrategy]] of Object.entries(families)) {
+        for (const [suffix, size] of [["", standard], ["HighRes", highRes]]) {
+          variables["imageParamsFor" + family + suffix] = artwork(
+            type,
+            scaleStrategy ? { ...size, scaleStrategy } : size,
+            { features }
+          );
         }
+      }
+      return {
+        ...variables,
+        imageParamsForPodcastEpisodicLogo: artwork(
+          "LOGO_HORIZONTAL_CROPPED",
+          { width: 800, height: 126, scaleStrategy: "CONTAIN" },
+          { features: { tone: "LIGHT" } }
+        ),
+        imageParamsForRankedBoxart: artwork(
+          "BOXSHOT",
+          { width: 426, height: 607 },
+          { features: { fallbackStrategy: "STILL", suppressTop10Badge: true } }
+        ),
+        imageParamsForMobileGameBoxart: artwork("APP_ICON", { width: 200, height: 200 }, { formats }),
+        imageParamsForCharacterCircle: artwork("SQUAREHEADSHOT_1000x1000", { width: 200, height: 200 }, { formats }),
+        imageParamsForChannel: artwork(rtl ? "CHANNEL_TILE_BACKGROUND_RTL" : "CHANNEL_TILE_BACKGROUND", standard, { formats }),
+        imageParamsForChannelLogo: artwork("CHANNEL_LOGO_COLOR_CROPPED", { height: 44 }, { formats: ["WEBP", "PNG"] }),
+        imageParamsForEntryPointBackground: artwork(
+          rtl ? "MLP_ENTRY_POINT_BACKGROUND_RTL" : "MLP_ENTRY_POINT_BACKGROUND",
+          { width: 1024 },
+          { features: { fallbackStrategy: "STILL" } }
+        ),
+        imageParamsForEntryPointLogo: artwork("LOGO_STACKED_CROPPED", { height: 260 }, { formats })
       };
     }
     function firstVideoIdFromCarouselNode(node) {
@@ -7433,45 +7388,39 @@
       }
       return "";
     }
-    function firstGraphqlText(value, depth = 0, seen = /* @__PURE__ */ new Set()) {
-      if (depth > 5 || value === null || value === void 0) return "";
+    function firstGraphqlString(value, keys, accepts, maxDepth, depth = 0, seen = /* @__PURE__ */ new Set()) {
+      if (depth > maxDepth || value == null) return "";
       if (typeof value === "string") {
         const text = value.trim();
-        if (!text || /^https?:\/\//i.test(text) || text.length > 240) return "";
-        return text;
+        return accepts(text) ? text : "";
       }
       if (typeof value !== "object" || seen.has(value)) return "";
       seen.add(value);
-      for (const key of ["text", "value", "title", "name", "label", "displayString"]) {
-        const result = firstGraphqlText(value[key], depth + 1, seen);
+      for (const key of keys) {
+        const result = firstGraphqlString(value[key], keys, accepts, maxDepth, depth + 1, seen);
         if (result) return result;
       }
       for (const child of Object.values(value)) {
-        const result = firstGraphqlText(child, depth + 1, seen);
+        const result = firstGraphqlString(child, keys, accepts, maxDepth, depth + 1, seen);
         if (result) return result;
       }
       return "";
     }
-    function firstGraphqlImageUrl(value, depth = 0, seen = /* @__PURE__ */ new Set()) {
-      if (depth > 7 || value === null || value === void 0) return "";
-      if (typeof value === "string") {
-        const text = value.trim();
-        if (/^https?:\/\//i.test(text) && (/(?:\.webp|\.jpe?g|\.png)(?:[?#]|$)/i.test(text) || /nflxso\.net|nflximg\.net/i.test(text))) {
-          return text;
-        }
-        return "";
-      }
-      if (typeof value !== "object" || seen.has(value)) return "";
-      seen.add(value);
-      for (const key of ["url", "imageUrl", "artwork", "image", "src", "uri"]) {
-        const result = firstGraphqlImageUrl(value[key], depth + 1, seen);
-        if (result) return result;
-      }
-      for (const child of Object.values(value)) {
-        const result = firstGraphqlImageUrl(child, depth + 1, seen);
-        if (result) return result;
-      }
-      return "";
+    function firstGraphqlText(value) {
+      return firstGraphqlString(
+        value,
+        ["text", "value", "title", "name", "label", "displayString"],
+        (text) => Boolean(text) && !/^https?:\/\//i.test(text) && text.length <= 240,
+        5
+      );
+    }
+    function firstGraphqlImageUrl(value) {
+      return firstGraphqlString(
+        value,
+        ["url", "imageUrl", "artwork", "image", "src", "uri"],
+        (text) => /^https?:\/\//i.test(text) && (/(?:\.webp|\.jpe?g|\.png)(?:[?#]|$)/i.test(text) || /nflxso\.net|nflximg\.net/i.test(text)),
+        7
+      );
     }
     async function fetchMyListCarouselPage(request, cursor, signal, sessionToken) {
       assertCurrent(sessionToken);
@@ -7533,20 +7482,30 @@
         responseBytes: text.length
       };
     }
-    function carouselFetchError(error, sessionToken) {
-      assertCurrent(sessionToken);
-      if (isCancelled(error) || error?.code && error?.stage) return error;
-      const aborted = error?.name === "AbortError";
-      return createError(
-        aborted ? "FRESH_MY_LIST_CAROUSEL_TIMEOUT" : "FRESH_MY_LIST_CAROUSEL_FAILED",
-        "fresh-my-list-carousel",
-        aborted ? "Netflix CarouselPage timed out after " + FRESH_MY_LIST_FETCH_TIMEOUT_MS + " ms" : "Netflix CarouselPage failed: " + (error?.message || error),
-        {
-          timeoutMs: aborted ? FRESH_MY_LIST_FETCH_TIMEOUT_MS : null,
-          errorName: error?.name || null,
-          errorMessage: error?.message || String(error || "")
-        }
-      );
+    async function withFreshRequest(sessionToken, carousel, operation) {
+      const fetchState = beginRequest(sessionToken);
+      const started = performance.now();
+      try {
+        return await operation(fetchState.controller.signal, started);
+      } catch (error) {
+        assertCurrent(sessionToken);
+        if (isCancelled(error) || error?.code && error?.stage) throw error;
+        const aborted = error?.name === "AbortError";
+        const prefix = carousel ? "FRESH_MY_LIST_CAROUSEL" : "FRESH_MY_LIST_FETCH";
+        const label = carousel ? "Netflix CarouselPage" : "Netflix My List refresh";
+        throw createError(
+          prefix + (aborted ? "_TIMEOUT" : "_FAILED"),
+          carousel ? "fresh-my-list-carousel" : "fresh-my-list-fetch",
+          aborted ? label + " timed out after " + FRESH_MY_LIST_FETCH_TIMEOUT_MS + " ms" : label + " failed: " + (error?.message || error),
+          {
+            timeoutMs: aborted ? FRESH_MY_LIST_FETCH_TIMEOUT_MS : null,
+            errorName: error?.name || null,
+            errorMessage: error?.message || String(error || "")
+          }
+        );
+      } finally {
+        finishRequest(fetchState);
+      }
     }
     async function fetchFreshMyListBootstrapViaCarousel(sessionToken = null) {
       assertCurrent(sessionToken);
@@ -7583,10 +7542,8 @@
       const { appVersion, locale } = context.listRequestContext();
       if (appVersion) request.headers["x-netflix.context.app-version"] = String(appVersion);
       if (locale) request.headers["x-netflix.context.locales"] = String(locale).toLowerCase();
-      const fetchState = beginRequest(sessionToken);
-      const started = performance.now();
-      try {
-        const page = await fetchMyListCarouselPage(request, null, fetchState.controller.signal, sessionToken);
+      return withFreshRequest(sessionToken, true, async (signal, started) => {
+        const page = await fetchMyListCarouselPage(request, null, signal, sessionToken);
         assertCurrent(sessionToken);
         const fresh = {
           totalCount: page.totalCount,
@@ -7611,18 +7568,12 @@
           hasNextPage: fresh.graphqlHasNextPage
         });
         return fresh;
-      } catch (error) {
-        throw carouselFetchError(error, sessionToken);
-      } finally {
-        finishRequest(fetchState);
-      }
+      });
     }
     async function collectFreshMyListCarouselItems(bootstrap, sessionToken = null) {
       assertCurrent(sessionToken);
       if (!bootstrap?.graphqlHasNextPage) return bootstrap;
-      const fetchState = beginRequest(sessionToken);
-      const started = performance.now();
-      try {
+      return withFreshRequest(sessionToken, true, async (signal, started) => {
         const edges = [...bootstrap.graphqlEdges];
         const seenCursors = /* @__PURE__ */ new Set();
         let cursor = bootstrap.graphqlEndCursor;
@@ -7647,7 +7598,7 @@
             );
           }
           seenCursors.add(cursor);
-          const page = await fetchMyListCarouselPage(bootstrap.graphqlRequest, cursor, fetchState.controller.signal, sessionToken);
+          const page = await fetchMyListCarouselPage(bootstrap.graphqlRequest, cursor, signal, sessionToken);
           if (page.totalCount !== bootstrap.totalCount) {
             throw createError(
               "FRESH_MY_LIST_CAROUSEL_TOTAL_COUNT_UNAVAILABLE",
@@ -7676,19 +7627,13 @@
           graphqlEndCursor: cursor,
           graphqlRequest: null
         };
-      } catch (error) {
-        throw carouselFetchError(error, sessionToken);
-      } finally {
-        finishRequest(fetchState);
-      }
+      });
     }
     async function fetchFreshMyListBootstrapViaPage(sessionToken = null) {
       assertCurrent(sessionToken);
       const requestUrl = new URL("/browse/my-list", location.origin);
       requestUrl.searchParams.set("_tm_legacy_mylist_refresh", `${now()}-${sessionToken ?? 0}`);
-      const fetchState = beginRequest(sessionToken);
-      const started = performance.now();
-      try {
+      return withFreshRequest(sessionToken, false, async (signal, started) => {
         const response = await fetch(requestUrl.href, {
           method: "GET",
           credentials: "include",
@@ -7697,7 +7642,7 @@
           headers: {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
           },
-          signal: fetchState.controller.signal
+          signal
         });
         assertCurrent(sessionToken);
         if (!response.ok) {
@@ -7729,24 +7674,7 @@
           fallback: true
         });
         return fresh;
-      } catch (error) {
-        assertCurrent(sessionToken);
-        if (isCancelled(error)) throw error;
-        if (error?.code && error?.stage) throw error;
-        const aborted = error?.name === "AbortError";
-        throw createError(
-          aborted ? "FRESH_MY_LIST_FETCH_TIMEOUT" : "FRESH_MY_LIST_FETCH_FAILED",
-          "fresh-my-list-fetch",
-          aborted ? `Netflix My List refresh timed out after ${FRESH_MY_LIST_FETCH_TIMEOUT_MS} ms` : `Netflix My List refresh failed: ${error?.message || error}`,
-          {
-            timeoutMs: aborted ? FRESH_MY_LIST_FETCH_TIMEOUT_MS : null,
-            errorName: error?.name || null,
-            errorMessage: error?.message || String(error || "")
-          }
-        );
-      } finally {
-        finishRequest(fetchState);
-      }
+      });
     }
     async function fetchFreshMyListBootstrap(sessionToken = null) {
       assertCurrent(sessionToken);
@@ -9661,6 +9589,14 @@
     const moves = /* @__PURE__ */ new Set();
     const motionOwners = /* @__PURE__ */ new Map();
     const waits = /* @__PURE__ */ new Set();
+    function bindingGuard(binding, sessionToken, assertOperation = () => {
+    }) {
+      return () => {
+        assertRouteSession(sessionToken);
+        assertBinding(binding);
+        assertOperation();
+      };
+    }
     function diagnosticSink(token) {
       let sink;
       try {
@@ -9929,6 +9865,7 @@
     async function waitLogicalPageChange(section, scroller, track, beforePage, direction, beforeTransform, beforeSignature, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
       assertRouteSession(sessionToken);
       const bindingOwner = borrowBinding(section, scroller, track);
+      const assertCurrent = bindingGuard(bindingOwner, sessionToken);
       assertBinding(bindingOwner);
       const runtime = getCarouselDomRuntime(section);
       const started = performance.now();
@@ -9949,16 +9886,14 @@
             } catch (_) {
               diagnostic.bump("logicalMoveObserverFailures");
             }
-            assertRouteSession(sessionToken);
-            assertBinding(bindingOwner);
+            assertCurrent();
             if (!signalled) {
               signal?.close();
               signal = null;
               await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
             }
           }
-          assertRouteSession(sessionToken);
-          assertBinding(bindingOwner);
+          assertCurrent();
           if (token !== null) diagnostic.bump("logicalMoveReads");
           const transform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
           const signature = visibleSignature(currentPageSlots(scroller, track));
@@ -9982,8 +9917,7 @@
             cycleDetected: Boolean(runtime?.cycleDetected)
           };
         }
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
+        assertCurrent();
         if (hoverPreparationCancelled(token)) {
           return { page: beforePage, changed: false, transform: lastTransform, signature: lastSignature };
         }
@@ -10006,24 +9940,22 @@
     }
     async function waitPageByPolling(section, before, timeout, sessionToken = null, token = null) {
       const bindingOwner = borrowBinding(section);
-      assertRouteSession(sessionToken);
-      assertBinding(bindingOwner);
+      const assertCurrent = bindingGuard(bindingOwner, sessionToken);
+      assertCurrent();
       const start = performance.now();
       while (performance.now() - start < timeout) {
         await sleep(hoverPreparationCancelled(token) ? CANCELLED_MOVE_POLL_MS : 12);
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
+        assertCurrent();
         const now = selectedPage(section);
         if (now !== before) return now;
       }
-      assertRouteSession(sessionToken);
-      assertBinding(bindingOwner);
+      assertCurrent();
       return selectedPage(section);
     }
     async function waitPage(section, before, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
       const bindingOwner = borrowBinding(section);
-      assertRouteSession(sessionToken);
-      assertBinding(bindingOwner);
+      const assertCurrent = bindingGuard(bindingOwner, sessionToken);
+      assertCurrent();
       const immediate = selectedPage(section);
       if (immediate !== before) return immediate;
       if (timeout <= 0) return immediate;
@@ -10055,8 +9987,7 @@
         const check = () => {
           if (finished) return;
           try {
-            assertRouteSession(sessionToken);
-            assertBinding(bindingOwner);
+            assertCurrent();
           } catch (_) {
             close();
             return;
@@ -10079,8 +10010,7 @@
           close();
         }
       });
-      assertRouteSession(sessionToken);
-      assertBinding(bindingOwner);
+      assertCurrent();
       if (observedPage !== null) return observedPage;
       const elapsed = performance.now() - started;
       const remaining = Math.max(0, timeout - elapsed);
@@ -10088,8 +10018,8 @@
     }
     async function waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, timeout = SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken = null) {
       const bindingOwner = bindingForSource(scroller, track);
-      assertRouteSession(sessionToken);
-      assertBinding(bindingOwner);
+      const assertCurrent = bindingGuard(bindingOwner, sessionToken);
+      assertCurrent();
       const started = performance.now();
       let currentTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
       let currentSignature = visibleSignature(currentPageSlots(scroller, track));
@@ -10098,8 +10028,7 @@
       let previousSignature = currentSignature;
       while (performance.now() - started < timeout) {
         await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
+        assertCurrent();
         currentTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
         currentSignature = visibleSignature(currentPageSlots(scroller, track));
         if (currentTransform !== beforeTransform || Boolean(beforeSignature) && Boolean(currentSignature) && currentSignature !== beforeSignature) {
@@ -10114,8 +10043,7 @@
         previousSignature = currentSignature;
       }
       await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
-      assertRouteSession(sessionToken);
-      assertBinding(bindingOwner);
+      assertCurrent();
       return {
         transform: currentTransform,
         signature: currentSignature,
@@ -10277,9 +10205,8 @@
     async function goToPage(section, scroller, target, token = null, sessionToken = null, preferCyclicShortest = false, assertOperation = () => {
     }) {
       const bindingOwner = borrowBinding(section, scroller);
-      assertRouteSession(sessionToken);
-      assertBinding(bindingOwner);
-      assertOperation();
+      const assertCurrent = bindingGuard(bindingOwner, sessionToken, assertOperation);
+      assertCurrent();
       const diagnostic = diagnosticSink(token);
       const total = pageCount(section);
       target = Math.max(0, Math.min(total - 1, target));
@@ -10301,14 +10228,10 @@
       let forcedDirection = null;
       let pageChangeRetryCount = 0;
       while (true) {
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
-        assertOperation();
+        assertCurrent();
         const current = selectedPage(section);
         if (current === target || guard-- <= 0) break;
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
-        assertOperation();
+        assertCurrent();
         if (token !== null && token !== readHoverToken()) {
           cancelled = true;
           break;
@@ -10337,16 +10260,12 @@
               token
             });
             await sleep(120);
-            assertRouteSession(sessionToken);
-            assertBinding(bindingOwner);
-            assertOperation();
+            assertCurrent();
             continue;
           }
           throw error;
         }
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
-        assertOperation();
+        assertCurrent();
         if (token !== null && token !== readHoverToken()) {
           cancelled = true;
           break;
@@ -10362,9 +10281,7 @@
               token
             });
             const retried = await moveOnePage(section, scroller, directDirection, token, sessionToken, assertOperation);
-            assertRouteSession(sessionToken);
-            assertBinding(bindingOwner);
-            assertOperation();
+            assertCurrent();
             if (token !== null && token !== readHoverToken()) {
               cancelled = true;
               break;
@@ -10378,9 +10295,7 @@
         }
         if (next === current) break;
       }
-      assertRouteSession(sessionToken);
-      assertBinding(bindingOwner);
-      assertOperation();
+      assertCurrent();
       const result = selectedPage(section);
       if (startPage !== target || result !== target || cancelled) {
         log(tLog("pageMoveResult"), {
@@ -10411,9 +10326,8 @@
       const sessionToken = options.sessionToken ?? null;
       const token = options.hoverToken ?? null;
       const bindingOwner = bindingForSource(scroller, track);
-      assertRouteSession(sessionToken);
-      assertBinding(bindingOwner);
-      assertOperation();
+      const assertCurrent = bindingGuard(bindingOwner, sessionToken, assertOperation);
+      assertCurrent();
       if (hoverPreparationCancelled(token)) return [];
       const start = performance.now();
       let lastSignature = "";
@@ -10424,9 +10338,7 @@
       let freshContentSeen = !previousSignature;
       while (performance.now() - start < timeout) {
         await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
-        assertOperation();
+        assertCurrent();
         if (hoverPreparationCancelled(token)) return [];
         const slots = currentPageSlots(scroller, track);
         let newItems = 0, requiredMatches = 0;
@@ -10466,9 +10378,7 @@
           if (requiredStableFrames <= 1) return slots;
         }
       }
-      assertRouteSession(sessionToken);
-      assertBinding(bindingOwner);
-      assertOperation();
+      assertCurrent();
       if (hoverPreparationCancelled(token)) return [];
       return best;
     }
@@ -10492,10 +10402,7 @@
     }
     function createRestoration(section, scroller, track, items, expectedPageSlots, sessionToken) {
       const bindingOwner = borrowBinding(section, scroller, track);
-      const assertCurrent = () => {
-        assertRouteSession(sessionToken);
-        assertBinding(bindingOwner);
-      };
+      const assertCurrent = bindingGuard(bindingOwner, sessionToken);
       function immediateRestoredPageState(targetPage) {
         const requiredPageKeys = pageItemKeys(items, targetPage);
         const slots = currentPageSlots(scroller, track);
@@ -10612,15 +10519,14 @@
       async function repairFastRestoredPage(targetPage, canonicalTargetTransform = "", reason = "verification-failed") {
         assertCurrent();
         const started = performance.now();
+        const result = (complete, verification = null) => ({
+          complete,
+          verification,
+          elapsedMs: Math.round(performance.now() - started)
+        });
         const total = pageCount(section);
         const repairDirection = targetPage < total - 1 ? 1 : targetPage > 0 ? -1 : 0;
-        if (repairDirection === 0) {
-          return {
-            complete: false,
-            verification: null,
-            elapsedMs: Math.round(performance.now() - started)
-          };
-        }
+        if (repairDirection === 0) return result(false);
         const adjacentPage = targetPage + repairDirection;
         const beforeTransform = trackTransformValue(track);
         const beforeState = immediateRestoredPageState(targetPage);
@@ -10637,92 +10543,69 @@
           mountedKeys: beforeState.mountedKeys,
           missingKeys: beforeState.missingKeys
         });
-        const outwardSignature = visibleSignature(currentPageSlots(scroller, track));
-        const movedOut = await moveOnePage(section, scroller, repairDirection, null, sessionToken);
-        assertCurrent();
-        if (movedOut !== adjacentPage) {
-          warn(tLog("nativeFastRestorationPhaseRepairMoveFailed"), {
-            reason,
-            from: targetPage,
-            target: adjacentPage,
-            result: movedOut,
-            transform: trackTransformValue(track)
-          });
-          return {
-            complete: false,
-            verification: null,
-            elapsedMs: Math.round(performance.now() - started)
-          };
+        let adjacentVerification;
+        for (const [from, destination, direction] of [
+          [targetPage, adjacentPage, repairDirection],
+          [adjacentPage, targetPage, -repairDirection]
+        ]) {
+          const signature = visibleSignature(currentPageSlots(scroller, track));
+          const moved = await moveOnePage(section, scroller, direction, null, sessionToken);
+          assertCurrent();
+          if (moved !== destination) {
+            warn(tLog("nativeFastRestorationPhaseRepairMoveFailed"), {
+              reason,
+              from,
+              target: destination,
+              result: moved,
+              transform: trackTransformValue(track)
+            });
+            return result(false);
+          }
+          const verification = await verifyRestoredPage(destination, signature, FAST_RESTORE_VERIFY_TIMEOUT_MS);
+          assertCurrent();
+          const transform = trackTransformValue(track);
+          if (destination === adjacentPage) {
+            adjacentVerification = verification;
+            log(tLog("nativeFastRestorationPhaseRepairAdjacentPageVerified"), {
+              reason,
+              requestedPage: adjacentPage,
+              selectedPage: verification.selectedPage,
+              complete: verification.ok,
+              expectedKeys: verification.expectedKeys,
+              mountedKeys: verification.mountedKeys,
+              missingKeys: verification.missingKeys,
+              transform,
+              verificationElapsedMs: verification.elapsedMs
+            });
+            if (!verification.ok) {
+              warn(tLog("nativeFastRestorationPhaseRepairAdjacentPageDidNotStabilize"), {
+                requestedPage: adjacentPage,
+                selectedPage: verification.selectedPage,
+                expectedKeys: verification.expectedKeys,
+                mountedKeys: verification.mountedKeys,
+                missingKeys: verification.missingKeys
+              });
+              return result(false, verification);
+            }
+          } else {
+            log(tLog("nativeFastRestorationPhaseRepairCompleted"), {
+              reason,
+              target: targetPage,
+              selectedPage: verification.selectedPage,
+              complete: verification.ok,
+              expectedKeys: verification.expectedKeys,
+              mountedKeys: verification.mountedKeys,
+              missingKeys: verification.missingKeys,
+              canonicalTargetTransform,
+              finalTransform: transform,
+              transformMatchesCanonical: Boolean(canonicalTargetTransform) && transform === canonicalTargetTransform,
+              adjacentVerificationElapsedMs: adjacentVerification.elapsedMs,
+              targetVerificationElapsedMs: verification.elapsedMs,
+              elapsedMs: Math.round(performance.now() - started)
+            });
+            return result(verification.ok, verification);
+          }
         }
-        const adjacentVerification = await verifyRestoredPage(adjacentPage, outwardSignature, FAST_RESTORE_VERIFY_TIMEOUT_MS);
-        assertCurrent();
-        const adjacentTransform = trackTransformValue(track);
-        log(tLog("nativeFastRestorationPhaseRepairAdjacentPageVerified"), {
-          reason,
-          requestedPage: adjacentPage,
-          selectedPage: adjacentVerification.selectedPage,
-          complete: adjacentVerification.ok,
-          expectedKeys: adjacentVerification.expectedKeys,
-          mountedKeys: adjacentVerification.mountedKeys,
-          missingKeys: adjacentVerification.missingKeys,
-          transform: adjacentTransform,
-          verificationElapsedMs: adjacentVerification.elapsedMs
-        });
-        if (!adjacentVerification.ok) {
-          warn(tLog("nativeFastRestorationPhaseRepairAdjacentPageDidNotStabilize"), {
-            requestedPage: adjacentPage,
-            selectedPage: adjacentVerification.selectedPage,
-            expectedKeys: adjacentVerification.expectedKeys,
-            mountedKeys: adjacentVerification.mountedKeys,
-            missingKeys: adjacentVerification.missingKeys
-          });
-          return {
-            complete: false,
-            verification: adjacentVerification,
-            elapsedMs: Math.round(performance.now() - started)
-          };
-        }
-        const returnSignature = visibleSignature(currentPageSlots(scroller, track));
-        const movedBack = await moveOnePage(section, scroller, -repairDirection, null, sessionToken);
-        assertCurrent();
-        if (movedBack !== targetPage) {
-          warn(tLog("nativeFastRestorationPhaseRepairMoveFailed"), {
-            reason,
-            from: adjacentPage,
-            target: targetPage,
-            result: movedBack,
-            transform: trackTransformValue(track)
-          });
-          return {
-            complete: false,
-            verification: null,
-            elapsedMs: Math.round(performance.now() - started)
-          };
-        }
-        const targetVerification = await verifyRestoredPage(targetPage, returnSignature, FAST_RESTORE_VERIFY_TIMEOUT_MS);
-        assertCurrent();
-        const complete = targetVerification.ok;
-        const finalTransform = trackTransformValue(track);
-        log(tLog("nativeFastRestorationPhaseRepairCompleted"), {
-          reason,
-          target: targetPage,
-          selectedPage: targetVerification.selectedPage,
-          complete,
-          expectedKeys: targetVerification.expectedKeys,
-          mountedKeys: targetVerification.mountedKeys,
-          missingKeys: targetVerification.missingKeys,
-          canonicalTargetTransform,
-          finalTransform,
-          transformMatchesCanonical: Boolean(canonicalTargetTransform) && finalTransform === canonicalTargetTransform,
-          adjacentVerificationElapsedMs: adjacentVerification.elapsedMs,
-          targetVerificationElapsedMs: targetVerification.elapsedMs,
-          elapsedMs: Math.round(performance.now() - started)
-        });
-        return {
-          complete,
-          verification: targetVerification,
-          elapsedMs: Math.round(performance.now() - started)
-        };
       }
       async function restoreNativePageFast2(targetPage, canonicalTargetTransform = "") {
         assertCurrent();
@@ -13855,34 +13738,25 @@
       let lastSignature = "";
       let stableSince = started;
       let lastState = nativeCarouselReadiness(section, scroller, track);
-      log(tLog("waitingForNativeCarouselInitialization"), {
-        pages: lastState.pages,
-        slots: lastState.slots,
-        cards: lastState.cards,
-        currentCards: lastState.currentCards,
-        columns: lastState.columns,
-        controlsPresent: lastState.controlsPresent,
-        controlsEnabled: lastState.controlsEnabled,
-        trackInitialized: lastState.trackInitialized,
-        domGeneration: lastState.domGeneration,
-        navigationMode: lastState.navigationMode,
-        pageMode: lastState.pageMode,
-        capabilities: lastState.capabilities
+      const outcome = (ready, reason, state, extra = {}) => ({
+        ready,
+        reason,
+        elapsedMs: Math.round(performance.now() - started),
+        state,
+        ...extra
       });
+      const detached = () => outcome(false, "detached", { ...lastState, connected: false });
+      const { connected, signature, ...initialDetails } = lastState;
+      log(tLog("waitingForNativeCarouselInitialization"), initialDetails);
       assertAdmission();
       while (performance.now() - started < NATIVE_READY_TIMEOUT_MS) {
         assertAdmission();
         assertRouteSession(sessionToken);
-        if (!isBindingCurrent(bindingOwner)) return {
-          ready: false,
-          reason: "detached",
-          elapsedMs: Math.round(performance.now() - started),
-          state: { ...lastState, connected: false }
-        };
+        if (!isBindingCurrent(bindingOwner)) return detached();
         const state = nativeCarouselReadiness(section, scroller, track);
         lastState = state;
         if (!state.connected) {
-          return { ready: false, reason: "detached", elapsedMs: Math.round(performance.now() - started), state };
+          return outcome(false, "detached", state);
         }
         const now = performance.now();
         if (state.signature !== lastSignature) {
@@ -13896,13 +13770,7 @@
         const singlePageReady = state.pages === 1 && state.cards > 0 && state.currentCards > 0 && state.slots === state.cards && (fastSinglePageReady || stableMs >= NATIVE_SINGLE_PAGE_STABLE_MS);
         const emptyPageReady = state.pages === 1 && state.cards === 0 && state.slots === 0 && stableMs >= NATIVE_EMPTY_STABLE_MS;
         if (emptyPageReady) {
-          return {
-            ready: true,
-            empty: true,
-            reason: "stable-empty-page",
-            elapsedMs: Math.round(performance.now() - started),
-            state
-          };
+          return outcome(true, "stable-empty-page", state, { empty: true });
         }
         if (logicalCarouselReady || multiPageReady || singlePageReady) {
           await readinessFrame();
@@ -13911,20 +13779,10 @@
           await readinessFrame();
           assertAdmission();
           assertRouteSession(sessionToken);
-          if (!isBindingCurrent(bindingOwner)) return {
-            ready: false,
-            reason: "detached",
-            elapsedMs: Math.round(performance.now() - started),
-            state: { ...lastState, connected: false }
-          };
+          if (!isBindingCurrent(bindingOwner)) return detached();
           const confirmed = nativeCarouselReadiness(section, scroller, track);
           if (confirmed.connected && confirmed.signature === state.signature) {
-            const result2 = {
-              ready: true,
-              reason: logicalCarouselReady ? "logical-carousel" : multiPageReady ? "multi-page" : fastSinglePageReady ? "fast-single-page" : "stable-single-page",
-              elapsedMs: Math.round(performance.now() - started),
-              state: confirmed
-            };
+            const result2 = outcome(true, logicalCarouselReady ? "logical-carousel" : multiPageReady ? "multi-page" : fastSinglePageReady ? "fast-single-page" : "stable-single-page", confirmed);
             log(tLog("nativeCarouselInitializationReady"), result2);
             assertAdmission();
             return result2;
@@ -13938,21 +13796,14 @@
         assertRouteSession(sessionToken);
       }
       assertRouteSession(sessionToken);
-      if (!isBindingCurrent(bindingOwner)) return {
-        ready: false,
-        reason: "detached",
-        elapsedMs: Math.round(performance.now() - started),
-        state: { ...lastState, connected: false }
-      };
+      if (!isBindingCurrent(bindingOwner)) return detached();
       const finalState = nativeCarouselReadiness(section, scroller, track);
-      const result = {
-        ready: false,
-        reason: "timeout",
-        stage: "native-carousel-readiness",
-        timeoutMs: NATIVE_READY_TIMEOUT_MS,
-        elapsedMs: Math.round(performance.now() - started),
-        state: finalState
-      };
+      const result = outcome(
+        false,
+        "timeout",
+        finalState,
+        { stage: "native-carousel-readiness", timeoutMs: NATIVE_READY_TIMEOUT_MS }
+      );
       logOperationTimeout(result.stage, result.timeoutMs, {
         elapsedMs: result.elapsedMs,
         state: finalState
@@ -13978,6 +13829,33 @@
       const formulaSidePadding = Math.max(0, (subtractPx - gap * Math.max(0, columns - 1)) / 2);
       return { columns, subtractPx, gap, paddingLeft, paddingRight, formulaSidePadding };
     }
+    function layoutResult({
+      columns,
+      cardWidth,
+      gap,
+      gridLeft,
+      gridWidth,
+      sidePaddingLeft,
+      sidePaddingRight = sidePaddingLeft,
+      scrollerWidth,
+      scrollerHeight,
+      formulaBased = false
+    }) {
+      return {
+        columns,
+        cardWidth,
+        gap,
+        gridLeft,
+        gridWidth,
+        sidePaddingLeft,
+        sidePaddingRight,
+        sidePadding: (sidePaddingLeft + sidePaddingRight) / 2,
+        scrollerWidth: Math.max(1, scrollerWidth),
+        scrollerHeight: Math.max(1, scrollerHeight),
+        widthRatio: cardWidth / gridWidth,
+        formulaBased
+      };
+    }
     function measureVisibleLayout(section, scroller, track) {
       const sectionRect = nativeRect(section);
       const scrollerRect = nativeRect(scroller);
@@ -13987,24 +13865,21 @@
         const explicitPadding = paddingLeft > 0.5 || paddingRight > 0.5;
         const sidePaddingLeft = explicitPadding ? paddingLeft : formulaSidePadding;
         const sidePaddingRight = explicitPadding ? paddingRight : formulaSidePadding;
-        const sidePadding2 = (sidePaddingLeft + sidePaddingRight) / 2;
         const gridWidth2 = Math.max(1, scrollerRect.width - sidePaddingLeft - sidePaddingRight);
         const cardWidth2 = Math.max(1, (gridWidth2 - gap2 * Math.max(0, columns2 - 1)) / columns2);
         const gridLeft2 = Math.max(0, scrollerRect.left - sectionRect.left + sidePaddingLeft);
-        return {
+        return layoutResult({
           columns: columns2,
           cardWidth: cardWidth2,
           gap: gap2,
           gridLeft: gridLeft2,
           gridWidth: gridWidth2,
-          sidePadding: sidePadding2,
           sidePaddingLeft,
           sidePaddingRight,
-          scrollerWidth: Math.max(1, scrollerRect.width),
-          scrollerHeight: Math.max(1, scrollerRect.height),
-          widthRatio: cardWidth2 / gridWidth2,
+          scrollerWidth: scrollerRect.width,
+          scrollerHeight: scrollerRect.height,
           formulaBased: true
-        };
+        });
       }
       const activeSlots = nativeFilledSlots(track).filter((slot) => {
         const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
@@ -14023,20 +13898,16 @@
       const sidePadding = Math.max(0, (scrollerRect.width - (cardWidth * columns + gap * Math.max(0, columns - 1))) / 2);
       const gridWidth = Math.max(1, scrollerRect.width - sidePadding * 2);
       const gridLeft = Math.max(0, scrollerRect.left - sectionRect.left + sidePadding);
-      return {
+      return layoutResult({
         columns,
         cardWidth,
         gap,
         gridLeft,
         gridWidth,
-        sidePadding,
         sidePaddingLeft: sidePadding,
-        sidePaddingRight: sidePadding,
-        scrollerWidth: Math.max(1, scrollerRect.width),
-        scrollerHeight: Math.max(1, scrollerRect.height),
-        widthRatio: cardWidth / gridWidth,
-        formulaBased: false
-      };
+        scrollerWidth: scrollerRect.width,
+        scrollerHeight: scrollerRect.height
+      });
     }
     function measureEmptyLayout(section) {
       const sectionRect = nativeRect(section);
@@ -14078,20 +13949,17 @@
       const columns = Math.max(1, Math.round(gridWidth / 290));
       const gap = 8;
       const cardWidth = Math.max(1, (gridWidth - gap * Math.max(0, columns - 1)) / columns);
-      return {
+      return layoutResult({
         columns,
         cardWidth,
         gap,
         gridLeft,
         gridWidth,
-        sidePadding: (sidePaddingLeft + sidePaddingRight) / 2,
         sidePaddingLeft,
         sidePaddingRight,
-        scrollerWidth: Math.max(1, sectionRect.width),
-        scrollerHeight: 1,
-        widthRatio: cardWidth / gridWidth,
-        formulaBased: false
-      };
+        scrollerWidth: sectionRect.width,
+        scrollerHeight: 1
+      });
     }
     function readNativeMyListDomState() {
       if (!nativeReadScope) return withNativeReadScope(() => readNativeMyListDomState());
@@ -16491,6 +16359,7 @@
       return identity && sourceState?.itemMap ? sourceState.itemMap.get(itemKey(identity)) || null : null;
     }
     async function prepareMountedPage(page, targetItem, triggerEvent = null, token = null, sessionToken = null) {
+      const preparationDetail = (detail) => ({ requestedPage: page, targetItem: itemSummary(targetItem), ...detail });
       assertRouteSession(sessionToken);
       if (hover.isCancelled(token)) return null;
       let targetCard = gridView.getCard(targetItem);
@@ -16501,11 +16370,9 @@
       const state = sourceState;
       const { section, scroller, track } = state || {};
       if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
-        warn(tLog("nativePagePreparationFailed"), {
-          reason: "native-binding-unavailable",
-          targetItem: itemSummary(targetItem),
-          requestedPage: page
-        });
+        warn(tLog("nativePagePreparationFailed"), preparationDetail({
+          reason: "native-binding-unavailable"
+        }));
         return null;
       }
       const nativeOwner = nativeCarousel.borrowBinding(section, scroller, track);
@@ -16585,6 +16452,11 @@
           } };
         });
       };
+      const preparationCancelled = (reason) => {
+        if (token === null || token === hover.intent().token) return false;
+        log(tLog("nativePagePreparationCancelled"), { reason, token, hoverToken: hover.intent().token });
+        return true;
+      };
       const reportPositionMismatch = (located2) => {
         warn("Native My List position mismatch escalated without source search", {
           targetItem: itemSummary(targetItem),
@@ -16603,38 +16475,28 @@
         );
       };
       const started2 = performance.now();
-      log(tLog("nativePagePreparationStarted"), {
-        requestedPage: page,
-        targetItem: itemSummary(targetItem),
+      log(tLog("nativePagePreparationStarted"), preparationDetail({
         triggerEvent: triggerEvent?.type || "",
         token,
         hoverToken: hover.intent().token
-      });
+      }));
       let targetSourceSlot = null;
       let resolvedSource = null;
       let actualPage = page;
       let staleSourceRecovery = false;
       let located = await resolveSource();
-      if (token !== null && token !== hover.intent().token) {
-        log(tLog("nativePagePreparationCancelled"), { reason: "token-changed-after-expected-page-check", token, hoverToken: hover.intent().token });
-        return null;
-      }
+      if (preparationCancelled("token-changed-after-expected-page-check")) return null;
       if (located?.status === "mismatch") {
         if (located.positionMismatch) {
           reportPositionMismatch(located);
           return null;
         }
-        log("Retrying expected native page after transient page mismatch", {
-          targetItem: itemSummary(targetItem),
-          requestedPage: page,
+        log("Retrying expected native page after transient page mismatch", preparationDetail({
           visibleIds: located.visibleIds || []
-        });
+        }));
         await sleep(120);
         located = await resolveSource();
-        if (token !== null && token !== hover.intent().token) {
-          log(tLog("nativePagePreparationCancelled"), { reason: "token-changed-after-mismatch-retry", token, hoverToken: hover.intent().token });
-          return null;
-        }
+        if (preparationCancelled("token-changed-after-mismatch-retry")) return null;
         if (located?.positionMismatch) {
           reportPositionMismatch(located);
           return null;
@@ -16653,30 +16515,22 @@
         const mutationRecoveryPending = mutationSourceRecoveryPending;
         const expectedPageMismatch = located?.status === "mismatch";
         if (staleLogicalMapping || mutationRecoveryPending || expectedPageMismatch) {
-          log("Hover expected-page mapping is stale; searching live native source", {
-            targetItem: itemSummary(targetItem),
-            requestedPage: page,
+          log("Hover expected-page mapping is stale; searching live native source", preparationDetail({
             locatedStatus: located?.status || null,
             locatedReason: located?.reason || null,
             mutationRecoveryPending,
             expectedPageMismatch,
             visibleIds: located?.visibleIds || []
-          });
+          }));
           let repaired = await resolveSource("preferred-refresh");
-          if (token !== null && token !== hover.intent().token) {
-            log(tLog("nativePagePreparationCancelled"), { reason: "token-changed-after-stale-page-refresh", token, hoverToken: hover.intent().token });
-            return null;
-          }
+          if (preparationCancelled("token-changed-after-stale-page-refresh")) return null;
           if (!repaired?.slot) {
             repaired = await resolveSource("search", {
               repairLogicalMapping: expectedPageMismatch || mutationRecoveryPending,
               maxRadius: mutationSourceRecoveryPending ? null : 2
             });
           }
-          if (token !== null && token !== hover.intent().token) {
-            log(tLog("nativePagePreparationCancelled"), { reason: "token-changed-after-stale-page-search", token, hoverToken: hover.intent().token });
-            return null;
-          }
+          if (preparationCancelled("token-changed-after-stale-page-search")) return null;
           assertCurrent();
           if (repaired?.slot) {
             if (rejectLargeNativePositionDeviation(targetItem, repaired.source, page, located?.visibleIds || [])) return null;
@@ -16694,32 +16548,26 @@
           } else {
             const promptSuppression = responsive.suppression();
             if (promptSuppression.suppress) {
-              log(tLog("nativePagePreparationCancelled"), {
+              log(tLog("nativePagePreparationCancelled"), preparationDetail({
                 reason: "logical-page-mapping-stale-source-not-found-transient",
-                targetItem: itemSummary(targetItem),
-                requestedPage: page,
                 locatedReason: located?.reason || null,
                 visibleIds: located?.visibleIds || [],
                 promptSuppression
-              });
+              }));
               return null;
             }
-            log("Stale logical page recovery exhausted; escalating to reinitialization prompt", {
-              targetItem: itemSummary(targetItem),
-              requestedPage: page,
+            log("Stale logical page recovery exhausted; escalating to reinitialization prompt", preparationDetail({
               locatedReason: located?.reason || null,
               visibleIds: located?.visibleIds || [],
               promptSuppression
-            });
+            }));
             showOrderMismatchDialog(targetItem, page, located?.visibleIds || []);
             return null;
           }
         } else {
-          log(tLog("nativePagePreparationCancelled"), {
-            reason: located?.reason || "expected-page-check-inconclusive",
-            targetItem: itemSummary(targetItem),
-            requestedPage: page
-          });
+          log(tLog("nativePagePreparationCancelled"), preparationDetail({
+            reason: located?.reason || "expected-page-check-inconclusive"
+          }));
           return null;
         }
       }
@@ -16832,13 +16680,11 @@
         return null;
       }
       nativeCarousel.assertObservation(pageView);
-      log(tLog("nativePagePreparationCompleted"), {
-        requestedPage: page,
+      log(tLog("nativePagePreparationCompleted"), preparationDetail({
         actualPage,
-        targetItem: itemSummary(targetItem),
         targetReady: Boolean(freshTarget),
         elapsedMs: Math.round(performance.now() - started2)
-      });
+      }));
       nativeCarousel.assertObservation(pageView);
       return freshTarget ? { card: targetCard, source: popupSource(targetSourceSlot, targetItem), page: actualPage } : null;
     }
@@ -17779,39 +17625,6 @@
   }
 
   // src/i18n/ui-messages.js
-  var NETFLIX_PRIMARY_UI_LOCALES = /* @__PURE__ */ new Set([
-    "da",
-    "de",
-    "en",
-    "es",
-    "fil",
-    "fr",
-    "hr",
-    "id",
-    "it",
-    "hu",
-    "ms",
-    "nl",
-    "nb",
-    "pl",
-    "pt",
-    "ro",
-    "fi",
-    "sv",
-    "vi",
-    "tr",
-    "cs",
-    "el",
-    "ru",
-    "uk",
-    "he",
-    "ar",
-    "hi",
-    "th",
-    "zh",
-    "ja",
-    "ko"
-  ]);
   var UI_MESSAGES = {
     "da": {
       legacyMyList: "Klassisk Min liste",
@@ -18465,6 +18278,7 @@
       UI_MESSAGES[locale][key] = values[index];
     });
   }
+  var NETFLIX_PRIMARY_UI_LOCALES = new Set(Object.keys(UI_MESSAGES));
 
   // src/i18n/log-messages.js
   var LOG_MESSAGES = {
@@ -18909,7 +18723,7 @@
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.4.64";
+  var SCRIPT_VERSION = "1.4.65";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

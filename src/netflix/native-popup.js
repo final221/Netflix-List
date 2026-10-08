@@ -60,21 +60,6 @@ export function createNativePopup(options = {}) {
             let fiberAssignments = 0;
             let propsAssignments = 0;
 
-            function reactKeysForNode(node) {
-                const keys = Object.getOwnPropertyNames(node);
-                return {
-                    fiberKeys: keys.filter(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')),
-                    propsKeys: keys.filter(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$')),
-                    otherKeys: keys.filter(k =>
-                        k.startsWith('__react') &&
-                        !k.startsWith('__reactFiber$') &&
-                        !k.startsWith('__reactInternalInstance$') &&
-                        !k.startsWith('__reactProps$') &&
-                        !k.startsWith('__reactEventHandlers$')
-                    )
-                };
-            }
-
             function cloneFiberChain(sourceFiber) {
                 if (!sourceFiber || typeof sourceFiber !== 'object') return sourceFiber;
                 if (fiberMap.has(sourceFiber)) return fiberMap.get(sourceFiber);
@@ -94,31 +79,26 @@ export function createNativePopup(options = {}) {
                 return clonedFiber;
             }
 
+            const groups = [
+                { prefixes: ['__reactFiber$', '__reactInternalInstance$'], copy: cloneFiberChain,
+                    assigned: () => fiberAssignments++, failure: 'fiberGraftFailed' },
+                { prefixes: ['__reactProps$', '__reactEventHandlers$'], copy: value => value,
+                    assigned: () => propsAssignments++, failure: 'propsGraftFailed' },
+                { prefixes: ['__react'], copy: value => value, assigned: () => {}, failure: null }
+            ];
             for (const [source, clone] of pairs) {
-                const { fiberKeys, propsKeys, otherKeys } = reactKeysForNode(source);
-
-                for (const key of fiberKeys) {
-                    try {
-                        clone[key] = cloneFiberChain(source[key]);
-                        fiberAssignments++;
-                    } catch (error) {
-                        warn(tLog('fiberGraftFailed'), key, error);
+                const keys = groups.map(() => []);
+                for (const key of Object.getOwnPropertyNames(source)) {
+                    if (!key.startsWith('__react') || key.startsWith('__reactContainer$')) continue;
+                    keys[groups.findIndex(group => group.prefixes.some(prefix => key.startsWith(prefix)))].push(key);
+                }
+                // Preserve assignment order: fibers, props, then remaining React keys.
+                groups.forEach((group, index) => {
+                    for (const key of keys[index]) {
+                        try { clone[key] = group.copy(source[key]); group.assigned(); }
+                        catch (error) { if (group.failure) warn(tLog(group.failure), key, error); }
                     }
-                }
-
-                for (const key of propsKeys) {
-                    try {
-                        clone[key] = source[key];
-                        propsAssignments++;
-                    } catch (error) {
-                        warn(tLog('propsGraftFailed'), key, error);
-                    }
-                }
-
-                for (const key of otherKeys) {
-                    if (key.startsWith('__reactContainer$')) continue;
-                    try { clone[key] = source[key]; } catch (_) {}
-                }
+                });
             }
 
             cloneRoot.setAttribute('data-tm-react-grafted', 'true');

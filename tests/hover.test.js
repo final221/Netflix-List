@@ -86,6 +86,35 @@ test('native popup owns replay resources and settles a retired pending open', as
     assert.equal(popup.diagnostics().pendingReplays, 0);
 });
 
+test('grafting preserves legacy key families, fiber cycles, assignment order and isolated failures', async () => {
+    const warnings = [], reads = [];
+    const e = await environment({ popup: { warn: (...args) => warnings.push(args) } });
+    const fiber = { stateNode: e.nativeCard }; fiber.return = fiber;
+    const handlers = { onMouseEnter() {} }, other = { native: true };
+    for (const [key, label, value] of [
+        ['__reactEventHandlers$legacy', 'props', handlers], ['__reactOther$test', 'other', other],
+        ['__reactInternalInstance$legacy', 'fiber', fiber]
+    ]) Object.defineProperty(e.nativeCard, key, { get() { reads.push(label); return value; } });
+    Object.defineProperty(e.nativeCard, '__reactProps$broken', { get() { throw new Error('props failed'); } });
+    Object.defineProperty(e.nativeCard, '__reactContainer$ignored', { get() { throw new Error('must not read container'); } });
+    const prepared = e.prepare(), card = prepared.fresh.querySelector('a');
+    assert.deepEqual(reads, ['fiber', 'props', 'other']);
+    assert.equal(card.__reactEventHandlers$legacy, handlers);
+    assert.equal(card.__reactOther$test, other);
+    assert.notEqual(card.__reactInternalInstance$legacy, fiber);
+    assert.equal(card.__reactInternalInstance$legacy.stateNode, card);
+    assert.equal(card.__reactInternalInstance$legacy.return, card.__reactInternalInstance$legacy);
+    assert.equal(Object.hasOwn(card, '__reactContainer$ignored'), false);
+    assert.equal(Object.hasOwn(card, '__reactProps$broken'), false);
+    assert.equal(prepared.stats.fiberAssignments, 2);
+    assert.equal(prepared.stats.propsAssignments, 2);
+    assert.deepEqual(warnings.map(args => args.slice(0, 2)), [['propsGraftFailed', '__reactProps$broken']]);
+    e.popup.invalidate();
+    for (const key of ['__reactEventHandlers$legacy', '__reactOther$test', '__reactInternalInstance$legacy']) {
+        assert.equal(Object.hasOwn(card, key), false);
+    }
+});
+
 test('graft retirement visits only prepared cards in 30, 150 and 600-card registries', async () => {
     for(const size of [30,150,600]){
         const e=await environment(), records=[e.item,e.other,...Array.from({length:size-2},(_,i)=>({
