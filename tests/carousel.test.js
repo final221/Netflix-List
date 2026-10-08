@@ -2256,6 +2256,25 @@ test('hover hydration stops before the next geometry read after cancellation', a
     assert.equal(reads, 0);
 });
 
+test('collection stability waits for unseen content even when the previous page is stable', async () => {
+    const e = navigationEnvironment({ mode: 'indicator' });
+    let completed = false;
+    const pending = e.carousel.stablePage(e.scroller, e.track, {
+        sessionToken: e.scope.token,
+        seenKeys: new Set(['v:1']),
+        minimumNewItems: 1,
+        minimumSlots: 1
+    });
+    pending.then(() => { completed = true; });
+    await e.scheduler.frame(); await e.scheduler.frame();
+    assert.equal(completed, false);
+    e.setPage(1);
+    const slots = await e.settle(pending);
+    assert.equal(slots[0], e.pages[1][0]);
+    assert.deepEqual(e.directions, []);
+    assert.deepEqual(e.carousel.diagnostics().navigation, { pendingMoves: 0, pendingWaits: 0, motionLeases: 0 });
+});
+
 test('initialization stability waits remain independent of hover cancellation', async () => {
     const e = navigationEnvironment();
     const pending = e.carousel.stablePage(e.scroller, e.track, { sessionToken: e.scope.token });
