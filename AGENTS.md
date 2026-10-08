@@ -7,6 +7,7 @@ Instructions for assistants changing this repository. [README.md](README.md) pro
 - Read `docs/context.md` for durable repository knowledge and user preferences.
 - Read `docs/findings.md` when continuing the code-review findings or their follow-up plan.
 - Read `docs/architecture.md` for the architecture actually implemented, and use the commands in `README.md` for build/verification.
+- For structural refactoring, read `docs/Repo Hygiene.md` for size-review and refactoring best practices; its scale triggers assessment rather than automatic splitting.
 - When investigating runtime behavior, read `logs/knowledge.md` first. For a new log review, inspect only the supplied capture and relevant excerpts; do not load all historical raw exports into context.
 - Inspect the userscript and its current version before making code changes.
 

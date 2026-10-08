@@ -41,6 +41,7 @@ docs/
   context.md                        Durable repository knowledge and user preferences
   findings.md                       Findings, decisions, progress and verification
   Maintainability Map.md            Versioned module sizes and responsibility inventory
+  Repo Hygiene.md                   Best practices for size review and refactoring
 logs/
   knowledge.md                      Bounded, version-specific live observations/provenance
   <version>.txt                     Temporary new capture; removed after completed review
@@ -57,3 +58,5 @@ dist/
 Read [docs/architecture.md](docs/architecture.md) for implemented ownership, source composition and verification boundaries, [docs/findings.md](docs/findings.md) for findings and progress, and [AGENTS.md](AGENTS.md) for working instructions.
 
 See the [Maintainability Map](docs/Maintainability%20Map.md) for module line counts and responsibility descriptions.
+
+Use [Repo Hygiene](docs/Repo%20Hygiene.md) for file-size review signals and refactoring best practices.
