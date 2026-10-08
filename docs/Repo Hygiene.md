@@ -10,11 +10,11 @@ Size amplifies the cost of the same structural problems: a small file is easier 
 
 | Lines | Assessment | Concern when |
 | ---: | --- | --- |
-| Up to 200 | Usually manageable; target structural refactoring for severe problems. | Ownership conflicts repeatedly cause defects, or the structure makes even a small change unsafe or difficult to verify. Mild untidiness rarely justifies restructuring an easily traversed file. |
-| 201–400 | A substantial problem should justify structural refactoring. | Mixed responsibilities or competing state owners regularly force coordinated edits, obscure behavior, or make focused testing difficult. |
-| 401–600 | A moderate problem is enough to justify structural refactoring. | A routine change requires tracing distant sections, workflow boundaries are blurred, or callers need unnecessary knowledge of internal state and sequencing. |
-| 601–800 | Demonstrated structural friction should make refactoring a priority. | Navigation, duplicated decisions, long workflows or scattered mutations add recurring effort to understanding and changing the file, even without severe defects. |
-| Over 800 | Refactoring is the default expectation; retention needs a good reason. | Review cannot justify keeping the structure through cohesive ownership, understandable workflows and focused tests, or cannot show why a proposed split would worsen coupling or scatter tightly coupled state. |
+| Up to 200 | Usually easy to traverse. | **A severe structural problem makes safe changes unreliable:** conflicting state owners repeatedly cause defects, or valid states and cleanup cannot be reliably traced even within this small file. Mild untidiness is insufficient. |
+| 201–400 | Manageable with a clear responsibility. | **A substantial structural problem regularly obstructs changes:** independent responsibilities require coordinated edits, shared mutations have unclear consequences, or testing one behavior requires setting up unrelated workflows. |
+| 401–600 | Traversal and context costs are becoming significant. | **A moderate structural problem adds noticeable effort to routine changes:** one rule requires edits in distant sections, following a workflow needs repeated backtracking, or callers must reconstruct internal sequencing. Defects need not already have occurred. |
+| 601–800 | Small structural problems become costly at this size. | **Even mild, recurring structural friction is enough:** scattered helpers force repeated searching, a few duplicated decisions must be kept in sync, or loosely related sections add avoidable context to otherwise simple changes. |
+| Over 800 | Retention requires explicit justification. | **There is no convincing reason to retain the structure, even without a reported defect.** Review must demonstrate cohesive ownership, understandable workflows and focused tests, plus why a smaller structure would worsen coupling or scatter tightly coupled state. Otherwise, plan refactoring. |
 
 Translation catalogs, schemas, stylesheets and declarative tables may reasonably exceed these ranges. Generated files should be changed through their source. Test files should be assessed by scenario cohesion and fixture complexity, not divided merely to pass a size check. Functions need their own review: one deeply nested workflow can be difficult even inside a small file.
 
