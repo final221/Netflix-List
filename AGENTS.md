@@ -1,6 +1,6 @@
 # Repository instructions
 
-This repository maintains a Tampermonkey userscript for Netflix My List. The script presents the list as a scrollable grid.
+Instructions for assistants changing this repository. [README.md](README.md) provides installation, development commands and the repository map; this file owns mandatory workflow, versioning and document rules.
 
 ## Read before working
 

@@ -938,3 +938,7 @@ The user selected removal of all seven old raw captures and bounded retention in
 ## Documentation layout — 2026-10-08
 
 The user selected evaluation and restructuring of document locations. README.md and AGENTS.md remain root entry points; docs/context.md and docs/findings.md now join docs/architecture.md under docs/. logs/knowledge.md retains its separate evidence role. README owns the repository map; architecture owns source composition. Active links/read instructions/path references are updated; context content is moved unchanged. Local-link/map-path checks, artifact verification and whitespace review pass. Runtime/version remains 1.4.61.
+
+## README and agent-instruction cleanup — 2026-10-08
+
+At the user's request, README is reduced to introduction/installation, runnable verification, repository map and documentation links. Versioning, retention and change rules remain in AGENTS.md; architecture/verification detail remains in docs/architecture.md. Local-link/anchor, artifact and whitespace checks pass. Runtime/version stays 1.4.61. Context was reviewed without a durable change.
