@@ -29,9 +29,9 @@ Any pushed change to the distributable requires a version greater than the newes
 
 ## User testing and version logs
 
-The user tests released versions in Netflix with Tampermonkey on Windows. `logs/` stores diagnostic captures from that live use, named for the tested userscript version, such as `logs/1.4.52.txt`. CopyLogs provides the export; saving it in the repository is a manual user action.
+The user tests released versions in Netflix with Tampermonkey on Windows and manually saves CopyLogs exports in logs/. Raw captures are temporary review inputs. After review, distinguishing version-specific evidence and its limits are folded into [logs/knowledge.md](logs/knowledge.md), actionable interpretation goes into [findings.md](findings.md), and the reviewed raw export is removed. AGENTS.md owns this retention workflow.
 
-These files provide evidence of behavior in the user's browser alongside the offline tests and Windows CI. When reviewing a capture, match its version to the tested release and record the observed result, limitations and follow-up in [findings.md](findings.md), citing the log. A saved log documents that session; successful live checks require supporting observations or user confirmation. Preserve the original captures.
+The knowledge file stays compact and contains no implementation plans, architecture or automated-test results. Previously committed originals remain recoverable through the Git provenance it records. Live observations remain separate from local/CI acceptance and do not certify newer releases.
 
 ## Architecture
 

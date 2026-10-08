@@ -7,7 +7,7 @@ This repository maintains a Tampermonkey userscript for Netflix My List. The scr
 - Read `context.md` for durable repository knowledge and user preferences.
 - Read `findings.md` when continuing the code-review findings or their follow-up plan.
 - Read `docs/architecture.md` for the architecture actually implemented, and use the commands in `README.md` for build/verification.
-- When investigating runtime behavior or reviewing live-test evidence, read the relevant version's files in `logs/`.
+- When investigating runtime behavior, read `logs/knowledge.md` first. For a new log review, inspect only the supplied capture and relevant excerpts; do not load all historical raw exports into context.
 - Inspect the userscript and its current version before making code changes.
 
 ## Document ownership
@@ -17,7 +17,8 @@ This repository maintains a Tampermonkey userscript for Netflix My List. The scr
 - `findings.md` is the working record for current review findings, decisions, and the ordered follow-up plan, including completed and deferred points. Update it as a selected step is completed or its status changes; do not duplicate its current status in `context.md`.
 - `docs/architecture.md` owns the implemented architecture and continuing ownership, dependency and lifecycle contracts. Explain changes to these boundaries there before applying them; selected work and progress belong in `findings.md`.
 - `ready-to-delete/` contains retired documentation whose continuing contracts and necessary evidence have been extracted. It is not a working authority, and active documents must not depend on it. The user may delete the folder without affecting development or verification.
-- `logs/` contains user-supplied diagnostic exports from live Netflix testing, named for the tested userscript version (for example, `logs/1.4.52.txt`). Preserve these captures as supplied. Record their interpretation and any follow-up in `findings.md`, citing the file and tested version; a capture alone does not prove every live check passed. Keep this evidence separate from automated test/CI results and do not apply an older capture's conclusions to a newer release without evidence.
+- `logs/knowledge.md` owns distilled user-side live evidence: tested version, capture date/environment, distinguishing observations/measurements, evidence limits and source provenance. It does not own diagnoses, fix status, plans, architecture, preferences or automated test/CI results. `findings.md` owns actionable interpretation and follow-up, citing the tested version and knowledge record rather than duplicating the capture summary.
+- New raw exports in `logs/` (for example, `logs/1.4.62.txt`) are temporary review inputs. The user authorizes removing them after review and distillation; preserve their supplied contents while reviewing and retain raw input if review is incomplete. A capture alone does not prove every live check passed or compatibility of another release.
 
 ## Userscript versioning
 
@@ -34,3 +35,11 @@ This repository maintains a Tampermonkey userscript for Netflix My List. The scr
 - Keep optional implementation within the step the user selected. A request to explain or assess possible follow-up work is discussion, not approval to implement it.
 - Review the diff before finishing and run `git diff --check` for whitespace problems.
 - After a repository-changing run, commit and push the changes to `origin`. The user has standing authorization for this in `context.md`; do not ask for per-commit confirmation. Follow any separate sandbox or automated-review gate presented by the app.
+
+## Live-log review and retention
+
+1. Match each new capture to its tested version and read relevant events/snapshot fields without dumping entire captures into context. Verify new evidence against existing summaries; distinguish observed facts from inference.
+2. Fold only new or distinguishing evidence into logs/knowledge.md, with version, copiedAt/environment and source identity. For an already committed capture, record a Git revision/path for recovery; otherwise record filename and SHA256. Do not silently assign the findings cleanup revision as the capture's tested runtime revision.
+3. Extract actionable issues, changed interpretations and follow-up into findings.md. Update architecture or other owning documents only for supported changes within their boundaries; log review alone does not select unrelated runtime work. Avoid duplicate fact tables across documents.
+4. After review is complete and necessary evidence is retained, remove the reviewed raw capture from the checkout. Do not create another archive or evidence document. Check active links and whitespace, then commit/push through the normal workflow. Retrieve a committed original from Git only when a specific investigation needs omitted detail.
+5. Keep logs/knowledge.md under 100 lines and 8 KiB. Merge routine older sessions into version ranges as needed; retain distinct failure signatures, meaningful comparison measurements, provenance and evidence limits. Exclude title-by-title activity, payloads, full stacks, repeated counters and chronological experiment narratives. Keep actionable detail in findings.md rather than expanding the knowledge file.
