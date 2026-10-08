@@ -1,11 +1,11 @@
 # Ready for user deletion
 
-This folder contains retired documents, staged here on 2026-10-08 so the user can delete them. Nothing has been deleted by the cleanup. No active document, build or test depends on this folder.
+These three completed reports have had their useful information extracted and may be deleted with this folder. They are historical snapshots; relative links and baseline proposals inside them are not maintained. No active document, build or test depends on them. Earlier retired migration files have already been removed from the working tree and are not restored here.
 
-| Retired file | Information retained elsewhere |
+| Retired report | Retained information |
 | --- | --- |
-| Migration.md | Continuing design/ownership/lifecycle contracts in docs/architecture.md; completion in findings.md |
-| MigrationPlan.md | Completed P01–P21 scope and final acceptance in findings.md; continuing workflow in AGENTS.md/README.md |
-| findings-migration-history.md | Compact phase/completion record, exact final CI/revision, scenario ledger meaning and version-specific live evidence in findings.md |
+| test-capability-audit.md | Compact suite/coverage map, fixture limits, observed fixes and sensitivity evidence in findings.md |
+| reduction-assessment.md | Completed R01–R03 outcomes, measured savings and concise material-admission counterexample in findings.md |
+| architecture-reduction-review.md | Completed D01–D03 outcomes, measurements and rejected consolidation rationale in findings.md; native validity contracts in docs/architecture.md |
 
-The original proposal/plan are historical snapshots. Their future-tense instructions, temporary bridges and relative links are not maintained. Original details remain recoverable from Git history. The three audit/reduction reports under docs/ remain active evidence references and are outside this deletion set.
+No report was deleted by this follow-up; deletion remains the user's action. Original details remain recoverable from Git history.

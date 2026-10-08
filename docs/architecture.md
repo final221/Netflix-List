@@ -47,7 +47,15 @@ Network adapters validate same-origin endpoints, construct transient credentials
 
 ### Native observations and lifetimes
 
-Source, source-card, mapping, preparation and observation receipts retain different validity proofs. Preparation includes exclusive readiness and one-time complete-count acceptance; mapping includes the admitted model interpretation; observations additionally validate their requested live facts. Native count, position, readiness, presentation, geometry and page-window changes can invalidate their respective receipts without a route change. A universal generation token cannot replace these checks.
+| Native receipt | Distinct validity proof |
+| --- | --- |
+| Binding | Issued identity, route/generation, accepted references and connectedness |
+| Source card | Binding/model revision, live slot/href/React index, filled membership and indicator-page ownership |
+| Mapping result | Exact mapping operation/result revision, including the committed replacement model |
+| Preparation | Exclusive owner, model/generation, readiness and one-time complete-count acceptance |
+| Observation | Exact operation plus requested live-fact validation within a synchronous read scope |
+
+These receipts retain separate validity proofs. Native count, position, readiness, presentation, geometry and page-window changes can invalidate their respective receipts without a route change. A universal generation token cannot replace these checks.
 
 Discovery observes without adopting; identity-only discovery avoids profile/card/count/geometry work. Geometry can describe an incoming source without authorizing adoption. Explicit page-window/template observations include ordered/empty windows and wrapped-tail inPage interpretation. Native handles validate connectedness, identity, index and relevant page/model ownership when borrowed. Shared synchronous read scopes end before await. Descriptions and layout scalars copied for formatting remain passive unless their original receipt is still admitted.
 
