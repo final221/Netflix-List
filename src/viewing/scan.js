@@ -235,59 +235,39 @@ export function createScan({ watch, viewing, data: viewingData, activeProfile, p
     }
 
     async function collectViewingEpisodePlans(plans, job) {
-        const segments = [];
-        for (const plan of plans) {
-            const latest = viewing.latestEpisode(plan);
-            if (latest && !latest.episode) segments.push({ plan, season: latest.season, from: latest.index, to: latest.index });
-        }
+        const targets = plans.map(plan => ({ plan, latest: viewing.latestEpisode(plan) }))
+            .filter(({ latest }) => latest && !latest.episode);
         // Request one episode per series. Older progress cannot change the
         // latest-episode inference, including when the finale is unavailable.
-        for (let offset = 0; offset < segments.length;) {
-            const batch = [];
-            let size = 0;
-            while (offset < segments.length) {
-                const segment = segments[offset];
-                if (segment.plan.finished) { offset++; continue; }
-                const length = segment.to - segment.from + 1;
-                if (batch.length && size + length > VIEWING_EPISODE_BATCH_SIZE) break;
-                batch.push(segment);
-                size += length;
-                offset++;
-            }
+        for (let offset = 0; offset < targets.length; offset += VIEWING_EPISODE_BATCH_SIZE) {
+            const batch = targets.slice(offset, offset + VIEWING_EPISODE_BATCH_SIZE).filter(({ plan }) => !plan.finished);
             if (!batch.length) continue;
             const ranges = await runViewingRequest(job, owner => viewingData.readEpisodes(
-                batch.map(({ season, from, to }) => ({ seasonId: season.id, from, to })), job.context, owner));
-            for (let batchIndex = 0; batchIndex < batch.length; batchIndex++) {
-                const { plan, season, from, to } = batch[batchIndex];
-                const latest = viewing.latestEpisode(plan);
-                for (let index = from; index <= to; index++) {
-                    const { id, record, kinds } = ranges[batchIndex].episodes[index - from];
-                    const status = viewing.classifyVideo(record);
-                    season.episodes.set(index, { id, status, ...(status === 'unknown' ? { record } : {}) });
-                    if (latest?.season === season && latest.index === index) season.episodes.get(index).progress = viewing.progress(record);
-                    job.seriesStats.episodesChecked++;
-                    if (!id) job.seriesStats.missingEpisodeRefs++;
-                    if (status === 'unknown') {
-                        job.seriesStats.episodesUnknown++;
-                        season.episodes.get(index).kinds = recordViewingFieldKinds(kinds, job.recheckStats.initialUnknownFields);
-                    }
-                    else if (status !== 'complete') job.seriesStats.episodesIncomplete++;
-                }
+                batch.map(({ latest }) => ({ seasonId: latest.season.id, from: latest.index, to: latest.index })), job.context, owner));
+            for (const [index, { latest }] of batch.entries()) {
+                const { id, record, kinds } = ranges[index].episodes[0];
+                const status = viewing.classifyVideo(record);
+                const episode = { id, status, progress: viewing.progress(record), ...(status === 'unknown' ? { record } : {}) };
+                latest.season.episodes.set(latest.index, episode);
+                job.seriesStats.episodesChecked++;
+                if (!id) job.seriesStats.missingEpisodeRefs++;
+                if (status === 'unknown') {
+                    job.seriesStats.episodesUnknown++;
+                    episode.kinds = recordViewingFieldKinds(kinds, job.recheckStats.initialUnknownFields);
+                } else if (status !== 'complete') job.seriesStats.episodesIncomplete++;
             }
             // Keep each fully checked result even if a later request fails or
             // reaches the scan budget. Unfinished coverage remains unknown.
-            for (const plan of new Set(batch.map(segment => segment.plan))) {
+            for (const { plan } of batch) {
                 if (plan.finished) continue;
-                const full = plan.seasons.every(season => season.episodes.size === season.count);
-                const observed = plan.seasons.flatMap(season => [...season.episodes.values()]);
+                const episode = viewing.latestEpisode(plan).episode;
                 const result = viewing.seriesResult(plan);
-                if (result === 'complete' || full || observed.some(episode => !episode.id || episode.status !== 'complete')) {
-                    const status = result === 'complete' ? result : full ? result
-                        : observed.some(episode => !episode.id || episode.status === 'unknown') ? 'unknown' : 'in-progress';
-                    finishViewingSeriesPlan(plan, status, job);
-                } else saveViewingSeriesDetails(plan, job);
+                // Every checked plan has exactly one finale. A complete finale
+                // settles the inference; other progress retains the coverage fallback.
+                finishViewingSeriesPlan(plan, result !== 'unknown' ? result
+                    : !episode.id || episode.status === 'unknown' ? 'unknown' : 'in-progress', job);
             }
-            publishViewingProgress(job, batch.map(segment => segment.plan.videoId));
+            publishViewingProgress(job, batch.map(({ plan }) => plan.videoId));
         }
     }
 
@@ -302,11 +282,8 @@ export function createScan({ watch, viewing, data: viewingData, activeProfile, p
         job.results.set(plan.videoId, status);
         saveViewingSeriesDetails(plan, job);
         if (status === 'unknown') {
-            const observed = plan.seasons.flatMap(season => [...season.episodes.values()]);
             const latest = viewing.latestEpisode(plan)?.episode;
-            if ((latest?.id && latest.status === 'unknown') ||
-                (observed.every(episode => episode.id && ['complete', 'unknown'].includes(episode.status)) &&
-                new Set(observed.map(episode => episode.id)).size === observed.length)) {
+            if (latest?.id && latest.status === 'unknown') {
                 if (!job.unresolvedSeries.has(plan)) job.recheckStats.candidates++;
                 job.unresolvedSeries.add(plan);
             }
@@ -347,19 +324,12 @@ export function createScan({ watch, viewing, data: viewingData, activeProfile, p
             for (const plan of job.unresolvedSeries) {
                 if (plan.status !== 'unknown' || plan.recheckBlocked) continue;
                 const latest = viewing.latestEpisode(plan)?.episode;
-                const onlyLatest = plan.seasons.some(season => [...season.episodes.values()].some(episode =>
-                    ['not-started', 'in-progress'].includes(episode.status)));
-                for (const season of plan.seasons) {
-                    for (const episode of season.episodes.values()) {
-                        if (onlyLatest && episode !== latest) continue;
-                        if (episode.status !== 'unknown' || attempted.has(episode.id)) continue;
-                        if (!targets.has(episode.id)) {
-                            if (targets.size >= VIEWING_EPISODE_BATCH_SIZE) continue;
-                            targets.set(episode.id, []);
-                        }
-                        targets.get(episode.id).push({ plan, episode });
-                    }
+                if (latest?.status !== 'unknown' || attempted.has(latest.id)) continue;
+                if (!targets.has(latest.id)) {
+                    if (targets.size >= VIEWING_EPISODE_BATCH_SIZE) continue;
+                    targets.set(latest.id, []);
                 }
+                targets.get(latest.id).push({ plan, episode: latest });
             }
             if (!targets.size) return;
             // The reference supplied the episode ID. Ask the same read-only
@@ -387,7 +357,7 @@ export function createScan({ watch, viewing, data: viewingData, activeProfile, p
                         creditsOffset: direct.creditsOffset ?? previous?.creditsOffset ?? null
                     } : previous;
                     episode.status = viewing.classifyVideo(record);
-                    if (episode === viewing.latestEpisode(plan)?.episode) episode.progress = viewing.progress(record);
+                    episode.progress = viewing.progress(record);
                     if (episode.status === 'unknown') {
                         job.recheckStats.unknownEpisodes++;
                         episode.kinds = recordViewingFieldKinds(kinds, job.recheckStats.remainingUnknownFields);
@@ -398,9 +368,8 @@ export function createScan({ watch, viewing, data: viewingData, activeProfile, p
                 }
             }
             for (const plan of affected) {
-                const full = plan.seasons.every(season => season.episodes.size === season.count);
                 const result = viewing.seriesResult(plan);
-                if (result === 'complete' || full) finishViewingSeriesPlan(plan, result, job);
+                if (result === 'complete' || plan.expected === 1) finishViewingSeriesPlan(plan, result, job);
                 saveViewingSeriesDetails(plan, job);
                 if (plan.status === 'complete') job.recheckStats.recoveredSeries++;
             }

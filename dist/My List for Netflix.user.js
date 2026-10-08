@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.66
+// @version      1.4.67
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -8692,59 +8692,34 @@
       await collectViewingEpisodePlans(plans, job);
     }
     async function collectViewingEpisodePlans(plans, job) {
-      const segments = [];
-      for (const plan of plans) {
-        const latest = viewing.latestEpisode(plan);
-        if (latest && !latest.episode) segments.push({ plan, season: latest.season, from: latest.index, to: latest.index });
-      }
-      for (let offset = 0; offset < segments.length; ) {
-        const batch = [];
-        let size = 0;
-        while (offset < segments.length) {
-          const segment = segments[offset];
-          if (segment.plan.finished) {
-            offset++;
-            continue;
-          }
-          const length = segment.to - segment.from + 1;
-          if (batch.length && size + length > VIEWING_EPISODE_BATCH_SIZE) break;
-          batch.push(segment);
-          size += length;
-          offset++;
-        }
+      const targets = plans.map((plan) => ({ plan, latest: viewing.latestEpisode(plan) })).filter(({ latest }) => latest && !latest.episode);
+      for (let offset = 0; offset < targets.length; offset += VIEWING_EPISODE_BATCH_SIZE) {
+        const batch = targets.slice(offset, offset + VIEWING_EPISODE_BATCH_SIZE).filter(({ plan }) => !plan.finished);
         if (!batch.length) continue;
         const ranges = await runViewingRequest(job, (owner) => viewingData.readEpisodes(
-          batch.map(({ season, from, to }) => ({ seasonId: season.id, from, to })),
+          batch.map(({ latest }) => ({ seasonId: latest.season.id, from: latest.index, to: latest.index })),
           job.context,
           owner
         ));
-        for (let batchIndex = 0; batchIndex < batch.length; batchIndex++) {
-          const { plan, season, from, to } = batch[batchIndex];
-          const latest = viewing.latestEpisode(plan);
-          for (let index = from; index <= to; index++) {
-            const { id, record, kinds } = ranges[batchIndex].episodes[index - from];
-            const status = viewing.classifyVideo(record);
-            season.episodes.set(index, { id, status, ...status === "unknown" ? { record } : {} });
-            if (latest?.season === season && latest.index === index) season.episodes.get(index).progress = viewing.progress(record);
-            job.seriesStats.episodesChecked++;
-            if (!id) job.seriesStats.missingEpisodeRefs++;
-            if (status === "unknown") {
-              job.seriesStats.episodesUnknown++;
-              season.episodes.get(index).kinds = recordViewingFieldKinds(kinds, job.recheckStats.initialUnknownFields);
-            } else if (status !== "complete") job.seriesStats.episodesIncomplete++;
-          }
+        for (const [index, { latest }] of batch.entries()) {
+          const { id, record, kinds } = ranges[index].episodes[0];
+          const status = viewing.classifyVideo(record);
+          const episode = { id, status, progress: viewing.progress(record), ...status === "unknown" ? { record } : {} };
+          latest.season.episodes.set(latest.index, episode);
+          job.seriesStats.episodesChecked++;
+          if (!id) job.seriesStats.missingEpisodeRefs++;
+          if (status === "unknown") {
+            job.seriesStats.episodesUnknown++;
+            episode.kinds = recordViewingFieldKinds(kinds, job.recheckStats.initialUnknownFields);
+          } else if (status !== "complete") job.seriesStats.episodesIncomplete++;
         }
-        for (const plan of new Set(batch.map((segment) => segment.plan))) {
+        for (const { plan } of batch) {
           if (plan.finished) continue;
-          const full = plan.seasons.every((season) => season.episodes.size === season.count);
-          const observed = plan.seasons.flatMap((season) => [...season.episodes.values()]);
+          const episode = viewing.latestEpisode(plan).episode;
           const result = viewing.seriesResult(plan);
-          if (result === "complete" || full || observed.some((episode) => !episode.id || episode.status !== "complete")) {
-            const status = result === "complete" ? result : full ? result : observed.some((episode) => !episode.id || episode.status === "unknown") ? "unknown" : "in-progress";
-            finishViewingSeriesPlan(plan, status, job);
-          } else saveViewingSeriesDetails(plan, job);
+          finishViewingSeriesPlan(plan, result !== "unknown" ? result : !episode.id || episode.status === "unknown" ? "unknown" : "in-progress", job);
         }
-        publishViewingProgress(job, batch.map((segment) => segment.plan.videoId));
+        publishViewingProgress(job, batch.map(({ plan }) => plan.videoId));
       }
     }
     function finishViewingSeriesPlan(plan, status, job) {
@@ -8758,9 +8733,8 @@
       job.results.set(plan.videoId, status);
       saveViewingSeriesDetails(plan, job);
       if (status === "unknown") {
-        const observed = plan.seasons.flatMap((season) => [...season.episodes.values()]);
         const latest = viewing.latestEpisode(plan)?.episode;
-        if (latest?.id && latest.status === "unknown" || observed.every((episode) => episode.id && ["complete", "unknown"].includes(episode.status)) && new Set(observed.map((episode) => episode.id)).size === observed.length) {
+        if (latest?.id && latest.status === "unknown") {
           if (!job.unresolvedSeries.has(plan)) job.recheckStats.candidates++;
           job.unresolvedSeries.add(plan);
         }
@@ -8812,18 +8786,12 @@
         for (const plan of job.unresolvedSeries) {
           if (plan.status !== "unknown" || plan.recheckBlocked) continue;
           const latest = viewing.latestEpisode(plan)?.episode;
-          const onlyLatest = plan.seasons.some((season) => [...season.episodes.values()].some((episode) => ["not-started", "in-progress"].includes(episode.status)));
-          for (const season of plan.seasons) {
-            for (const episode of season.episodes.values()) {
-              if (onlyLatest && episode !== latest) continue;
-              if (episode.status !== "unknown" || attempted.has(episode.id)) continue;
-              if (!targets.has(episode.id)) {
-                if (targets.size >= VIEWING_EPISODE_BATCH_SIZE) continue;
-                targets.set(episode.id, []);
-              }
-              targets.get(episode.id).push({ plan, episode });
-            }
+          if (latest?.status !== "unknown" || attempted.has(latest.id)) continue;
+          if (!targets.has(latest.id)) {
+            if (targets.size >= VIEWING_EPISODE_BATCH_SIZE) continue;
+            targets.set(latest.id, []);
           }
+          targets.get(latest.id).push({ plan, episode: latest });
         }
         if (!targets.size) return;
         const beforeRequests = job.requests;
@@ -8849,7 +8817,7 @@
               creditsOffset: direct.creditsOffset ?? previous?.creditsOffset ?? null
             } : previous;
             episode.status = viewing.classifyVideo(record);
-            if (episode === viewing.latestEpisode(plan)?.episode) episode.progress = viewing.progress(record);
+            episode.progress = viewing.progress(record);
             if (episode.status === "unknown") {
               job.recheckStats.unknownEpisodes++;
               episode.kinds = recordViewingFieldKinds(kinds, job.recheckStats.remainingUnknownFields);
@@ -8863,9 +8831,8 @@
           }
         }
         for (const plan of affected) {
-          const full = plan.seasons.every((season) => season.episodes.size === season.count);
           const result = viewing.seriesResult(plan);
-          if (result === "complete" || full) finishViewingSeriesPlan(plan, result, job);
+          if (result === "complete" || plan.expected === 1) finishViewingSeriesPlan(plan, result, job);
           saveViewingSeriesDetails(plan, job);
           if (plan.status === "complete") job.recheckStats.recoveredSeries++;
         }
@@ -10943,7 +10910,6 @@
     }
   }) {
     const LOGICAL_COLLECTION_TIMEOUT_MS = 12e4, PARTIAL_PAGE_RECOVERY_TIMEOUT_MS = 2500, PAGE_STABLE_TIMEOUT_MS = 2e3;
-    const NETFLIX_DOM_SELECTORS2 = { standardCard: cardSelector };
     const assertRouteSession = (token) => scope.assertCurrent(token);
     const {
       model: getCarouselDomRuntime,
@@ -11184,6 +11150,75 @@
         operations.delete(operation);
       }
     }
+    function scanReporter(operation, goal, started, extra = {}) {
+      const { section, scroller, track, totalCount, sessionToken, counters: counters2 } = operation;
+      const mode = extra.pageMode ? { pageMode: extra.pageMode } : {};
+      return {
+        pageFacts(requestedPage, actualPage, slots, minimumSlots, minimumNewItems, seen) {
+          const newKeys = new Set(slots.map((slot) => itemKeyFromCard(slot.querySelector(cardSelector))).filter((key) => key && !seen.has(key)));
+          return {
+            requestedPage,
+            actualPage,
+            slots: slots.length,
+            minimumSlots,
+            newItemsReady: newKeys.size,
+            minimumNewItems,
+            ...mode
+          };
+        },
+        pageResult(actualPage, added, total, details = {}) {
+          log(tLog("collectionPageResult"), {
+            actualPage,
+            added: added.length,
+            total,
+            goal,
+            ...mode,
+            ...details,
+            snapshotWork: { ...counters2 },
+            items: added.map(itemSummary)
+          });
+          publish(operation, { collectedCount: total, totalCount });
+        },
+        async restore(items, columns, initialPage, endingPage, canonicalTargetTransform, restorationStarted = performance.now()) {
+          const restored = await restoreNativePageFast(
+            section,
+            scroller,
+            track,
+            items,
+            columns,
+            initialPage,
+            canonicalTargetTransform,
+            sessionToken
+          );
+          assertOperation(operation);
+          log(tLog("nativeRestorationResult"), {
+            from: endingPage,
+            target: initialPage,
+            selectedPage: selectedPage(section),
+            complete: restored && selectedPage(section) === initialPage,
+            elapsedMs: Math.round(performance.now() - restorationStarted),
+            ...mode
+          });
+          return restored;
+        },
+        complete(items, endingPage, initialPage, details = {}) {
+          assertOperation(operation);
+          log(tLog("fullCollectionCompleted"), {
+            collected: items.length,
+            totalCount,
+            goal,
+            ...details,
+            elapsedMs: Math.round(performance.now() - started),
+            endingPage,
+            restoredPage: selectedPage(section),
+            initialPage,
+            ...extra,
+            snapshotWork: { ...counters2 },
+            ids: items.map((item) => item.videoId || item.href)
+          });
+        }
+      };
+    }
     async function collectAllItemsLogical(operation) {
       const { section, scroller, track, totalCount, sessionToken } = operation;
       assertOperation(operation);
@@ -11205,6 +11240,7 @@
       const responsiveColumns = operation.columns || currentPageSlots(scroller, track).length || 1;
       const estimatedPages = Math.max(1, Math.ceil(totalCount / Math.max(1, responsiveColumns)));
       const started = performance.now();
+      const report = scanReporter(operation, goal, started, { pageMode: "logical" });
       const stablePageTransforms = /* @__PURE__ */ new Map();
       let initialPage = null;
       let endingPage = 0;
@@ -11352,38 +11388,28 @@
             });
           }
           visitedSignatures.add(stabilizedSignature);
-          const newKeys = /* @__PURE__ */ new Set();
-          for (const position of pageState.positions) {
-            const card = position.slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
-            const key = itemKeyFromCard(card);
-            if (key && !videoIndex.has(key)) newKeys.add(key);
-          }
+          const pageFacts = report.pageFacts(
+            page,
+            page,
+            pageState.positions.map((position) => position.slot),
+            expectedSlots,
+            1,
+            videoIndex
+          );
+          pageFacts.slots = pageState.slots.length;
+          const indexFacts = { itemIndices: pageState.itemIndices, logicalIndices: pageState.logicalIndices };
           log(tLog("collectionPageStabilized"), {
-            requestedPage: page,
-            actualPage: page,
-            slots: pageState.slots.length,
-            minimumSlots: expectedSlots,
-            newItemsReady: newKeys.size,
-            minimumNewItems: 1,
+            ...pageFacts,
             signature: stabilizedSignature,
             transform: stabilizedTransform,
-            itemIndices: pageState.itemIndices,
-            logicalIndices: pageState.logicalIndices,
-            stabilizeElapsedMs: Math.round(performance.now() - stabilizeStarted),
-            pageMode: "logical"
+            ...indexFacts,
+            stabilizeElapsedMs: Math.round(performance.now() - stabilizeStarted)
           });
-          if (pageState.slots.length < expectedSlots || newKeys.size < 1 || !stabilizedSignature) {
+          if (pageState.slots.length < expectedSlots || pageFacts.newItemsReady < 1 || !stabilizedSignature) {
             const details = {
-              requestedPage: page,
-              actualPage: page,
-              slots: pageState.slots.length,
-              minimumSlots: expectedSlots,
-              newItemsReady: newKeys.size,
-              minimumNewItems: 1,
+              ...pageFacts,
               signaturePresent: Boolean(stabilizedSignature),
-              itemIndices: pageState.itemIndices,
-              logicalIndices: pageState.logicalIndices,
-              pageMode: "logical"
+              ...indexFacts
             };
             logOperationTimeout("logical-page-stabilization", PAGE_STABLE_TIMEOUT_MS, details);
             throw initializationTimeoutError("logical-page-stabilization", PAGE_STABLE_TIMEOUT_MS, details);
@@ -11438,17 +11464,7 @@
             videoIndex.set(key, logicalIndex);
             added.push(item);
           }
-          log(tLog("collectionPageResult"), {
-            actualPage: page,
-            added: added.length,
-            total: collectedCount(),
-            goal,
-            missing: Math.max(0, goal - collectedCount()),
-            pageMode: "logical",
-            snapshotWork: { ...snapshotWork },
-            items: added.map(itemSummary)
-          });
-          publish(operation, { collectedCount: collectedCount(), totalCount });
+          report.pageResult(page, added, collectedCount(), { missing: Math.max(0, goal - collectedCount()) });
           endingPage = page;
           if (collectedCount() >= goal) {
             completionReason = "total-count-and-logical-index-range-reached";
@@ -11518,25 +11534,15 @@
         if (endingPage !== initialPage) {
           const restorationStarted = performance.now();
           const canonicalTargetTransform = stablePageTransforms.get(initialPage) || "";
-          const restorationComplete = await restoreNativePageFast(
-            section,
-            scroller,
-            track,
+          const restorationComplete = await report.restore(
             items,
             responsiveColumns,
             initialPage,
+            endingPage,
             canonicalTargetTransform,
-            sessionToken
+            restorationStarted
           );
           assertOperation(operation);
-          log(tLog("nativeRestorationResult"), {
-            from: endingPage,
-            target: initialPage,
-            selectedPage: selectedPage(section),
-            complete: restorationComplete && selectedPage(section) === initialPage,
-            elapsedMs: Math.round(performance.now() - restorationStarted),
-            pageMode: "logical"
-          });
           if (!restorationComplete || selectedPage(section) !== initialPage) {
             incomplete("restore-initial-page", "native-restoration-incomplete", {
               from: endingPage,
@@ -11545,21 +11551,10 @@
             });
           }
         }
-        assertOperation(operation);
-        log(tLog("fullCollectionCompleted"), {
-          collected: items.length,
-          totalCount,
-          goal,
+        report.complete(items, endingPage, initialPage, {
           completionReason,
           cycleDetected: runtime.cycleDetected,
-          elapsedMs: Math.round(performance.now() - started),
-          endingPage,
-          restoredPage: selectedPage(section),
-          initialPage,
-          pageMode: "logical",
-          domGeneration: runtime.profile.generation,
-          snapshotWork: { ...snapshotWork },
-          ids: items.map((item) => item.videoId || item.href)
+          domGeneration: runtime.profile.generation
         });
         return items;
       } finally {
@@ -11589,6 +11584,7 @@
         )
       );
       const started = performance.now();
+      const report = scanReporter(operation, goal, started);
       const initialPage = selectedPage(section);
       operation.initialPage = initialPage;
       publish(operation, { initialPage });
@@ -11628,31 +11624,16 @@
           const stabilizedSignature = visibleSignature(slots);
           const stabilizedTransform = trackTransformValue(track);
           stablePageTransforms.set(actualPage, stabilizedTransform);
-          const newKeys = /* @__PURE__ */ new Set();
-          for (const slot of slots) {
-            const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
-            const key = itemKeyFromCard(card);
-            if (key && !seen.has(key)) newKeys.add(key);
-          }
+          const pageFacts = report.pageFacts(page, actualPage, slots, minimumSlots, minimumNewItems, seen);
           log(tLog("collectionPageStabilized"), {
-            requestedPage: page,
-            actualPage,
-            slots: slots.length,
-            minimumSlots,
-            newItemsReady: newKeys.size,
-            minimumNewItems,
+            ...pageFacts,
             signature: stabilizedSignature,
             transform: stabilizedTransform,
             stabilizeElapsedMs: Math.round(performance.now() - stabilizeStarted)
           });
-          if (slots.length < minimumSlots || newKeys.size < minimumNewItems) {
+          if (slots.length < minimumSlots || pageFacts.newItemsReady < minimumNewItems) {
             warn(tLog("collectionStoppedBecauseThePageNeverReachedTheExpectedStableState"), {
-              requestedPage: page,
-              actualPage,
-              slots: slots.length,
-              minimumSlots,
-              newItemsReady: newKeys.size,
-              minimumNewItems,
+              ...pageFacts,
               timeoutMs: PAGE_STABLE_TIMEOUT_MS
             });
             break;
@@ -11676,15 +11657,7 @@
             items.push(item);
           }
           const added = items.slice(beforeCount);
-          log(tLog("collectionPageResult"), {
-            actualPage,
-            added: added.length,
-            total: items.length,
-            goal,
-            snapshotWork: { ...snapshotWork },
-            items: added.map(itemSummary)
-          });
-          publish(operation, { collectedCount: items.length, totalCount });
+          report.pageResult(actualPage, added, items.length);
           if (Number.isFinite(goal) && items.length >= goal || actualPage >= pages - 1) break;
           previousPageSignature = stabilizedSignature;
           const next = await moveOnePage(section, scroller, 1, null, sessionToken);
@@ -11711,24 +11684,15 @@
             moveCountParity: Math.abs(endingPage - initialPage) % 2 === 0 ? "even" : "odd",
             canonicalTargetTransform
           });
-          const restorationComplete = await restoreNativePageFast(
-            section,
-            scroller,
-            track,
+          const restorationComplete = await report.restore(
             items,
             expectedPageSlots,
             initialPage,
+            endingPage,
             canonicalTargetTransform,
-            sessionToken
+            restorationStarted
           );
           assertOperation(operation);
-          log(tLog("nativeRestorationResult"), {
-            from: endingPage,
-            target: initialPage,
-            selectedPage: selectedPage(section),
-            complete: restorationComplete && selectedPage(section) === initialPage,
-            elapsedMs: Math.round(performance.now() - restorationStarted)
-          });
           if (restorationComplete && selectedPage(section) === initialPage) {
             await nextFrame(operation);
             assertOperation(operation);
@@ -11739,18 +11703,7 @@
       } finally {
         motionLease.release();
       }
-      assertOperation(operation);
-      log(tLog("fullCollectionCompleted"), {
-        collected: items.length,
-        totalCount,
-        goal,
-        elapsedMs: Math.round(performance.now() - started),
-        endingPage,
-        restoredPage: selectedPage(section),
-        initialPage,
-        snapshotWork: { ...snapshotWork },
-        ids: items.map((item) => item.videoId || item.href)
-      });
+      report.complete(items, endingPage, initialPage);
       return items;
     }
     return Object.freeze({
@@ -18813,7 +18766,7 @@
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.4.66";
+  var SCRIPT_VERSION = "1.4.67";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

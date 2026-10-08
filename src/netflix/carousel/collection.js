@@ -3,7 +3,6 @@ export function createCollection({ native, navigation, scope, performance, reque
     cancelAnimationFrame, captureItem, videoIdFromHref, cardSelector, createError: initializationError,
     log = () => {}, warn = () => {}, tLog = value => value, logTimeout: logOperationTimeout = () => {} }) {
     const LOGICAL_COLLECTION_TIMEOUT_MS = 120000, PARTIAL_PAGE_RECOVERY_TIMEOUT_MS = 2500, PAGE_STABLE_TIMEOUT_MS = 2000;
-    const NETFLIX_DOM_SELECTORS = { standardCard: cardSelector };
     const assertRouteSession = token => scope.assertCurrent(token);
     const { model: getCarouselDomRuntime, resetModel: resetCarouselDomRuntime,
         profile: detectCarouselDomProfile, profileSummary: carouselDomProfileSummary,
@@ -190,6 +189,41 @@ export function createCollection({ native, navigation, scope, performance, reque
         } finally { operations.delete(operation); }
     }
 
+    function scanReporter(operation, goal, started, extra = {}) {
+        const { section, scroller, track, totalCount, sessionToken, counters } = operation;
+        const mode = extra.pageMode ? { pageMode: extra.pageMode } : {};
+        return {
+            pageFacts(requestedPage, actualPage, slots, minimumSlots, minimumNewItems, seen) {
+                const newKeys = new Set(slots.map(slot => itemKeyFromCard(slot.querySelector(cardSelector)))
+                    .filter(key => key && !seen.has(key)));
+                return { requestedPage, actualPage, slots: slots.length, minimumSlots,
+                    newItemsReady: newKeys.size, minimumNewItems, ...mode };
+            },
+            pageResult(actualPage, added, total, details = {}) {
+                log(tLog('collectionPageResult'), { actualPage, added: added.length, total, goal,
+                    ...mode, ...details, snapshotWork: { ...counters }, items: added.map(itemSummary) });
+                publish(operation, { collectedCount: total, totalCount });
+            },
+            async restore(items, columns, initialPage, endingPage, canonicalTargetTransform, restorationStarted = performance.now()) {
+                const restored = await restoreNativePageFast(section, scroller, track, items, columns,
+                    initialPage, canonicalTargetTransform, sessionToken);
+                assertOperation(operation);
+                log(tLog('nativeRestorationResult'), { from: endingPage, target: initialPage,
+                    selectedPage: selectedPage(section), complete: restored && selectedPage(section) === initialPage,
+                    elapsedMs: Math.round(performance.now() - restorationStarted), ...mode });
+                // Callers recheck selection after logging, which can invoke host code.
+                return restored;
+            },
+            complete(items, endingPage, initialPage, details = {}) {
+                assertOperation(operation);
+                log(tLog('fullCollectionCompleted'), { collected: items.length, totalCount, goal,
+                    ...details, elapsedMs: Math.round(performance.now() - started), endingPage,
+                    restoredPage: selectedPage(section), initialPage, ...extra,
+                    snapshotWork: { ...counters }, ids: items.map(item => item.videoId || item.href) });
+            }
+        };
+    }
+
     async function collectAllItemsLogical(operation) {
         const { section, scroller, track, totalCount, sessionToken } = operation;
         assertOperation(operation);
@@ -212,6 +246,7 @@ export function createCollection({ native, navigation, scope, performance, reque
         const responsiveColumns = operation.columns || currentPageSlots(scroller, track).length || 1;
         const estimatedPages = Math.max(1, Math.ceil(totalCount / Math.max(1, responsiveColumns)));
         const started = performance.now();
+        const report = scanReporter(operation, goal, started, { pageMode: 'logical' });
         const stablePageTransforms = new Map();
         let initialPage = null;
         let endingPage = 0;
@@ -372,40 +407,25 @@ export function createCollection({ native, navigation, scope, performance, reque
                 }
                 visitedSignatures.add(stabilizedSignature);
 
-                const newKeys = new Set();
-                for (const position of pageState.positions) {
-                    const card = position.slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-                    const key = itemKeyFromCard(card);
-                    if (key && !videoIndex.has(key)) newKeys.add(key);
-                }
+                const pageFacts = report.pageFacts(page, page, pageState.positions.map(position => position.slot),
+                    expectedSlots, 1, videoIndex);
+                // Positions supply identities; the mounted window supplies the slot count.
+                pageFacts.slots = pageState.slots.length;
+                const indexFacts = { itemIndices: pageState.itemIndices, logicalIndices: pageState.logicalIndices };
 
                 log(tLog('collectionPageStabilized'), {
-                    requestedPage: page,
-                    actualPage: page,
-                    slots: pageState.slots.length,
-                    minimumSlots: expectedSlots,
-                    newItemsReady: newKeys.size,
-                    minimumNewItems: 1,
+                    ...pageFacts,
                     signature: stabilizedSignature,
                     transform: stabilizedTransform,
-                    itemIndices: pageState.itemIndices,
-                    logicalIndices: pageState.logicalIndices,
+                    ...indexFacts,
                     stabilizeElapsedMs: Math.round(performance.now() - stabilizeStarted),
-                    pageMode: 'logical'
                 });
 
-                if (pageState.slots.length < expectedSlots || newKeys.size < 1 || !stabilizedSignature) {
+                if (pageState.slots.length < expectedSlots || pageFacts.newItemsReady < 1 || !stabilizedSignature) {
                     const details = {
-                        requestedPage: page,
-                        actualPage: page,
-                        slots: pageState.slots.length,
-                        minimumSlots: expectedSlots,
-                        newItemsReady: newKeys.size,
-                        minimumNewItems: 1,
+                        ...pageFacts,
                         signaturePresent: Boolean(stabilizedSignature),
-                        itemIndices: pageState.itemIndices,
-                        logicalIndices: pageState.logicalIndices,
-                        pageMode: 'logical'
+                        ...indexFacts
                     };
                     logOperationTimeout('logical-page-stabilization', PAGE_STABLE_TIMEOUT_MS, details);
                     throw initializationTimeoutError('logical-page-stabilization', PAGE_STABLE_TIMEOUT_MS, details);
@@ -458,17 +478,7 @@ export function createCollection({ native, navigation, scope, performance, reque
                     added.push(item);
                 }
 
-                log(tLog('collectionPageResult'), {
-                    actualPage: page,
-                    added: added.length,
-                    total: collectedCount(),
-                    goal,
-                    missing: Math.max(0, goal - collectedCount()),
-                    pageMode: 'logical',
-                    snapshotWork: { ...snapshotWork },
-                    items: added.map(itemSummary)
-                });
-                publish(operation, { collectedCount: collectedCount(), totalCount });
+                report.pageResult(page, added, collectedCount(), { missing: Math.max(0, goal - collectedCount()) });
 
                 endingPage = page;
                 if (collectedCount() >= goal) {
@@ -546,25 +556,9 @@ export function createCollection({ native, navigation, scope, performance, reque
             if (endingPage !== initialPage) {
                 const restorationStarted = performance.now();
                 const canonicalTargetTransform = stablePageTransforms.get(initialPage) || '';
-                const restorationComplete = await restoreNativePageFast(
-                    section,
-                    scroller,
-                    track,
-                    items,
-                    responsiveColumns,
-                    initialPage,
-                    canonicalTargetTransform,
-                    sessionToken
-                );
+                const restorationComplete = await report.restore(items, responsiveColumns, initialPage,
+                    endingPage, canonicalTargetTransform, restorationStarted);
                 assertOperation(operation);
-                log(tLog('nativeRestorationResult'), {
-                    from: endingPage,
-                    target: initialPage,
-                    selectedPage: selectedPage(section),
-                    complete: restorationComplete && selectedPage(section) === initialPage,
-                    elapsedMs: Math.round(performance.now() - restorationStarted),
-                    pageMode: 'logical'
-                });
                 if (!restorationComplete || selectedPage(section) !== initialPage) {
                     incomplete('restore-initial-page', 'native-restoration-incomplete', {
                         from: endingPage,
@@ -574,22 +568,8 @@ export function createCollection({ native, navigation, scope, performance, reque
                 }
             }
 
-            assertOperation(operation);
-            log(tLog('fullCollectionCompleted'), {
-                collected: items.length,
-                totalCount,
-                goal,
-                completionReason,
-                cycleDetected: runtime.cycleDetected,
-                elapsedMs: Math.round(performance.now() - started),
-                endingPage,
-                restoredPage: selectedPage(section),
-                initialPage,
-                pageMode: 'logical',
-                domGeneration: runtime.profile.generation,
-                snapshotWork: { ...snapshotWork },
-                ids: items.map(item => item.videoId || item.href)
-            });
+            report.complete(items, endingPage, initialPage, { completionReason, cycleDetected: runtime.cycleDetected,
+                domGeneration: runtime.profile.generation });
             return items;
         } finally {
             motionLease.release();
@@ -625,6 +605,7 @@ export function createCollection({ native, navigation, scope, performance, reque
                 )
             );
         const started = performance.now();
+        const report = scanReporter(operation, goal, started);
         const initialPage = selectedPage(section);
         operation.initialPage = initialPage;
         publish(operation, { initialPage });
@@ -679,33 +660,18 @@ export function createCollection({ native, navigation, scope, performance, reque
                 const stabilizedSignature = visibleSignature(slots);
                 const stabilizedTransform = trackTransformValue(track);
                 stablePageTransforms.set(actualPage, stabilizedTransform);
-                const newKeys = new Set();
-                for (const slot of slots) {
-                    const card = slot.querySelector(NETFLIX_DOM_SELECTORS.standardCard);
-                    const key = itemKeyFromCard(card);
-                    if (key && !seen.has(key)) newKeys.add(key);
-                }
+                const pageFacts = report.pageFacts(page, actualPage, slots, minimumSlots, minimumNewItems, seen);
 
                 log(tLog('collectionPageStabilized'), {
-                    requestedPage: page,
-                    actualPage,
-                    slots: slots.length,
-                    minimumSlots,
-                    newItemsReady: newKeys.size,
-                    minimumNewItems,
+                    ...pageFacts,
                     signature: stabilizedSignature,
                     transform: stabilizedTransform,
                     stabilizeElapsedMs: Math.round(performance.now() - stabilizeStarted)
                 });
 
-                if (slots.length < minimumSlots || newKeys.size < minimumNewItems) {
+                if (slots.length < minimumSlots || pageFacts.newItemsReady < minimumNewItems) {
                     warn(tLog('collectionStoppedBecauseThePageNeverReachedTheExpectedStableState'), {
-                        requestedPage: page,
-                        actualPage,
-                        slots: slots.length,
-                        minimumSlots,
-                        newItemsReady: newKeys.size,
-                        minimumNewItems,
+                        ...pageFacts,
                         timeoutMs: PAGE_STABLE_TIMEOUT_MS
                     });
                     break;
@@ -725,16 +691,7 @@ export function createCollection({ native, navigation, scope, performance, reque
                 }
 
                 const added = items.slice(beforeCount);
-                log(tLog('collectionPageResult'), {
-                    actualPage,
-                    added: added.length,
-                    total: items.length,
-                    goal,
-                    snapshotWork: { ...snapshotWork },
-                    items: added.map(itemSummary)
-                });
-
-                publish(operation, { collectedCount: items.length, totalCount });
+                report.pageResult(actualPage, added, items.length);
 
                 if ((Number.isFinite(goal) && items.length >= goal) || actualPage >= pages - 1) break;
                 previousPageSignature = stabilizedSignature;
@@ -763,25 +720,9 @@ export function createCollection({ native, navigation, scope, performance, reque
                     moveCountParity: Math.abs(endingPage - initialPage) % 2 === 0 ? 'even' : 'odd',
                     canonicalTargetTransform
                 });
-                const restorationComplete = await restoreNativePageFast(
-                    section,
-                    scroller,
-                    track,
-                    items,
-                    expectedPageSlots,
-                    initialPage,
-                    canonicalTargetTransform,
-                    sessionToken
-                );
+                const restorationComplete = await report.restore(items, expectedPageSlots, initialPage,
+                    endingPage, canonicalTargetTransform, restorationStarted);
                 assertOperation(operation);
-
-                log(tLog('nativeRestorationResult'), {
-                    from: endingPage,
-                    target: initialPage,
-                    selectedPage: selectedPage(section),
-                    complete: restorationComplete && selectedPage(section) === initialPage,
-                    elapsedMs: Math.round(performance.now() - restorationStarted)
-                });
 
                 // Keep suppression through two more paints after the expected original
                 // page is mounted so deferred Netflix writes cannot animate on release.
@@ -796,18 +737,7 @@ export function createCollection({ native, navigation, scope, performance, reque
             motionLease.release();
         }
 
-        assertOperation(operation);
-        log(tLog('fullCollectionCompleted'), {
-            collected: items.length,
-            totalCount,
-            goal,
-            elapsedMs: Math.round(performance.now() - started),
-            endingPage,
-            restoredPage: selectedPage(section),
-            initialPage,
-            snapshotWork: { ...snapshotWork },
-            ids: items.map(item => item.videoId || item.href)
-        });
+        report.complete(items, endingPage, initialPage);
         return items;
     }
 

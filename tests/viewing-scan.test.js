@@ -27,6 +27,44 @@ function fixture(onChange = () => {}, count = 1) {
         onFinish(callback) { finishHook = callback; } };
 }
 
+test('finale batches preserve short-series fallback, missing references and direct repair outcomes', async () => {
+    const scope = createSessionScope({ isTargetPage: () => true, AbortController, setTimeout, clearTimeout });
+    const sessionToken = scope.begin(), requests = [];
+    const progress = bookmark => ({ type: 'episode', watched: false, bookmark, runtime: 100, creditsOffset: null });
+    const v = createViewing({ activeProfile: () => 'a', now: () => 1000, performanceNow: () => 0,
+        beginRequest: scope.beginRequest, finishRequest: scope.finishRequest, setRequestTimeout: scope.setRequestTimeout,
+        isCancelled: scope.isCancelled, createCancelledError: scope.cancelledError, getValue: () => null, setValue() {},
+        scanLimits: { episodeBatch: 2 },
+        data: { limits: { titleBatch: 50, episodeBatch: 200, seasons: 40, episodes: 500 },
+            beginRead: () => ({ profileGuid: 'a' }),
+            async readTitles(ids) { return new Map(ids.map(id => [id, { videoId: id, type: 'show', seasonCount: 1, episodeCount: null }])); },
+            async readSeasons(records) { return records.map(({ videoId }) => ({ videoId,
+                expected: ['1', '4'].includes(videoId) ? 1 : 3,
+                seasons: [{ id: videoId, count: ['1', '4'].includes(videoId) ? 1 : 3 }] })); },
+            async readEpisodes(segments) {
+                requests.push(segments);
+                return segments.map(({ seasonId, from, to }) => ({ seasonId, from, to,
+                    episodes: [{ id: seasonId === '5' ? '' : seasonId + '1',
+                        record: ['1', '2'].includes(seasonId) ? progress(0) : null,
+                        kinds: { watched: 'missing', bookmark: 'missing', runtime: 'missing' } }] }));
+            },
+            async readDirectEpisodes(ids) {
+                assert.deepEqual(ids, ['31', '41']);
+                return new Map(ids.map(id => [id, { record: progress(id === '31' ? 25 : 0),
+                    kinds: { watched: 'false', bookmark: 'zero', runtime: 'positive-number' } }]));
+            } } });
+    const session = v.createSession({ sessionToken, assertCurrent: () => scope.assertCurrent(sessionToken),
+        readItems: () => ['1', '2', '3', '4', '5'].map(videoId => ({ videoId })) });
+    await v.start(session);
+    assert(requests.every(batch => batch.length <= 2 && batch.every(range => range.from === range.to)));
+    assert.deepEqual(requests.flat().map(range => range.from), [0, 2, 2, 0, 2]);
+    assert.deepEqual(['1', '2', '3', '4', '5'].map(id => v.freshStatus(session, id)),
+        ['not-started', 'in-progress', 'unknown', 'not-started', 'unknown']);
+    assert.equal(scope.requestCount(), 0);
+    assert.equal(v.diagnostics(session).failure, null);
+    v.dispose(session);
+});
+
 test('viewing sessions hide scan maps/controllers and share an exact refresh promise', async () => {
     const e = fixture();
     e.v.start(e.session);

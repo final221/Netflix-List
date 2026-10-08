@@ -2480,6 +2480,51 @@ test('native traversal commands collect overlapping windows in both modes and re
     }
 });
 
+test('both collection strategies retain stabilization, result and restoration evidence', async () => {
+    for (const mode of ['logical', 'indicator']) {
+        const events = [];
+        const e = traversalEnvironment({ mode, overrides: { log(name, facts) { events.push({ name, facts }); } } });
+        await e.settle(e.collect());
+        const pages = events.filter(event => event.name === 'collectionPageStabilized').map(event => event.facts);
+        assert.deepEqual(pages.map(facts => [facts.actualPage, facts.slots, facts.newItemsReady]), [[0, 3, 3], [1, 3, 1]]);
+        assert(pages.every(facts => facts.signature && facts.transform && facts.stabilizeElapsedMs >= 0));
+        const results = events.filter(event => event.name === 'collectionPageResult').map(event => event.facts);
+        assert.deepEqual(results.map(facts => [facts.added, facts.total, facts.goal]), [[3, 3, 4], [1, 4, 4]]);
+        assert.equal(results[0].snapshotWork.snapshotsCaptured, 3, 'earlier evidence is copied');
+        const restored = events.find(event => event.name === 'nativeRestorationResult').facts;
+        assert.deepEqual([restored.from, restored.target, restored.selectedPage, restored.complete], [1, 0, 0, true]);
+        assert(restored.elapsedMs >= 0);
+        const completed = events.find(event => event.name === 'fullCollectionCompleted').facts;
+        assert.deepEqual(completed.ids, ['1', '2', '3', '4']);
+        assert.deepEqual([completed.collected, completed.totalCount, completed.endingPage, completed.restoredPage], [4, 4, 1, 0]);
+        assert.equal(completed.snapshotWork.duplicateSnapshotsAvoided, 2);
+        assert.equal(completed.pageMode, mode === 'logical' ? mode : undefined);
+        if (mode === 'logical') {
+            assert.deepEqual(pages[1].logicalIndices, [1, 2, 3]);
+            assert.equal(results[1].missing, 0);
+            assert.equal(completed.completionReason, 'total-count-and-logical-index-range-reached');
+        }
+    }
+});
+
+test('restoration reporting cannot resume an obsolete collection or release replacement motion', async () => {
+    for (const mode of ['logical', 'indicator']) {
+        let e, replacement;
+        e = traversalEnvironment({ mode, overrides: { log(name) {
+            if (name !== 'nativeRestorationResult') return;
+            e.carousel.clearBinding(); e.carousel.bind(e.section, e.scroller, e.track);
+            replacement = e.carousel.suppressMotion(e.section, e.track);
+        } } });
+        await e.settle(assert.rejects(e.collect(), { code: 'NATIVE_SOURCE_REPLACED' }));
+        assert.equal(e.track.style.getPropertyValue('transition'), 'none');
+        assert.equal(e.carousel.diagnostics().navigation.motionLeases, 1);
+        assert.equal(e.scheduler.frames.size, 0);
+        assert.equal(e.scheduler.timers.size, 0);
+        replacement.release();
+        assert.equal(e.track.style.getPropertyValue('transition'), 'original-transition');
+    }
+});
+
 test('native traversal cancellation releases captured material and cannot return a successful partial collection', async () => {
     for (const mode of ['logical', 'indicator']) {
         const captured = [];

@@ -10,7 +10,7 @@ User-supplied Netflix evidence is distilled in [logs/knowledge.md](../logs/knowl
 
 ## Current work and deferred items
 
-Release **1.4.66** makes diagnostic exports compact by default; the 1.4.65 simplification remains complete. The 2% benchmark applies primarily to authored runtime lines, with generated output reported separately. The 1.4.63 review fixes, modular migration P01–P21 and selected R01–R03/D01–D03 reductions remain complete. The user authorizes continuing concrete behavior-preserving simplification directly, without repeated full assessments or disposable prototypes.
+Release **1.4.67** continues collection/viewing simplification; compact diagnostic exports from 1.4.66 remain implemented. The 2% benchmark applies primarily to authored runtime lines, with generated output reported separately. The 1.4.63 review fixes, modular migration P01–P21 and selected R01–R03/D01–D03 reductions remain complete. The user authorizes continuing concrete behavior-preserving simplification directly, without repeated full assessments or disposable prototypes.
 
 - **Current live checks:** adopt the new Tampermonkey installation URL and test the current release; remaining evidence gaps and conditional investigations are listed below.
 - **Diagnostics scope:** export-volume reduction is selected and implemented. Detailed title/URL/video-ID diagnostics remain available through Shift-click and the console; a separate privacy/redaction policy remains unselected (original point E).
@@ -24,7 +24,20 @@ Evidence: [logs/knowledge.md](../logs/knowledge.md), sessions 1.4.52–1.4.58 an
 
 **Hover delay:** 1.4.58 preparation reaches about 1.6 seconds, with substantial issued-move acknowledgement and queue wait; graft/alignment/replay work is small in that session. If current user testing still shows delay, investigate issued-move acknowledgement and cancelled-work queue admission while preserving settlement ownership. No performance fix is selected by reviewing or distilling logs.
 
-**Live acceptance gap:** the supplied sessions do not establish real resize/zoom/remapping, route exit/reentry/retirement, membership/Undo, manual viewing or exact construction/readiness timer retirement. Unknown viewing metadata remains unresolved despite successful requests. The 1.4.64 capture establishes complete loading and sampled native hover activity; it does not close the listed interaction/lifecycle gaps. No supplied capture tests 1.4.65–1.4.66; automated acceptance and older activity cannot replace current-version user observations.
+**Live acceptance gap:** the supplied sessions do not establish real resize/zoom/remapping, route exit/reentry/retirement, membership/Undo, manual viewing or exact construction/readiness timer retirement. Unknown viewing metadata remains unresolved despite successful requests. The 1.4.64 capture establishes complete loading and sampled native hover activity; it does not close the listed interaction/lifecycle gaps. No supplied capture tests 1.4.65–1.4.67; automated acceptance and older activity cannot replace current-version user observations.
+
+## Collection and finale-scan simplification — 1.4.67
+
+Native collection shares new-key sampling, page-result/progress reporting, restoration invocation/evidence and completion reporting. Logical and indicator policies retain separate validation, failure handling, restoration widths and paint waits. Viewing scan now batches and repairs its actual one-finale-per-series targets directly, removing historical range accounting, nested range traversal and unreachable multi-episode repair selection. Full coverage classification, metadata/manual expiry, unknown outcomes, request budgets and diagnostic fields remain intact. Revalidate collection ownership after the shared asynchronous restoration returns.
+
+| Measure | 1.4.66 | 1.4.67 | Net reduction |
+| --- | --- | --- | --- |
+| Authored runtime (42 modules) | 15,815 lines / 920,065 bytes | 15,714 lines / 916,548 bytes | **101 lines (0.64%) / 3,517 bytes** |
+| Generated userscript | 18,823 lines / 873,636 bytes | 18,776 lines / 871,230 bytes | **47 lines (0.25%) / 2,406 bytes** |
+
+Same physical-line/LF-normalized-byte measure as previous checkpoints; tests, tooling and documentation excluded. This pass **does not meet the 2% benchmark**. Shared schemas account for part of the savings; removing unused range machinery reduces concepts. Further reductions traced in session/carousel require wider ownership work, while many shorter alternatives merely compress formatting; neither is counted as completed simplification here.
+
+Three regressions verify both strategies' retained evidence, retirement during restoration reporting with replacement motion ownership, and finale batch bounds/short-series versus older-coverage fallbacks/missing references/direct repair outcomes. All **551** offline tests pass; build/check, generated syntax, diff and whitespace review pass. Package/lock/metadata/internal versions agree at 1.4.67. Live acceptance remains outstanding.
 
 ## Compact log exports and capture distillation — 1.4.66
 
