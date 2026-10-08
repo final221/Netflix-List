@@ -30,7 +30,7 @@ jobs:
       - name: Check generated output and dependencies
         run: npm run check
       - name: Syntax
-        run: node --check "Legacy My List for Netflix.user.js"
+        run: node --check "dist/My List for Netflix.user.js"
       - name: Whitespace
         run: git show --format= --check HEAD
       - name: Build leaves tracked files unchanged

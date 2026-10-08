@@ -113,8 +113,12 @@ async function checkScenarioTransfers(root) {
     }
 }
 
-// Preserve the baseline installation contract while feature ownership migrates.
+// Preserve installation identity and the published release location.
 function checkInstallation(metadata) {
+    assert.equal(metadata.name, 'My List for Netflix', 'Metadata name must preserve script identity');
+    const releaseURL = 'https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js';
+    assert.equal(metadata.updateURL, releaseURL, 'Metadata updateURL must use the published dist artifact');
+    assert.equal(metadata.downloadURL, releaseURL, 'Metadata downloadURL must use the published dist artifact');
     assert.deepEqual(metadata.match, ['https://www.netflix.com/*'], 'Metadata match must preserve the Netflix scope');
     assert.deepEqual(metadata.grant,
         ['GM_registerMenuCommand', 'GM_unregisterMenuCommand', 'GM_getValue', 'GM_setValue'],

@@ -4,7 +4,9 @@ A Tampermonkey userscript that presents Netflix My List as a scrollable grid, us
 
 ## Installation
 
-Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released userscript](https://github.com/final221/Netflix-List/raw/refs/heads/main/Legacy%20My%20List%20for%20Netflix.user.js) and install it. Visit `https://www.netflix.com/browse/my-list`. The existing menu command toggles the original Netflix list, and CopyLogs exports the script's diagnostics.
+Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released userscript](https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js) and install it. Visit `https://www.netflix.com/browse/my-list`. The existing menu command toggles the original Netflix list, and CopyLogs exports the script's diagnostics.
+
+For copies installed from the former root location, open the released-userscript link once and confirm the update in Tampermonkey. The script name/namespace is unchanged; this release specifies the new URLs for future updates.
 
 ## Development
 
@@ -15,13 +17,13 @@ npm run check
 npm test
 npm run build
 npm run check
-node --check "Legacy My List for Netflix.user.js"
+node --check "dist/My List for Netflix.user.js"
 git diff --check
 ```
 
 Run check before rebuilding a checkout so stale committed output cannot be hidden. After changing source, rebuild before validating the resulting release. The same verification runs in [Windows CI](.github/workflows/check.yml).
 
-Edit `src/` and use `npm run build` to generate the root userscript. See [AGENTS.md](AGENTS.md) for release rules and repository change instructions.
+Edit `src/` and use `npm run build` to generate the distributable in dist/. See [AGENTS.md](AGENTS.md) for release rules and repository change instructions.
 
 ## Live testing
 
@@ -47,7 +49,8 @@ tests/                              Offline behavior, bundle and dependency chec
 .github/workflows/check.yml         Windows CI
 package.json / package-lock.json    Release version and locked tooling
 userscript.meta.json                Userscript installation metadata
-Legacy My List for Netflix.user.js  Generated, committed release
+dist/
+  My List for Netflix.user.js        Generated, committed installable release
 ```
 
 An optional ready-to-delete/ folder contains retired documents awaiting deletion.

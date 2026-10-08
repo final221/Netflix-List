@@ -1,10 +1,10 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 
 export const repositoryRoot = fileURLToPath(new URL('../', import.meta.url));
-export const distributionName = 'Legacy My List for Netflix.user.js';
+export const distributionName = 'dist/My List for Netflix.user.js';
 
 function metadataHeader(metadata, version) {
     if (Object.hasOwn(metadata, 'version')) throw new Error('Version belongs only in package.json');
@@ -59,6 +59,7 @@ export async function generateUserscript({ root = repositoryRoot } = {}) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
     const result = await generateUserscript();
+    await mkdir(path.dirname(path.join(repositoryRoot, distributionName)), { recursive: true });
     await writeFile(path.join(repositoryRoot, distributionName), result.code, 'utf8');
     console.log(`Built ${distributionName} v${result.version}`);
 }

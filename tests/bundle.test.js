@@ -11,7 +11,7 @@ import { EventTarget, Element, createDocument } from './helpers/dom.js';
 import { createScheduler } from './helpers/scheduler.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const distribution = 'Legacy My List for Netflix.user.js';
+const distribution = 'dist/My List for Netflix.user.js';
 const shipped = (await readFile(path.join(root, distribution), 'utf8')).replace(/\r\n/g, '\n');
 const releaseVersion = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
 
@@ -167,6 +167,7 @@ async function fixture(operation) {
         for (const name of ['package.json', 'userscript.meta.json', 'src', 'tests']) {
             await cp(path.join(root, name), path.join(directory, name), { recursive: true });
         }
+        await mkdir(path.dirname(path.join(directory, distribution)), { recursive: true });
         await writeFile(path.join(directory, distribution), shipped);
         await operation(directory);
     } finally {
@@ -185,6 +186,8 @@ test('build is deterministic, self-contained and preserves metadata/version', as
     const header = first.code.slice(0, first.code.indexOf('// ==/UserScript=='));
     assert.equal(header.match(/@version\s+(\S+)/)?.[1], releaseVersion);
     assert.equal(first.code.match(/SCRIPT_VERSION = ["']([^"']+)["']/)?.[1], releaseVersion);
+    assert.equal(header.match(/@updateURL\s+(\S+)/)?.[1], 'https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js');
+    assert.equal(header.match(/@downloadURL\s+(\S+)/)?.[1], 'https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js');
     assert.match(header, /@sandbox\s+raw/);
     assert.match(header, /@run-at\s+document-idle/);
     assert.match(header, /@noframes\s*$/m);
@@ -242,7 +245,8 @@ test('check rejects altered grants and execution settings', async () => {
     const { checkUserscript } = await import('../scripts/check.mjs');
     for (const [key, value] of Object.entries({ grant: ['GM_getValue'], sandbox: 'JavaScript',
         'run-at': 'document-start', noframes: false, match: ['https://example.com/*'],
-        namespace: 'changed.script.identity', require: ['https://example.com/runtime.js'] })) {
+        name: 'Changed script', namespace: 'changed.script.identity', updateURL: 'https://example.com/wrong.user.js',
+        downloadURL: 'https://example.com/wrong.user.js', require: ['https://example.com/runtime.js'] })) {
         await fixture(async directory => {
             const file = path.join(directory, 'userscript.meta.json');
             const metadata = JSON.parse(await readFile(file, 'utf8'));

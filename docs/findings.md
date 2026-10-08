@@ -942,3 +942,9 @@ The user selected evaluation and restructuring of document locations. README.md 
 ## README and agent-instruction cleanup — 2026-10-08
 
 At the user's request, README is reduced to introduction/installation, runnable verification, repository map and documentation links. Versioning, retention and change rules remain in AGENTS.md; architecture/verification detail remains in docs/architecture.md. Local-link/anchor, artifact and whitespace checks pass. Runtime/version stays 1.4.61. Context was reviewed without a durable change.
+
+## Release artifact relocation — 1.4.62, 2026-10-08
+
+The user selected moving/renaming the generated userscript into dist/My List for Netflix.user.js and providing the new Tampermonkey installation URL. Build creates dist/, checker/bundle fixtures and Windows CI use that path, and metadata pins updateURL/downloadURL to the published raw GitHub file while retaining name/namespace/grants/storage identity. README provides the one-time installation transition; root output is removed. Runtime algorithms are unchanged; package/lock/generated version advances to 1.4.62. Context reviewed without a durable change; live installation remains user-owned.
+
+Local acceptance: all 537 tests pass, including generated update/download URL assertions and rejection of changed installation identity/URLs. Build/check, syntax, local links and whitespace pass; generated runtime body matches 1.4.61 after normalizing the injected version. Exact publication and Windows CI evidence follow separately.
