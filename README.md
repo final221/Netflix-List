@@ -29,13 +29,38 @@ Any pushed change to the distributable requires a version greater than the newes
 
 ## User testing and version logs
 
-The user tests released versions in Netflix with Tampermonkey on Windows and manually saves CopyLogs exports in logs/. Raw captures are temporary review inputs. After review, distinguishing version-specific evidence and its limits are folded into [logs/knowledge.md](logs/knowledge.md), actionable interpretation goes into [findings.md](findings.md), and the reviewed raw export is removed. AGENTS.md owns this retention workflow.
+The user tests released versions in Netflix with Tampermonkey on Windows and manually saves CopyLogs exports in logs/. Raw captures are temporary review inputs. After review, distinguishing version-specific evidence and its limits are folded into [logs/knowledge.md](logs/knowledge.md), actionable interpretation goes into [docs/findings.md](docs/findings.md), and the reviewed raw export is removed. AGENTS.md owns this retention workflow.
 
 The knowledge file stays compact and contains no implementation plans, architecture or automated-test results. Previously committed originals remain recoverable through the Git provenance it records. Live observations remain separate from local/CI acceptance and do not certify newer releases.
 
+## Repository layout
+
+Paths below are relative to the repository root. README and AGENTS stay at the root for discovery; project documentation lives under docs/. Live-log evidence stays under logs/ with its temporary review inputs.
+
+```text
+README.md                           Installation, verification and repository map
+AGENTS.md                           Workflow, document ownership and read order
+docs/
+  architecture.md                   Implemented source/ownership contracts and source map
+  context.md                        Durable repository knowledge and user preferences
+  findings.md                       Findings, decisions, progress and verification
+logs/
+  knowledge.md                      Bounded, version-specific live observations/provenance
+  <version>.txt                     Temporary new capture; removed after completed review
+src/                                Authored runtime modules
+scripts/                            Build and consistency verification
+tests/                              Offline behavior, bundle and dependency checks
+.github/workflows/check.yml         Windows CI
+package.json / package-lock.json    Release version and locked tooling
+userscript.meta.json                Userscript installation metadata
+Legacy My List for Netflix.user.js  Generated, committed release
+```
+
+An optional ready-to-delete/ folder holds retired documents awaiting user deletion. Active documentation never depends on it. The source composition map is in [docs/architecture.md](docs/architecture.md); document ownership and retention rules are in AGENTS.md.
+
 ## Architecture
 
-[docs/architecture.md](docs/architecture.md) owns the implemented architecture and continuing contracts. [findings.md](findings.md) records decisions, completed work, verification and version-specific live evidence. The 21-step modular-source migration is complete.
+[docs/architecture.md](docs/architecture.md) owns the implemented architecture and continuing contracts. [docs/findings.md](docs/findings.md) records decisions, completed work, verification and version-specific live evidence. The 21-step modular-source migration is complete.
 
 `src/main.js` starts `app/application.js`. Application owns navigation, retained logging, semantic settings/menus and the current My List session. Each `app/my-list-session.js` instance assembles and retires the public list/viewing/grid/hover/native capabilities and owns its own request scope. `app/responsive.js` owns viewport/source checks and the refresh transaction. List owns membership/collection/queues/Undo; viewing owns profile-specific scans/placement/persistence; grid owns cards/frame/groups/styles and bounded image diagnostics; hover owns intent/timing. Netflix adapters own page/protocol interpretation, native binding/mapping/navigation/collection, source presentation and native popup mechanics. Diagnostic reporting consumes copied feature summaries. No production legacy entry or import exception remains.
 

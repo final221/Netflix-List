@@ -1,6 +1,6 @@
 # Distilled live-log evidence
 
-This file owns compact observations and provenance from user-supplied Netflix sessions. It contains evidence, not bug diagnoses, fix status, implementation plans, architecture, preferences or automated acceptance. Those belong in [findings.md](../findings.md), [docs/architecture.md](../docs/architecture.md), context.md and repository workflow. Review procedure and size limits belong in AGENTS.md.
+This file owns compact observations and provenance from user-supplied Netflix sessions. It contains evidence, not bug diagnoses, fix status, implementation plans, architecture, preferences or automated acceptance. Those belong in [docs/findings.md](../docs/findings.md), [docs/architecture.md](../docs/architecture.md), docs/context.md and repository workflow. Review procedure and size limits belong in AGENTS.md.
 
 ## Historical sessions — 1.4.52–1.4.58
 
@@ -25,4 +25,4 @@ Original exports were named `logs/<version>.txt`. All seven are recoverable at G
 
 ## Evidence limits
 
-Absence of a warning in later sessions does not prove the 1.4.54 mapping failure is resolved in all relevant cases. These exports do not establish real resize/zoom/remapping, route retirement/reentry, membership/Undo, manual viewing or exact construction/readiness retirement acceptance. Native replay counters show activity, not every popup control or physical-pointer outcome. Sample limits restrict later detail. No supplied capture tests 1.4.59–1.4.61; older results must not be applied to those releases. Current issue interpretation and follow-up belong only in findings.md.
+Absence of a warning in later sessions does not prove the 1.4.54 mapping failure is resolved in all relevant cases. These exports do not establish real resize/zoom/remapping, route retirement/reentry, membership/Undo, manual viewing or exact construction/readiness retirement acceptance. Native replay counters show activity, not every popup control or physical-pointer outcome. Sample limits restrict later detail. No supplied capture tests 1.4.59–1.4.61; older results must not be applied to those releases. Current issue interpretation and follow-up belong only in docs/findings.md.

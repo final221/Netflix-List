@@ -1,6 +1,6 @@
 # Implemented architecture
 
-This document owns the implemented architecture and continuing ownership, dependency and lifecycle contracts. [findings.md](../findings.md) records decisions, completed work, release evidence and user-supplied live logs. The modular-source migration is complete; its retired implementation plan is no longer a working authority.
+This document owns the implemented architecture and continuing ownership, dependency and lifecycle contracts. [docs/findings.md](findings.md) records decisions, completed work, release evidence and user-supplied live logs. The modular-source migration is complete; its retired implementation plan is no longer a working authority.
 
 ## Build and dependency boundary
 
@@ -78,6 +78,8 @@ Keep delegated listeners, filtered/coalesced observers, cooperative 24-item/6-ms
 Architecture review traces success, failure, source/profile replacement, route cancellation and disposal through actual callers and cross-owner write sites. A passing import graph or total test count alone cannot prove ownership or preserved behavior. Tests use real owners and input fixtures, retain useful observable scenarios and use targeted assertion-sensitivity checks for reductions. Offline evidence does not certify current Netflix private React/DOM compatibility or frame times; those remain version-specific user testing.
 
 ## Application and page sessions
+
+The [repository map](../README.md#repository-layout) locates documentation, evidence, tooling and the release artifact. The composition map below uses paths under src/, with src/main.js shown as the root entry.
 
 ```text
 src/main.js
