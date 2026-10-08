@@ -1,5 +1,7 @@
 # Architecture reduction review — 1.4.60
 
+Completed review and implementation: D01–D03 and the second review shipped in 1.4.61. The baseline proposals and restored prototype below are historical, superseded by the implementation record. This report retains distinct native validity proofs, rejected reductions, measurements and sensitivity evidence; findings.md owns current decisions and progress.
+
 Review baseline: `1bc709a` after fast-forwarding and pushing main on 2026-10-08. The usual project folder is on main, with the same 1.4.60 artifact Tampermonkey obtains from the README installation URL. The user explicitly requested staying in this folder/on main; no branch or worktree was created or selected for this review. That instruction overrides the simplify-codebase skill's separate-working-tree guideline.
 
 This is assessment plus a restored experiment, not implementation approval for all proposed changes. The previous R01–R03 reductions are already published. The essential goal and guards in [the reduction assessment](reduction-assessment.md) still apply. Review included the implemented architecture, migration contracts, source callers and behavior assertions. Existing live exports remain version-specific evidence; this review makes no new Netflix compatibility claim.
@@ -90,7 +92,7 @@ Affected contracts include `collectLogical`, `preparePreferred`, `collectForPubl
 3. Make D03's canonical staged transfer the collection result, adapting native inputs at the boundary. Require removal of the enriched preferred item representation and its conversion path, not a parallel implementation.
 4. Reconsider shared carousel receipt plumbing only if those changes expose a substantial common rule. Current evidence favors keeping its distinct validators.
 
-These changes preserve the implemented feature owners and are not a new whole-codebase migration. If implementation needs different ownership/layout, update Migration.md's target contracts explicitly before applying that step. Re-review guards and actual caller contracts at each step; passing tests alone does not make an untested native compatibility branch unnecessary.
+These changes preserve the implemented feature owners and are not a new whole-codebase migration. If implementation needs different ownership/layout, update architecture.md's continuing contracts explicitly before applying that step. Re-review guards and actual caller contracts at each step; passing tests alone does not make an untested native compatibility branch unnecessary.
 
 The review finds plausible structural excess, especially repeated session coordination and preferred collection wrapping. It does **not** establish that the whole 19,276-line artifact is essential, or that a much smaller implementation can preserve every capability. The only newly measured saving is the restored scheduler prototype. Documentation is the only retained change in this run; main stays on release 1.4.60 for the user's live Netflix check.
 
@@ -105,7 +107,7 @@ The user subsequently authorized reviews to include worthwhile simplification an
 
 **D03:** preferred wire construction now creates canonical frozen scalar records and carries template/columns once at collection level. Per-item page/logicalIndex/cardTemplate wrapper fields are gone; canonical identity survives later staging without another scalar normalization. Complete collection returns the guarded public transfer to grid construction; mounted/native input goes through the same transfer builder. Shared preferred material is described once, while native captured inputs retain identity-checked release ledgers. Inputs without captured material need no cleanup ledger entry.
 
-An intentional refinement from the proposed early transfer: material/page staging happens at complete collection admission, after native count acceptance. Its guard belongs to the current collection rather than the earlier template observation, whose mapping generation can legitimately change on count acceptance. This avoids a new rebinding API or a second transfer implementation. Ownership/layout remain those of the existing migration contracts.
+An intentional refinement from the proposed early transfer: material/page staging happens at complete collection admission, after native count acceptance. Its guard belongs to the current collection rather than the earlier template observation, whose mapping generation can legitimately change on count acceptance. This avoids a new rebinding API or a second transfer implementation. Ownership/layout remain those of the implemented architectural contracts.
 
 The **second review** removed five pure forwarding helpers in the session, an unused private builder export/parameter, and the duplicate position-mismatch diagnostic/prompt construction. Their actual native operations and diagnostic fields stay intact. A source-wide function-reference scan found no additional unused private named functions; exported factories/policies remain referenced capabilities. The scan is supporting evidence, not a dead-code proof for dynamic APIs.
 

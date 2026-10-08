@@ -1,5 +1,7 @@
 # Reduction assessment — 1.4.59
 
+Completed assessment and implementation: R01–R03 shipped in 1.4.60, followed by the 1.4.61 review. Baseline proposals, caller locations and worktree statements below are historical, superseded by the implementation/publication records. This report retains experiment evidence, counterexamples and acceptance rationale; findings.md owns current decisions and progress.
+
 Assessment baseline: `89ece8df950af3c2b7849edc8287e44d2611a411`, also the fast-forwarded main checkout. This request selects assessment of reducible code, not implementation of every candidate below. The existing `codex/essential-code` worktree was reused for disposable experiments and this report; the usual project folder remains on main 1.4.59. No runtime change or version increment is retained.
 
 ## Essential goal and guards

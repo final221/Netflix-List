@@ -1,14 +1,73 @@
 # Implemented architecture
 
-This document describes the implemented source and ownership boundaries. [Migration.md](../Migration.md) defines the destination and contracts; [MigrationPlan.md](../MigrationPlan.md) defines ordered acceptance; [findings.md](../findings.md) records progress, release evidence and user-supplied live logs.
+This document owns the implemented architecture and continuing ownership, dependency and lifecycle contracts. [findings.md](../findings.md) records decisions, completed work, release evidence and user-supplied live logs. The modular-source migration is complete; its retired implementation plan is no longer a working authority.
 
 ## Build and dependency boundary
 
-`package.json` owns the release version and exact Node/npm/esbuild versions. `package-lock.json` locks dependencies; `userscript.meta.json` preserves the installation identity, filename, Netflix match, grants, raw sandbox and document-idle behavior. `scripts/build.mjs` generates the readable self-contained root userscript, injecting identical metadata/internal versions with no external runtime imports or source map. Authored runtime changes belong under `src/`.
+`package.json` owns the release version and exact Node/npm/esbuild versions. `package-lock.json` locks dependencies; `userscript.meta.json` preserves the installation identity, filename, Netflix match, grants, raw sandbox and document-idle behavior. `scripts/build.mjs` generates the readable self-contained root userscript, injecting identical metadata/internal versions with no external runtime imports or source map. The installation name/namespace, match, grants, run-at, raw sandbox and noframes semantics remain stable; output preserves the escaped non-ASCII runtime-string convention and includes styles/translations without @require or runtime module fetches. Authored runtime changes belong under `src/`.
 
 `scripts/check.mjs` generates in memory and checks the existing artifact without overwriting it. It verifies metadata, syntax, normalized output equality, reachable production files, declared capability entry points and absence of cycles/external dependencies. Application composes public features/adapters; private feature files are accessible only within their owner. Netflix/native code cannot import app. There is no legacy import exception or production legacy file. Dependency metadata contains no `src/legacy.js`; deliberately reintroducing that edge fails verification. Graph checks supplement actual state/resource/caller reviews rather than proving ownership by themselves.
 
 `.github/workflows/check.yml` runs one Windows job with locked dependencies and the package's Node version. It checks committed output before tests or rebuilding, runs the offline suites, verifies reproducible output/dependencies/syntax/commit whitespace and rejects tracked build changes. README owns the runnable commands. Live Netflix compatibility remains user-owned.
+
+## Continuing architectural contracts
+
+### Dependency and boundary rules
+
+Each feature's main file is its public capability; neighboring files are private implementation. Boundaries follow state, resource lifetime and complete behavior, rather than file length. Application connects explicit operations and callbacks, without a shared mutable context bag. Instance activation is explicit; imports start no listeners, requests or timers.
+
+| Importing area | Permitted dependencies outside its private implementation |
+| --- | --- |
+| main and app | App internals, public list/viewing/grid/hover capabilities, declared Netflix entries, DOM names, localization and logger/report |
+| Netflix and private carousel | Declared Netflix entries and DOM names; logging, scope and grid replacement arrive as injected collaborators |
+| List | Public list-data, page-DOM and carousel entries |
+| Viewing | Public context and viewing-data entries; pure completion has no adapter dependency |
+| Grid | Card-markup, DOM names and localization |
+| Hover | Native-popup and carousel; current card/replacement operations are injected |
+| Localization and diagnostics | Their own internals and injected locale/snapshot/probe providers |
+| DOM names | Literal names with no runtime feature imports |
+
+These are the directions enforced by scripts/check.mjs. A declared Netflix entry does not grant access to another capability's private files. No production area imports app coordination. List/viewing changes reach grid through session wiring. Only grid changes displayed structure; native popup attaches or restores only its owned interaction properties on borrowed cards. Netflix DOM, React, protocol, endpoint and geometry interpretation stays in adapters. Passive diagnostics cannot authorize publication or trigger recovery, reject an otherwise admitted interaction, or change classification.
+
+### Values and publication
+
+| Boundary value | Continuing contract |
+| --- | --- |
+| Membership record | Canonical frozen scalar identity/display data; no DOM, fiber, credentials, viewing placement, native page or Undo fields. Order comes from current membership, never a stale copied native position. |
+| Collection transfer | Complete records/count/provenance plus separate material/page readers and exact release. Grid and membership accept at one synchronous point before obsolete cleanup. A declined acceptance cannot report a successful change. Failure/cancellation cannot publish a partial successful list. |
+| Native receipt or handle | Read-only and privately registered against its exact binding, model, operation and observed facts. Copying scalar facts or matching a title ID cannot recreate authority. |
+| Grid-card handle | Exact registry/card identity; retirement invalidates it even when the title is unchanged. Borrowers cannot move it or edit its registration. |
+| Viewing publication | Changed IDs and semantic type/placement/manual/loading/failure facts, admitted against current session, profile and membership. No raw job/result/controller/coverage maps cross the boundary. Grid rebuild transfers accepted classification/choice/cache facts to the new viewing session before retiring old work, without resuming requests or letting old refresh completion clear a newer owner. |
+| Undo | List owns record, saved position, correlation and deadline; grid owns retained markup under that exact correlation. A reusable title ID cannot borrow another removal's tree. |
+| Diagnostic summary | Copied bounded facts, without general access to raw DOM/fibers/credentials or operational authority. |
+
+Authoritative expected count, accepted collected count and pending native convergence remain distinct. Missing native content with a positive expected count is not proof of an empty list. Empty, unavailable, cancelled, identity/order mismatch and failed integration remain different outcomes. Synthetic empty presentation stays grid-owned and must not insert a synthetic section into Netflix's managed stack during last-item adoption.
+
+Network adapters validate same-origin endpoints, construct transient credentials, encode requests and parse bodies. Viewing methods represent bounded actual HTTP batches; scan budgets count dispatched requests, drain an allocated wave and stop new dispatch after terminal failure. Absent, malformed and contradictory metadata stay distinguishable; absent progress cannot imply completion. Storage keys/schema, six-hour automatic-cache validation, fresh-only cache saving, manual precedence and conditional series-coverage expiry remain preserved.
+
+### Native observations and lifetimes
+
+Source, source-card, mapping, preparation and observation receipts retain different validity proofs. Preparation includes exclusive readiness and one-time complete-count acceptance; mapping includes the admitted model interpretation; observations additionally validate their requested live facts. Native count, position, readiness, presentation, geometry and page-window changes can invalidate their respective receipts without a route change. A universal generation token cannot replace these checks.
+
+Discovery observes without adopting; identity-only discovery avoids profile/card/count/geometry work. Geometry can describe an incoming source without authorizing adoption. Explicit page-window/template observations include ordered/empty windows and wrapped-tail inPage interpretation. Native handles validate connectedness, identity, index and relevant page/model ownership when borrowed. Shared synchronous read scopes end before await. Descriptions and layout scalars copied for formatting remain passive unless their original receipt is still admitted.
+
+Mounted bootstrap proof stays private to carousel; list chooses whether entry may reuse it and falls back to fresh data if revalidation fails. Initial versus SPA freshness, logical versus indicator count policy, fresh indicator page-zero anchoring, preferred/right/left search order and wrapped-tail rules remain distinct. Readiness overlaps independent fresh-data work with a handled result; count-request failure must not leave an unhandled readiness rejection. Native signature admission precedes source-handle publication, while exact-record page hints remain carousel-owned for the current membership parent.
+
+Session, active profile, native binding/model, grid card and hover attempt are independent validity dimensions. Revalidate after asynchronous waits and around reentrant adapter, storage, diagnostic and cleanup callbacks before publication. Dispose repeatedly without releasing a newer owner's requests, timers, styles, grafts, geometry or preview. Source presentation, navigation motion and popup geometry retain separate restoration owners; cleanup attempts independent resources after a host failure.
+
+Cancel queued native work before its click. Once a click is issued, navigation retains bounded acknowledgement, settlement and restoration: pointer departure cannot roll it back. Readiness retirement is separate from issued-move settlement. Session pauses and carousel readiness timers/confirmation frames are cancelled and settled by their exact owners.
+
+### Composed behavior and bounded work
+
+Grid publication precedes optional viewing completion. Membership clicks require observed convergence rather than assuming the click changed server/native state. Add/remove accept membership and registry together; captured input release is identity-checked so it cannot consume a newer capture. Native mapping and displayed page attributes can change without rewriting membership order.
+
+Card replacement is synchronous across retirement, presentation/control preparation and registry acceptance, with no await inside that handoff. Only the exact admitted preparation can transfer its hover attempt to the replacement; unrelated retirement cancels it. Failure leaves a consistent card or explicit unprepared state. Cosmetic no-op grouping preserves unrelated stationary hover; geometry checks are limited to protected targets, without sibling hydration or a whole-grid invalidation pass.
+
+Initialization/recovery/responsive work holds exact, idempotently releasable list deferral tickets. Final admitted release retries current intents; old release cannot drain a new transaction and session disposal drops obsolete intents. Hover-facing resolution waits for responsive stability and then revalidates. Refresh-internal native calls use carousel directly and cannot wait on their own transaction. Deferral does not serialize unrelated requests, rendering and native work into a universal queue.
+
+Keep delegated listeners, filtered/coalesced observers, cooperative 24-item/6-ms construction, bounded requests/retries/sampling and local card/group updates. Ordinary browsing adds no periodic metadata work, eager hover preparation, repeated full-list copies, per-card listeners or whole-grid scans. Settings owns semantic preference persistence; source visibility and frame spacing remain native/grid operations. Feature counters and probes retain their feature lifetimes; explicit reporting owns clipboard export.
+
+Architecture review traces success, failure, source/profile replacement, route cancellation and disposal through actual callers and cross-owner write sites. A passing import graph or total test count alone cannot prove ownership or preserved behavior. Tests use real owners and input fixtures, retain useful observable scenarios and use targeted assertion-sensitivity checks for reductions. Offline evidence does not certify current Netflix private React/DOM compatibility or frame times; those remain version-specific user testing.
 
 ## Application and page sessions
 
@@ -67,7 +126,7 @@ Private hover timing owns counters, phase sinks and finite animation-gap windows
 
 ## Responsive coordination and diagnostics
 
-Responsive owns window/visual-viewport listeners, one current source ResizeObserver across populated/native-empty/provisional-empty modes, 140 ms checks, active refresh promise, signatures/counters, count-convergence suppression and the complete settled refresh/remapping transaction. Session supplies a frozen read-only parent view and guarded layout/initial-page/viewport publication callbacks. Native/grid/hover/list operations remain public collaborators. Route/source/timer/observer/transaction identities reject obsolete completion; old work cannot clear a newer promise, frame marker or ticket. Disposal releases its exact P14 ticket without resuming a retired source.
+Responsive owns window/visual-viewport listeners, one current source ResizeObserver across populated/native-empty/provisional-empty modes, 140 ms checks, active refresh promise, signatures/counters, count-convergence suppression and the complete settled refresh/remapping transaction. Session supplies a frozen read-only parent view and guarded layout/initial-page/viewport publication callbacks. Native/grid/hover/list operations remain public collaborators. Route/source/timer/observer/transaction identities reject obsolete completion; old work cannot clear a newer promise, frame marker or ticket. Disposal releases its exact reconciliation ticket without resuming a retired source.
 
 Duplicate/no-shape events, the narrow hidden/parked one-pixel height exception and page-count-only convergence preserve hover. Actual bounds/zoom/pixel-ratio/offset/clipping changes and stale mapping retain cancellation and refresh behavior, 80 ms settling polls/1,200 ms bound and the existing single 400 ms remapping retry. Hover waits on responsive stability then revalidates its attempt. Refresh-internal carousel operations never wait on their own transaction or start popup preparation. Mismatch reinitialization waits for stability/navigation idle before returning the native carousel to page zero.
 

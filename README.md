@@ -33,9 +33,9 @@ The user tests released versions in Netflix with Tampermonkey on Windows. `logs/
 
 These files provide evidence of behavior in the user's browser alongside the offline tests and Windows CI. When reviewing a capture, match its version to the tested release and record the observed result, limitations and follow-up in [findings.md](findings.md), citing the log. A saved log documents that session; successful live checks require supporting observations or user confirmation. Preserve the original captures.
 
-## Architecture and migration
+## Architecture
 
-[docs/architecture.md](docs/architecture.md) describes the implemented ownership and lifetimes. [Migration.md](Migration.md) defines the destination; [MigrationPlan.md](MigrationPlan.md) defines ordered steps; [findings.md](findings.md) records progress, verification and version-specific live evidence.
+[docs/architecture.md](docs/architecture.md) owns the implemented architecture and continuing contracts. [findings.md](findings.md) records decisions, completed work, verification and version-specific live evidence. The 21-step modular-source migration is complete.
 
 `src/main.js` starts `app/application.js`. Application owns navigation, retained logging, semantic settings/menus and the current My List session. Each `app/my-list-session.js` instance assembles and retires the public list/viewing/grid/hover/native capabilities and owns its own request scope. `app/responsive.js` owns viewport/source checks and the refresh transaction. List owns membership/collection/queues/Undo; viewing owns profile-specific scans/placement/persistence; grid owns cards/frame/groups/styles and bounded image diagnostics; hover owns intent/timing. Netflix adapters own page/protocol interpretation, native binding/mapping/navigation/collection, source presentation and native popup mechanics. Diagnostic reporting consumes copied feature summaries. No production legacy entry or import exception remains.
 

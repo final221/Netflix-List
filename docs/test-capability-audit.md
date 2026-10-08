@@ -1,5 +1,7 @@
 # Capability coverage audit before simplification
 
+Completed prerequisite: all six coverage groups were completed for release 1.4.59. The initial gap matrix and group-1 next steps below are historical, superseded by the completion record. This report retains capability/test mapping, fixture limitations and sensitivity evidence; findings.md owns current decisions and progress.
+
 Audit date: 2026-10-08. Baseline: `220e175`, userscript **1.4.58**. Working branch: `codex/essential-code` in a separate managed worktree.
 
 ## Decision

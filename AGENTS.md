@@ -6,7 +6,6 @@ This repository maintains a Tampermonkey userscript for Netflix My List. The scr
 
 - Read `context.md` for durable repository knowledge and user preferences.
 - Read `findings.md` when continuing the code-review findings or their follow-up plan.
-- Read `Migration.md` and `MigrationPlan.md` before discussing or implementing the modular-source migration.
 - Read `docs/architecture.md` for the architecture actually implemented, and use the commands in `README.md` for build/verification.
 - When investigating runtime behavior or reviewing live-test evidence, read the relevant version's files in `logs/`.
 - Inspect the userscript and its current version before making code changes.
@@ -16,8 +15,8 @@ This repository maintains a Tampermonkey userscript for Netflix My List. The scr
 - `AGENTS.md` defines repository workflow and document boundaries.
 - `context.md` contains compact durable knowledge and user preferences. Follow its protected maintenance instructions; keep current findings and project status out of it.
 - `findings.md` is the working record for current review findings, decisions, and the ordered follow-up plan, including completed and deferred points. Update it as a selected step is completed or its status changes; do not duplicate its current status in `context.md`.
-- `Migration.md` defines the proposed modular-source destination, ownership contracts, rationale, and increment acceptance conditions. It does not describe an already implemented layout or authorize all increments. Keep migration selection/progress in `findings.md`; explain target-design changes in `Migration.md` before applying the affected step.
-- `MigrationPlan.md` defines ordered implementation steps, dependencies, bounded scope and completion evidence for that destination. Each prompt selects a step; plan creation does not authorize executing the whole plan. Keep step selection/progress in `findings.md`.
+- `docs/architecture.md` owns the implemented architecture and continuing ownership, dependency and lifecycle contracts. Explain changes to these boundaries there before applying them; selected work and progress belong in `findings.md`.
+- `ready-to-delete/` contains retired documentation whose continuing contracts and necessary evidence have been extracted. It is not a working authority, and active documents must not depend on it. The user may delete the folder without affecting development or verification.
 - `logs/` contains user-supplied diagnostic exports from live Netflix testing, named for the tested userscript version (for example, `logs/1.4.52.txt`). Preserve these captures as supplied. Record their interpretation and any follow-up in `findings.md`, citing the file and tested version; a capture alone does not prove every live check passed. Keep this evidence separate from automated test/CI results and do not apply an older capture's conclusions to a newer release without evidence.
 
 ## Userscript versioning
