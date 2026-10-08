@@ -27,6 +27,75 @@ test('complete application publishes populated membership before optional viewin
     e.app.dispose();e.app.dispose();assert.equal(e.document.getElementById('tm-netflix-mylist-v15-grid'),null);
     assert.equal(e.scheduler.timers.size,0);assert.equal(e.scheduler.frames.size,0);assert.equal(e.menus.size,0);
 });
+test('initial unavailable counts wait for valid membership instead of completing an empty grid', async () => {
+    for (const value of [null, '', false]) {
+        const b = createBrowser({ pathname: '/browse/my-list' });
+        mountPopulatedMyList(b, { count: 2 });
+        const row = b.window.netflix.reactContext.models.graphql.data.list;
+        row.entities.totalCount = value;
+        const app = createApplication({ environment: b.context, version: 'test' });
+        app.start(); await b.scheduler.advance();
+        assert.equal(app.diagnostics().currentSession.completed, false, String(value));
+        assert.ok(!b.logs.some(entry => entry[1] === 'Empty legacy list finalized'));
+        row.entities.totalCount = 2;
+        for (let i = 0; i < 80 && !app.diagnostics().currentSession.completed; i++) {
+            await b.scheduler.advance(25); await b.scheduler.frame();
+        }
+        assert.equal(app.diagnostics().currentSession.completed, true);
+        assert.equal(b.document.getElementById('tm-netflix-mylist-v15-grid').querySelectorAll('[data-tm-item-video-id]').length, 2);
+        app.dispose(); assert.equal(b.scheduler.timers.size, 0); assert.equal(b.scheduler.frames.size, 0);
+    }
+});
+
+test('cards disappearing during a positive-count collection report failure instead of a successful empty list', async () => {
+    let removed = false;
+    const e = await populatedApplication({ beforeStart(b) {
+        const log = b.context.console.log;
+        b.context.console.log = (...args) => {
+            log(...args);
+            if (!removed && args[1] === 'Full collection started') {
+                removed = true;
+                const track = b.document.querySelector('[data-uia="carousel-scroller"]').children[0];
+                for (const card of [...track.children]) card.remove();
+            }
+        };
+    } });
+    assert.equal(removed, true);
+    assert.equal(e.app.diagnostics().currentSession.completed, false);
+    assert.equal(e.app.diagnostics().currentSession.blocked, true);
+    assert.ok(!e.logs.some(entry => entry[1] === 'Empty legacy list finalized'));
+    assert.ok(e.logs.some(entry => entry[1] === 'Initialization failed' && entry[2]?.code === 'NO_NATIVE_CARDS'));
+    e.app.dispose(); assert.equal(e.scheduler.timers.size, 0); assert.equal(e.scheduler.frames.size, 0);
+});
+
+test('menu registration failures preserve startup, preference delivery and route reentry', async () => {
+    for (const failAt of [1, 2]) {
+        let registrations = 0;
+        const e = await populatedApplication({ beforeStart(b) {
+            const register = b.context.GM_registerMenuCommand;
+            b.context.GM_registerMenuCommand = (...args) => {
+                if (++registrations === failAt) throw new Error('menu unavailable');
+                return register(...args);
+            };
+        } });
+        assert.equal(e.app.diagnostics().currentSession.completed, true);
+        if (failAt === 2) {
+            [...e.menus.values()][0].callback();
+            assert.equal(e.section.getAttribute('data-tm-original-mylist-visible'), 'false');
+        }
+        assert.ok(e.logs.some(entry => entry[1] === 'Userscript menu registration failed'));
+        await e.navigate('/browse');
+        assert.equal(e.app.diagnostics().currentSession, null);
+        await e.navigate('/browse/my-list');
+        for (let i = 0; i < 80 && !e.app.diagnostics().currentSession.completed; i++) {
+            await e.scheduler.advance(25); await e.scheduler.frame();
+        }
+        assert.equal(e.app.diagnostics().currentSession.completed, true);
+        e.app.dispose(); assert.equal(e.scheduler.timers.size, 0); assert.equal(e.scheduler.frames.size, 0);
+        assert.equal(e.window.listenerCount('popstate'), 0);
+    }
+});
+
 test('late source arrival unblocks the real session without replacing application resources',async()=>{
     const b=createBrowser({pathname:'/browse/my-list'}),app=createApplication({environment:b.context,version:'test'});
     app.start();await b.scheduler.advance(1000);const token=app.diagnostics().currentSession.token;

@@ -43,6 +43,8 @@ These are the directions enforced by scripts/check.mjs. A declared Netflix entry
 
 Authoritative expected count, accepted collected count and pending native convergence remain distinct. Missing native content with a positive expected count is not proof of an empty list. Empty, unavailable, cancelled, identity/order mismatch and failed integration remain different outcomes. Synthetic empty presentation stays grid-owned and must not insert a synthetic section into Netflix's managed stack during last-item adoption.
 
+List-data uses one count parser for cached/bootstrap discovery and fresh GraphQL responses: only numeric values or nonblank numeric strings representing nonnegative safe integers are admitted. An unavailable count stays unavailable until validated data arrives; a successful empty collection requires both an expected count of zero and the observed empty native shape. Settings isolates optional menu-registration failures, reports them through the application logger and still delivers saved preference changes; menu availability cannot prevent page-session startup.
+
 Network adapters validate same-origin endpoints, construct transient credentials, encode requests and parse bodies. Viewing methods represent bounded actual HTTP batches; scan budgets count dispatched requests, drain an allocated wave and stop new dispatch after terminal failure. Absent, malformed and contradictory metadata stay distinguishable; absent progress cannot imply completion. Storage keys/schema, six-hour automatic-cache validation, fresh-only cache saving, manual precedence and conditional series-coverage expiry remain preserved.
 
 ### Native observations and lifetimes

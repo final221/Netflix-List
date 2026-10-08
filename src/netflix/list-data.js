@@ -8,6 +8,11 @@ export function createListData({ context, pageDom, location, fetch, performance,
     const graphqlData = context.readGraphqlBootstrap;
     const continuations = new WeakMap();
     let myListGraphqlKey = null;
+    function listCount(value) {
+        if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) return null;
+        const count = Number(value);
+        return Number.isSafeInteger(count) && count >= 0 ? count : null;
+    }
     function isMyListGraphqlSection(value) {
         if (!value || value.__typename !== 'PinotCarouselSection') return false;
         const listeners = Array.isArray(value.eventListeners) ? value.eventListeners : [];
@@ -25,7 +30,7 @@ export function createListData({ context, pageDom, location, fetch, performance,
             value &&
             value.__typename === 'PinotCarouselSection' &&
             value.entities &&
-            Number.isFinite(Number(value.entities.totalCount))
+            listCount(value.entities.totalCount) !== null
         );
     }
 
@@ -36,7 +41,7 @@ export function createListData({ context, pageDom, location, fetch, performance,
         if (myListGraphqlKey) {
             const cached = data[myListGraphqlKey];
             if (cached && cached.__typename === 'PinotCarouselSection' &&
-                Number.isFinite(Number(cached.entities?.totalCount))) {
+                listCount(cached.entities?.totalCount) !== null) {
                 return { key: myListGraphqlKey, value: cached, reason: 'cached-key' };
             }
             myListGraphqlKey = null;
@@ -301,12 +306,8 @@ export function createListData({ context, pageDom, location, fetch, performance,
                 { responseUrl: response.url, responseBytes: text.length, errorMessage: error?.message || String(error) });
         }
         const node = payload?.data?.node;
-        const countValue = node?.entities?.totalCount;
-        const totalCount = Number(countValue);
-        const countPresent = typeof countValue === 'number' ||
-            (typeof countValue === 'string' && countValue.trim() !== '');
-        if (node?.__typename !== 'PinotCarouselSection' || !countPresent ||
-            !Number.isSafeInteger(totalCount) || totalCount < 0) {
+        const totalCount = listCount(node?.entities?.totalCount);
+        if (node?.__typename !== 'PinotCarouselSection' || totalCount === null) {
             throw createError('FRESH_MY_LIST_CAROUSEL_TOTAL_COUNT_UNAVAILABLE', 'fresh-my-list-carousel',
                 'Could not read the current Netflix My List totalCount from CarouselPage', {
                     responseUrl: response.url, responseBytes: text.length, typename: node?.__typename || null,
@@ -563,8 +564,7 @@ export function createListData({ context, pageDom, location, fetch, performance,
 
         readMyListTotalCount() {
             try {
-                const count = Number(findMyListGraphqlEntry()?.value?.entities?.totalCount);
-                return Number.isFinite(count) && count >= 0 ? count : null;
+                return listCount(findMyListGraphqlEntry()?.value?.entities?.totalCount);
             } catch (_) {
                 return null;
             }
@@ -572,8 +572,8 @@ export function createListData({ context, pageDom, location, fetch, performance,
 
         detectMyListTotalCount() {
             const entry = findMyListGraphqlEntry();
-            const count = Number(entry?.value?.entities?.totalCount);
-            if (!Number.isFinite(count) || count < 0) return null;
+            const count = listCount(entry?.value?.entities?.totalCount);
+            if (count === null) return null;
             log(tLog('totalCountDetected'), {
                 totalCount: count,
                 graphqlKey: entry?.key || null,

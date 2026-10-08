@@ -287,9 +287,11 @@ test('publication collection uses complete preferred material and otherwise perf
 });
 
 test('publication collection confirms native empty truthfully and rejects unproven empty or mismatched counts', async () => {
-    const e=fixture();const empty=await e.list.collectForPublication({totalCount:2,collectNative:async()=>[],
+    const e=fixture();const empty=await e.list.collectForPublication({totalCount:0,collectNative:async()=>[],
         readEmpty:()=>({pages:1,cards:0})});
     assert.equal(empty.status,'empty');assert.equal(empty.transfer.records.length,0);
+    await assert.rejects(e.list.collectForPublication({totalCount:2,collectNative:async()=>[],
+        readEmpty:()=>({pages:1,cards:0})}),{code:'NO_NATIVE_CARDS'});
     await assert.rejects(e.list.collectForPublication({totalCount:2,collectNative:async()=>[],
         readEmpty:()=>({pages:2,cards:0})}),{code:'NO_NATIVE_CARDS'});
     await assert.rejects(e.list.collectForPublication({totalCount:2,collectNative:async()=>[{videoId:'1'}]}),

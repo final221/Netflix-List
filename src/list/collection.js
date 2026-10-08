@@ -110,7 +110,7 @@ export function createCollection({ runChunks, assertSession, isCancelled, collec
         }
         if (!items.length) {
             const empty = readEmpty(), pages = empty.pages, cards = empty.cards; guard();
-            if (pages === 1 && cards === 0) return Object.freeze({ status: 'empty', transfer: prepareRecords(items, { assertCurrent: guard }) });
+            if (totalCount === 0 && pages === 1 && cards === 0) return Object.freeze({ status: 'empty', transfer: prepareRecords(items, { assertCurrent: guard }) });
             const error = createFailure({ code: 'NO_NATIVE_CARDS', collected: 0, totalCount }); guard(); throw error;
         }
         if (items.length !== totalCount) {

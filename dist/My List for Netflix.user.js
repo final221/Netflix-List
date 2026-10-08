@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.62
+// @version      1.4.63
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -6474,7 +6474,7 @@
       if (!items.length) {
         const empty = readEmpty(), pages = empty.pages, cards = empty.cards;
         guard();
-        if (pages === 1 && cards === 0) return Object.freeze({ status: "empty", transfer: prepareRecords(items, { assertCurrent: guard }) });
+        if (totalCount === 0 && pages === 1 && cards === 0) return Object.freeze({ status: "empty", transfer: prepareRecords(items, { assertCurrent: guard }) });
         const error = createFailure({ code: "NO_NATIVE_CARDS", collected: 0, totalCount });
         guard();
         throw error;
@@ -7229,6 +7229,11 @@
     const graphqlData = context.readGraphqlBootstrap;
     const continuations = /* @__PURE__ */ new WeakMap();
     let myListGraphqlKey = null;
+    function listCount(value) {
+      if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return null;
+      const count = Number(value);
+      return Number.isSafeInteger(count) && count >= 0 ? count : null;
+    }
     function isMyListGraphqlSection(value) {
       if (!value || value.__typename !== "PinotCarouselSection") return false;
       const listeners = Array.isArray(value.eventListeners) ? value.eventListeners : [];
@@ -7241,7 +7246,7 @@
     }
     function graphqlCarouselCandidates(data) {
       return Object.entries(data || {}).filter(
-        ([, value]) => value && value.__typename === "PinotCarouselSection" && value.entities && Number.isFinite(Number(value.entities.totalCount))
+        ([, value]) => value && value.__typename === "PinotCarouselSection" && value.entities && listCount(value.entities.totalCount) !== null
       );
     }
     function findMyListGraphqlEntry() {
@@ -7249,7 +7254,7 @@
       if (!data) return null;
       if (myListGraphqlKey) {
         const cached = data[myListGraphqlKey];
-        if (cached && cached.__typename === "PinotCarouselSection" && Number.isFinite(Number(cached.entities?.totalCount))) {
+        if (cached && cached.__typename === "PinotCarouselSection" && listCount(cached.entities?.totalCount) !== null) {
           return { key: myListGraphqlKey, value: cached, reason: "cached-key" };
         }
         myListGraphqlKey = null;
@@ -7511,10 +7516,8 @@
         );
       }
       const node = payload?.data?.node;
-      const countValue = node?.entities?.totalCount;
-      const totalCount = Number(countValue);
-      const countPresent = typeof countValue === "number" || typeof countValue === "string" && countValue.trim() !== "";
-      if (node?.__typename !== "PinotCarouselSection" || !countPresent || !Number.isSafeInteger(totalCount) || totalCount < 0) {
+      const totalCount = listCount(node?.entities?.totalCount);
+      if (node?.__typename !== "PinotCarouselSection" || totalCount === null) {
         throw createError(
           "FRESH_MY_LIST_CAROUSEL_TOTAL_COUNT_UNAVAILABLE",
           "fresh-my-list-carousel",
@@ -7783,16 +7786,15 @@
       },
       readMyListTotalCount() {
         try {
-          const count = Number(findMyListGraphqlEntry()?.value?.entities?.totalCount);
-          return Number.isFinite(count) && count >= 0 ? count : null;
+          return listCount(findMyListGraphqlEntry()?.value?.entities?.totalCount);
         } catch (_) {
           return null;
         }
       },
       detectMyListTotalCount() {
         const entry = findMyListGraphqlEntry();
-        const count = Number(entry?.value?.entities?.totalCount);
-        if (!Number.isFinite(count) || count < 0) return null;
+        const count = listCount(entry?.value?.entities?.totalCount);
+        if (count === null) return null;
         log(tLog("totalCountDetected"), {
           totalCount: count,
           graphqlKey: entry?.key || null,
@@ -17882,6 +17884,7 @@
 
   // src/app/settings.js
   function createSettings({ storage, registerMenu, unregisterMenu, tUi = (key) => key, onChange = () => {
+  }, warn = () => {
   } }) {
     const storageKey = "legacyMyListForNetflix.settings.v3";
     let visible = true, active = false, menu = null, menuRevision = 0;
@@ -17907,13 +17910,20 @@
       releaseMenu();
       if (!active || typeof registerMenu !== "function") return;
       const revision = menuRevision;
-      menu = registerMenu(tUi(visible ? "hideOriginalMyList" : "showOriginalMyList"), () => {
-        if (!active || revision !== menuRevision) return;
-        visible = !visible;
-        save();
-        refresh();
-        onChange(preferences());
-      });
+      try {
+        menu = registerMenu(tUi(visible ? "hideOriginalMyList" : "showOriginalMyList"), () => {
+          if (!active || revision !== menuRevision) return;
+          visible = !visible;
+          save();
+          refresh();
+          onChange(preferences());
+        });
+      } catch (error) {
+        try {
+          warn("Userscript menu registration failed", error);
+        } catch (_) {
+        }
+      }
     }
     function start() {
       if (active) return;
@@ -19122,6 +19132,7 @@
         registerMenu: userscript.registerMenu,
         unregisterMenu: userscript.unregisterMenu,
         tUi: i18n.tUi,
+        warn: logger.warn,
         onChange: (preferences) => {
           session?.preferencesChanged(preferences);
           logger.log(i18n.tLog("originalMyListVisibilityChanged"), { enabled: preferences.viewOriginalMyList });
@@ -19165,7 +19176,7 @@
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.4.62";
+  var SCRIPT_VERSION = "1.4.63";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

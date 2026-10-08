@@ -55,7 +55,7 @@ export function createApplication({ environment = globalThis, version = '', crea
         active = true; ++revision; lastObservedUrl = location.href;
         let storage; try { storage = environment.localStorage; } catch (_) {}
         settings = createSettings({ storage, registerMenu: userscript.registerMenu,
-            unregisterMenu: userscript.unregisterMenu, tUi: i18n.tUi,
+            unregisterMenu: userscript.unregisterMenu, tUi: i18n.tUi, warn: logger.warn,
             onChange: preferences => {
                 session?.preferencesChanged(preferences);
                 logger.log(i18n.tLog('originalMyListVisibilityChanged'), { enabled: preferences.viewOriginalMyList });

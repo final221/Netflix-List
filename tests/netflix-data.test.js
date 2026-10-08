@@ -330,6 +330,24 @@ test('list data never publishes malformed or incomplete records as a complete co
     }
 });
 
+test('list counts reject absent and malformed bootstrap values even after discovery cached the row', () => {
+    for (const value of [undefined, null, '', '   ', false, true, [], {}, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+        const e = dataEnvironment();
+        assert.equal(e.adapter.readMyListTotalCount(), 4);
+        e.graph.MyList.entities.totalCount = value;
+        assert.equal(e.adapter.readMyListTotalCount(), null, String(value));
+        assert.equal(e.adapter.detectMyListTotalCount(), null, String(value));
+        assert.equal(e.adapter.diagnostics().graphqlKey, null);
+        e.adapter.reset();
+        assert.equal(e.adapter.readMyListTotalCount(), null, String(value));
+    }
+    for (const value of [0, '0', 4, '4']) {
+        const e = dataEnvironment(value);
+        assert.equal(e.adapter.readMyListTotalCount(), Number(value));
+        assert.equal(e.adapter.detectMyListTotalCount(), Number(value));
+    }
+});
+
 test('list data keeps native-page cache identity private and resets discovery without stale model reads', () => {
     const e = dataEnvironment();
     assert.equal(e.adapter.readMyListTotalCount(), 4);

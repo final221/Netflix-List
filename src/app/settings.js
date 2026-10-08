@@ -1,5 +1,5 @@
 // Preferences and userscript menus are application resources; no feature DOM is accessed.
-export function createSettings({ storage, registerMenu, unregisterMenu, tUi = key => key, onChange = () => {} }) {
+export function createSettings({ storage, registerMenu, unregisterMenu, tUi = key => key, onChange = () => {}, warn = () => {} }) {
     const storageKey = 'legacyMyListForNetflix.settings.v3';
     let visible = true, active = false, menu = null, menuRevision = 0;
     const preferences = () => Object.freeze({ viewOriginalMyList: visible });
@@ -12,10 +12,14 @@ export function createSettings({ storage, registerMenu, unregisterMenu, tUi = ke
         releaseMenu();
         if (!active || typeof registerMenu !== 'function') return;
         const revision = menuRevision;
-        menu = registerMenu(tUi(visible ? 'hideOriginalMyList' : 'showOriginalMyList'), () => {
-            if (!active || revision !== menuRevision) return;
-            visible = !visible; save(); refresh(); onChange(preferences());
-        });
+        try {
+            menu = registerMenu(tUi(visible ? 'hideOriginalMyList' : 'showOriginalMyList'), () => {
+                if (!active || revision !== menuRevision) return;
+                visible = !visible; save(); refresh(); onChange(preferences());
+            });
+        } catch (error) {
+            try { warn('Userscript menu registration failed', error); } catch (_) {}
+        }
     }
     function start() {
         if (active) return;
