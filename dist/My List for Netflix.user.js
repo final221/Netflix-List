@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.65
+// @version      1.4.66
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -4195,7 +4195,7 @@
           clearFeedback();
           link.textContent = "CopyLogs";
           try {
-            await copyLogs();
+            await copyLogs({ detailed: Boolean(event.shiftKey) });
             if (!current(sequence)) return;
             link.textContent = tLog("copied");
             link.title = tLog("copied");
@@ -6848,10 +6848,65 @@
     readThumbnails,
     readNativePopup
   }) {
-    function buildInvestigationLogText() {
+    const MAX_COMPACT_CHARACTERS = 2e4;
+    function compact(value, depth = 0) {
+      if (typeof value === "string") return value.length > 400 ? value.slice(0, 400) + " [truncated]" : value;
+      if (!value || typeof value !== "object") return value;
+      if (depth >= 8) return { omitted: true, kind: Array.isArray(value) ? "array" : "object" };
+      if (Array.isArray(value)) return value.length <= 3 ? value.map((item) => compact(item, depth + 1)) : { count: value.length, samples: value.slice(0, 3).map((item) => compact(item, depth + 1)), omitted: value.length - 3 };
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, compact(item, depth + 1)]));
+    }
+    function seriesSummary(rows) {
+      if (!Array.isArray(rows)) return compact(rows);
+      const groups = /* @__PURE__ */ new Map();
+      for (const row of rows) {
+        const key = JSON.stringify([row.status, row.reason]);
+        if (!groups.has(key)) groups.set(key, { status: row.status, reason: row.reason, count: 0, samples: [] });
+        const group = groups.get(key);
+        group.count++;
+        if (!group.samples.length) group.samples.push(compact(row));
+      }
+      return { count: rows.length, groups: [...groups.values()] };
+    }
+    function compactEntry(entry) {
+      const offset = entry.indexOf(" {");
+      if (offset < 0) return compact(entry);
+      try {
+        return entry.slice(0, offset + 1) + logger.formatValue(compact(JSON.parse(entry.slice(offset + 1))));
+      } catch (_) {
+        return compact(entry);
+      }
+    }
+    function groupedEntries(entries) {
+      const groups = [], byName = /* @__PURE__ */ new Map();
+      entries.forEach((entry, index) => {
+        const match = entry.match(/^\[([^\]]+)\]\s+(\w+)\s+(.*)$/);
+        const warning = !match || match[2] !== "INFO";
+        const name = match?.[3].split(" {")[0];
+        let group = warning ? null : byName.get(name);
+        if (!group) {
+          group = { index, name, warning, count: 0, first: entry, last: entry, slowest: entry, elapsedMs: -1 };
+          groups.push(group);
+          if (!warning) byName.set(name, group);
+        }
+        group.count++;
+        group.last = entry;
+        try {
+          const elapsed = JSON.parse(entry.slice(entry.indexOf(" {") + 1)).elapsedMs;
+          if (Number.isFinite(elapsed) && elapsed > group.elapsedMs) {
+            group.elapsedMs = elapsed;
+            group.slowest = entry;
+          }
+        } catch (_) {
+        }
+      });
+      return groups.map((group) => ({ ...group, text: [.../* @__PURE__ */ new Set([group.first, group.last, group.slowest])].map(compactEntry).join("\n") + (group.count > 1 ? "\n  occurrences: " + group.count : "") }));
+    }
+    function buildInvestigationLogText(detailed) {
       const snapshot = readRuntime();
       const environment = readEnvironment();
-      return [
+      const format = (value) => logger.formatValue(detailed ? value : compact(value));
+      const lines = [
         "My List for Netflix Diagnostic Log",
         `version: ${version}`,
         `copiedAt: ${logger.formatTimestamp()}`,
@@ -6864,13 +6919,48 @@
         `logLanguage: ${environment.logLanguage}`,
         `viewport: ${environment.viewport}`,
         `devicePixelRatio: ${environment.devicePixelRatio}`,
+        `exportMode: ${detailed ? "detailed" : "compact; sampled lists and grouped events"}`,
         `entries: ${logger.size()}`,
-        `snapshot: ${logger.formatValue(snapshot)}`,
-        `seriesViewing: ${logger.formatValue(readSeriesViewing())}`,
-        `thumbnailDiagnostics: ${logger.formatValue(readThumbnails())}`,
-        `nativePopupDiagnostics: ${logger.formatValue(readNativePopup())}`,
+        `snapshot: ${format(snapshot)}`,
+        `seriesViewing: ${logger.formatValue(detailed ? readSeriesViewing() : seriesSummary(readSeriesViewing()))}`,
+        `thumbnailDiagnostics: ${format(readThumbnails())}`,
+        `nativePopupDiagnostics: ${format(readNativePopup())}`
+      ];
+      const entries = logger.entries();
+      if (detailed) return [...lines, "---", ...entries].join("\n") + "\n";
+      const groups = groupedEntries(entries), selected = [];
+      let budget = MAX_COMPACT_CHARACTERS - 200;
+      const retainedLines = [];
+      const takeLine = (line) => {
+        if (line.length + 1 <= budget) {
+          retainedLines.push(line);
+          budget -= line.length + 1;
+        }
+      };
+      const takeGroup = (group) => {
+        if (group.text.length + 1 <= budget) {
+          selected.push(group);
+          budget -= group.text.length + 1;
+        }
+      };
+      lines.slice(0, -3).forEach(takeLine);
+      groups.filter((group) => group.warning).reverse().forEach(takeGroup);
+      const eventCountsLine = "eventCounts: " + logger.formatValue(groups.map((group) => ({
+        event: compact(group.name),
+        occurrences: group.count,
+        warning: group.warning,
+        maxElapsedMs: group.elapsedMs < 0 ? null : group.elapsedMs
+      })));
+      takeLine(eventCountsLine);
+      lines.slice(-3).forEach(takeLine);
+      groups.filter((group) => !group.warning).forEach(takeGroup);
+      const omittedGroups = groups.length - selected.length;
+      const omittedSections = [...lines, eventCountsLine].filter((line) => !retainedLines.includes(line)).length;
+      return [
+        ...retainedLines,
+        `exportLimits: ${MAX_COMPACT_CHARACTERS} characters; omitted event groups: ${omittedGroups}; omitted sections: ${omittedSections}; Shift-click CopyLogs for full detail`,
         "---",
-        ...logger.entries()
+        ...selected.sort((a, b) => a.index - b.index).map((group) => group.text)
       ].join("\n") + "\n";
     }
     async function copyTextToClipboard(text) {
@@ -6898,7 +6988,7 @@
         textarea.remove();
       }
     }
-    return Object.freeze({ copy: () => copyTextToClipboard(buildInvestigationLogText()) });
+    return Object.freeze({ copy: ({ detailed = false } = {}) => copyTextToClipboard(buildInvestigationLogText(detailed)) });
   }
 
   // src/netflix/popup-inspection.js
@@ -15342,10 +15432,10 @@
         pointer: { x: hover.intent().pointerX, y: hover.intent().pointerY }
       };
     }
-    async function copyDiagnosticLogs() {
-      log(tLog("copyLogsRequested"), collectRuntimeSnapshot());
+    async function copyDiagnosticLogs(options = {}) {
+      log(tLog("copyLogsRequested"), { detailed: Boolean(options.detailed) });
       try {
-        const method = await diagnosticReport.copy();
+        const method = await diagnosticReport.copy(options);
         log(tLog("copyLogsCompleted"), { method, entries: logger.size() });
         return method;
       } catch (error) {
@@ -18291,7 +18381,7 @@
     routeChangeDetected: { en: "Route change detected", ja: "\u30DA\u30FC\u30B8\u9077\u79FB\u691C\u51FA" },
     clipboardFallback: { en: "Clipboard API failed; using fallback", ja: "\u30AF\u30EA\u30C3\u30D7\u30DC\u30FC\u30C9API\u306B\u5931\u6557\u3002fallback\u3078\u79FB\u884C" },
     execCommandCopyFailed: { en: "execCommand(copy) failed.", ja: "execCommand(copy) \u304C\u5931\u6557\u3057\u307E\u3057\u305F\u3002" },
-    copyLogsTooltip: { en: "Copy the My List for Netflix log to the clipboard", ja: "\u30AF\u30EA\u30C3\u30D7\u30DC\u30FC\u30C9\u306BMy List for Netflix\u306E\u30ED\u30B0\u3092\u30B3\u30D4\u30FC\u3057\u307E\u3059" },
+    copyLogsTooltip: { en: "Copy a compact diagnostic report; Shift-click for full detail", ja: "\u7C21\u6F54\u306A\u8A3A\u65AD\u30EC\u30DD\u30FC\u30C8\u3092\u30B3\u30D4\u30FC\u3057\u307E\u3059\u3002Shift\u30AF\u30EA\u30C3\u30AF\u3067\u8A73\u7D30\u3092\u30B3\u30D4\u30FC\u3057\u307E\u3059" },
     copied: { en: "Copied.", ja: "\u30B3\u30D4\u30FC\u3057\u307E\u3057\u305F\u3002" },
     copyLogsRequested: { en: "CopyLogs requested", ja: "CopyLogs\u8981\u6C42" },
     copyLogsCompleted: { en: "CopyLogs completed", ja: "CopyLogs\u5B8C\u4E86" },
@@ -18723,7 +18813,7 @@
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.4.65";
+  var SCRIPT_VERSION = "1.4.66";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

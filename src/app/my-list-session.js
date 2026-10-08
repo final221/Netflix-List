@@ -663,10 +663,10 @@ export function createMyListSession({ environment = globalThis, version, context
         };
     }
 
-    async function copyDiagnosticLogs() {
-        log(tLog('copyLogsRequested'), collectRuntimeSnapshot());
+    async function copyDiagnosticLogs(options = {}) {
+        log(tLog('copyLogsRequested'), { detailed: Boolean(options.detailed) });
         try {
-            const method = await diagnosticReport.copy();
+            const method = await diagnosticReport.copy(options);
             log(tLog('copyLogsCompleted'), { method, entries: logger.size() });
             return method;
         } catch (error) {

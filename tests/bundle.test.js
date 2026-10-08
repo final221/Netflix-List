@@ -96,10 +96,10 @@ test('generated CopyLogs uses report providers without requests and retains logs
     await b.navigate('/browse/my-list');
     await b.scheduler.advance();
     const requests = b.requests.length;
-    async function copy() {
+    async function copy(detailed = false) {
         const link = b.document.getElementById('tm-netflix-mylist-v20-log');
         assert.ok(link);
-        link.dispatchEvent({ type: 'click', currentTarget: link, preventDefault() {} });
+        link.dispatchEvent({ type: 'click', shiftKey: detailed, currentTarget: link, preventDefault() {} });
         await b.scheduler.flush();
     }
     await copy();
@@ -115,7 +115,13 @@ test('generated CopyLogs uses report providers without requests and retains logs
     await copy();
     assert.equal(b.clipboard.length, 2);
     assert.ok(b.clipboard[1].includes('CopyLogs completed'));
-    assert.equal(b.clipboard[1].match(/Script started/g).length, 1);
+    const counts = JSON.parse(b.clipboard[1].split('\n').find(line => line.startsWith('eventCounts: ')).slice(13));
+    assert.equal(counts.find(group => group.event === 'Script started').occurrences, 1);
+    const beforeDetailed = b.requests.length;
+    await copy(true);
+    assert.match(b.clipboard[2], /exportMode: detailed/);
+    assert.equal(b.clipboard[2].match(/Script started/g).length, 1);
+    assert.equal(b.requests.length, beforeDetailed);
     await b.navigate('/browse');
 });
 

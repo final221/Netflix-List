@@ -53,7 +53,7 @@ export function createFrame({ document, tLog, tUi, copyLogs, setTimeout, clearTi
                 clearFeedback();
                 link.textContent = 'CopyLogs';
                 try {
-                    await copyLogs();
+                    await copyLogs({ detailed: Boolean(event.shiftKey) });
                     if (!current(sequence)) return;
                     link.textContent = tLog('copied'); link.title = tLog('copied');
                     const timer = setTimeout(() => {

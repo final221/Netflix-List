@@ -10,21 +10,29 @@ User-supplied Netflix evidence is distilled in [logs/knowledge.md](../logs/knowl
 
 ## Current work and deferred items
 
-Release **1.4.65** continues the authorized behavior-preserving simplification. The 2% benchmark applies primarily to authored runtime lines, with generated output reported separately. The 1.4.63 review fixes, modular migration P01–P21 and selected R01–R03/D01–D03 reductions remain complete. The user authorizes continuing concrete behavior-preserving simplification directly, without repeated full assessments or disposable prototypes.
+Release **1.4.66** makes diagnostic exports compact by default; the 1.4.65 simplification remains complete. The 2% benchmark applies primarily to authored runtime lines, with generated output reported separately. The 1.4.63 review fixes, modular migration P01–P21 and selected R01–R03/D01–D03 reductions remain complete. The user authorizes continuing concrete behavior-preserving simplification directly, without repeated full assessments or disposable prototypes.
 
 - **Current live checks:** adopt the new Tampermonkey installation URL and test the current release; remaining evidence gaps and conditional investigations are listed below.
-- **Deferred by the user:** original point E, limiting copied title/URL/video-ID details. Keep detailed diagnostics until selected; the original A–G table retains the decision.
+- **Diagnostics scope:** export-volume reduction is selected and implemented. Detailed title/URL/video-ID diagnostics remain available through Shift-click and the console; a separate privacy/redaction policy remains unselected (original point E).
 - **Optional work:** further hardening, fallback behavior or performance changes need a concrete current issue and a selected scope. Historical proposal lists are not the current implementation queue.
 
 ## Live-log findings and remaining validation
 
-Evidence: [logs/knowledge.md](../logs/knowledge.md), sessions 1.4.52–1.4.58. The raw captures are retired after distillation. Historical count reconciliation with successful native fallback does not imply partial-list publication. The 1.4.53 routeSessionToken failure was fixed in P17/1.4.54 with an actual-caller regression; the residual fixture had masked it.
+Evidence: [logs/knowledge.md](../logs/knowledge.md), sessions 1.4.52–1.4.58 and 1.4.64. The raw captures are retired after distillation. Historical count reconciliation with successful native fallback does not imply partial-list publication. The 1.4.53 routeSessionToken failure was fixed in P17/1.4.54 with an actual-caller regression; the residual fixture had masked it.
 
 **Mapping warning:** 1.4.54 hover preparation reports “Observed native page mapping changed”. Later sessions show native interaction without that warning, but do not demonstrate resolution in every relevant case. Treat recurrence as an investigation against the current release; do not infer that the historical defect persists in the current release.
 
 **Hover delay:** 1.4.58 preparation reaches about 1.6 seconds, with substantial issued-move acknowledgement and queue wait; graft/alignment/replay work is small in that session. If current user testing still shows delay, investigate issued-move acknowledgement and cancelled-work queue admission while preserving settlement ownership. No performance fix is selected by reviewing or distilling logs.
 
-**Live acceptance gap:** the supplied sessions do not establish real resize/zoom/remapping, route exit/reentry/retirement, membership/Undo, manual viewing or exact construction/readiness timer retirement. Unknown viewing metadata remains unresolved despite successful requests. No supplied capture tests 1.4.59–1.4.65; automated acceptance and older activity cannot replace current-version user observations.
+**Live acceptance gap:** the supplied sessions do not establish real resize/zoom/remapping, route exit/reentry/retirement, membership/Undo, manual viewing or exact construction/readiness timer retirement. Unknown viewing metadata remains unresolved despite successful requests. The 1.4.64 capture establishes complete loading and sampled native hover activity; it does not close the listed interaction/lifecycle gaps. No supplied capture tests 1.4.65–1.4.66; automated acceptance and older activity cannot replace current-version user observations.
+
+## Compact log exports and capture distillation — 1.4.66
+
+The user selected substantially smaller logs and bounded review context. Normal CopyLogs now samples large arrays/strings, groups series by status/reason and repeated INFO events by message, and retains event counts and elapsed maxima with first/latest/slowest samples. The 20,000-character export ceiling is below 60 KiB in UTF-8; recent warnings precede optional details/routine samples in budget admission. Omitted groups/sections and sampled list counts are explicit. Shift-click provides the detailed retained report; console/buffer history and existing feature counters remain available. Copy no longer logs a second full runtime snapshot into history.
+
+Applied offline to the supplied **1.4.64** capture, the report shrinks **419,064 → 19,887 bytes (95.25%)**, with 40 event types counted; the budget omits 37 event sample groups and one optional section. This is a replay of supplied data through the exporter, not a live 1.4.66 test. New distinguishing session evidence/provenance is distilled only in [logs/knowledge.md](../logs/knowledge.md); the reviewed uncommitted raw capture is removed. Mandatory review guidance now requires size/frequency measurement and bounded programmatic extraction before reading long JSON lines.
+
+Two new regressions cover list/series/event compaction, first/latest/slowest samples, full detailed export, UTF-8/character bounds and warning priority/explicit omissions. Existing frame and generated-bundle tests verify Shift-click admission, clipboard lifetime/fallback, retained history across routes and no requests on copy. All **548** offline tests pass; build/check, generated syntax, diff and whitespace review pass. Package/lock/metadata/internal versions agree at 1.4.66; live acceptance remains unverified for this release. The 2% source benchmark applies to simplification passes, not to this new bounded export behavior.
 
 ## Review fixes — 1.4.63, 2026-10-08
 
@@ -101,7 +109,7 @@ The highest-risk areas are the private React metadata used to determine logical 
 
 ## Logging note for E
 
-The diagnostic entries are kept in a page-memory circular buffer capped at 5,000 entries and are also sent to the browser console. They are not persisted as log history in local or session storage. “Copy Logs” explicitly copies a diagnostic snapshot and the retained entries in chronological order to the clipboard. The snapshot includes page and browser details, and individual entries can include item identifiers or URLs when those are logged. Round 2 gates expensive interaction traces, while preserving warnings, phase timings, and the existing copied-detail policy.
+The diagnostic entries are kept in a page-memory circular buffer capped at 5,000 entries and are also sent to the browser console. They are not persisted as log history in local or session storage. Normal CopyLogs now copies compact summaries and sampled/grouped history within an explicit budget; Shift-click copies the full diagnostic snapshot and retained entries in chronological order. The snapshot includes page and browser details, and individual entries can include item identifiers or URLs when those are logged. Round 2 gates expensive interaction traces, while preserving warnings, phase timings, and the existing copied-detail policy.
 
 Changing this would affect diagnostics, not Netflix's list or server behavior. Keeping detailed logs is useful for troubleshooting; any runtime cost comes from formatting, retaining, and writing log messages, and reducing copied details is not a meaningful grid-performance improvement. The user chose to defer E while keeping the option on the plan.
 

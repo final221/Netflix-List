@@ -48,16 +48,19 @@ test('grid owns one detached/current status and preserves separated label, meta,
 
 test('CopyLogs owns its finite feedback timer and disposal cancels feedback and detached actions', async () => {
     let copies = 0;
-    const e = fixture({ copyLogs: async () => { copies++; } });
+    const options = [];
+    const e = fixture({ copyLogs: async value => { copies++; options.push(value); } });
     const status = e.mount(), link = status.querySelector('#' + LOG_LINK_ID);
     click(link); await flush();
     assert.equal(copies, 1);
+    assert.deepEqual(options[0], { detailed: false });
     assert.equal(link.textContent, 'log:copied');
     assert.equal(e.timers.size, 1);
     const restore = [...e.timers.values()][0]; e.timers.clear(); restore();
     assert.equal(link.textContent, 'CopyLogs');
     assert.equal(link.title, 'log:copyLogsTooltip');
-    click(link); await flush();
+    link.dispatchEvent({ type: 'click', shiftKey: true, preventDefault() {} }); await flush();
+    assert.deepEqual(options[1], { detailed: true });
     e.grid.dispose();
     assert.equal(e.timers.size, 0);
     assert.equal(link.listenerCount('click'), 0);

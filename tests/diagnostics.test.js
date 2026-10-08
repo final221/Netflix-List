@@ -104,7 +104,7 @@ test('popup reset and current-owner checks reject stale observations without exp
     assert.equal(e.inspection.diagnostics().responsePages, 1);
 });
 
-function reportFixture({ primary, fallback = true, throws = false } = {}) {
+function reportFixture({ primary, fallback = true, throws = false, providers = {} } = {}) {
     const { logger } = loggerFixture();
     const document = createDocument();
     let copied = '', selected = 0, reads = 0;
@@ -126,7 +126,7 @@ function reportFixture({ primary, fallback = true, throws = false } = {}) {
             htmlLanguage: 'ja', netflixLanguage: 'ja', displayLanguage: 'ja', logLanguage: 'ja', viewport: '1280x800', devicePixelRatio: 1 }),
         readRuntime: () => { reads++; return { performanceWork: { nativeCollection: { metadataReads: 2 } } }; },
         readSeriesViewing: () => [{ title: 'Weeds', reason: 'unavailable-episode-progress' }],
-        readThumbnails: () => ({ available: true }), readNativePopup: () => ({ status: 'inactive-route' }) });
+        readThumbnails: () => ({ available: true }), readNativePopup: () => ({ status: 'inactive-route' }), ...providers });
     return { logger, report, document, copied: () => copied, selected: () => selected, reads: () => reads };
 }
 
@@ -147,6 +147,48 @@ test('report copies current explicit summaries and chronological logs only on re
     assert.ok(text.endsWith('\n'));
     assert.equal(e.selected(), 0);
     assert.equal(e.document.body.children.length, 0);
+});
+
+test('compact reports summarize large collections and repeated events while detailed exports retain every entry', async () => {
+    const series = Array.from({ length: 500 }, (_, index) => ({ title: 'Series ' + index,
+        status: index < 300 ? 'complete' : 'unknown', reason: index < 300 ? 'latest-episode-complete' : 'unavailable-episode-progress' }));
+    const e = reportFixture({ primary: async () => {}, providers: { readSeriesViewing: () => series } });
+    const items = Array.from({ length: 500 }, (_, index) => ({ videoId: String(index), href: '/watch/' + index }));
+    for (let index = 0; index < 1000; index++) e.logger.log('Move', { seq: index, elapsedMs: index === 400 ? 900 : 10, items });
+    e.logger.warn('Source replaced', { code: 'NATIVE_SOURCE_REPLACED', videoId: '123' });
+    await e.report.copy();
+    const compact = e.copied();
+    const summary = JSON.parse(compact.split('\n').find(line => line.startsWith('seriesViewing: ')).slice(15));
+    assert.equal(summary.count, 500);
+    assert.deepEqual(summary.groups.map(group => [group.status, group.count, group.samples.length]), [['complete', 300, 1], ['unknown', 200, 1]]);
+    assert.match(compact, /occurrences: 1000/);
+    assert.match(compact, /"seq":0/);
+    assert.match(compact, /"seq":999/);
+    assert.match(compact, /"seq":400,"elapsedMs":900/);
+    assert.match(compact, /"count":500,"samples":.*"omitted":497/);
+    assert.match(compact, /WARN.*NATIVE_SOURCE_REPLACED/);
+    assert.equal(e.logger.size(), 1001);
+    await e.report.copy({ detailed: true });
+    assert.match(e.copied(), /exportMode: detailed/);
+    assert.equal(JSON.parse(e.copied().split('\n').find(line => line.startsWith('seriesViewing: ')).slice(15)).length, 500);
+    assert.ok(e.copied().includes(e.logger.entries()[400]));
+    assert.ok(e.copied().length > compact.length * 20);
+});
+
+test('compact export budgets prioritize warnings and report omissions without partial lines', async () => {
+    const e = reportFixture({ primary: async () => {} });
+    for (let index = 0; index < 4999; index++) e.logger.log('Event ' + index, { detail: '\u65e5'.repeat(1000) });
+    e.logger.warn('Critical failure', { code: 'LATEST_FAILURE', stack: 'failure origin' });
+    await e.report.copy();
+    const text = e.copied();
+    assert.ok(text.length <= 20000);
+    assert.ok(Buffer.byteLength(text) < 60000);
+    assert.match(text, /WARN.*LATEST_FAILURE.*failure origin/);
+    assert.match(text, /omitted event groups: [1-9]/);
+    assert.match(text, /version: test/);
+    assert.match(text, /snapshot: .*metadataReads/);
+    assert.match(text, /Shift-click CopyLogs/);
+    for (const line of text.split('\n').filter(line => line.includes(' {'))) JSON.parse(line.slice(line.indexOf(' {') + 1));
 });
 
 test('clipboard rejection falls back once and releases its owned textarea on success or failure', async () => {
