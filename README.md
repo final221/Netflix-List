@@ -4,7 +4,7 @@ A Tampermonkey userscript that presents Netflix My List as a scrollable grid, us
 
 ## Installation
 
-Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released userscript](https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js) and install it. Visit `https://www.netflix.com/browse/my-list`. The existing menu command toggles the original Netflix list, and CopyLogs exports a compact diagnostic report. Shift-click CopyLogs when a specific investigation needs the full retained details.
+Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released userscript](https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js) and install it. Visit `https://www.netflix.com/browse/my-list`. The existing menu command toggles the original Netflix list, and CopyLogs exports diagnostic summaries with event outcomes and timing aggregates. Its size target limits extra examples; essential summaries can exceed it. Shift-click CopyLogs when a specific investigation needs full payloads and every retained occurrence.
 
 For copies installed from the former root location, open the released-userscript link once and confirm the update in Tampermonkey. The script name/namespace is unchanged; this release specifies the new URLs for future updates.
 

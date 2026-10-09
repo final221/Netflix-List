@@ -175,20 +175,62 @@ test('compact reports summarize large collections and repeated events while deta
     assert.ok(e.copied().length > compact.length * 20);
 });
 
-test('compact export budgets prioritize warnings and report omissions without partial lines', async () => {
-    const e = reportFixture({ primary: async () => {} });
-    for (let index = 0; index < 4999; index++) e.logger.log('Event ' + index, { detail: '\u65e5'.repeat(1000) });
-    e.logger.warn('Critical failure', { code: 'LATEST_FAILURE', stack: 'failure origin' });
+test('compact export retains late decisions and warnings even when essential summaries exceed the target', async () => {
+    const snapshot = Object.fromEntries(Array.from({ length: 60 }, (_, index) => ['counter' + index, 'x'.repeat(350)]));
+    const e = reportFixture({ primary: async () => {}, providers: { readRuntime: () => snapshot } });
+    for (let index = 0; index < 80; index++) e.logger.log('Routine ' + index, { detail: '日'.repeat(1000) });
+    e.logger.log('Fresh Netflix My List carousel bootstrap fetched', { graphqlKey: 'actual-requested-row',
+        totalCount: 10, graphqlEdgeCount: 10, hasNextPage: true });
+    e.logger.warn('Count reconciled', { provisionalTotalCount: 10, mountedTotalCount: 500 });
+    e.logger.log('Full collection completed', { collected: 500, elapsedMs: 6961 });
     await e.report.copy();
     const text = e.copied();
-    assert.ok(text.length <= 20000);
-    assert.ok(Buffer.byteLength(text) < 60000);
-    assert.match(text, /WARN.*LATEST_FAILURE.*failure origin/);
-    assert.match(text, /omitted event groups: [1-9]/);
-    assert.match(text, /version: test/);
-    assert.match(text, /snapshot: .*metadataReads/);
-    assert.match(text, /Shift-click CopyLogs/);
+    assert.match(text, /actual-requested-row/);
+    assert.match(text, /"hasNextPage":true/);
+    assert.match(text, /WARN.*"mountedTotalCount":500/);
+    assert.match(text, /Full collection completed.*"elapsedMs":6961/);
+    assert.match(text, /essential summaries exceed target/);
+    assert.match(text, /omitted event groups: 0/);
+    assert.ok(text.length > 20000);
+    assert.equal(e.logger.size(), 83);
     for (const line of text.split('\n').filter(line => line.includes(' {'))) JSON.parse(line.slice(line.indexOf(' {') + 1));
+});
+
+test('compact aggregation retains intermediate outcomes, nested timing totals and distinguishing array samples', async () => {
+    const rows = [0, 1, 2].map(index => ({ title: 'same outcome ' + index, status: 'complete', reason: 'ready' }));
+    rows.push({ title: 'distinct failure', status: 'unknown', reason: 'missing-reference' });
+    const e = reportFixture({ primary: async () => {}, providers: { readRuntime: () => ({ readings: [500, 500, 500, 10], rows }) } });
+    e.logger.log('Preparation', { outcome: 'complete', phase: 'initial', elapsedMs: 10, nested: { settleMs: 2 } });
+    e.logger.log('Preparation', { outcome: 'mismatch', phase: 'initial', elapsedMs: 3, nested: { settleMs: 1 } });
+    e.logger.log('Preparation', { outcome: 'complete', phase: 'initial', elapsedMs: 20, nested: { settleMs: 4 } });
+    e.logger.log('Preparation', { outcome: 'complete', phase: 'retry', elapsedMs: 5 });
+    await e.report.copy();
+    const text = e.copied();
+    assert.match(text, /"outcome":"mismatch"/);
+    assert.match(text, /"phase":"retry"/);
+    assert.match(text, /distinct failure/);
+    const snapshot = JSON.parse(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+    assert.deepEqual(snapshot.readings.values, [{ value: 500, count: 3 }, { value: 10, count: 1 }]);
+    const summary = JSON.parse(text.split('\n').find(line => line.includes('eventSummary: ') && line.includes('"occurrences":2')).split('eventSummary: ')[1]);
+    assert.deepEqual(summary.numbers.elapsedMs, { count: 2, min: 10, max: 20, total: 30 });
+    assert.deepEqual(summary.numbers['nested.settleMs'], { count: 2, min: 2, max: 4, total: 6 });
+});
+
+test('compact reports distinguish manual and automatic results and retain long diagnostic reasons', async () => {
+    const reason = 'distinct-reason-'.repeat(40);
+    const series = [{ status: 'complete', reason: 'unavailable', automaticStatus: 'unknown', manualChoice: 'complete' },
+        { status: 'complete', reason: 'unavailable', automaticStatus: 'complete', manualChoice: null }];
+    const e = reportFixture({ primary: async () => {}, providers: { readSeriesViewing: () => series } });
+    e.logger.log('Decision', { reason });
+    await e.report.copy();
+    assert.ok(e.copied().includes(reason));
+    const summary = JSON.parse(e.copied().split('\n').find(line => line.startsWith('seriesViewing: ')).slice(15));
+    assert.equal(summary.groups.length, 2);
+    assert.equal(summary.groups[0].samples[0].manualChoice, 'complete');
+    assert.equal(summary.groups[1].samples[0].automaticStatus, 'complete');
+    await e.report.copy({ detailed: true });
+    assert.ok(e.copied().includes(reason));
+    assert.deepEqual(JSON.parse(e.copied().split('\n').find(line => line.startsWith('seriesViewing: ')).slice(15)), series);
 });
 
 test('clipboard rejection falls back once and releases its owned textarea on success or failure', async () => {

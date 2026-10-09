@@ -115,8 +115,8 @@ test('generated CopyLogs uses report providers without requests and retains logs
     await copy();
     assert.equal(b.clipboard.length, 2);
     assert.ok(b.clipboard[1].includes('CopyLogs completed'));
-    const counts = JSON.parse(b.clipboard[1].split('\n').find(line => line.startsWith('eventCounts: ')).slice(13));
-    assert.equal(counts.find(group => group.event === 'Script started').occurrences, 1);
+    assert.equal(b.clipboard[1].split('\n').filter(line => /^\[.*\] INFO\s+Script started(?: |$)/.test(line)).length, 1);
+    assert.match(b.clipboard[1], /omitted event groups: 0/);
     const beforeDetailed = b.requests.length;
     await copy(true);
     assert.match(b.clipboard[2], /exportMode: detailed/);
