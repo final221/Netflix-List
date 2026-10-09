@@ -1,6 +1,6 @@
 # Findings and follow-up plan
 
-Updated: 2026-10-09
+Updated: 2026-10-10
 
 This file records the code-review findings and the agreed follow-up plan for My List for Netflix. It is a working record; the plan does not authorize extra code changes beyond the step the user has chosen to pursue. Current release and remaining work come first. Historical checkpoints follow; later completion records supersede earlier pending-work statements.
 
@@ -12,7 +12,7 @@ User-supplied Netflix evidence is distilled in [logs/knowledge.md](../logs/knowl
 
 Release **1.4.70** adds bounded bootstrap row-selection diagnostics to the normal compact export; compact retention corrections, private carousel geometry and collection/viewing simplification remain implemented. The 2% benchmark applies primarily to authored runtime lines, with generated output reported separately. The 1.4.63 review fixes, modular migration P01–P21 and selected R01–R03/D01–D03 reductions remain complete. The user authorizes continuing concrete behavior-preserving simplification directly, without repeated full assessments or disposable prototypes.
 
-- **Current live checks:** 1.4.70 direct-load evidence is reviewed; capture normal CopyLogs for Browse→My List entry on the same profile to test the row-selection hypothesis in the slow path. Remaining interaction/lifecycle gaps are listed below.
+- **Current loading issue:** 1.4.70 evidence confirms selection of a different cached page/section during a slow load. Next runtime scope is validating row selection against the live anchor and obtaining current row metadata when no matching usable cache candidate exists; this log review does not implement that fix. Remaining interaction/lifecycle gaps are listed below.
 - **Diagnostics scope:** compact exports now retain every event/outcome summary and numeric/timing aggregates; the size target limits optional examples rather than essential summaries. Detailed title/URL/video-ID diagnostics remain available through Shift-click and the console; a separate privacy/redaction policy remains unselected (original point E).
 - **Optional work:** further hardening, fallback behavior or performance changes need a concrete current issue and a selected scope. Historical proposal lists are not the current implementation queue.
 - **Selected refactor completed:** private carousel geometry, including the formula parser shared with readiness, is extracted. Initialization and restoration extraction remain assessment candidates, not selected work.
@@ -26,6 +26,16 @@ Evidence: [logs/knowledge.md](../logs/knowledge.md), sessions 1.4.52–1.4.58, 1
 **Hover delay:** 1.4.58 preparation reaches about 1.6 seconds, with substantial issued-move acknowledgement and queue wait; graft/alignment/replay work is small in that session. If current user testing still shows delay, investigate issued-move acknowledgement and cancelled-work queue admission while preserving settlement ownership. No performance fix is selected by reviewing or distilling logs.
 
 **Live acceptance gap:** the supplied sessions do not establish real resize/zoom/remapping, route exit/reentry/retirement, membership/Undo, manual viewing or exact construction/readiness timer retirement. Unknown viewing metadata remains unresolved despite successful requests. The 1.4.64 capture establishes complete loading and sampled native hover activity; it does not close the listed interaction/lifecycle gaps. No reviewed capture tests 1.4.65–1.4.66 or 1.4.68; the 1.4.69 capture establishes complete loading and sampled hover activity but does not close those gaps. Automated acceptance and older activity cannot replace current-version user observations. The 1.4.67 capture is reviewed and retired after distillation.
+
+## Cached-row mismatch established — 1.4.70
+
+The [later 1.4.70 capture](../logs/knowledge.md#session--1470) reproduces slow loading with the new instrumentation. Selection reason is cached-key. Requested and mounted section IDs differ before and after the request, their decoded page and section identities differ, first-card samples differ, and the mounted row stays stable. The selected cached count and response count/edge count are nine; the authoritative native count is 500. No continuation is advertised. Initialization takes **8,282 ms**, including **7,521 ms** native fallback. Unlike the preceding successful 2,526-ms direct-load session, this session selects an identity distinct from the mounted My List row.
+
+This establishes a concrete stale/different-row selection defect in the script's fast-path request admission for this session. It does not identify how Netflix's page-global bootstrap came to retain that row. The trace begins already on My List and contains no Browse→My List route transition; do not classify it as a captured SPA entry or limit the fix to SPA. The cache selector admits a cached key solely by type/count and prioritizes playlist listeners before live identity. Its nativeRowCachedCount is null: no matching usable candidate was found by the diagnostic's cache scan. Merely preferring an existing live-ID match may therefore leave this case unresolved.
+
+**Next implementation scope:** validate cached/listener candidates against the mounted My List anchor before using their opaque request IDs; use a matching current candidate when present. When none is usable, obtain fresh/current row metadata through the appropriate adapter and revalidate its identity instead of requesting the old row again. Preserve request/route/profile ownership and complete-list/native fallback behavior; do not synthesize opaque IDs from an unverified encoding or relax count checks. Add regressions for cached wrong-row selection with an available live match, and for a live row absent from usable bootstrap candidates. This is now a code/admission investigation with reproducible evidence, rather than a request for another equivalent log.
+
+The input is detailed, but offline replay through the current normal compact exporter preserves rowSelection identically (**65,436 bytes** versus **517,617**); the decisive facts are not lost by compact export. Compact logging stays the default. Review/provenance distillation and raw retirement are complete; documentation-only change, version 1.4.70 unchanged. Whitespace/size checks pass; durable context reviewed without changes. Runtime correction remains to be selected/implemented.
 
 ## Direct-load row-selection evidence — 1.4.70
 
