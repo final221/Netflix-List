@@ -12,20 +12,28 @@ User-supplied Netflix evidence is distilled in [logs/knowledge.md](../logs/knowl
 
 Release **1.4.70** adds bounded bootstrap row-selection diagnostics to the normal compact export; compact retention corrections, private carousel geometry and collection/viewing simplification remain implemented. The 2% benchmark applies primarily to authored runtime lines, with generated output reported separately. The 1.4.63 review fixes, modular migration P01–P21 and selected R01–R03/D01–D03 reductions remain complete. The user authorizes continuing concrete behavior-preserving simplification directly, without repeated full assessments or disposable prototypes.
 
-- **Current live checks:** on 1.4.70, capture normal CopyLogs for a direct My List load and a Browse→My List entry on the same profile; inspect requested/live row comparison before selecting a loading fix. Remaining interaction/lifecycle gaps are listed below.
+- **Current live checks:** 1.4.70 direct-load evidence is reviewed; capture normal CopyLogs for Browse→My List entry on the same profile to test the row-selection hypothesis in the slow path. Remaining interaction/lifecycle gaps are listed below.
 - **Diagnostics scope:** compact exports now retain every event/outcome summary and numeric/timing aggregates; the size target limits optional examples rather than essential summaries. Detailed title/URL/video-ID diagnostics remain available through Shift-click and the console; a separate privacy/redaction policy remains unselected (original point E).
 - **Optional work:** further hardening, fallback behavior or performance changes need a concrete current issue and a selected scope. Historical proposal lists are not the current implementation queue.
 - **Selected refactor completed:** private carousel geometry, including the formula parser shared with readiness, is extracted. Initialization and restoration extraction remain assessment candidates, not selected work.
 
 ## Live-log findings and remaining validation
 
-Evidence: [logs/knowledge.md](../logs/knowledge.md), sessions 1.4.52–1.4.58, 1.4.64, 1.4.67 and 1.4.69. The raw captures are retired after distillation. Historical count reconciliation with successful native fallback does not imply partial-list publication. The 1.4.53 routeSessionToken failure was fixed in P17/1.4.54 with an actual-caller regression; the residual fixture had masked it.
+Evidence: [logs/knowledge.md](../logs/knowledge.md), sessions 1.4.52–1.4.58, 1.4.64, 1.4.67, 1.4.69 and 1.4.70. The raw captures are retired after distillation. Historical count reconciliation with successful native fallback does not imply partial-list publication. The 1.4.53 routeSessionToken failure was fixed in P17/1.4.54 with an actual-caller regression; the residual fixture had masked it.
 
 **Mapping warning:** 1.4.54 hover preparation reports “Observed native page mapping changed”. Later sessions show native interaction without that warning, but do not demonstrate resolution in every relevant case. Treat recurrence as an investigation against the current release; do not infer that the historical defect persists in the current release.
 
 **Hover delay:** 1.4.58 preparation reaches about 1.6 seconds, with substantial issued-move acknowledgement and queue wait; graft/alignment/replay work is small in that session. If current user testing still shows delay, investigate issued-move acknowledgement and cancelled-work queue admission while preserving settlement ownership. No performance fix is selected by reviewing or distilling logs.
 
 **Live acceptance gap:** the supplied sessions do not establish real resize/zoom/remapping, route exit/reentry/retirement, membership/Undo, manual viewing or exact construction/readiness timer retirement. Unknown viewing metadata remains unresolved despite successful requests. The 1.4.64 capture establishes complete loading and sampled native hover activity; it does not close the listed interaction/lifecycle gaps. No reviewed capture tests 1.4.65–1.4.66 or 1.4.68; the 1.4.69 capture establishes complete loading and sampled hover activity but does not close those gaps. Automated acceptance and older activity cannot replace current-version user observations. The 1.4.67 capture is reviewed and retired after distillation.
+
+## Direct-load row-selection evidence — 1.4.70
+
+The [new compact capture](../logs/knowledge.md#session--1470) begins directly on My List and uses the complete GraphQL path: **2,526 ms** initialization for all 500 titles, seven GraphQL pages, zero native scan metadata/snapshots. Requested and mounted section IDs match before and after response, cached counts are both 500, selected/native/response first-card samples agree and the mounted section does not change. Bootstrap advertises continuation (75 edges/total 500/hasNextPage=true). There are no warning/error events. Compact export retains the full row-selection record and accounts for all 278 occurrences; the selected instrumentation has live evidence for this successful direct-entry case.
+
+This is a different entry/session from the 1.4.69 Browse→My List native fallback (8,016 ms). Version 1.4.70 only adds diagnostics: faster loading here does not establish a performance fix or diagnose the earlier row selection. **Next evidence:** normal compact 1.4.70 CopyLogs after entering through Browse on the same profile, preferably reproducing the slower path. A requested/live mismatch then supports correcting candidate selection; matching IDs with a partial response instead selects request/context investigation. Keep current behavior until that distinction is supported; the existing complete fast path already demonstrates why eliminating the fallback matters.
+
+Capture review complete: evidence/provenance distilled, older routine session wording compacted within the knowledge limit, raw input removed under AGENTS.md. Documentation-only change, version unchanged; diff/whitespace and size checks pass, durable context reviewed without changes.
 
 ## Bootstrap row-selection diagnostics — 1.4.70
 
