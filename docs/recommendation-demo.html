@@ -1,0 +1,180 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Recommendation refill experiment</title>
+<style>body{font:16px system-ui;background:#141414;color:#eee;max-width:1050px;margin:40px auto;padding:20px}button,select{font:inherit;padding:8px;margin:4px;background:#303030;color:white;border:1px solid #777;border-radius:5px}button:disabled{opacity:.45}#cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:15px;margin:25px 0}.card{padding:20px;background:#242424;border-radius:10px}.card h2{font-size:20px}#status{padding:12px;background:#252525}small{color:#bbb}</style>
+<h1>Watched, without a thumbs-down</h1><p>Offline simulation with fictional titles and finite pages. This page does not connect to Netflix or change ratings.</p>
+<label>Profile <select id="profile"><option>A</option><option>B</option></select></label>
+<button id="undo">Undo last dismissal</button><button id="more">Try more pages</button><button id="reset">Reset this profile</button>
+<div id="cards"></div><p id="status" role="status"></p><p id="choices"></p>
+<small>Each request returns four titles. Refill stops at the end of the row or a request limit. Dismissed titles recur across pages to exercise duplicate filtering. Choices persist locally per demo profile. Series/new-episode handling and Netflix hover integration are outside this experiment.</small>
+<script>var RecommendationExperiment = (() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+  var __copyProps = (to, from, except, desc) => {
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (let key of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(to, key) && key !== except)
+          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    }
+    return to;
+  };
+  var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+  // scripts/recommendation-prototype.js
+  var recommendation_prototype_exports = {};
+  __export(recommendation_prototype_exports, {
+    createRecommendationPrototype: () => createRecommendationPrototype
+  });
+  function createRecommendationPrototype({
+    getPage,
+    loadChoices = () => ({}),
+    saveChoices = () => {
+    },
+    pageBudget = 3,
+    totalBudget = 12,
+    capacity = 6
+  }) {
+    let epoch = 0, state = null;
+    function selectProfile(profile) {
+      if (typeof profile !== "string" || !profile) throw new Error("Profile required");
+      const loaded = loadChoices(profile);
+      const choices = new Map(Object.entries(loaded || {}).filter(([id, reason]) => /^\d+$/.test(id) && ["watched", "hide"].includes(reason)));
+      state?.controller.abort();
+      state = {
+        epoch: ++epoch,
+        profile,
+        choices,
+        cards: [],
+        buffer: [],
+        seen: /* @__PURE__ */ new Set(),
+        cursors: /* @__PURE__ */ new Set(),
+        cursor: null,
+        ended: false,
+        requests: 0,
+        busy: false,
+        status: "ready",
+        undo: null,
+        controller: new AbortController()
+      };
+    }
+    function current(owner) {
+      return state === owner && owner.epoch === epoch;
+    }
+    function snapshot() {
+      if (!state) return null;
+      return {
+        profile: state.profile,
+        cards: state.cards.map((card) => ({ ...card })),
+        choices: Object.fromEntries(state.choices),
+        requests: state.requests,
+        busy: state.busy,
+        status: state.status,
+        canUndo: Boolean(state.undo)
+      };
+    }
+    async function refill() {
+      const owner = state;
+      if (!owner || owner.busy) return snapshot();
+      owner.busy = true;
+      let dispatched = 0;
+      try {
+        while (current(owner) && owner.cards.length < capacity) {
+          while (owner.buffer.length && owner.cards.length < capacity) {
+            const card = owner.buffer.shift();
+            if (!owner.choices.has(card.id)) owner.cards.push(card);
+          }
+          if (owner.cards.length >= capacity) {
+            owner.status = "full";
+            break;
+          }
+          if (owner.ended) {
+            owner.status = "exhausted";
+            break;
+          }
+          if (dispatched >= pageBudget || owner.requests >= totalBudget) {
+            owner.status = "budget";
+            break;
+          }
+          owner.requests++;
+          dispatched++;
+          const page = await getPage({ profile: owner.profile, cursor: owner.cursor, signal: owner.controller.signal });
+          if (!current(owner)) break;
+          if (!page || !Array.isArray(page.cards) || typeof page.hasNextPage !== "boolean" || page.cards.some((card) => !card || !/^\d+$/.test(card.id) || typeof card.title !== "string")) {
+            throw new Error("Invalid page");
+          }
+          const next = page.endCursor;
+          if (page.hasNextPage && (typeof next !== "string" || !next || next === owner.cursor || owner.cursors.has(next))) {
+            throw new Error("Missing or repeated cursor");
+          }
+          if (page.hasNextPage) owner.cursors.add(next);
+          owner.cursor = next;
+          owner.ended = !page.hasNextPage;
+          for (const card of page.cards) if (!owner.seen.has(card.id)) {
+            owner.seen.add(card.id);
+            owner.buffer.push({ id: card.id, title: card.title });
+          }
+        }
+      } catch (error) {
+        if (current(owner)) owner.status = "failed";
+      } finally {
+        if (current(owner)) owner.busy = false;
+      }
+      return snapshot();
+    }
+    function persist(owner, choices) {
+      saveChoices(owner.profile, Object.fromEntries(choices));
+      if (!current(owner)) throw new Error("Profile changed during save");
+      owner.choices = choices;
+    }
+    function dismiss(id, reason) {
+      const owner = state;
+      if (!owner || !["watched", "hide"].includes(reason)) throw new Error("Invalid dismissal");
+      const index = owner.cards.findIndex((card2) => card2.id === id);
+      if (index < 0) throw new Error("Title is no longer displayed");
+      const choices = new Map(owner.choices);
+      choices.set(id, reason);
+      const card = owner.cards[index], previous = owner.choices.get(id);
+      persist(owner, choices);
+      owner.undo = { card, index, previous };
+      owner.cards.splice(index, 1);
+      return refill();
+    }
+    function undo() {
+      const owner = state, previous = owner?.undo;
+      if (!previous) return snapshot();
+      const choices = new Map(owner.choices);
+      if (previous.previous) choices.set(previous.card.id, previous.previous);
+      else choices.delete(previous.card.id);
+      persist(owner, choices);
+      owner.undo = null;
+      owner.cards.splice(previous.index, 0, previous.card);
+      if (owner.cards.length > capacity) owner.buffer.unshift(owner.cards.pop());
+      return snapshot();
+    }
+    function dispose() {
+      state?.controller.abort();
+      state = null;
+      epoch++;
+    }
+    return Object.freeze({ selectProfile, refill, dismiss, undo, snapshot, dispose });
+  }
+  return __toCommonJS(recommendation_prototype_exports);
+})();
+
+const names=['Northern Lights','The Last Train','Paper Kingdom','Ocean Road','Quiet City','After the Rain','Hidden Valley','Moon Garden','Winter Letters','The Long Weekend','Glass Harbour','Second Sunrise'];
+const titles=names.map((title,i)=>({id:String(i+1),title}));
+const pages=[titles.slice(0,4),[titles[0],...titles.slice(4,7)],titles.slice(7,11),[titles[4],titles[11]]];
+const key=p=>'netflix-refill-offline-demo.'+p;
+const controller=RecommendationExperiment.createRecommendationPrototype({
+loadChoices:p=>JSON.parse(localStorage.getItem(key(p))||'{}'),saveChoices:(p,c)=>localStorage.setItem(key(p),JSON.stringify(c)),
+getPage:async({cursor})=>{const i=cursor===null?0:Number(cursor);return {cards:pages[i],hasNextPage:i<pages.length-1,endCursor:String(i+1)}}});
+const cards=document.getElementById('cards'),profile=document.getElementById('profile'),undo=document.getElementById('undo'),more=document.getElementById('more');
+function render(){const s=controller.snapshot();cards.replaceChildren();for(const card of s.cards){const box=document.createElement('div');box.className='card';const h=document.createElement('h2');h.textContent=card.title;box.append(h);for(const [reason,label] of [['watched','Already watched'],['hide','Hide suggestion']]){const b=document.createElement('button');b.textContent=label;b.onclick=()=>run(()=>controller.dismiss(card.id,reason));box.append(b)}cards.append(box)}undo.disabled=!s.canUndo;more.disabled=s.busy;document.getElementById('status').textContent=s.status==='exhausted'?'Row exhausted: no further titles supplied.':s.status==='failed'?'Refill failed; current titles retained.':'Refill: '+s.status;document.getElementById('status').textContent+=' | Requests: '+s.requests+' | Cards: '+s.cards.length;document.getElementById('choices').textContent='Saved dismissals: '+Object.keys(s.choices).length+' | Ratings changed: 0';}
+async function run(action){try{await action();render()}catch(e){document.getElementById('status').textContent='Could not save choice: '+e.message}}
+profile.onchange=()=>run(()=>{controller.selectProfile(profile.value);return controller.refill()});undo.onclick=()=>run(()=>controller.undo());more.onclick=()=>run(()=>controller.refill());document.getElementById('reset').onclick=()=>run(()=>{localStorage.removeItem(key(profile.value));controller.selectProfile(profile.value);return controller.refill()});
+run(()=>{controller.selectProfile(profile.value);return controller.refill()});
+</script></html>

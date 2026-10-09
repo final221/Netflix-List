@@ -174,6 +174,8 @@ CopyLogs defaults to a compact report. Environment, copied feature summaries, wa
 
 ## Verification
 
+The separate recommendation-refill experiment under scripts/ is not production architecture and is not reachable from src/main.js. Its injected page/storage adapter and synthetic tests exercise finite ordered refill, profile ownership, cancellation and Undo; `docs/recommendation-demo.html` bundles that controller into a standalone fictional browser demonstration. It neither owns Netflix DOM nor supplies a Netflix network adapter. Integrating it into production requires establishing the native recommendation-row contracts and documenting those boundaries here first.
+
 Generated-bundle tests execute actual offline startup, menus/localization/storage/grants, target-route entry/exit/reentry, retained Copy Logs and stale response/body rejection. Public app/settings/scope tests cover exact session/hook/menu retirement, denied storage and independent request registries. Migrated feature/native tests exercise their unchanged public capabilities and selected private policies; import/build tests reject stale artifacts, forbidden edges, dormant files and cycles.
 
 Named suites import unmodified capabilities and selected private policies. Browser, DOM, scheduler, protocol and storage fixtures supply inputs and observe outputs; no loader reads declarations, rewrites owner source or injects mutable private inspectors. Only generated-bundle tests execute code in a VM, using the complete shipped artifact. Shared browser fixtures support both the real application and bundle; composed viewing tests connect actual viewing/data/grid/scope owners.

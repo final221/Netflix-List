@@ -25,6 +25,10 @@ Run check before rebuilding a checkout so stale committed output cannot be hidde
 
 Edit `src/` and use `npm run build` to generate the distributable in dist/. See [AGENTS.md](AGENTS.md) for release rules and repository change instructions.
 
+## Offline recommendation experiment
+
+For the separate offline recommendation-refill experiment, open [the demo](docs/recommendation-demo.html) in a browser. It uses fictional titles and simulated finite pages, preserves ratings, remembers dismissals per demo profile, and supports Undo. Regenerate it with `node scripts/build-recommendation-demo.mjs`; its controller and tests are outside the released userscript. See [findings](docs/findings.md#offline-recommendation-refill-experiment) for integration limits.
+
 ## Live testing
 
 Test released versions in Netflix on Windows. Save CopyLogs exports under logs/ for review; [logs/knowledge.md](logs/knowledge.md) retains distilled observations. Follow [the log-review procedure](AGENTS.md#live-log-review-and-retention) for retention and issue extraction.
@@ -42,11 +46,12 @@ docs/
   findings.md                       Findings, decisions, progress and verification
   Maintainability Map.md            Versioned module sizes and responsibility inventory
   Repo Hygiene.md                   Best practices for size review and refactoring
+  recommendation-demo.html          Generated standalone offline refill experiment
 logs/
   knowledge.md                      Bounded, version-specific live observations/provenance
   <version>.txt                     Temporary new capture; removed after completed review
 src/                                Authored runtime modules
-scripts/                            Build and consistency verification
+scripts/                            Build/verification and offline recommendation experiment
 tests/                              Offline behavior, bundle and dependency checks
 .github/workflows/check.yml         Windows CI
 package.json / package-lock.json    Release version and locked tooling
