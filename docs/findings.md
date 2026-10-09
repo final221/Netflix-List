@@ -1,6 +1,6 @@
 # Findings and follow-up plan
 
-Updated: 2026-10-08
+Updated: 2026-10-09
 
 This file records the code-review findings and the agreed follow-up plan for My List for Netflix. It is a working record; the plan does not authorize extra code changes beyond the step the user has chosen to pursue. Current release and remaining work come first. Historical checkpoints follow; later completion records supersede earlier pending-work statements.
 
@@ -10,11 +10,12 @@ User-supplied Netflix evidence is distilled in [logs/knowledge.md](../logs/knowl
 
 ## Current work and deferred items
 
-Release **1.4.67** continues collection/viewing simplification; compact diagnostic exports from 1.4.66 remain implemented. The 2% benchmark applies primarily to authored runtime lines, with generated output reported separately. The 1.4.63 review fixes, modular migration P01–P21 and selected R01–R03/D01–D03 reductions remain complete. The user authorizes continuing concrete behavior-preserving simplification directly, without repeated full assessments or disposable prototypes.
+Release **1.4.68** extracts private carousel geometry; collection/viewing simplification and compact diagnostic exports remain implemented. The 2% benchmark applies primarily to authored runtime lines, with generated output reported separately. The 1.4.63 review fixes, modular migration P01–P21 and selected R01–R03/D01–D03 reductions remain complete. The user authorizes continuing concrete behavior-preserving simplification directly, without repeated full assessments or disposable prototypes.
 
 - **Current live checks:** adopt the new Tampermonkey installation URL and test the current release; remaining evidence gaps and conditional investigations are listed below.
 - **Diagnostics scope:** export-volume reduction is selected and implemented. Detailed title/URL/video-ID diagnostics remain available through Shift-click and the console; a separate privacy/redaction policy remains unselected (original point E).
 - **Optional work:** further hardening, fallback behavior or performance changes need a concrete current issue and a selected scope. Historical proposal lists are not the current implementation queue.
+- **Selected refactor completed:** private carousel geometry, including the formula parser shared with readiness, is extracted. Initialization and restoration extraction remain assessment candidates, not selected work.
 
 ## Live-log findings and remaining validation
 
@@ -24,7 +25,17 @@ Evidence: [logs/knowledge.md](../logs/knowledge.md), sessions 1.4.52–1.4.58 an
 
 **Hover delay:** 1.4.58 preparation reaches about 1.6 seconds, with substantial issued-move acknowledgement and queue wait; graft/alignment/replay work is small in that session. If current user testing still shows delay, investigate issued-move acknowledgement and cancelled-work queue admission while preserving settlement ownership. No performance fix is selected by reviewing or distilling logs.
 
-**Live acceptance gap:** the supplied sessions do not establish real resize/zoom/remapping, route exit/reentry/retirement, membership/Undo, manual viewing or exact construction/readiness timer retirement. Unknown viewing metadata remains unresolved despite successful requests. The 1.4.64 capture establishes complete loading and sampled native hover activity; it does not close the listed interaction/lifecycle gaps. No supplied capture tests 1.4.65–1.4.67; automated acceptance and older activity cannot replace current-version user observations.
+**Live acceptance gap:** the supplied sessions do not establish real resize/zoom/remapping, route exit/reentry/retirement, membership/Undo, manual viewing or exact construction/readiness timer retirement. Unknown viewing metadata remains unresolved despite successful requests. The 1.4.64 capture establishes complete loading and sampled native hover activity; it does not close the listed interaction/lifecycle gaps. No reviewed capture tests 1.4.65–1.4.68; automated acceptance and older activity cannot replace current-version user observations. The untracked 1.4.67 capture is preserved for a separate log review.
+
+## Private carousel geometry — 1.4.68
+
+The selected extraction moves slot-formula parsing, median calculation, populated formula/measured-card geometry and empty-shell geometry together into private `netflix/carousel/layout.js` (163 lines). Readiness uses its formula parser; carousel retains public measurement, synchronous rectangle/filled-slot/layout caches, binding/route/caller guards and immutable receipt authority. Layout owns no resources or mutable state. Geometry changes now fit in one focused file without traversing discovery, mapping and resolution; changing admission still belongs to carousel. No new public boundary or forwarding module is introduced.
+
+Direction check: keeping all geometry inside carousel mixes layout policy with its 2,166-line binding/observation owner; splitting populated and empty measurements separately would scatter their shared result schema and formula policy. The single private module retains all calculation branches and comments. Residual carousel (2,014 lines) remains large because binding/model/receipt registration and guarded discovery/preparation/resolution share exact lifetimes; this step does not distribute those registries or claim their broader refactoring complete.
+
+Authored runtime changes **15,714 → 15,725 lines / 916,548 → 917,305 LF-normalized bytes**, across 42 → 43 modules. Carousel alone shrinks by 152 lines; total source grows by 11 lines/757 bytes. Generated output changes **18,776 → 18,796 lines / 871,230 → 871,805 bytes**. This is a locality improvement, not a net reduction or achievement of the 2% simplification benchmark; no latency improvement is claimed.
+
+Three characterization tests pass against the original code and the extraction: derived/asymmetric formula padding and readiness columns with shared reads; malformed-formula/measured-card/default fallback; native-content/title/hidden empty insets and synthetic viewport thresholds. Existing caller tests retain geometry/viewport/binding/parent/route rejection, bounds-only read limits, responsive remapping and actual-session startup/empty adoption. Deliberately disabling explicit-padding precedence fails the new formula assertion; source is restored before release verification. All **554** offline tests pass, including 178 focused carousel/session/responsive/empty tests. Build/check, generated syntax, moved-policy equivalence, diff and whitespace checks pass. Package/lock/metadata/internal versions agree at 1.4.68; live Netflix acceptance remains outstanding. Context was reviewed without a durable change.
 
 ## Collection and finale-scan simplification — 1.4.67
 

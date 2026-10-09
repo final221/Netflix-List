@@ -1,14 +1,14 @@
 # Maintainability Map
 
-Snapshot: **1.4.67**, 2026-10-08, runtime revision `25c43b12a00b0a4ba83fd3219bb5de9e1e21fd42`.
+Snapshot: **1.4.68**, 2026-10-09, private carousel geometry extraction.
 
-The **42 authored runtime modules total 15,714 lines**. Counts include comments and blank lines, excluding a final empty line; CRLF and LF produce identical counts. Build tooling, tests and the generated userscript are excluded from this total.
+The **43 authored runtime modules total 15,725 lines**. Counts include comments and blank lines, excluding a final empty line; CRLF and LF produce identical counts. Build tooling, tests and the generated userscript are excluded from this total.
 
 This document provides a measured size inventory and short responsibility descriptions. [architecture.md](architecture.md) owns the implemented source map and architectural contracts; [findings.md](findings.md) owns simplification decisions and progress. These counts describe the snapshot above and should be remeasured when updating this map.
 
 **Comment-only** counts lines occupied solely by comments, including block-comment delimiters and blank lines inside block comments. **Inline comments** counts lines containing both code and a comment; those lines are already included in Lines and must not be subtracted as comment-only. Multiple comments on one line count once. JavaScript comments are identified by a parser, so URLs, regular expressions and comment-like text in strings are excluded; the two actual CSS comment lines in `grid/styles.js` are included.
 
-Overall: **352 comment-only lines**, **4 lines with inline comments**, and **808 blank lines outside comments**. The remaining **14,554 lines contain code or data**, including lines with inline comments. These categories describe physical lines, not executable statement counts.
+Overall: **354 comment-only lines**, **4 lines with inline comments**, and **809 blank lines outside comments**. The remaining **14,562 lines contain code or data**, including lines with inline comments. These categories describe physical lines, not executable statement counts.
 
 All module paths below are relative to [src/](../src/).
 
@@ -53,8 +53,9 @@ All module paths below are relative to [src/](../src/).
 | `netflix/page-dom.js` | 308 | 12 | 0 | Interprets Netflix page elements, card identities, membership controls, and empty states. |
 | `netflix/popup-inspection.js` | 219 | 6 | 0 | Performs bounded, passive inspection of popup-related responses and component shapes. |
 | `netflix/viewing-data.js` | 255 | 4 | 0 | Requests and interprets Netflix viewing, season, and episode metadata. |
-| **Native carousel** | **4,659** | **102** | **1** | |
-| `netflix/carousel/carousel.js` | 2,166 | 44 | 0 | Owns native source bindings, discovery, readiness, observations, geometry, mapping, and card resolution. |
+| **Native carousel** | **4,670** | **104** | **1** | |
+| `netflix/carousel/carousel.js` | 2,014 | 29 | 0 | Owns native source bindings, discovery, readiness, observations, geometry admission/read caches, mapping, and card resolution. |
+| `netflix/carousel/layout.js` | 163 | 17 | 0 | Interprets slot formulas and measures populated/empty geometry using carousel-owned DOM readers. |
 | `netflix/carousel/collection.js` | 746 | 15 | 1 | Collects native cards across pages, validates consistency, and restores the starting page. |
 | `netflix/carousel/navigation.js` | 1,253 | 35 | 0 | Serializes native movement, waits for acknowledgement/stability, and performs restoration and repair. |
 | `netflix/carousel/page-model.js` | 234 | 4 | 0 | Tracks logical pages, signatures, page hints, and wrapped-tail index interpretation. |
@@ -66,8 +67,8 @@ All module paths below are relative to [src/](../src/).
 | `viewing/completion.js` | 74 | 4 | 0 | Classifies playback completion, credits thresholds, and series/latest-episode results. |
 | `viewing/scan.js` | 483 | 24 | 1 | Runs bounded viewing requests, finale checks, repairs, incremental publication, and network accounting. |
 | `viewing/viewing.js` | 124 | 1 | 0 | Combines viewing policies and exposes profile-specific sessions and placement operations. |
-| **Total** | **15,714** | **352** | **4** | **42 modules** |
+| **Total** | **15,725** | **354** | **4** | **43 modules** |
 
-The three largest modules—page session, carousel, and navigation—contain **6,100 lines (38.8%)** of the authored runtime. The two translation catalogs and stylesheet account for another **1,228 lines**, mostly declarative content. Line count describes size; it does not by itself establish complexity or safe reduction potential.
+The three largest modules—page session, carousel, and navigation—contain **5,948 lines (37.8%)** of the authored runtime. The two translation catalogs and stylesheet account for another **1,228 lines**, mostly declarative content. Line count describes size; it does not by itself establish complexity or safe reduction potential.
 
-For comparison, `scripts/build.mjs` contains **65 lines**, `scripts/check.mjs` contains **157 lines**, and the full generated `dist/My List for Netflix.user.js` contains **18,776 lines**. Authored modules remain the primary maintainability measure; generated output is measured separately.
+For comparison, `scripts/build.mjs` contains **65 lines**, `scripts/check.mjs` contains **157 lines**, and the full generated `dist/My List for Netflix.user.js` contains **18,796 lines**. Authored modules remain the primary maintainability measure; generated output is measured separately.

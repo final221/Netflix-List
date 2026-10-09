@@ -1432,6 +1432,105 @@ test('incoming and empty geometry can be observed before binding without adoptin
     assert.deepEqual(e.directions, []);
 });
 
+test('layout formulas preserve derived and explicit asymmetric padding and share readiness columns', () => {
+    for (const [formula, style, expected] of [
+        ['calc((100% - 240px) / 4)', { columnGap: '8px' }, [4, 90, 8, 128, 384, 108, 108]],
+        ['calc((100% - 240px) / 4)', { columnGap: '8px', paddingLeft: '10px', paddingRight: '30px' }, [4, 134, 8, 30, 560, 10, 30]],
+        ['calc((100% - 24px) / 4)', { gap: '8px', paddingLeft: '12px', paddingRight: '20px' }, [4, 136, 8, 32, 568, 12, 20]]
+    ]) {
+        const e = mountedEnvironment({ getComputedStyle: () => style });
+        e.slots[0].setAttribute('style', 'width: ' + formula);
+        let sectionReads = 0, scrollerReads = 0;
+        e.section.getBoundingClientRect = () => { sectionReads++; return { left: 10, right: 710, width: 700, height: 120 }; };
+        e.scroller.getBoundingClientRect = () => { scrollerReads++; return { left: 30, right: 630, width: 600, height: 100 }; };
+        e.carousel.sample(() => {
+            const observation = e.carousel.measureLayout(e.options);
+            const layout = observation.layout;
+            assert.deepEqual([layout.columns, layout.cardWidth, layout.gap, layout.gridLeft, layout.gridWidth,
+                layout.sidePaddingLeft, layout.sidePaddingRight], expected);
+            assert.equal(layout.formulaBased, true);
+            assert.equal(layout.scrollerWidth, 600);
+            assert.equal(layout.scrollerHeight, 100);
+            assert.equal(layout.sidePadding, (expected[5] + expected[6]) / 2);
+            assert.equal(layout.widthRatio, expected[1] / expected[4]);
+            assert.equal(e.carousel.observeSource({ ...e.options, readiness: true }).readiness.columns, 4);
+            e.carousel.assertObservation(observation);
+            assert.deepEqual(e.carousel.measureLayout(e.options).layout, layout);
+            assert.equal(sectionReads, 1);
+            assert.equal(scrollerReads, 1);
+        });
+        assert.equal(e.scheduler.timers.size, 0);
+    }
+});
+
+test('measured layout rejects malformed formulas and preserves active-card median geometry', () => {
+    for (const formula of ['', 'calc((100% - 24px) / 0)', 'calc(100% / 3)']) {
+        const e = mountedEnvironment();
+        e.section.getBoundingClientRect = () => ({ left: 10, right: 710, width: 700, height: 120 });
+        e.scroller.getBoundingClientRect = () => ({ left: 30, right: 630, width: 600, height: 100 });
+        e.slots[0].setAttribute('style', formula);
+        const rectangles = [
+            { left: 260, right: 380, width: 120 },
+            { left: 0, right: 100, width: 100 },
+            { left: 130, right: 240, width: 110 }
+        ];
+        e.slots.forEach((slot, index) => { slot.getBoundingClientRect = () => rectangles[index]; });
+        const offPage = e.track.appendChild(new Element('div'));
+        offPage.appendChild(new Element('a')).setAttribute('tabindex', '-1');
+        offPage.getBoundingClientRect = () => { throw new Error('inactive cards must not be measured'); };
+        const layout = e.carousel.measureLayout(e.options).layout;
+        assert.deepEqual([layout.columns, layout.cardWidth, layout.gap, layout.gridLeft, layout.gridWidth,
+            layout.sidePaddingLeft, layout.sidePaddingRight], [3, 110, 25, 130, 380, 110, 110]);
+        assert.equal(layout.formulaBased, false);
+        offPage.remove();
+        e.slots.forEach(slot => slot.querySelector('a').setAttribute('tabindex', '-1'));
+        assert.deepEqual(e.carousel.measureLayout(e.options).layout, layout, 'without active cards, filled cards supply the same sample');
+    }
+    const e = environment();
+    e.section.getBoundingClientRect = e.scroller.getBoundingClientRect = () => ({ left: 0, right: 500, width: 500, height: 0 });
+    const layout = e.carousel.measureLayout(sourceOptions(e)).layout;
+    assert.equal(layout.columns, 5);
+    assert.equal(layout.cardWidth, 100);
+    assert.equal(layout.gap, 8);
+    assert.equal(layout.scrollerHeight, 1);
+});
+
+test('empty layout preserves native anchors, hidden insets and synthetic viewport breakpoints', () => {
+    for (const anchor of ['empty-carousel-section+content', 'empty-carousel-section+title']) {
+        const e = environment();
+        e.section.getBoundingClientRect = () => ({ left: 50, right: 1250, width: 1200, height: 100 });
+        const reference = e.section.appendChild(new Element('div'));
+        reference.setAttribute('data-uia', anchor);
+        reference.getBoundingClientRect = () => ({ left: 70, right: 1220, width: 1150, height: 60 });
+        const layout = e.carousel.measureLayout({ section: e.section }).layout;
+        assert.deepEqual([layout.gridLeft, layout.gridWidth, layout.sidePaddingLeft, layout.sidePaddingRight], [20, 1150, 20, 30]);
+        assert.equal(layout.columns, 4);
+        assert.equal(layout.cardWidth, 281.5);
+    }
+    for (const hidden of ['class', 'attribute']) {
+        const e = environment();
+        e.section.setAttribute('data-uia', 'empty-carousel-section');
+        if (hidden === 'class') e.section.classList.add(ORIGINAL_HIDDEN_CLASS);
+        else e.section.setAttribute(ORIGINAL_VISIBILITY_ATTR, 'false');
+        e.section.getBoundingClientRect = () => ({ left: 48, right: 1232, width: 1184, height: 0 });
+        const layout = e.carousel.measureLayout({ section: e.section }).layout;
+        assert.deepEqual([layout.gridLeft, layout.gridWidth, layout.sidePaddingLeft, layout.sidePaddingRight], [0, 1184, 0, 0]);
+    }
+    for (const [width, padding] of [[599, 24], [600, 36], [1279, 36], [1280, 48], [1599, 48], [1600, 60], [2559, 60], [2560, 72]]) {
+        const e = environment({ window: { innerWidth: width } });
+        e.section.getBoundingClientRect = () => ({ left: 0, right: width, width, height: 0 });
+        const outside = e.section.appendChild(new Element('div'));
+        outside.setAttribute('data-uia', 'empty-carousel-section+content');
+        outside.getBoundingClientRect = () => ({ left: -10, right: width + 10, width: width + 20 });
+        const layout = e.carousel.measureLayout({ section: e.section }).layout;
+        assert.deepEqual([layout.gridLeft, layout.gridWidth, layout.sidePaddingLeft, layout.sidePaddingRight],
+            [padding, width - padding * 2, padding, padding]);
+        assert.equal(layout.formulaBased, false);
+        assert.equal(layout.scrollerHeight, 1);
+        assert.equal(e.scheduler.timers.size, 0);
+    }
+});
+
 test('bounds-only observations share the native sample and perform no card or layout reads', () => {
     const e = mountedEnvironment();
     let boundsReads = 0;
