@@ -23,6 +23,7 @@ async function fixture() {
 test('grid prepares one private placement control tree before publication and copies facts into its labels', async () => {
     const e = await fixture(), handle = e.grid.getCard(e.item), controls = e.controls(handle.node);
     assert.ok(controls.toggle);
+    assert.equal(controls.root.getAttribute('data-tm-card-actions'), 'true');
     assert.equal(handle.node.__tmViewingControls, undefined);
     e.grid.updateCardPlacement(handle, { status: 'complete', type: 'movie', manual: true, disabled: false });
     assert.equal(controls.toggle.textContent, 'moveBackToMyList');

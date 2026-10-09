@@ -5,8 +5,10 @@ import {
     STATUS_META_CLASS, LOG_LINK_ID, ORDER_MISMATCH_DIALOG_ID, GRID_ID,
     LEGACY_EMPTY_STATE_ID
 } from '../dom-names.js';
+import { CARD_ACTION_STYLES } from '../card-actions.js';
 
 const stylesheet = `
+${CARD_ACTION_STYLES}
             [${SECTION_ATTR}="true"] {
                 position: relative !important;
                 overflow: visible !important;
@@ -253,38 +255,6 @@ const stylesheet = `
                 height: auto;
             }
 
-            #${GRID_ID} [data-tm-viewing-actions] {
-                display: flex;
-                flex-wrap: wrap;
-                align-items: center;
-                gap: 4px;
-                padding-top: 6px;
-                position: relative;
-                z-index: 1;
-            }
-
-            #${GRID_ID} [data-tm-viewing-actions] > button {
-                border: 1px solid rgba(255,255,255,.18);
-                border-radius: 5px;
-                padding: 5px 8px;
-                background: #242424;
-                color: rgba(255,255,255,.85);
-                font: inherit;
-                font-size: 12px;
-                line-height: 1.3;
-                cursor: pointer;
-            }
-
-            #${GRID_ID} [data-tm-viewing-actions] > button:hover,
-            #${GRID_ID} [data-tm-viewing-actions] > button:focus-visible {
-                border-color: #fff;
-                color: #fff;
-                outline: 2px solid #fff;
-                outline-offset: 2px;
-            }
-
-            #${GRID_ID} [data-tm-viewing-actions] > button:disabled { opacity: .45; cursor: default; }
-            #${GRID_ID} [data-tm-viewing-actions] > button[hidden] { display: none; }
             #${GRID_ID} [data-tm-manual-choice] {
                 display: inline-flex;
                 align-items: center;

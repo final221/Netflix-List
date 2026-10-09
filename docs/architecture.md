@@ -23,6 +23,7 @@ Each feature's main file is its public capability; neighboring files are private
 | List | Public list-data, page-DOM and carousel entries |
 | Viewing | Public context and viewing-data entries; pure completion has no adapter dependency |
 | Grid | Card-markup, DOM names and localization |
+| Grid and recommendations presentation | Shared card-actions markup/styles; feature owners retain input, identity and persistence |
 | Hover | Native-popup and carousel; current card/replacement operations are injected |
 | Recommendations | Public recommendation-DOM and context entries; localization arrives as an injected collaborator |
 | Localization and diagnostics | Their own internals and injected locale/snapshot/probe providers |
@@ -120,6 +121,8 @@ Responsive page shape is derived from the accepted geometry signature (columns/p
 Initialization shares its generic blocked-failure reporting and verified empty completion locally within runScript; phase-specific recovery and exact deferral release remain with their existing callers. Hover preparation requires an admitted target card; there is no page-wide preparation mode.
 
 ## Native integration
+
+`card-actions.js` owns stateless action-row creation and shared under-card button styles, consumed by grid groups/styles and recommendations. It starts no resources and owns no card identity, events or choices. My List retains its viewing-action attributes and guards. Browsing rails stay in normal flow beneath native cards with the same markup/style contract; the native adapter leases slot overflow and scroller bottom padding to make room without moving cards. Recommendation controls remain visible without hovering the artwork. The dismissed-card message remains a separate passive overlay while Undo stays in the shared rail. Scroller padding is reference-counted across exact card leases and restored when its last card retires; other native style updates are preserved.
 
 `recommendations/recommendations.js` activates on browsing and search routes, excluding My List and playback. It owns a coalesced mutation observer, delegated input, per-profile GM storage, script-owned card buttons/placeholders and a stylesheet. It reads profile identity before applying persisted choices and again around storage/input; missing identity or invalid storage disables choices. Title/host replacement retires the exact decoration before reuse. Application invokes its route check alongside the independent My List lifecycle and disposes it on shutdown. `netflix/recommendation-dom.js` interprets current standard cards and legacy title cards, excludes progress/Continue Watching rows, and leases native content visibility and host positioning. Hidden cards retain their native slot size; no native card is moved, cloned or removed, and ordinary native popup interaction remains on visible cards. Restore only properties still holding the leased value. Choices affect browsing visibility only, not My List classification, Netflix ratings, watch history or server data. No recommendation request or automated paging is introduced; replacement and fresh recommendations remain deferred.
 

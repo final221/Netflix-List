@@ -1,4 +1,5 @@
 import { createRecommendationDom } from '../netflix/recommendation-dom.js';
+import { createCardActions, CARD_ACTION_STYLES } from '../card-actions.js';
 
 export function createRecommendations({ environment, context, userscript, tUi, log = () => {}, warn = () => {} }) {
     const { document, location, MutationObserver, queueMicrotask } = environment;
@@ -17,7 +18,7 @@ export function createRecommendations({ environment, context, userscript, tUi, l
             Object.keys(value.choices).length > 5000) throw new Error('invalid-storage');
         return Object.fromEntries(Object.entries(value.choices).filter(([id, reason]) => /^\d+$/.test(id) && ['watched', 'hide'].includes(reason)));
     }
-    function release(entry) { entry.controls.remove(); entry.lease.release(); entries.delete(entry.host); }
+    function release(entry) { entry.controls.remove(); entry.label.remove(); entry.lease.release(); entries.delete(entry.host); }
     function syncProfile() {
         const next = readProfile();
         if (next === profile) return;
@@ -42,14 +43,16 @@ export function createRecommendations({ environment, context, userscript, tUi, l
         const existing = entries.get(value.host);
         if (existing && existing.id === value.id && existing.card === value.card && existing.controls.parentElement === value.host) return;
         if (existing) release(existing);
-        const controls = document.createElement('div'); controls.className = 'tm-rec-controls';
+        const actions = [['watched', 'watched', 'markWatched'], ['hide', 'hide', 'hideRecommendation'], ['undo', 'undo', 'undoRecommendation']];
+        const { root: controls, buttons: actionButtons } = createCardActions(document, actions.map(([, , message]) => tUi(message)));
+        controls.className = 'tm-rec-controls';
         const entry = { ...value, controls, lease: dom.lease(value) };
-        const label = document.createElement('span'); entry.label = label; controls.appendChild(label);
-        for (const [action, field, message] of [['watched', 'watched', 'markWatched'], ['hide', 'hide', 'hideRecommendation'], ['undo', 'undo', 'undoRecommendation']]) {
-            const button = document.createElement('button'); button.type = 'button'; button.textContent = tUi(message);
-            button.setAttribute('aria-label', tUi(message)); buttons.set(button, { entry, action }); entry[field] = button; controls.appendChild(button);
+        const label = document.createElement('span'); label.className = 'tm-rec-placeholder'; entry.label = label;
+        for (const [index, [action, field, message]] of actions.entries()) {
+            const button = actionButtons[index];
+            button.setAttribute('aria-label', tUi(message)); buttons.set(button, { entry, action }); entry[field] = button;
         }
-        entries.set(value.host, entry); value.host.appendChild(controls); paint(entry);
+        entries.set(value.host, entry); value.host.appendChild(label); value.host.appendChild(controls); paint(entry);
     }
     function scan(root = document) {
         if (!active || !allowed()) return;
@@ -60,7 +63,7 @@ export function createRecommendations({ environment, context, userscript, tUi, l
         for (const value of dom.scan(root)) decorate(value);
         if (entries.size && !style) {
             style = document.createElement('style');
-            style.textContent = '.tm-rec-controls{position:absolute;inset-inline:3px;bottom:3px;z-index:10;display:flex;flex-wrap:wrap;gap:3px;justify-content:center;opacity:0;pointer-events:none}.tm-rec-controls span{display:none}.tm-rec-controls button{font:12px system-ui!important;background:#161616!important;color:#fff!important;border:1px solid #aaa!important;border-radius:4px;padding:4px 6px;cursor:pointer}.tm-rec-controls [hidden]{display:none!important}*:hover>.tm-rec-controls,.tm-rec-controls:focus-within{opacity:1;pointer-events:auto}.tm-rec-controls[data-tm-rec-hidden="true"]{inset:0;background:#181818;opacity:1;pointer-events:auto;align-content:center}.tm-rec-controls[data-tm-rec-hidden="true"] span{display:block;width:100%;text-align:center;font:13px system-ui;color:#bbb}.tm-rec-controls button:disabled{opacity:.5;cursor:default}';
+            style.textContent = CARD_ACTION_STYLES + '\n.tm-rec-placeholder{position:absolute;inset:0;background:#181818;display:flex;align-items:center;justify-content:center;font:13px system-ui;color:#bbb;pointer-events:none}.tm-rec-placeholder[hidden]{display:none!important}.tm-rec-controls{opacity:1;pointer-events:auto}';
             document.head.appendChild(style);
         }
     }
@@ -107,10 +110,10 @@ export function createRecommendations({ environment, context, userscript, tUi, l
         observer = new MutationObserver(records => {
             if (!allowed()) { check(); return; }
             for (const record of records) {
-                if (record.target?.closest?.('.tm-rec-controls') || record.target === style) continue;
+                if (record.target?.closest?.('.tm-rec-controls, .tm-rec-placeholder') || record.target === style) continue;
                 if (record.type === 'attributes') schedule(record.target.parentElement || document);
                 else if (record.type === 'childList') {
-                    if ([...(record.addedNodes || []), ...(record.removedNodes || [])].every(node => node === style || node.className === 'tm-rec-controls')) continue;
+                    if ([...(record.addedNodes || []), ...(record.removedNodes || [])].every(node => node === style || ['tm-rec-controls', 'tm-rec-placeholder'].includes(node.className))) continue;
                     schedule(record.target);
                 }
             }

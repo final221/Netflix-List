@@ -112,3 +112,35 @@ test('profile replacement during storage cannot publish a dismissal into the new
     assert.equal(a.card.style.visibility, undefined); assert.equal(b.feature.diagnostics().hiddenCount, 0);
     assert.equal(b.saved.size, 1); assert.ok([...b.saved.keys()][0].endsWith('A'));
 });
+
+test('browsing actions use the shared persistent rail after the artwork, with separate Undo and placeholder', () => {
+    const b = setup(), a = mount(b); b.feature.check();
+    const rail = a.host.querySelector('[data-tm-card-actions]');
+    assert.ok(rail); assert.equal(rail.parentElement, a.host);
+    assert.ok(a.host.children.indexOf(rail) > a.host.children.indexOf(a.card));
+    assert.equal(rail.querySelectorAll('button').length, 3);
+    assert.ok(b.document.head.querySelector('style').textContent.includes('padding-top: 6px'));
+    assert.ok(!b.document.head.querySelector('style').textContent.includes('opacity:0'));
+    b.click(a.host, 'Hide suggestion');
+    assert.equal(rail.querySelectorAll('button').find(button => button.textContent === 'Undo').hidden, false);
+    assert.equal(a.host.querySelector('.tm-rec-placeholder').parentElement, a.host);
+    assert.equal(rail.querySelector('.tm-rec-placeholder'), null);
+    b.click(a.host, 'Undo'); assert.equal(a.card.style.visibility, undefined);
+});
+
+test('shared scroller space survives one card retirement and restores after the last lease', () => {
+    const b = setup(), a = mount(b), other = mount(b, '2');
+    a.row.appendChild(other.host); other.row.remove();
+    a.row.style.setProperty('padding-bottom', '8px', 'important');
+    a.host.style.setProperty('overflow', 'hidden');
+    b.feature.check(); assert.equal(a.row.style.getPropertyValue('padding-bottom'), '72px');
+    assert.equal(a.host.style.getPropertyValue('overflow'), 'visible');
+    a.host.remove(); b.feature.check();
+    assert.equal(a.row.style.getPropertyValue('padding-bottom'), '72px');
+    assert.equal(a.host.style.getPropertyValue('overflow'), 'hidden');
+    b.feature.dispose(); b.feature.dispose();
+    assert.equal(a.row.style.getPropertyValue('padding-bottom'), '8px');
+    assert.equal(a.row.style.getPropertyPriority('padding-bottom'), 'important');
+    b.feature.check(); a.row.style.setProperty('padding-bottom', '100px'); b.feature.dispose();
+    assert.equal(a.row.style.getPropertyValue('padding-bottom'), '100px');
+});

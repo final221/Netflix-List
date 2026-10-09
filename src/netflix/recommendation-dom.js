@@ -3,6 +3,28 @@ import { readVideoIdFromHref } from './page-dom.js';
 // Slot size/order remains Netflix-owned. No private mutation or playback API.
 export function createRecommendationDom({ document, location, getComputedStyle }) {
     const selector = 'a[data-uia="standard-card"][href], .title-card';
+    const scrollerLeases = new WeakMap();
+    function styleLease(node, name, value, priority = '') {
+        const previous = node.style.getPropertyValue(name), previousPriority = node.style.getPropertyPriority(name);
+        node.style.setProperty(name, value, priority);
+        return () => {
+            if (node.style.getPropertyValue(name) !== value || node.style.getPropertyPriority(name) !== priority) return;
+            if (previous) node.style.setProperty(name, previous, previousPriority); else node.style.removeProperty(name);
+        };
+    }
+    function reserveActions(scroller) {
+        let resource = scrollerLeases.get(scroller);
+        if (!resource) {
+            const padding = Number.parseFloat(getComputedStyle?.(scroller).paddingBottom) || 0;
+            resource = { users: 0, restore: styleLease(scroller, 'padding-bottom', `${padding + 72}px`, 'important') };
+            scrollerLeases.set(scroller, resource);
+        }
+        resource.users++; let released = false;
+        return () => {
+            if (released) return; released = true;
+            if (--resource.users === 0) { resource.restore(); scrollerLeases.delete(scroller); }
+        };
+    }
     function describe(card) {
         if (!card?.isConnected) return null;
         const host = card.closest('[data-virtual-slot], .slider-item') || card.parentElement;
@@ -14,7 +36,8 @@ export function createRecommendationDom({ document, location, getComputedStyle }
         let id = readVideoIdFromHref(href, location.href);
         if (!id) try { id = new URL(href, location.href).pathname.match(/^\/watch\/(\d+)(?:\/|$)/)?.[1] || ''; } catch (_) {}
         if (!/^\d+$/.test(id)) return null;
-        return { host, card, id };
+        const scroller = host.closest('[data-uia="carousel-scroller"], .slider') || row;
+        return { host, card, id, scroller };
     }
     function scan(root = document) {
         const result = [], seen = new Set();
@@ -25,13 +48,15 @@ export function createRecommendationDom({ document, location, getComputedStyle }
         }
         return result;
     }
-    function lease({ host, card, id }) {
+    function lease({ host, card, id, scroller }) {
         const previousPosition = host.style.getPropertyValue('position'), positionPriority = host.style.getPropertyPriority('position');
         const positioned = !getComputedStyle || !getComputedStyle(host).position || getComputedStyle(host).position === 'static';
         if (positioned) host.style.setProperty('position', 'relative');
+        const restoreOverflow = styleLease(host, 'overflow', 'visible', 'important');
+        const releaseSpace = reserveActions(scroller);
         let hidden = false, originalVisibility = '', visibilityPriority = '', originalPointer = '', pointerPriority = '';
         const originalAria = card.getAttribute('aria-hidden'), originalTab = card.getAttribute('tabindex');
-        function current() { const value = describe(card); return value?.host === host && value.id === id; }
+        function current() { const value = describe(card); return value?.host === host && value.id === id && value.scroller === scroller; }
         function restore() {
             if (!hidden) return;
             for (const [key, applied, previous, priority] of [['visibility', 'hidden', originalVisibility, visibilityPriority],
@@ -60,7 +85,7 @@ export function createRecommendationDom({ document, location, getComputedStyle }
                 }
                 return true;
             },
-            release() { restore(); if (positioned && host.style.getPropertyValue('position') === 'relative') {
+            release() { restore(); restoreOverflow(); releaseSpace(); if (positioned && host.style.getPropertyValue('position') === 'relative') {
                 if (previousPosition) host.style.setProperty('position', previousPosition, positionPriority); else host.style.removeProperty('position');
             } }
         };

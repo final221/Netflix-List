@@ -1,10 +1,10 @@
 # Distilled live-log evidence
 
-User-side evidence/provenance. Interpretation: [docs/findings.md](../docs/findings.md); other ownership/retention: AGENTS.md.
+Interpretation: [findings](../docs/findings.md).
 
 ## Historical sessions — 1.4.52–1.4.58
 
-Originals `logs/<version>.txt`, recoverable at revision **8ca0de7ea22f3f5b7a0bdeadb6b091bfb9161d46**. Retired 2026-10-08; copiedAt in 2026, UTC+02:00; not controlled benchmarks. Windows/Firefox 157, DPR 1. Viewports: 1.4.52/.53/.55 at 2560×1279, the others at 1920×919.
+Originals `logs/<version>.txt` at **8ca0de7ea22f3f5b7a0bdeadb6b091bfb9161d46**. Retired 2026-10-08; copiedAt 2026, UTC+02:00; uncontrolled benchmarks. Windows/Firefox 157, DPR 1. Viewports: 1.4.52/.53/.55 2560×1279; others 1920×919.
 
 | Tested version / copiedAt | Distinct observed evidence |
 | --- | --- |
@@ -12,7 +12,7 @@ Originals `logs/<version>.txt`, recoverable at revision **8ca0de7ea22f3f5b7a0bde
 | 1.4.53 / Oct 7 15:27:14.420 | Same complete 9→498 fallback. Hover replay/preparation: ReferenceError: routeSessionToken is not defined in findMountedSourceSlot. |
 | 1.4.54 / Oct 7 18:49:20.923 | 75→500/native fallback/page-zero restoration, seven columns. Hover: “Observed native page mapping changed”; no successful replay captured. |
 | 1.4.55–1.4.57 / Oct 7 19:54:45.064; 20:15:12.939; 20:47:27.991 | 500 titles/no WARN/ERROR/no real refresh. .55: zero hover, 123 resources/82 images. .56/.57: native hover activity. .57: two pointer accepts/48 preview observations/33 transfers/no diagnostic failure; 48-replay sample limit. Unchanged checks: 1/4/3; parked exception in .55/.56. |
-| 1.4.58 / Oct 8 00:00:24.153 | Fresh logical GraphQL collection initializes 500 titles in 3,357 ms; seven columns/72 finalized pages, mapping not stale. All 14 replay attempts dispatch; nine matching preview transfers are retained/released. No WARN/ERROR or reported cleanup/diagnostic failures. Detailed distinguishing measurements below. |
+| 1.4.58 / Oct 8 00:00:24.153 | Fresh GraphQL collection initializes 500 titles in 3,357 ms; seven columns/72 finalized pages, mapping not stale. All 14 replay attempts dispatch; nine matching preview transfers are retained/released. No WARN/ERROR or reported cleanup/diagnostic failures. |
 
 ### 1.4.58 measurements
 
@@ -58,5 +58,7 @@ Uncommitted `logs/Textdokument (neu).txt`: 63,370 bytes, SHA256 **0fb1b128244939
 - Cached-key selects count nine; selected/live section IDs mismatch before/after request, their decoded page identities differ and card samples disagree. Live ID is stable; nativeRowCachedCount=null. Response nine edges/count nine/hasNextPage=false; native count 500. Six replays/transfers/no replay failure; viewing 23 successes/197 complete/272 unknown, no request failure.
 
 ## Evidence limits
+
+User report **2026-10-10**, after 1.5.0 release (installed version/environment unconfirmed): enlarged native previews cover artwork buttons. Source: this chat; no capture/timings.
 
 Warning absence cannot certify the 1.4.54 mapping failure resolved. Unverified: real resize/zoom/remapping, route retirement/reentry, membership/Undo, manual viewing, exact timer retirement, every popup control/pointer outcome. Request success does not resolve unknown viewing metadata. Samples limit detail. No captures test 1.4.59–1.4.63, 1.4.65–1.4.66, 1.4.68 or 1.4.71 onward.

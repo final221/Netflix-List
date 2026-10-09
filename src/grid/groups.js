@@ -1,3 +1,5 @@
+import { createCardActions } from '../card-actions.js';
+
 // Script-owned viewing presentation. Placement/profile/storage decisions stay with viewing.
 export function createGroups({ document, tUi, readRoot, getCard, assertCard, createError, moveCard, orderChildren, updateStatus,
     formatUiNumber = String, formatItemCount = String }) {
@@ -91,10 +93,10 @@ export function createGroups({ document, tUi, readRoot, getCard, assertCard, cre
             for (const child of [...node.children]) {
                 if (child.getAttribute('data-tm-viewing-actions') === 'true') child.remove();
             }
-            const root = document.createElement('div'); root.setAttribute('data-tm-viewing-actions', 'true');
-            const toggle = document.createElement('button'); toggle.type = 'button'; toggle.setAttribute('data-tm-viewing-action', 'toggle');
+            const { root, buttons: [toggle] } = createCardActions(document, ['']); root.setAttribute('data-tm-viewing-actions', 'true');
+            toggle.setAttribute('data-tm-viewing-action', 'toggle');
             const marker = document.createElement('span'); marker.setAttribute('data-tm-manual-choice', 'true'); marker.setAttribute('role', 'img');
-            root.appendChild(toggle); root.appendChild(marker); node.appendChild(root);
+            root.appendChild(marker); node.appendChild(root);
             controls = { root, toggle, marker, item }; controlsByNode.set(node, controls);
         }
         return controls;

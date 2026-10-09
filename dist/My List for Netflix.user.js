@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.5.0
+// @version      1.5.1
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -3684,8 +3684,54 @@
     };
   }
 
+  // src/card-actions.js
+  function createCardActions(document, labels) {
+    const root = document.createElement("div");
+    root.setAttribute("data-tm-card-actions", "true");
+    const buttons = labels.map((label) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      root.appendChild(button);
+      return button;
+    });
+    return { root, buttons };
+  }
+  var CARD_ACTION_STYLES = `
+    [data-tm-card-actions] {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px;
+        padding-top: 6px;
+        position: relative;
+        z-index: 1;
+    }
+    [data-tm-card-actions] > button {
+        border: 1px solid rgba(255,255,255,.18);
+        border-radius: 5px;
+        padding: 5px 8px;
+        background: #242424;
+        color: rgba(255,255,255,.85);
+        font: inherit;
+        font-size: 12px;
+        line-height: 1.3;
+        cursor: pointer;
+    }
+    [data-tm-card-actions] > button:hover,
+    [data-tm-card-actions] > button:focus-visible {
+        border-color: #fff;
+        color: #fff;
+        outline: 2px solid #fff;
+        outline-offset: 2px;
+    }
+    [data-tm-card-actions] > button:disabled { opacity: .45; cursor: default; }
+    [data-tm-card-actions] > [hidden] { display: none !important; }
+`;
+
   // src/grid/styles.js
   var stylesheet = `
+${CARD_ACTION_STYLES}
             [${SECTION_ATTR}="true"] {
                 position: relative !important;
                 overflow: visible !important;
@@ -3932,38 +3978,6 @@
                 height: auto;
             }
 
-            #${GRID_ID} [data-tm-viewing-actions] {
-                display: flex;
-                flex-wrap: wrap;
-                align-items: center;
-                gap: 4px;
-                padding-top: 6px;
-                position: relative;
-                z-index: 1;
-            }
-
-            #${GRID_ID} [data-tm-viewing-actions] > button {
-                border: 1px solid rgba(255,255,255,.18);
-                border-radius: 5px;
-                padding: 5px 8px;
-                background: #242424;
-                color: rgba(255,255,255,.85);
-                font: inherit;
-                font-size: 12px;
-                line-height: 1.3;
-                cursor: pointer;
-            }
-
-            #${GRID_ID} [data-tm-viewing-actions] > button:hover,
-            #${GRID_ID} [data-tm-viewing-actions] > button:focus-visible {
-                border-color: #fff;
-                color: #fff;
-                outline: 2px solid #fff;
-                outline-offset: 2px;
-            }
-
-            #${GRID_ID} [data-tm-viewing-actions] > button:disabled { opacity: .45; cursor: default; }
-            #${GRID_ID} [data-tm-viewing-actions] > button[hidden] { display: none; }
             #${GRID_ID} [data-tm-manual-choice] {
                 display: inline-flex;
                 align-items: center;
@@ -4877,15 +4891,12 @@
         for (const child of [...node.children]) {
           if (child.getAttribute("data-tm-viewing-actions") === "true") child.remove();
         }
-        const root = document.createElement("div");
+        const { root, buttons: [toggle] } = createCardActions(document, [""]);
         root.setAttribute("data-tm-viewing-actions", "true");
-        const toggle = document.createElement("button");
-        toggle.type = "button";
         toggle.setAttribute("data-tm-viewing-action", "toggle");
         const marker = document.createElement("span");
         marker.setAttribute("data-tm-manual-choice", "true");
         marker.setAttribute("role", "img");
-        root.appendChild(toggle);
         root.appendChild(marker);
         node.appendChild(root);
         controls = { root, toggle, marker, item };
@@ -19008,6 +19019,34 @@
   // src/netflix/recommendation-dom.js
   function createRecommendationDom({ document, location, getComputedStyle }) {
     const selector = 'a[data-uia="standard-card"][href], .title-card';
+    const scrollerLeases = /* @__PURE__ */ new WeakMap();
+    function styleLease(node, name, value, priority = "") {
+      const previous = node.style.getPropertyValue(name), previousPriority = node.style.getPropertyPriority(name);
+      node.style.setProperty(name, value, priority);
+      return () => {
+        if (node.style.getPropertyValue(name) !== value || node.style.getPropertyPriority(name) !== priority) return;
+        if (previous) node.style.setProperty(name, previous, previousPriority);
+        else node.style.removeProperty(name);
+      };
+    }
+    function reserveActions(scroller) {
+      let resource = scrollerLeases.get(scroller);
+      if (!resource) {
+        const padding = Number.parseFloat(getComputedStyle?.(scroller).paddingBottom) || 0;
+        resource = { users: 0, restore: styleLease(scroller, "padding-bottom", `${padding + 72}px`, "important") };
+        scrollerLeases.set(scroller, resource);
+      }
+      resource.users++;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        if (--resource.users === 0) {
+          resource.restore();
+          scrollerLeases.delete(scroller);
+        }
+      };
+    }
     function describe(card) {
       if (!card?.isConnected) return null;
       const host = card.closest("[data-virtual-slot], .slider-item") || card.parentElement;
@@ -19021,7 +19060,8 @@
       } catch (_) {
       }
       if (!/^\d+$/.test(id)) return null;
-      return { host, card, id };
+      const scroller = host.closest('[data-uia="carousel-scroller"], .slider') || row;
+      return { host, card, id, scroller };
     }
     function scan(root = document) {
       const result = [], seen = /* @__PURE__ */ new Set();
@@ -19035,15 +19075,17 @@
       }
       return result;
     }
-    function lease({ host, card, id }) {
+    function lease({ host, card, id, scroller }) {
       const previousPosition = host.style.getPropertyValue("position"), positionPriority = host.style.getPropertyPriority("position");
       const positioned = !getComputedStyle || !getComputedStyle(host).position || getComputedStyle(host).position === "static";
       if (positioned) host.style.setProperty("position", "relative");
+      const restoreOverflow = styleLease(host, "overflow", "visible", "important");
+      const releaseSpace = reserveActions(scroller);
       let hidden = false, originalVisibility = "", visibilityPriority = "", originalPointer = "", pointerPriority = "";
       const originalAria = card.getAttribute("aria-hidden"), originalTab = card.getAttribute("tabindex");
       function current() {
         const value = describe(card);
-        return value?.host === host && value.id === id;
+        return value?.host === host && value.id === id && value.scroller === scroller;
       }
       function restore() {
         if (!hidden) return;
@@ -19089,6 +19131,8 @@
         },
         release() {
           restore();
+          restoreOverflow();
+          releaseSpace();
           if (positioned && host.style.getPropertyValue("position") === "relative") {
             if (previousPosition) host.style.setProperty("position", previousPosition, positionPriority);
             else host.style.removeProperty("position");
@@ -19122,6 +19166,7 @@
     }
     function release(entry) {
       entry.controls.remove();
+      entry.label.remove();
       entry.lease.release();
       entries.delete(entry.host);
     }
@@ -19162,22 +19207,21 @@
       const existing = entries.get(value.host);
       if (existing && existing.id === value.id && existing.card === value.card && existing.controls.parentElement === value.host) return;
       if (existing) release(existing);
-      const controls = document.createElement("div");
+      const actions = [["watched", "watched", "markWatched"], ["hide", "hide", "hideRecommendation"], ["undo", "undo", "undoRecommendation"]];
+      const { root: controls, buttons: actionButtons } = createCardActions(document, actions.map(([, , message]) => tUi(message)));
       controls.className = "tm-rec-controls";
       const entry = { ...value, controls, lease: dom.lease(value) };
       const label = document.createElement("span");
+      label.className = "tm-rec-placeholder";
       entry.label = label;
-      controls.appendChild(label);
-      for (const [action, field, message] of [["watched", "watched", "markWatched"], ["hide", "hide", "hideRecommendation"], ["undo", "undo", "undoRecommendation"]]) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.textContent = tUi(message);
+      for (const [index, [action, field, message]] of actions.entries()) {
+        const button = actionButtons[index];
         button.setAttribute("aria-label", tUi(message));
         buttons.set(button, { entry, action });
         entry[field] = button;
-        controls.appendChild(button);
       }
       entries.set(value.host, entry);
+      value.host.appendChild(label);
       value.host.appendChild(controls);
       paint(entry);
     }
@@ -19191,7 +19235,7 @@
       for (const value of dom.scan(root)) decorate(value);
       if (entries.size && !style) {
         style = document.createElement("style");
-        style.textContent = '.tm-rec-controls{position:absolute;inset-inline:3px;bottom:3px;z-index:10;display:flex;flex-wrap:wrap;gap:3px;justify-content:center;opacity:0;pointer-events:none}.tm-rec-controls span{display:none}.tm-rec-controls button{font:12px system-ui!important;background:#161616!important;color:#fff!important;border:1px solid #aaa!important;border-radius:4px;padding:4px 6px;cursor:pointer}.tm-rec-controls [hidden]{display:none!important}*:hover>.tm-rec-controls,.tm-rec-controls:focus-within{opacity:1;pointer-events:auto}.tm-rec-controls[data-tm-rec-hidden="true"]{inset:0;background:#181818;opacity:1;pointer-events:auto;align-content:center}.tm-rec-controls[data-tm-rec-hidden="true"] span{display:block;width:100%;text-align:center;font:13px system-ui;color:#bbb}.tm-rec-controls button:disabled{opacity:.5;cursor:default}';
+        style.textContent = CARD_ACTION_STYLES + "\n.tm-rec-placeholder{position:absolute;inset:0;background:#181818;display:flex;align-items:center;justify-content:center;font:13px system-ui;color:#bbb;pointer-events:none}.tm-rec-placeholder[hidden]{display:none!important}.tm-rec-controls{opacity:1;pointer-events:auto}";
         document.head.appendChild(style);
       }
     }
@@ -19276,10 +19320,10 @@
           return;
         }
         for (const record of records) {
-          if (record.target?.closest?.(".tm-rec-controls") || record.target === style) continue;
+          if (record.target?.closest?.(".tm-rec-controls, .tm-rec-placeholder") || record.target === style) continue;
           if (record.type === "attributes") schedule(record.target.parentElement || document);
           else if (record.type === "childList") {
-            if ([...record.addedNodes || [], ...record.removedNodes || []].every((node) => node === style || node.className === "tm-rec-controls")) continue;
+            if ([...record.addedNodes || [], ...record.removedNodes || []].every((node) => node === style || ["tm-rec-controls", "tm-rec-placeholder"].includes(node.className))) continue;
             schedule(record.target);
           }
         }
@@ -19480,7 +19524,7 @@
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.5.0";
+  var SCRIPT_VERSION = "1.5.1";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
