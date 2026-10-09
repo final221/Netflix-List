@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.70
+// @version      1.4.71
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -7397,6 +7397,13 @@
     function findMyListGraphqlEntry() {
       const data = graphqlData();
       if (!data) return null;
+      const anchor = pageDom.readMyListAnchor();
+      const candidates = graphqlCarouselCandidates(data);
+      if (anchor.sectionId) {
+        const matched = candidates.find(([, value]) => String(value.id || "") === anchor.sectionId);
+        myListGraphqlKey = matched?.[0] || null;
+        return matched ? { key: matched[0], value: matched[1], reason: "native-section-id" } : null;
+      }
       if (myListGraphqlKey) {
         const cached = data[myListGraphqlKey];
         if (cached && cached.__typename === "PinotCarouselSection" && listCount(cached.entities?.totalCount) !== null) {
@@ -7404,20 +7411,10 @@
         }
         myListGraphqlKey = null;
       }
-      const candidates = graphqlCarouselCandidates(data);
       for (const [key, value] of candidates) {
         if (!isMyListGraphqlSection(value)) continue;
         myListGraphqlKey = key;
         return { key, value, reason: "playlist-event-listeners" };
-      }
-      const anchor = pageDom.readMyListAnchor();
-      const domSectionId = anchor.sectionId;
-      if (domSectionId) {
-        const matched = candidates.find(([, value]) => String(value?.id || "") === domSectionId);
-        if (matched) {
-          myListGraphqlKey = matched[0];
-          return { key: matched[0], value: matched[1], reason: "native-section-id" };
-        }
       }
       if (anchor.videoIds.length) {
         const domIds = new Set(anchor.videoIds);
@@ -7450,6 +7447,45 @@
       }
       return ids;
     }
+    function serializedSection(text, markerIndex) {
+      const start = text.lastIndexOf("{", markerIndex);
+      if (start < 0) return null;
+      let depth = 0, quoted = false, escaped = false;
+      for (let index = start; index < text.length; index++) {
+        const char = text[index];
+        if (quoted) {
+          if (escaped) escaped = false;
+          else if (char === "\\") escaped = true;
+          else if (char === '"') quoted = false;
+        } else if (char === '"') quoted = true;
+        else if (char === "{") depth++;
+        else if (char === "}" && --depth === 0) {
+          try {
+            return JSON.parse(text.slice(start, index + 1));
+          } catch (_) {
+            return null;
+          }
+        }
+      }
+      return null;
+    }
+    function mountedIdentity() {
+      const anchor = pageDom.readMyListAnchor(3);
+      return { sectionId: anchor.sectionId || "", firstVideoId: anchor.videoIds[0] || "" };
+    }
+    function assertMountedIdentity(identity, sessionToken) {
+      assertCurrent(sessionToken);
+      const current = mountedIdentity();
+      assertCurrent(sessionToken);
+      if (identity.sectionId && current.sectionId !== identity.sectionId) {
+        throw createError(
+          "FRESH_MY_LIST_SOURCE_CHANGED",
+          "fresh-my-list-carousel",
+          "The mounted My List section changed during collection",
+          { requestedSectionId: identity.sectionId, nativeSectionId: current.sectionId || null }
+        );
+      }
+    }
     function extractFreshMyListBootstrap(html) {
       const text = String(html || "");
       const notificationMarker = '"notificationMessageRegex":"UPDATE_PLAYLIST"';
@@ -7460,11 +7496,21 @@
         if (notificationIndex < 0) break;
         const sectionStart = text.lastIndexOf(sectionMarker, notificationIndex);
         if (sectionStart >= 0 && notificationIndex - sectionStart <= 5e4) {
+          const value = serializedSection(text, sectionStart);
+          if (isMyListGraphqlSection(value) && listCount(value.entities?.totalCount) !== null) {
+            return {
+              totalCount: listCount(value.entities.totalCount),
+              firstVideoId: [...graphqlSectionVideoIds(value)][0] || firstVideoIdFromCarouselNode(value),
+              rowMetadataReason: typeof value._id === "string" && value._id ? "usable-section" : "opaque-id-unavailable",
+              entry: typeof value._id === "string" && value._id ? { key: null, value, reason: "fresh-page-bootstrap" } : null
+            };
+          }
           const block = text.slice(sectionStart, notificationIndex + notificationMarker.length + 1024);
           const totalMatch = block.match(/"entities":\{"totalCount":(\d+)/);
           if (totalMatch) {
             const firstVideoMatch = block.match(/standardBoxshot_Video:(\d+)/);
             return {
+              rowMetadataReason: "section-json-unavailable",
               totalCount: Number(totalMatch[1]),
               firstVideoId: firstVideoMatch?.[1] || "",
               sectionStart,
@@ -7684,9 +7730,10 @@
         return { available: false, reason: "observation-failed" };
       }
     }
-    async function fetchFreshMyListBootstrapViaCarousel(sessionToken = null) {
+    async function fetchFreshMyListBootstrapViaCarousel(sessionToken = null, recoveredEntry = null, identity = mountedIdentity()) {
       assertCurrent(sessionToken);
-      const entry = findMyListGraphqlEntry();
+      assertMountedIdentity(identity, sessionToken);
+      const entry = recoveredEntry || findMyListGraphqlEntry();
       const rowId = entry?.value?._id;
       if (!rowId) {
         throw createError(
@@ -7729,8 +7776,9 @@
       if (locale) request.headers["x-netflix.context.locales"] = String(locale).toLowerCase();
       return withFreshRequest(sessionToken, true, async (signal, started) => {
         const page = await fetchMyListCarouselPage(request, null, signal, sessionToken);
-        assertCurrent(sessionToken);
+        assertMountedIdentity(identity, sessionToken);
         const fresh = {
+          mountedIdentity: identity,
           totalCount: page.totalCount,
           firstVideoId: firstVideoIdFromCarouselNode({ entities: { edges: page.edges } }),
           graphqlEdges: page.edges,
@@ -7764,7 +7812,7 @@
       });
     }
     async function collectFreshMyListCarouselItems(bootstrap, sessionToken = null) {
-      assertCurrent(sessionToken);
+      assertMountedIdentity(bootstrap.mountedIdentity, sessionToken);
       if (!bootstrap?.graphqlHasNextPage) return bootstrap;
       return withFreshRequest(sessionToken, true, async (signal, started) => {
         const edges = [...bootstrap.graphqlEdges];
@@ -7792,6 +7840,7 @@
           }
           seenCursors.add(cursor);
           const page = await fetchMyListCarouselPage(bootstrap.graphqlRequest, cursor, signal, sessionToken);
+          assertMountedIdentity(bootstrap.mountedIdentity, sessionToken);
           if (page.totalCount !== bootstrap.totalCount) {
             throw createError(
               "FRESH_MY_LIST_CAROUSEL_TOTAL_COUNT_UNAVAILABLE",
@@ -7883,7 +7932,29 @@
           stage: error?.stage || null,
           message: error?.message || String(error || "")
         });
-        return fetchFreshMyListBootstrapViaPage(sessionToken);
+        const identity = mountedIdentity();
+        const fresh = await fetchFreshMyListBootstrapViaPage(sessionToken);
+        assertMountedIdentity(identity, sessionToken);
+        if (fresh.entry) {
+          const firstVideoId = [...graphqlSectionVideoIds(fresh.entry.value)][0] || fresh.firstVideoId;
+          const firstMatches = !identity.firstVideoId || firstVideoId === identity.firstVideoId;
+          log("Fresh My List row metadata recovery", {
+            available: true,
+            firstMatches,
+            requestedSectionId: fresh.entry.value.id || null,
+            nativeSectionId: identity.sectionId || null
+          });
+          if (firstMatches) {
+            try {
+              return await fetchFreshMyListBootstrapViaCarousel(sessionToken, fresh.entry, identity);
+            } catch (recoveryError) {
+              assertCurrent(sessionToken);
+              if (isCancelled(recoveryError)) throw recoveryError;
+              warn("Fresh My List row metadata recovery failed", { code: recoveryError?.code || null });
+            }
+          }
+        } else log("Fresh My List row metadata recovery", { available: false, reason: fresh.rowMetadataReason });
+        return fresh;
       }
     }
     const pageFacts = Object.freeze({
@@ -7979,6 +8050,7 @@
         assertCurrent(sessionToken);
         if (collected !== fresh) current = summarize(collected, sessionToken);
         const records = await normalizeRecords(collected.graphqlEdges, totalCount, sessionToken);
+        assertMountedIdentity(collected.mountedIdentity, sessionToken);
         return { bootstrap: current, records };
       } catch (error) {
         assertCurrent(sessionToken);
@@ -18889,7 +18961,7 @@
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.4.70";
+  var SCRIPT_VERSION = "1.4.71";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

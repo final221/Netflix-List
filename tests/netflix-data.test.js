@@ -301,7 +301,7 @@ function dataEnvironment(count = 4, overrides = {}) {
         page, collect, setToken: value => { while (scope.token < value) scope.begin(); }, assertCurrent };
 }
 
-test('bootstrap diagnostics compare the selected row with the bounded live anchor without changing selection', async () => {
+test('live row identity overrides stale listener and cached rows while compact diagnostics retain the decision', async () => {
     for (const cached of [false, true]) {
         const e = dataEnvironment(9);
         const host = e.document.body.appendChild(new Element('main'));
@@ -310,26 +310,26 @@ test('bootstrap diagnostics compare the selected row with the bounded live ancho
         for (const id of ['2', '3', '4', '5']) row.append(slot(id));
         e.graph.Actual = { __typename: 'PinotCarouselSection', _id: 'actual-request', id: 'actual-list',
             entities: { totalCount: 500, edges: [] } };
-        if (cached) assert.equal(e.adapter.readMyListTotalCount(), 9);
+        if (cached) { row.id = ''; assert.equal(e.adapter.readMyListTotalCount(), 9); row.id = 'actual-list'; }
         e.responses.push(e.page(9, [1, 2, 3, 4, 5, 6, 7, 8, 9]));
         const bootstrap = await e.adapter.fetchBootstrap(1);
         const details = e.logs.find(log => log.name === 'Fresh Netflix My List carousel bootstrap fetched').details;
-        assert.equal(details.rowSelection.selectionReason, cached ? 'cached-key' : 'playlist-event-listeners');
+        assert.equal(details.rowSelection.selectionReason, 'native-section-id');
         const before = details.rowSelection.beforeRequest;
-        assert.equal(details.rowSelection.requestedRowId, 'row-id');
-        assert.equal(details.rowSelection.requestedSectionId, 'list-section');
+        assert.equal(details.rowSelection.requestedRowId, 'actual-request');
+        assert.equal(details.rowSelection.requestedSectionId, 'actual-list');
         assert.equal(before.nativeSectionId, 'actual-list');
-        assert.equal(before.sectionIdMatches, false);
-        assert.equal(before.selectedCachedCount, 9);
+        assert.equal(before.sectionIdMatches, true);
+        assert.equal(before.selectedCachedCount, 500);
         assert.equal(before.nativeRowCachedCount, 500);
         assert.deepEqual(before.nativeVideoIds, ['2', '3', '4']);
-        assert.deepEqual(before.selectedVideoIds, ['1']);
+        assert.deepEqual(before.selectedVideoIds, []);
         assert.equal(details.rowSelection.afterResponse.nativeSectionId, 'actual-list');
         assert.equal(details.rowSelection.nativeSectionChanged, false);
         assert.deepEqual(details.rowSelection.responseVideoIds, ['1', '2', '3']);
         assert.equal(details.rowSelection.responseFirstMatchesNative, false);
         assert.equal(bootstrap.totalCount, 9);
-        assert.equal(e.requests[0].body.variables.rowId, 'row-id');
+        assert.equal(e.requests[0].body.variables.rowId, 'actual-request');
         assert.equal(e.requests.length, 1);
         const rejected = await e.adapter.collectRecords({ bootstrap, totalCount: 500, sessionToken: 1 });
         assert.equal(rejected.records, null);
@@ -348,27 +348,15 @@ test('bootstrap diagnostics compare the selected row with the bounded live ancho
     }
 });
 
-test('bootstrap diagnostics distinguish unavailable observations and source changes without causing fallback', async () => {
-    const failing = dataEnvironment(4, { pageDom: { readMyListAnchor() { throw new Error('diagnostic read failed'); } } });
-    failing.responses.push(failing.page(4, [1, 2, 3, 4]));
-    assert.equal((await failing.adapter.fetchBootstrap(1)).totalCount, 4);
-    const failed = failing.logs.find(log => log.name.includes('bootstrap fetched')).details.rowSelection;
-    assert.equal(failed.beforeRequest.available, false);
-    assert.equal(failed.beforeRequest.reason, 'observation-failed');
-    assert.equal(failing.requests.length, 1);
-    assert.equal(failing.warnings.length, 0);
-
+test('source replacement rejects a stale bootstrap and route retirement prevents dispatch', async () => {
     const e = dataEnvironment();
     const host = e.document.body.appendChild(new Element('main')); host.setAttribute('data-uia', 'browse-page-sections');
     const row = section(host, 'carousel-row-section-1'); row.id = 'list-section'; row.append(slot('1'));
     e.responses.push({ ...e.page(4, [1, 2, 3, 4]), waitBody: async () => { row.id = 'replacement-section'; } });
-    await e.adapter.fetchBootstrap(1);
-    const changed = e.logs.find(log => log.name.includes('bootstrap fetched')).details.rowSelection;
-    assert.equal(changed.beforeRequest.sectionIdMatches, true);
-    assert.equal(changed.afterResponse.sectionIdMatches, false);
-    assert.equal(changed.nativeSectionChanged, true);
-    assert.equal(e.requests.length, 1);
-    assert.equal(e.warnings.length, 0);
+    e.responses.push({ raw: pageBootstrapHtml(4) });
+    assert.equal((await e.adapter.fetchBootstrap(1)).source, 'page');
+    assert.equal(e.warnings[0].details.code, 'FRESH_MY_LIST_SOURCE_CHANGED');
+    assert.equal(e.requests.length, 2);
     let retired;
     retired = dataEnvironment(4, { pageDom: { readMyListAnchor() {
         retired.scope.begin(); return { sectionId: 'new-owner', videoIds: [] };
@@ -376,6 +364,92 @@ test('bootstrap diagnostics distinguish unavailable observations and source chan
     await assert.rejects(retired.adapter.fetchBootstrap(1), error => error.code === 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED');
     assert.equal(retired.requests.length, 0);
     assert.equal(retired.warnings.length, 0);
+});
+
+test('optional row diagnostics cannot reject an admitted request when only their observation fails', async () => {
+    let reads = 0;
+    const e = dataEnvironment(4, { pageDom: { readMyListAnchor() {
+        if ([4, 6].includes(++reads)) throw new Error('diagnostic observation failed');
+        return { sectionId: 'list-section', videoIds: ['1'] };
+    } } });
+    e.responses.push(e.page(4, [1, 2, 3, 4]));
+    assert.equal((await e.adapter.fetchBootstrap(1)).totalCount, 4);
+    const selection = e.logs.find(event => event.name.includes('carousel bootstrap fetched')).details.rowSelection;
+    assert.equal(selection.beforeRequest.reason, 'observation-failed');
+    assert.equal(selection.afterResponse.reason, 'observation-failed');
+    assert.equal(e.requests.length, 1);
+    assert.equal(e.warnings.length, 0);
+});
+
+test('missing live cache metadata recovers a supplied opaque row from one fresh page without mutating the cache', async () => {
+    for (const firstMatches of [true, false]) {
+        const e = dataEnvironment(4);
+        const host = e.document.body.appendChild(new Element('main')); host.setAttribute('data-uia', 'browse-page-sections');
+        const row = section(host, 'carousel-row-section-1'); row.id = 'current-live'; row.append(slot('1'));
+        const freshRow = { __typename: 'PinotCarouselSection', _id: 'fresh-opaque-row', id: 'fresh-page-section',
+            entities: { totalCount: 4, edges: [{ node: { __ref: `standardBoxshot_Video:${firstMatches ? 1 : 9}` } }] },
+            eventListeners: [{ notificationMessageRegex: 'UPDATE_PLAYLIST' }], extra: 'escaped "quote" and } brace' };
+        e.responses.push({ raw: `<script>bootstrap=${JSON.stringify({ freshRow })}</script>` });
+        if (firstMatches) e.responses.push(e.page(4, [1, 2], true, 'next'), e.page(4, [3, 4]));
+        assert.equal(e.adapter.readMyListTotalCount(), null);
+        const bootstrap = await e.adapter.fetchBootstrap(1);
+        assert.equal(bootstrap.source, firstMatches ? 'graphql' : 'page');
+        assert.equal(e.requests[0].options.method, 'GET', 'never request the stale row');
+        const result = await e.collect(bootstrap);
+        if (firstMatches) {
+            assert.deepEqual(result.records.map(record => record.videoId), ['1', '2', '3', '4']);
+            assert.equal(e.requests.length, 3);
+            assert.equal(e.requests[1].body.variables.rowId, 'fresh-opaque-row');
+            assert.equal(e.requests[2].body.variables.rowId, 'fresh-opaque-row');
+        } else {
+            assert.equal(result.records, null);
+            assert.equal(e.requests.length, 1);
+        }
+        assert.deepEqual(Object.keys(e.graph), ['MyList']);
+        assert.equal(e.graph.MyList._id, 'row-id');
+        assert.equal(e.logs.find(event => event.name === 'Fresh My List row metadata recovery').details.firstMatches, firstMatches);
+    }
+});
+
+test('a retained collection rejects native section replacement before its next request', async () => {
+    const e = dataEnvironment(4);
+    const host = e.document.body.appendChild(new Element('main')); host.setAttribute('data-uia', 'browse-page-sections');
+    const row = section(host, 'carousel-row-section-1'); row.id = 'list-section'; row.append(slot('1'));
+    e.responses.push(e.page(4, [1, 2], true, 'next'));
+    const bootstrap = await e.adapter.fetchBootstrap(1);
+    row.id = 'replacement-section';
+    const result = await e.collect(bootstrap);
+    assert.equal(result.records, null);
+    assert.equal(result.error.code, 'FRESH_MY_LIST_SOURCE_CHANGED');
+    assert.equal(e.requests.length, 1);
+});
+
+test('fresh-page recovery preserves native fallback on malformed metadata or failed recovery, and cancels retired owners', async () => {
+    for (const mode of ['malformed', 'http', 'cancel', 'replace']) {
+        const e = dataEnvironment(4);
+        const host = e.document.body.appendChild(new Element('main')); host.setAttribute('data-uia', 'browse-page-sections');
+        const row = section(host, 'carousel-row-section-1'); row.id = 'live-row'; row.append(slot('1'));
+        const value = { __typename: 'PinotCarouselSection', _id: 'fresh-row',
+            entities: { totalCount: 4, edges: [{ node: { __ref: 'standardBoxshot_Video:1' } }] },
+            eventListeners: [{ notificationMessageRegex: 'UPDATE_PLAYLIST' }] };
+        e.responses.push({ raw: mode === 'malformed' ? pageBootstrapHtml(4) : JSON.stringify(value),
+            waitBody: async () => {
+                if (mode === 'cancel') e.scope.begin();
+                if (mode === 'replace') row.id = 'replaced-row';
+            } });
+        if (mode === 'http') e.responses.push({ status: 503 });
+        if (mode === 'cancel' || mode === 'replace') {
+            await assert.rejects(e.adapter.fetchBootstrap(1), error => error.code ===
+                (mode === 'cancel' ? 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED' : 'FRESH_MY_LIST_SOURCE_CHANGED'));
+            assert.equal(e.requests.length, 1);
+        } else {
+            const bootstrap = await e.adapter.fetchBootstrap(1);
+            assert.equal(bootstrap.source, 'page');
+            assert.equal((await e.collect(bootstrap)).records, null);
+            assert.equal(e.requests.length, mode === 'http' ? 2 : 1);
+        }
+        assert.equal(e.requests.some(request => request.body?.variables.rowId === 'row-id'), false);
+    }
 });
 
 test('list data hides wire responses and continuation while resuming the original row once', async () => {
@@ -667,6 +741,8 @@ test('page anchor fallbacks and direction/header facts use the current page with
     row.append(slot('1'), slot('2'));
     e.graph.MyList.entities.edges.push({ node: { __ref: 'standardBoxshot_Video:2' } });
     e.adapter.reset();
+    assert.equal(e.adapter.readMyListTotalCount(), null, 'shared titles cannot override a different section ID');
+    row.id = '';
     assert.equal(e.adapter.readMyListTotalCount(), 4);
     e.document.documentElement.dir = 'rtl';
     e.responses.push(e.page(4, [1, 2, 3, 4]));
