@@ -643,4 +643,197 @@ for (const [locale, values] of Object.entries(MANUAL_VIEWING_UI_MESSAGES)) {
     keys.forEach((key, index) => { UI_MESSAGES[locale][key] = values[index]; });
 }
 
+const RECOMMENDATION_UI_MESSAGES = {
+    "da": [
+        "Skjul forslag",
+        "Fortryd",
+        "Allerede set",
+        "Forslag skjult"
+    ],
+    "de": [
+        "Vorschlag ausblenden",
+        "R\u00fcckg\u00e4ngig",
+        "Bereits gesehen",
+        "Vorschlag ausgeblendet"
+    ],
+    "en": [
+        "Hide suggestion",
+        "Undo",
+        "Already watched",
+        "Suggestion hidden"
+    ],
+    "es": [
+        "Ocultar sugerencia",
+        "Deshacer",
+        "Ya visto",
+        "Sugerencia oculta"
+    ],
+    "fil": [
+        "Itago ang mungkahi",
+        "Ibalik",
+        "Napanood na",
+        "Nakatagong mungkahi"
+    ],
+    "fr": [
+        "Masquer la suggestion",
+        "Annuler",
+        "D\u00e9j\u00e0 vu",
+        "Suggestion masqu\u00e9e"
+    ],
+    "hr": [
+        "Sakrij prijedlog",
+        "Poni\u0161ti",
+        "Ve\u0107 pogledano",
+        "Prijedlog skriven"
+    ],
+    "id": [
+        "Sembunyikan saran",
+        "Urungkan",
+        "Sudah ditonton",
+        "Saran disembunyikan"
+    ],
+    "it": [
+        "Nascondi suggerimento",
+        "Annulla",
+        "Gi\u00e0 visto",
+        "Suggerimento nascosto"
+    ],
+    "hu": [
+        "Aj\u00e1nl\u00e1s elrejt\u00e9se",
+        "Visszavon\u00e1s",
+        "M\u00e1r l\u00e1ttam",
+        "Aj\u00e1nl\u00e1s elrejtve"
+    ],
+    "ms": [
+        "Sembunyikan cadangan",
+        "Buat asal",
+        "Sudah ditonton",
+        "Cadangan disembunyikan"
+    ],
+    "nl": [
+        "Suggestie verbergen",
+        "Ongedaan maken",
+        "Al gezien",
+        "Suggestie verborgen"
+    ],
+    "nb": [
+        "Skjul forslag",
+        "Angre",
+        "Allerede sett",
+        "Forslag skjult"
+    ],
+    "pl": [
+        "Ukryj propozycj\u0119",
+        "Cofnij",
+        "Ju\u017c obejrzane",
+        "Propozycja ukryta"
+    ],
+    "pt": [
+        "Ocultar sugest\u00e3o",
+        "Desfazer",
+        "J\u00e1 assistido",
+        "Sugest\u00e3o oculta"
+    ],
+    "ro": [
+        "Ascunde sugestia",
+        "Anuleaz\u0103",
+        "Deja vizionat",
+        "Sugestie ascuns\u0103"
+    ],
+    "fi": [
+        "Piilota ehdotus",
+        "Kumoa",
+        "Jo katsottu",
+        "Ehdotus piilotettu"
+    ],
+    "sv": [
+        "D\u00f6lj f\u00f6rslag",
+        "\u00c5ngra",
+        "Redan sett",
+        "F\u00f6rslag dolt"
+    ],
+    "vi": [
+        "\u1ea8n \u0111\u1ec1 xu\u1ea5t",
+        "Ho\u00e0n t\u00e1c",
+        "\u0110\u00e3 xem",
+        "\u0110\u1ec1 xu\u1ea5t \u0111\u00e3 \u1ea9n"
+    ],
+    "tr": [
+        "\u00d6neriyi gizle",
+        "Geri al",
+        "Zaten izlendi",
+        "\u00d6neri gizlendi"
+    ],
+    "cs": [
+        "Skr\u00fdt doporu\u010den\u00ed",
+        "Vr\u00e1tit zp\u011bt",
+        "Ji\u017e zhl\u00e9dnuto",
+        "Doporu\u010den\u00ed skryto"
+    ],
+    "el": [
+        "\u0391\u03c0\u03cc\u03ba\u03c1\u03c5\u03c8\u03b7 \u03c0\u03c1\u03cc\u03c4\u03b1\u03c3\u03b7\u03c2",
+        "\u0391\u03bd\u03b1\u03af\u03c1\u03b5\u03c3\u03b7",
+        "\u03a4\u03bf \u03ad\u03c7\u03c9 \u03b4\u03b5\u03b9",
+        "\u0397 \u03c0\u03c1\u03cc\u03c4\u03b1\u03c3\u03b7 \u03b1\u03c0\u03bf\u03ba\u03c1\u03cd\u03c6\u03c4\u03b7\u03ba\u03b5"
+    ],
+    "ru": [
+        "\u0421\u043a\u0440\u044b\u0442\u044c \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0438\u044e",
+        "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c",
+        "\u0423\u0436\u0435 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u043d\u043e",
+        "\u0420\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0438\u044f \u0441\u043a\u0440\u044b\u0442\u0430"
+    ],
+    "uk": [
+        "\u041f\u0440\u0438\u0445\u043e\u0432\u0430\u0442\u0438 \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0456\u044e",
+        "\u0421\u043a\u0430\u0441\u0443\u0432\u0430\u0442\u0438",
+        "\u0423\u0436\u0435 \u043f\u0435\u0440\u0435\u0433\u043b\u044f\u043d\u0443\u0442\u043e",
+        "\u0420\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0456\u044e \u043f\u0440\u0438\u0445\u043e\u0432\u0430\u043d\u043e"
+    ],
+    "he": [
+        "\u05d4\u05e1\u05ea\u05e8\u05ea \u05d4\u05de\u05dc\u05e6\u05d4",
+        "\u05d1\u05d9\u05d8\u05d5\u05dc",
+        "\u05db\u05d1\u05e8 \u05e6\u05e4\u05d9\u05ea\u05d9",
+        "\u05d4\u05d4\u05de\u05dc\u05e6\u05d4 \u05d4\u05d5\u05e1\u05ea\u05e8\u05d4"
+    ],
+    "ar": [
+        "\u0625\u062e\u0641\u0627\u0621 \u0627\u0644\u0627\u0642\u062a\u0631\u0627\u062d",
+        "\u062a\u0631\u0627\u062c\u0639",
+        "\u0634\u0627\u0647\u062f\u062a\u0647 \u0628\u0627\u0644\u0641\u0639\u0644",
+        "\u062a\u0645 \u0625\u062e\u0641\u0627\u0621 \u0627\u0644\u0627\u0642\u062a\u0631\u0627\u062d"
+    ],
+    "hi": [
+        "\u0938\u0941\u091d\u093e\u0935 \u091b\u093f\u092a\u093e\u090f\u0901",
+        "\u092a\u0939\u0932\u0947 \u091c\u0948\u0938\u093e \u0915\u0930\u0947\u0902",
+        "\u092a\u0939\u0932\u0947 \u0939\u0940 \u0926\u0947\u0916\u093e \u0939\u0948",
+        "\u0938\u0941\u091d\u093e\u0935 \u091b\u093f\u092a\u093e\u092f\u093e \u0917\u092f\u093e"
+    ],
+    "th": [
+        "\u0e0b\u0e48\u0e2d\u0e19\u0e04\u0e33\u0e41\u0e19\u0e30\u0e19\u0e33",
+        "\u0e40\u0e25\u0e34\u0e01\u0e17\u0e33",
+        "\u0e14\u0e39\u0e41\u0e25\u0e49\u0e27",
+        "\u0e0b\u0e48\u0e2d\u0e19\u0e04\u0e33\u0e41\u0e19\u0e30\u0e19\u0e33\u0e41\u0e25\u0e49\u0e27"
+    ],
+    "zh": [
+        "\u9690\u85cf\u63a8\u8350",
+        "\u64a4\u9500",
+        "\u5df2\u89c2\u770b",
+        "\u63a8\u8350\u5df2\u9690\u85cf"
+    ],
+    "ja": [
+        "\u304a\u3059\u3059\u3081\u3092\u975e\u8868\u793a",
+        "\u5143\u306b\u623b\u3059",
+        "\u8996\u8074\u6e08\u307f",
+        "\u304a\u3059\u3059\u3081\u3092\u975e\u8868\u793a\u306b\u3057\u307e\u3057\u305f"
+    ],
+    "ko": [
+        "\ucd94\ucc9c \uc228\uae30\uae30",
+        "\uc2e4\ud589 \ucde8\uc18c",
+        "\uc774\ubbf8 \uc2dc\uccad\ud568",
+        "\ucd94\ucc9c\uc774 \uc228\uaca8\uc9d0"
+    ]
+};
+for (const [locale, values] of Object.entries(RECOMMENDATION_UI_MESSAGES)) {
+    ['hideRecommendation', 'undoRecommendation', 'recommendationWatched', 'recommendationHidden']
+        .forEach((key, index) => { UI_MESSAGES[locale][key] = values[index]; });
+}
+
 export const NETFLIX_PRIMARY_UI_LOCALES = new Set(Object.keys(UI_MESSAGES));

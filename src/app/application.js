@@ -3,6 +3,7 @@ import { createSettings } from './settings.js';
 import { createNetflixContext } from '../netflix/context.js';
 import { createI18n } from '../i18n/i18n.js';
 import { createLogger } from '../diagnostics/logger.js';
+import { createRecommendations } from '../recommendations/recommendations.js';
 
 export function createApplication({ environment = globalThis, version = '', createSession = createMyListSession,
     userscript = { registerMenu: environment.GM_registerMenuCommand, unregisterMenu: environment.GM_unregisterMenuCommand,
@@ -14,6 +15,7 @@ export function createApplication({ environment = globalThis, version = '', crea
         isTraceEnabled: () => false });
     let active = false, session = null, settings = null, lastObservedUrl = '', routeChangeSequence = 0, revision = 0, sessionEpoch = 0;
     const hooks = [];
+    const recommendations = createRecommendations({ environment, context, userscript, tUi: i18n.tUi, log: logger.log, warn: logger.warn });
     function isTargetPage() { return location.origin === 'https://www.netflix.com' && location.pathname === '/browse/my-list'; }
     function retireSession(reason) { const previous = session; session = null; previous?.dispose(reason); }
     function routeChanged(source = 'unknown') {
@@ -23,7 +25,12 @@ export function createApplication({ environment = globalThis, version = '', crea
         const previousUrl = lastObservedUrl; lastObservedUrl = currentUrl;
         const target = isTargetPage();
         logger.log(i18n.tLog('routeChangeDetected'), { seq: ++routeChangeSequence, source, previousUrl, currentUrl, target });
-        if (!target) { retireSession(`route:${source}`); return; }
+        if (!target) {
+            retireSession(`route:${source}`);
+            try { recommendations.check(); } catch (error) { logger.warn('Recommendation controls unavailable', { message: error.message }); }
+            return;
+        }
+        recommendations.dispose();
         if (session) { session.check(); return; }
         const owner = revision;
         let next;
@@ -70,11 +77,11 @@ export function createApplication({ environment = globalThis, version = '', crea
     function dispose() {
         if (!active) return;
         active = false; ++revision;
-        try { retireSession('application-dispose'); }
+        try { try { recommendations.dispose(); } finally { retireSession('application-dispose'); } }
         finally {
             try { settings?.dispose(); } finally { for (const release of hooks.splice(0).reverse()) release(); }
         }
     }
     return Object.freeze({ start, dispose, diagnostics: () => Object.freeze({ active, routeChangeSequence,
-        currentSession: session?.diagnostics() || null }) });
+        currentSession: session?.diagnostics() || null, recommendations: recommendations.diagnostics() }) });
 }

@@ -17,6 +17,26 @@ const releaseVersion = JSON.parse(await readFile(path.join(root, 'package.json')
 
 function browser(options) { const b=createBrowser(options);vm.createContext(b.context);return {...b,start:()=>vm.runInContext(shipped,b.context,{filename:distribution,timeout:1000})}; }
 
+test('generated browsing release saves a dismissal and restores native visibility before playback', async () => {
+    const b = browser(), stored = new Map();
+    b.window.netflix.reactContext = { models: { userInfo: { data: { userGuid: 'A' } } } };
+    b.context.GM_getValue = (key, fallback) => stored.get(key) ?? fallback;
+    b.context.GM_setValue = (key, value) => stored.set(key, value);
+    const row = b.document.body.appendChild(new Element('section'));
+    const slot = row.appendChild(new Element('div')); slot.setAttribute('data-virtual-slot', '0');
+    const card = slot.appendChild(new Element('a')); card.setAttribute('data-uia', 'standard-card'); card.setAttribute('href', '/title/123');
+    b.start();
+    const input = () => slot.querySelectorAll('button').find(button => button.textContent === 'Hide suggestion');
+    assert.ok(input());
+    b.document.dispatchEvent({ type: 'click', target: input(), preventDefault() {}, stopImmediatePropagation() {} });
+    assert.equal(card.style.visibility, 'hidden'); assert.equal(stored.size, 1); assert.equal(b.requests.length, 0);
+    await b.navigate('/watch/123'); assert.equal(card.style.visibility, undefined); assert.equal(slot.querySelectorAll('button').length, 0);
+    await b.navigate('/browse'); assert.equal(card.style.visibility, 'hidden');
+    const undo = slot.querySelectorAll('button').find(button => button.textContent === 'Undo');
+    b.document.dispatchEvent({ type: 'click', target: undo, preventDefault() {}, stopImmediatePropagation() {} });
+    assert.equal(card.style.visibility, undefined); assert.equal(Object.keys([...stored.values()][0].choices).length, 0);
+});
+
 
 test('generated userscript starts exactly once and hooks the existing page environment', async () => {
     const b = browser();
@@ -418,11 +438,12 @@ for (const viewingFailure of ['missing-context', 'http']) {
         assert.ok(firstCards.every(node => !node.isConnected));
         assert.equal(b.document.getElementById('tm-netflix-mylist-v15-grid'), null);
         assert.equal(b.document.getElementById('tm-netflix-mylist-v15-status'), null);
-        assert.equal(b.document.head.querySelectorAll('style').length, 0);
+        assert.equal(b.document.getElementById('tm-netflix-mylist-v15-style'), null);
         assert.equal(section.getAttribute('data-tm-original-mylist-visible'), null);
         assert.equal(b.document.listenerCount('pointermove'), 0);
         assert.equal(b.window.listenerCount('resize'), 0);
-        assert.equal(b.observers.filter(observer => observer.active).length, 0);
+        // The retained native cards now belong to browsing recommendation controls.
+        assert.equal(b.observers.filter(observer => observer.active).length, viewingFailure === 'http' ? 1 : 0);
         assert.equal(b.scheduler.timers.size, 0); assert.equal(b.scheduler.frames.size, 0);
         await b.navigate('/browse/my-list'); await settle(2); assertList();
         assert.notEqual(b.document.getElementById('tm-netflix-mylist-v15-grid'), firstRoot);

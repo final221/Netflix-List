@@ -5,8 +5,8 @@ import { pathToFileURL } from 'node:url';
 import { Script } from 'node:vm';
 import { distributionName, generateUserscript, repositoryRoot } from './build.mjs';
 
-const publicFeatures = new Set(['src/list/list.js', 'src/viewing/viewing.js', 'src/grid/grid.js', 'src/hover/hover.js']);
-const netflixEntries = new Set(['context', 'page-dom', 'list-data', 'viewing-data', 'card-markup', 'native-popup', 'popup-inspection']
+const publicFeatures = new Set(['src/list/list.js', 'src/viewing/viewing.js', 'src/grid/grid.js', 'src/hover/hover.js', 'src/recommendations/recommendations.js']);
+const netflixEntries = new Set(['context', 'page-dom', 'list-data', 'viewing-data', 'card-markup', 'native-popup', 'popup-inspection', 'recommendation-dom']
     .map(name => `src/netflix/${name}.js`).concat('src/netflix/carousel/carousel.js'));
 const supportEntries = new Set(['src/dom-names.js', 'src/i18n/i18n.js', 'src/diagnostics/logger.js', 'src/diagnostics/report.js']);
 const listAdapters = new Set(['src/netflix/list-data.js', 'src/netflix/page-dom.js', 'src/netflix/carousel/carousel.js']);
@@ -32,6 +32,7 @@ function allowedImport(from, to) {
     if (owner === 'viewing') return from !== 'src/viewing/completion.js' && viewingAdapters.has(to);
     if (owner === 'grid') return gridAdapters.has(to);
     if (owner === 'hover') return hoverAdapters.has(to);
+    if (owner === 'recommendations') return ['src/netflix/recommendation-dom.js', 'src/netflix/context.js'].includes(to);
     return false;
 }
 

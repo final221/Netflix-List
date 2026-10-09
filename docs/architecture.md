@@ -18,16 +18,17 @@ Each feature's main file is its public capability; neighboring files are private
 
 | Importing area | Permitted dependencies outside its private implementation |
 | --- | --- |
-| main and app | App internals, public list/viewing/grid/hover capabilities, declared Netflix entries, DOM names, localization and logger/report |
+| main and app | App internals, public list/viewing/grid/hover/recommendations capabilities, declared Netflix entries, DOM names, localization and logger/report |
 | Netflix and private carousel | Declared Netflix entries and DOM names; logging, scope and grid replacement arrive as injected collaborators |
 | List | Public list-data, page-DOM and carousel entries |
 | Viewing | Public context and viewing-data entries; pure completion has no adapter dependency |
 | Grid | Card-markup, DOM names and localization |
 | Hover | Native-popup and carousel; current card/replacement operations are injected |
+| Recommendations | Public recommendation-DOM and context entries; localization arrives as an injected collaborator |
 | Localization and diagnostics | Their own internals and injected locale/snapshot/probe providers |
 | DOM names | Literal names with no runtime feature imports |
 
-These are the directions enforced by scripts/check.mjs. A declared Netflix entry does not grant access to another capability's private files. No production area imports app coordination. List/viewing changes reach grid through session wiring. Only grid changes displayed structure; native popup attaches or restores only its owned interaction properties on borrowed cards. Netflix DOM, React, protocol, endpoint and geometry interpretation stays in adapters. Passive diagnostics cannot authorize publication or trigger recovery, reject an otherwise admitted interaction, or change classification.
+These are the directions enforced by scripts/check.mjs. A declared Netflix entry does not grant access to another capability's private files. No production area imports app coordination. List/viewing changes reach grid through session wiring. Grid owns the My List displayed structure; recommendations owns only its browsing-card controls/placeholders and visibility leases. Native popup attaches or restores only its owned interaction properties on borrowed cards. Netflix DOM, React, protocol, endpoint and geometry interpretation stays in adapters. Passive diagnostics cannot authorize publication or trigger recovery, reject an otherwise admitted interaction, or change classification.
 
 ### Values and publication
 
@@ -89,6 +90,8 @@ The [repository map](../README.md#repository-layout) locates documentation, evid
 src/main.js
   -> app/application.js: startup, navigation, logger, settings and current session
      -> app/settings.js: persisted semantic preferences and exact menu callbacks
+     -> recommendations/recommendations.js: browsing controls, profile choices and exact retirement
+        -> netflix/recommendation-dom.js: native browsing-card identity and visibility leases
      -> app/my-list-session.js: one My List visit's composition and transactions
         -> app/session-scope.js: page-owned request registry, deadlines and cancellation
         -> app/responsive.js: viewport/source checks, refresh and list deferral
@@ -117,6 +120,8 @@ Responsive page shape is derived from the accepted geometry signature (columns/p
 Initialization shares its generic blocked-failure reporting and verified empty completion locally within runScript; phase-specific recovery and exact deferral release remain with their existing callers. Hover preparation requires an admitted target card; there is no page-wide preparation mode.
 
 ## Native integration
+
+`recommendations/recommendations.js` activates on browsing and search routes, excluding My List and playback. It owns a coalesced mutation observer, delegated input, per-profile GM storage, script-owned card buttons/placeholders and a stylesheet. It reads profile identity before applying persisted choices and again around storage/input; missing identity or invalid storage disables choices. Title/host replacement retires the exact decoration before reuse. Application invokes its route check alongside the independent My List lifecycle and disposes it on shutdown. `netflix/recommendation-dom.js` interprets current standard cards and legacy title cards, excludes progress/Continue Watching rows, and leases native content visibility and host positioning. Hidden cards retain their native slot size; no native card is moved, cloned or removed, and ordinary native popup interaction remains on visible cards. Restore only properties still holding the leased value. Choices affect browsing visibility only, not My List classification, Netflix ratings, watch history or server data. No recommendation request or automated paging is introduced; replacement and fresh recommendations remain deferred.
 
 `netflix/context.js` lazily reads page/profile/language/request context. `page-dom.js` interprets native section/card/membership-click/toast identity, heading typography, row gaps and empty shell/content. Native title normalization belongs there. `card-markup.js` captures, creates and sanitizes detached card material without owning membership or displayed structure. Adapters keep DOM/endpoint/protocol assumptions local rather than exposing raw page objects as application state.
 

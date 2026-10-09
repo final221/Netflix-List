@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.71
+// @version      1.5.0
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -18516,6 +18516,199 @@
       UI_MESSAGES[locale][key] = values[index];
     });
   }
+  var RECOMMENDATION_UI_MESSAGES = {
+    "da": [
+      "Skjul forslag",
+      "Fortryd",
+      "Allerede set",
+      "Forslag skjult"
+    ],
+    "de": [
+      "Vorschlag ausblenden",
+      "R\xFCckg\xE4ngig",
+      "Bereits gesehen",
+      "Vorschlag ausgeblendet"
+    ],
+    "en": [
+      "Hide suggestion",
+      "Undo",
+      "Already watched",
+      "Suggestion hidden"
+    ],
+    "es": [
+      "Ocultar sugerencia",
+      "Deshacer",
+      "Ya visto",
+      "Sugerencia oculta"
+    ],
+    "fil": [
+      "Itago ang mungkahi",
+      "Ibalik",
+      "Napanood na",
+      "Nakatagong mungkahi"
+    ],
+    "fr": [
+      "Masquer la suggestion",
+      "Annuler",
+      "D\xE9j\xE0 vu",
+      "Suggestion masqu\xE9e"
+    ],
+    "hr": [
+      "Sakrij prijedlog",
+      "Poni\u0161ti",
+      "Ve\u0107 pogledano",
+      "Prijedlog skriven"
+    ],
+    "id": [
+      "Sembunyikan saran",
+      "Urungkan",
+      "Sudah ditonton",
+      "Saran disembunyikan"
+    ],
+    "it": [
+      "Nascondi suggerimento",
+      "Annulla",
+      "Gi\xE0 visto",
+      "Suggerimento nascosto"
+    ],
+    "hu": [
+      "Aj\xE1nl\xE1s elrejt\xE9se",
+      "Visszavon\xE1s",
+      "M\xE1r l\xE1ttam",
+      "Aj\xE1nl\xE1s elrejtve"
+    ],
+    "ms": [
+      "Sembunyikan cadangan",
+      "Buat asal",
+      "Sudah ditonton",
+      "Cadangan disembunyikan"
+    ],
+    "nl": [
+      "Suggestie verbergen",
+      "Ongedaan maken",
+      "Al gezien",
+      "Suggestie verborgen"
+    ],
+    "nb": [
+      "Skjul forslag",
+      "Angre",
+      "Allerede sett",
+      "Forslag skjult"
+    ],
+    "pl": [
+      "Ukryj propozycj\u0119",
+      "Cofnij",
+      "Ju\u017C obejrzane",
+      "Propozycja ukryta"
+    ],
+    "pt": [
+      "Ocultar sugest\xE3o",
+      "Desfazer",
+      "J\xE1 assistido",
+      "Sugest\xE3o oculta"
+    ],
+    "ro": [
+      "Ascunde sugestia",
+      "Anuleaz\u0103",
+      "Deja vizionat",
+      "Sugestie ascuns\u0103"
+    ],
+    "fi": [
+      "Piilota ehdotus",
+      "Kumoa",
+      "Jo katsottu",
+      "Ehdotus piilotettu"
+    ],
+    "sv": [
+      "D\xF6lj f\xF6rslag",
+      "\xC5ngra",
+      "Redan sett",
+      "F\xF6rslag dolt"
+    ],
+    "vi": [
+      "\u1EA8n \u0111\u1EC1 xu\u1EA5t",
+      "Ho\xE0n t\xE1c",
+      "\u0110\xE3 xem",
+      "\u0110\u1EC1 xu\u1EA5t \u0111\xE3 \u1EA9n"
+    ],
+    "tr": [
+      "\xD6neriyi gizle",
+      "Geri al",
+      "Zaten izlendi",
+      "\xD6neri gizlendi"
+    ],
+    "cs": [
+      "Skr\xFDt doporu\u010Den\xED",
+      "Vr\xE1tit zp\u011Bt",
+      "Ji\u017E zhl\xE9dnuto",
+      "Doporu\u010Den\xED skryto"
+    ],
+    "el": [
+      "\u0391\u03C0\u03CC\u03BA\u03C1\u03C5\u03C8\u03B7 \u03C0\u03C1\u03CC\u03C4\u03B1\u03C3\u03B7\u03C2",
+      "\u0391\u03BD\u03B1\u03AF\u03C1\u03B5\u03C3\u03B7",
+      "\u03A4\u03BF \u03AD\u03C7\u03C9 \u03B4\u03B5\u03B9",
+      "\u0397 \u03C0\u03C1\u03CC\u03C4\u03B1\u03C3\u03B7 \u03B1\u03C0\u03BF\u03BA\u03C1\u03CD\u03C6\u03C4\u03B7\u03BA\u03B5"
+    ],
+    "ru": [
+      "\u0421\u043A\u0440\u044B\u0442\u044C \u0440\u0435\u043A\u043E\u043C\u0435\u043D\u0434\u0430\u0446\u0438\u044E",
+      "\u041E\u0442\u043C\u0435\u043D\u0438\u0442\u044C",
+      "\u0423\u0436\u0435 \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0435\u043D\u043E",
+      "\u0420\u0435\u043A\u043E\u043C\u0435\u043D\u0434\u0430\u0446\u0438\u044F \u0441\u043A\u0440\u044B\u0442\u0430"
+    ],
+    "uk": [
+      "\u041F\u0440\u0438\u0445\u043E\u0432\u0430\u0442\u0438 \u0440\u0435\u043A\u043E\u043C\u0435\u043D\u0434\u0430\u0446\u0456\u044E",
+      "\u0421\u043A\u0430\u0441\u0443\u0432\u0430\u0442\u0438",
+      "\u0423\u0436\u0435 \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u043D\u0443\u0442\u043E",
+      "\u0420\u0435\u043A\u043E\u043C\u0435\u043D\u0434\u0430\u0446\u0456\u044E \u043F\u0440\u0438\u0445\u043E\u0432\u0430\u043D\u043E"
+    ],
+    "he": [
+      "\u05D4\u05E1\u05EA\u05E8\u05EA \u05D4\u05DE\u05DC\u05E6\u05D4",
+      "\u05D1\u05D9\u05D8\u05D5\u05DC",
+      "\u05DB\u05D1\u05E8 \u05E6\u05E4\u05D9\u05EA\u05D9",
+      "\u05D4\u05D4\u05DE\u05DC\u05E6\u05D4 \u05D4\u05D5\u05E1\u05EA\u05E8\u05D4"
+    ],
+    "ar": [
+      "\u0625\u062E\u0641\u0627\u0621 \u0627\u0644\u0627\u0642\u062A\u0631\u0627\u062D",
+      "\u062A\u0631\u0627\u062C\u0639",
+      "\u0634\u0627\u0647\u062F\u062A\u0647 \u0628\u0627\u0644\u0641\u0639\u0644",
+      "\u062A\u0645 \u0625\u062E\u0641\u0627\u0621 \u0627\u0644\u0627\u0642\u062A\u0631\u0627\u062D"
+    ],
+    "hi": [
+      "\u0938\u0941\u091D\u093E\u0935 \u091B\u093F\u092A\u093E\u090F\u0901",
+      "\u092A\u0939\u0932\u0947 \u091C\u0948\u0938\u093E \u0915\u0930\u0947\u0902",
+      "\u092A\u0939\u0932\u0947 \u0939\u0940 \u0926\u0947\u0916\u093E \u0939\u0948",
+      "\u0938\u0941\u091D\u093E\u0935 \u091B\u093F\u092A\u093E\u092F\u093E \u0917\u092F\u093E"
+    ],
+    "th": [
+      "\u0E0B\u0E48\u0E2D\u0E19\u0E04\u0E33\u0E41\u0E19\u0E30\u0E19\u0E33",
+      "\u0E40\u0E25\u0E34\u0E01\u0E17\u0E33",
+      "\u0E14\u0E39\u0E41\u0E25\u0E49\u0E27",
+      "\u0E0B\u0E48\u0E2D\u0E19\u0E04\u0E33\u0E41\u0E19\u0E30\u0E19\u0E33\u0E41\u0E25\u0E49\u0E27"
+    ],
+    "zh": [
+      "\u9690\u85CF\u63A8\u8350",
+      "\u64A4\u9500",
+      "\u5DF2\u89C2\u770B",
+      "\u63A8\u8350\u5DF2\u9690\u85CF"
+    ],
+    "ja": [
+      "\u304A\u3059\u3059\u3081\u3092\u975E\u8868\u793A",
+      "\u5143\u306B\u623B\u3059",
+      "\u8996\u8074\u6E08\u307F",
+      "\u304A\u3059\u3059\u3081\u3092\u975E\u8868\u793A\u306B\u3057\u307E\u3057\u305F"
+    ],
+    "ko": [
+      "\uCD94\uCC9C \uC228\uAE30\uAE30",
+      "\uC2E4\uD589 \uCDE8\uC18C",
+      "\uC774\uBBF8 \uC2DC\uCCAD\uD568",
+      "\uCD94\uCC9C\uC774 \uC228\uACA8\uC9D0"
+    ]
+  };
+  for (const [locale, values] of Object.entries(RECOMMENDATION_UI_MESSAGES)) {
+    ["hideRecommendation", "undoRecommendation", "recommendationWatched", "recommendationHidden"].forEach((key, index) => {
+      UI_MESSAGES[locale][key] = values[index];
+    });
+  }
   var NETFLIX_PRIMARY_UI_LOCALES = new Set(Object.keys(UI_MESSAGES));
 
   // src/i18n/log-messages.js
@@ -18812,6 +19005,320 @@
     });
   }
 
+  // src/netflix/recommendation-dom.js
+  function createRecommendationDom({ document, location, getComputedStyle }) {
+    const selector = 'a[data-uia="standard-card"][href], .title-card';
+    function describe(card) {
+      if (!card?.isConnected) return null;
+      const host = card.closest("[data-virtual-slot], .slider-item") || card.parentElement;
+      const row = card.closest("section, .lolomoRow");
+      if (!host || !row || row.querySelector('[data-uia="progress-card"], .continueWatching') || row.classList.contains("continueWatching")) return null;
+      const anchor = card.matches("a[href]") ? card : card.querySelector("a[href]");
+      const href = anchor?.getAttribute("href") || anchor?.href || "";
+      let id = readVideoIdFromHref(href, location.href);
+      if (!id) try {
+        id = new URL(href, location.href).pathname.match(/^\/watch\/(\d+)(?:\/|$)/)?.[1] || "";
+      } catch (_) {
+      }
+      if (!/^\d+$/.test(id)) return null;
+      return { host, card, id };
+    }
+    function scan(root = document) {
+      const result = [], seen = /* @__PURE__ */ new Set();
+      const cards = root.matches?.(selector) ? [root, ...root.querySelectorAll(selector)] : root.querySelectorAll(selector);
+      for (const card of cards) {
+        const value = describe(card);
+        if (value && !seen.has(value.host)) {
+          seen.add(value.host);
+          result.push(value);
+        }
+      }
+      return result;
+    }
+    function lease({ host, card, id }) {
+      const previousPosition = host.style.getPropertyValue("position"), positionPriority = host.style.getPropertyPriority("position");
+      const positioned = !getComputedStyle || !getComputedStyle(host).position || getComputedStyle(host).position === "static";
+      if (positioned) host.style.setProperty("position", "relative");
+      let hidden = false, originalVisibility = "", visibilityPriority = "", originalPointer = "", pointerPriority = "";
+      const originalAria = card.getAttribute("aria-hidden"), originalTab = card.getAttribute("tabindex");
+      function current() {
+        const value = describe(card);
+        return value?.host === host && value.id === id;
+      }
+      function restore() {
+        if (!hidden) return;
+        for (const [key, applied, previous, priority] of [
+          ["visibility", "hidden", originalVisibility, visibilityPriority],
+          ["pointer-events", "none", originalPointer, pointerPriority]
+        ]) {
+          if (card.style.getPropertyValue(key) === applied) {
+            if (previous) card.style.setProperty(key, previous, priority);
+            else card.style.removeProperty(key);
+          }
+        }
+        if (card.getAttribute("aria-hidden") === "true") {
+          if (originalAria === null) card.removeAttribute("aria-hidden");
+          else card.setAttribute("aria-hidden", originalAria);
+        }
+        if (card.getAttribute("tabindex") === "-1") {
+          if (originalTab === null) card.removeAttribute("tabindex");
+          else card.setAttribute("tabindex", originalTab);
+        }
+        hidden = false;
+      }
+      return {
+        current,
+        hide(value) {
+          if (!current()) return false;
+          if (!value) {
+            restore();
+            return true;
+          }
+          if (!hidden) {
+            originalVisibility = card.style.getPropertyValue("visibility");
+            visibilityPriority = card.style.getPropertyPriority("visibility");
+            originalPointer = card.style.getPropertyValue("pointer-events");
+            pointerPriority = card.style.getPropertyPriority("pointer-events");
+            card.style.setProperty("visibility", "hidden", "important");
+            card.style.setProperty("pointer-events", "none", "important");
+            card.setAttribute("aria-hidden", "true");
+            card.setAttribute("tabindex", "-1");
+            hidden = true;
+          }
+          return true;
+        },
+        release() {
+          restore();
+          if (positioned && host.style.getPropertyValue("position") === "relative") {
+            if (previousPosition) host.style.setProperty("position", previousPosition, positionPriority);
+            else host.style.removeProperty("position");
+          }
+        }
+      };
+    }
+    return Object.freeze({ scan, lease, describe });
+  }
+
+  // src/recommendations/recommendations.js
+  function createRecommendations({ environment, context, userscript, tUi, log = () => {
+  }, warn = () => {
+  } }) {
+    const { document, location, MutationObserver, queueMicrotask } = environment;
+    const dom = createRecommendationDom(environment), entries = /* @__PURE__ */ new Map(), buttons = /* @__PURE__ */ new WeakMap();
+    const key = "legacyMyListForNetflix.recommendationChoices.v1.";
+    let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
+    const pending = /* @__PURE__ */ new Set();
+    const allowed = () => location.origin === "https://www.netflix.com" && (location.pathname === "/browse" || location.pathname.startsWith("/browse/") && location.pathname !== "/browse/my-list" || location.pathname === "/search");
+    const readProfile = () => {
+      const value = context.activeProfile();
+      return typeof value === "string" && value ? value : null;
+    };
+    function read(p) {
+      if (typeof userscript.getValue !== "function" || typeof userscript.setValue !== "function") throw new Error("storage-unavailable");
+      const value = userscript.getValue(key + encodeURIComponent(p), null);
+      if (value === null) return {};
+      if (value?.version !== 1 || !value.choices || typeof value.choices !== "object" || Array.isArray(value.choices) || Object.keys(value.choices).length > 5e3) throw new Error("invalid-storage");
+      return Object.fromEntries(Object.entries(value.choices).filter(([id, reason]) => /^\d+$/.test(id) && ["watched", "hide"].includes(reason)));
+    }
+    function release(entry) {
+      entry.controls.remove();
+      entry.lease.release();
+      entries.delete(entry.host);
+    }
+    function syncProfile() {
+      const next = readProfile();
+      if (next === profile) return;
+      for (const entry of [...entries.values()]) release(entry);
+      profile = next;
+      choices = {};
+      failed = false;
+      epoch++;
+      pending.clear();
+      queued = false;
+      if (next) try {
+        const loaded = read(next);
+        if (readProfile() === next) choices = loaded;
+        else profile = null;
+      } catch (error) {
+        failed = true;
+        warn("Recommendation choices unavailable", { reason: error.message });
+      }
+    }
+    function paint(entry) {
+      const reason = choices[entry.id];
+      if (!entry.lease.hide(Boolean(reason))) return;
+      entry.controls.setAttribute("data-tm-rec-hidden", reason ? "true" : "false");
+      entry.watched.hidden = Boolean(reason);
+      entry.hide.hidden = Boolean(reason);
+      entry.undo.hidden = !reason;
+      entry.label.hidden = !reason;
+      entry.label.textContent = tUi(reason === "watched" ? "recommendationWatched" : "recommendationHidden");
+      for (const button of [entry.watched, entry.hide, entry.undo]) {
+        button.disabled = !profile || failed;
+        button.title = failed || !profile ? tUi("viewingChoiceStorageFailed") : button.textContent;
+      }
+    }
+    function decorate(value) {
+      const existing = entries.get(value.host);
+      if (existing && existing.id === value.id && existing.card === value.card && existing.controls.parentElement === value.host) return;
+      if (existing) release(existing);
+      const controls = document.createElement("div");
+      controls.className = "tm-rec-controls";
+      const entry = { ...value, controls, lease: dom.lease(value) };
+      const label = document.createElement("span");
+      entry.label = label;
+      controls.appendChild(label);
+      for (const [action, field, message] of [["watched", "watched", "markWatched"], ["hide", "hide", "hideRecommendation"], ["undo", "undo", "undoRecommendation"]]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = tUi(message);
+        button.setAttribute("aria-label", tUi(message));
+        buttons.set(button, { entry, action });
+        entry[field] = button;
+        controls.appendChild(button);
+      }
+      entries.set(value.host, entry);
+      value.host.appendChild(controls);
+      paint(entry);
+    }
+    function scan(root = document) {
+      if (!active || !allowed()) return;
+      const previous = profile;
+      syncProfile();
+      if (!profile) return;
+      if (previous !== profile) root = document;
+      for (const entry of [...entries.values()]) if (!entry.lease.current()) release(entry);
+      for (const value of dom.scan(root)) decorate(value);
+      if (entries.size && !style) {
+        style = document.createElement("style");
+        style.textContent = '.tm-rec-controls{position:absolute;inset-inline:3px;bottom:3px;z-index:10;display:flex;flex-wrap:wrap;gap:3px;justify-content:center;opacity:0;pointer-events:none}.tm-rec-controls span{display:none}.tm-rec-controls button{font:12px system-ui!important;background:#161616!important;color:#fff!important;border:1px solid #aaa!important;border-radius:4px;padding:4px 6px;cursor:pointer}.tm-rec-controls [hidden]{display:none!important}*:hover>.tm-rec-controls,.tm-rec-controls:focus-within{opacity:1;pointer-events:auto}.tm-rec-controls[data-tm-rec-hidden="true"]{inset:0;background:#181818;opacity:1;pointer-events:auto;align-content:center}.tm-rec-controls[data-tm-rec-hidden="true"] span{display:block;width:100%;text-align:center;font:13px system-ui;color:#bbb}.tm-rec-controls button:disabled{opacity:.5;cursor:default}';
+        document.head.appendChild(style);
+      }
+    }
+    function schedule(root) {
+      pending.add(root);
+      if (pending.size > 24) {
+        pending.clear();
+        pending.add(document);
+      }
+      if (queued) return;
+      queued = true;
+      const owner = epoch;
+      queueMicrotask(() => {
+        if (!active || owner !== epoch) return;
+        queued = false;
+        const roots = [...pending];
+        pending.clear();
+        for (const node of roots) if (node === document || node.isConnected) scan(node);
+      });
+    }
+    function click(event) {
+      const button = event.target?.closest?.("button"), input = buttons.get(button);
+      if (!input || entries.get(input.entry.host) !== input.entry) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!active || !allowed()) {
+        check();
+        return;
+      }
+      const before = profile;
+      syncProfile();
+      if (!profile || failed || profile !== before || !input.entry.lease.current()) {
+        scan();
+        return;
+      }
+      try {
+        const p = profile, owner = epoch, latest = read(p);
+        if (input.action === "undo") delete latest[input.entry.id];
+        else latest[input.entry.id] = input.action;
+        if (Object.keys(latest).length > 5e3) throw new Error("storage-full");
+        if (readProfile() !== p || epoch !== owner) {
+          scan();
+          return;
+        }
+        userscript.setValue(key + encodeURIComponent(p), { version: 1, choices: latest });
+        if (readProfile() !== p || epoch !== owner || !active || !allowed()) {
+          check();
+          return;
+        }
+        choices = latest;
+        for (const entry of entries.values()) paint(entry);
+        log("Recommendation visibility choice saved", { action: input.action, hiddenCount: Object.keys(choices).length });
+      } catch (error) {
+        failed = true;
+        for (const entry of entries.values()) paint(entry);
+        warn("Recommendation choice could not be saved", { reason: error.message });
+      }
+    }
+    function pointer(event) {
+      if (!allowed()) {
+        check();
+        return;
+      }
+      if (readProfile() !== profile) {
+        scan();
+        observe();
+        return;
+      }
+      if (event.target?.closest?.(".tm-rec-controls")) return;
+      const card = event.target?.closest?.('a[data-uia="standard-card"], .title-card');
+      if (!card) return;
+      const value = dom.describe(card), entry = value && entries.get(value.host);
+      if (entry?.lease.current() && entry.controls.parentElement === value.host) return;
+      scan(card.parentElement);
+      observe();
+    }
+    function observe() {
+      if (observer || !profile || typeof MutationObserver !== "function") return;
+      observer = new MutationObserver((records) => {
+        if (!allowed()) {
+          check();
+          return;
+        }
+        for (const record of records) {
+          if (record.target?.closest?.(".tm-rec-controls") || record.target === style) continue;
+          if (record.type === "attributes") schedule(record.target.parentElement || document);
+          else if (record.type === "childList") {
+            if ([...record.addedNodes || [], ...record.removedNodes || []].every((node) => node === style || node.className === "tm-rec-controls")) continue;
+            schedule(record.target);
+          }
+        }
+      });
+      observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["href", "data-uia"] });
+    }
+    function check() {
+      if (!allowed()) {
+        dispose();
+        return;
+      }
+      if (!active) {
+        active = true;
+        epoch++;
+        document.addEventListener("click", click, true);
+        document.addEventListener("pointerover", pointer, true);
+      }
+      scan();
+      observe();
+    }
+    function dispose() {
+      active = false;
+      epoch++;
+      queued = false;
+      pending.clear();
+      observer?.disconnect();
+      observer = null;
+      document.removeEventListener("click", click, true);
+      document.removeEventListener("pointerover", pointer, true);
+      for (const entry of [...entries.values()]) release(entry);
+      style?.remove();
+      style = null;
+      profile = null;
+      choices = {};
+      failed = false;
+    }
+    return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(choices).length, storageFailed: failed }) });
+  }
+
   // src/app/application.js
   function createApplication({
     environment = globalThis,
@@ -18836,6 +19343,7 @@
     });
     let active = false, session = null, settings = null, lastObservedUrl = "", routeChangeSequence = 0, revision = 0, sessionEpoch = 0;
     const hooks = [];
+    const recommendations = createRecommendations({ environment, context, userscript, tUi: i18n.tUi, log: logger.log, warn: logger.warn });
     function isTargetPage() {
       return location.origin === "https://www.netflix.com" && location.pathname === "/browse/my-list";
     }
@@ -18854,8 +19362,14 @@
       logger.log(i18n.tLog("routeChangeDetected"), { seq: ++routeChangeSequence, source, previousUrl, currentUrl, target });
       if (!target) {
         retireSession(`route:${source}`);
+        try {
+          recommendations.check();
+        } catch (error) {
+          logger.warn("Recommendation controls unavailable", { message: error.message });
+        }
         return;
       }
+      recommendations.dispose();
       if (session) {
         session.check();
         return;
@@ -18944,7 +19458,11 @@
       active = false;
       ++revision;
       try {
-        retireSession("application-dispose");
+        try {
+          recommendations.dispose();
+        } finally {
+          retireSession("application-dispose");
+        }
       } finally {
         try {
           settings?.dispose();
@@ -18956,12 +19474,13 @@
     return Object.freeze({ start, dispose, diagnostics: () => Object.freeze({
       active,
       routeChangeSequence,
-      currentSession: session?.diagnostics() || null
+      currentSession: session?.diagnostics() || null,
+      recommendations: recommendations.diagnostics()
     }) });
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.4.71";
+  var SCRIPT_VERSION = "1.5.0";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

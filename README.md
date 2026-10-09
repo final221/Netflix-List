@@ -8,6 +8,8 @@ Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released u
 
 For copies installed from the former root location, open the released-userscript link once and confirm the update in Tampermonkey. The script name/namespace is unchanged; this release specifies the new URLs for future updates.
 
+Version **1.5.0** also adds **Mark watched** and **Hide suggestion** buttons on native cards on Netflix browsing/search pages. Hover a card or focus its buttons with the keyboard. Dismissals replace the card with a small **Undo** placeholder and persist per Netflix profile in this browser through Tampermonkey. Undo remains available on dismissed cards after reload. These manual choices leave Netflix ratings/watch history and My List placement unchanged. Continue Watching uses Netflix's existing controls. Native carousel slot sizes remain intact; replacement titles and fresh recommendations are still pending. The new controls have automated coverage but have not been verified against a live Netflix session.
+
 ## Development
 
 Development and verification target Windows. Use Node **24.13.0** and npm **11.6.2**, as declared in package.json. Install the locked build dependency with `npm ci`.
@@ -27,7 +29,7 @@ Edit `src/` and use `npm run build` to generate the distributable in dist/. See 
 
 ## Offline recommendation experiment
 
-For the separate offline recommendation-refill experiment, open [the demo](docs/recommendation-demo.html) in a browser. It uses fictional titles and simulated finite pages, preserves ratings, remembers dismissals per demo profile, and supports Undo. Regenerate it with `node scripts/build-recommendation-demo.mjs`; its controller and tests are outside the released userscript. See [findings](docs/findings.md#offline-recommendation-refill-experiment) for integration limits.
+For the separate offline recommendation-refill experiment, open [the demo](docs/recommendation-demo.html) in a browser. It uses fictional titles and simulated finite pages, preserves ratings, remembers dismissals per demo profile, and supports Undo. Regenerate it with `node scripts/build-recommendation-demo.mjs`; its controller and tests are outside the released userscript. See [findings](docs/findings.md#historical-offline-recommendation-refill-experiment) for integration limits.
 
 ## Live testing
 
