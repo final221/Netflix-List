@@ -1,6 +1,6 @@
 import { readVideoIdFromHref } from './page-dom.js';
 
-// Slot size/order remains Netflix-owned. No private mutation or playback API.
+// Visible slot size/order remains Netflix-owned. No private mutation or playback API.
 export function createRecommendationDom({ document, location, getComputedStyle }) {
     const selector = 'a[data-uia="standard-card"][href], .title-card';
     const scrollerLeases = new WeakMap();
@@ -57,10 +57,12 @@ export function createRecommendationDom({ document, location, getComputedStyle }
         const restoreOverflow = styleLease(host, 'overflow', 'visible', 'important');
         const releaseSpace = reserveActions(scroller);
         let hidden = false, originalVisibility = '', visibilityPriority = '', originalPointer = '', pointerPriority = '';
+        let restoreDisplay = null;
         const originalAria = card.getAttribute('aria-hidden'), originalTab = card.getAttribute('tabindex');
         function current() { const value = describe(card); return value?.host === host && value.id === id && value.scroller === scroller; }
         function restore() {
             if (!hidden) return;
+            restoreDisplay?.(); restoreDisplay = null;
             for (const [key, applied, previous, priority] of [['visibility', 'hidden', originalVisibility, visibilityPriority],
                 ['pointer-events', 'none', originalPointer, pointerPriority]]) {
                 if (card.style.getPropertyValue(key) === applied) {
@@ -80,6 +82,7 @@ export function createRecommendationDom({ document, location, getComputedStyle }
                 if (!current()) return false;
                 if (!value) { restore(); return true; }
                 if (!hidden) {
+                    restoreDisplay = styleLease(host, 'display', 'none', 'important');
                     originalVisibility = card.style.getPropertyValue('visibility'); visibilityPriority = card.style.getPropertyPriority('visibility');
                     originalPointer = card.style.getPropertyValue('pointer-events'); pointerPriority = card.style.getPropertyPriority('pointer-events');
                     card.style.setProperty('visibility', 'hidden', 'important'); card.style.setProperty('pointer-events', 'none', 'important');

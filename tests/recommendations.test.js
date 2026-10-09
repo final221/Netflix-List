@@ -26,16 +26,22 @@ function setup(options = {}) {
     return { ...b, saved, userscript, feature, select: value => { profile = value; },
         click(host, label) { const button = host.querySelectorAll('button').find(node => node.textContent === label);
             assert.ok(button, label); this.document.dispatchEvent({ type: 'click', target: button, preventDefault() {}, stopImmediatePropagation() {} }); },
+        restore(id) {
+            const root = this.document.querySelector('.tm-rec-manager');
+            if (root.querySelector('section').hidden) this.click(root, root.querySelector('button').textContent);
+            const row = root.querySelectorAll('.tm-rec-saved-row').find(node => node.querySelector('a').getAttribute('href') === `/title/${id}`);
+            assert.ok(row); this.click(row, '\u00d7');
+        },
         mutate(target, extra = {}) { this.observers.find(o => o.active).callback([{ type: 'childList', target, ...extra }]); } };
 }
 test('live recommendation controls persist both reasons, hide duplicates and Undo without server requests', () => {
     const b = setup(), a = mount(b), duplicate = mount(b), other = mount(b, '2', { legacy: true });
     other.card.querySelector('a').setAttribute('href', '/watch/2');
-    b.feature.check(); assert.equal(a.host.querySelectorAll('button').length, 3);
+    b.feature.check(); assert.equal(a.host.querySelectorAll('button').length, 2);
     b.click(a.host, 'Mark watched');
     assert.equal(a.card.style.visibility, 'hidden'); assert.equal(duplicate.card.style.visibility, 'hidden');
     assert.equal(other.card.style.visibility, undefined); assert.equal(b.requests.length, 0);
-    b.click(duplicate.host, 'Undo'); assert.equal(a.card.style.visibility, undefined);
+    b.restore('1'); assert.equal(a.card.style.visibility, undefined);
     b.click(other.host, 'Hide suggestion'); assert.equal(other.card.style.visibility, 'hidden');
     assert.deepEqual([...b.saved.values()][0], { version: 1, choices: { 2: 'hide' }, titles: {} });
     b.feature.dispose(); b.feature.check(); assert.equal(other.card.style.visibility, 'hidden');
@@ -44,17 +50,17 @@ test('live recommendation controls persist both reasons, hide duplicates and Und
 });
 test('recommendation profile changes reject old controls and isolate saved choices', () => {
     const b = setup(), a = mount(b); b.feature.check(); b.click(a.host, 'Mark watched');
-    b.select('B'); b.click(a.host, 'Undo'); assert.equal(a.card.style.visibility, undefined);
+    b.select('B'); b.click(a.host, 'Mark watched'); assert.equal(a.card.style.visibility, undefined);
     assert.equal(b.saved.size, 1); b.click(a.host, 'Hide suggestion');
     assert.equal(b.saved.size, 2); b.select('A'); b.feature.check();
-    assert.equal(a.host.querySelector('span').textContent, 'Already watched');
+    assert.equal(a.host.style.getPropertyValue('display'), 'none');
     b.select(null); b.feature.check(); assert.equal(a.host.querySelectorAll('button').length, 0);
     assert.equal(a.card.style.visibility, undefined);
 });
 test('recycled native slots retire old visibility and controls; newly mounted titles receive choices', async () => {
     const b = setup(), a = mount(b); b.feature.check(); b.click(a.host, 'Hide suggestion');
     a.card.setAttribute('href', '/title/2'); b.mutate(a.card, { type: 'attributes' }); await b.scheduler.flush();
-    assert.equal(a.card.style.visibility, undefined); assert.equal(a.host.querySelectorAll('button').length, 3);
+    assert.equal(a.card.style.visibility, undefined); assert.equal(a.host.querySelectorAll('button').length, 2);
     const newCard = mount(b); b.mutate(b.document.body, { addedNodes: [newCard.row] }); await b.scheduler.flush();
     assert.equal(newCard.card.style.visibility, 'hidden');
     const old = a.host.querySelectorAll('button')[0]; a.card.remove(); b.mutate(a.host, { removedNodes: [a.card] }); await b.scheduler.flush();
@@ -81,7 +87,7 @@ test('route retirement releases exact resources and skips Continue Watching and 
 });
 test('visibility retirement preserves native changes made after a dismissal', () => {
     const b = setup(), a = mount(b); a.card.style.setProperty('visibility', 'visible', 'important');
-    b.feature.check(); b.click(a.host, 'Hide suggestion'); b.click(a.host, 'Undo');
+    b.feature.check(); b.click(a.host, 'Hide suggestion'); b.restore('1');
     assert.equal(a.card.style.visibility, 'visible'); assert.equal(a.card.style.getPropertyPriority('visibility'), 'important');
     b.click(a.host, 'Hide suggestion'); a.card.style.setProperty('visibility', 'collapse'); a.host.style.setProperty('position', 'absolute');
     b.feature.dispose(); assert.equal(a.card.style.visibility, 'collapse'); assert.equal(a.host.style.position, 'absolute');
@@ -171,19 +177,38 @@ test('profile replacement during storage cannot publish a dismissal into the new
     assert.equal(b.saved.size, 1); assert.ok([...b.saved.keys()][0].endsWith('A'));
 });
 
-test('browsing actions use the shared persistent rail after the artwork, with separate Undo and placeholder', () => {
+test('browsing actions share the under-card rail and dismissals collapse the whole slot without placeholders', () => {
     const b = setup(), a = mount(b); b.feature.check();
     const rail = a.host.querySelector('[data-tm-card-actions]');
     assert.ok(rail); assert.equal(rail.parentElement, a.host);
     assert.ok(a.host.children.indexOf(rail) > a.host.children.indexOf(a.card));
-    assert.equal(rail.querySelectorAll('button').length, 3);
+    assert.equal(rail.querySelectorAll('button').length, 2);
     assert.ok(b.document.head.querySelector('style').textContent.includes('padding-top: 6px'));
     assert.ok(!b.document.head.querySelector('style').textContent.includes('opacity:0'));
     b.click(a.host, 'Hide suggestion');
-    assert.equal(rail.querySelectorAll('button').find(button => button.textContent === 'Undo').hidden, false);
-    assert.equal(a.host.querySelector('.tm-rec-placeholder').parentElement, a.host);
-    assert.equal(rail.querySelector('.tm-rec-placeholder'), null);
-    b.click(a.host, 'Undo'); assert.equal(a.card.style.visibility, undefined);
+    assert.equal(a.host.style.getPropertyValue('display'), 'none');
+    assert.equal(a.host.style.getPropertyPriority('display'), 'important');
+    assert.equal(a.host.querySelector('.tm-rec-placeholder'), null);
+    b.restore('1'); assert.equal(a.card.style.visibility, undefined);
+    assert.equal(a.host.style.getPropertyValue('display'), '');
+});
+
+test('whole-slot collapse restores exact display on Undo, recycling and retirement while preserving native updates', () => {
+    const b = setup(), a = mount(b), other = mount(b, '2', { legacy: true });
+    a.row.appendChild(other.host); other.row.remove(); a.host.style.setProperty('display', 'inline-block', 'important');
+    b.feature.check(); b.click(a.host, 'Mark watched');
+    assert.equal(a.host.style.getPropertyValue('display'), 'none');
+    assert.equal(other.host.style.getPropertyValue('display'), '');
+    assert.deepEqual(a.row.children, [a.host, other.host]); // No React-owned nodes are removed or reordered.
+    b.restore('1'); assert.equal(a.host.style.getPropertyValue('display'), 'inline-block');
+    assert.equal(a.host.style.getPropertyPriority('display'), 'important');
+    b.click(a.host, 'Hide suggestion'); a.card.setAttribute('href', '/title/3'); b.feature.check();
+    assert.equal(a.host.style.getPropertyValue('display'), 'inline-block');
+    b.click(other.host, 'Hide suggestion'); assert.equal(other.host.style.getPropertyValue('display'), 'none');
+    b.feature.dispose(); assert.equal(other.host.style.getPropertyValue('display'), '');
+    b.feature.check(); assert.equal(other.host.style.getPropertyValue('display'), 'none');
+    other.host.style.setProperty('display', 'flex'); b.feature.dispose();
+    assert.equal(other.host.style.getPropertyValue('display'), 'flex');
 });
 
 test('shared scroller space survives one card retirement and restores after the last lease', () => {

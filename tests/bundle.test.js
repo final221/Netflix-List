@@ -30,11 +30,16 @@ test('generated browsing release saves a dismissal and restores native visibilit
     assert.ok(input());
     b.document.dispatchEvent({ type: 'click', target: input(), preventDefault() {}, stopImmediatePropagation() {} });
     assert.equal(card.style.visibility, 'hidden'); assert.equal(stored.size, 1); assert.equal(b.requests.length, 0);
+    assert.equal(slot.style.getPropertyValue('display'), 'none');
     await b.navigate('/watch/123'); assert.equal(card.style.visibility, undefined); assert.equal(slot.querySelectorAll('button').length, 0);
+    assert.equal(slot.style.getPropertyValue('display'), '');
     await b.navigate('/browse'); assert.equal(card.style.visibility, 'hidden');
-    const undo = slot.querySelectorAll('button').find(button => button.textContent === 'Undo');
+    const manager = b.document.querySelector('.tm-rec-manager');
+    b.document.dispatchEvent({ type: 'click', target: manager.querySelector('button'), preventDefault() {}, stopImmediatePropagation() {} });
+    const undo = manager.querySelector('.tm-rec-saved-row').querySelector('button');
     b.document.dispatchEvent({ type: 'click', target: undo, preventDefault() {}, stopImmediatePropagation() {} });
     assert.equal(card.style.visibility, undefined); assert.equal(Object.keys([...stored.values()][0].choices).length, 0);
+    assert.equal(slot.style.getPropertyValue('display'), '');
 });
 
 

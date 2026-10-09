@@ -50,6 +50,7 @@ what it should not contain
 - Marking or reversing a viewing choice should preserve the user's browsing position instead of scrolling to the destination section.
 - Dismissing already-watched or unwanted browsing recommendations must preserve Netflix ratings and taste feedback. Prefer replacing dismissed cards with further Netflix recommendations rather than leaving gaps; watched elsewhere is a valid manual choice.
 - Keep browsing actions visible underneath cards, following My List's shared control presentation rather than requiring artwork hover or duplicating its UI implementation.
+- Collapse dismissed browsing cards completely so the remaining cards fill their space; restore them through the saved-choices panel rather than leaving Undo placeholders.
 - Keep saved browsing dismissals accessible from a right-side panel, grouped by watched and hidden, with small remove icons for quick individual restoration even when the native card is absent.
 - Keep card placement controls to one action between My List and Watched / Caught up. Fold returning to automatic classification into that action when it agrees with the destination; show a small passive marker for active manual placements rather than a separate reset button.
 - Known watched/caught-up titles should start in their section on list entry, and newly established viewing results should appear promptly.

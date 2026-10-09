@@ -6,6 +6,10 @@ This file records the code-review findings and the agreed follow-up plan for My 
 
 ## User live-test evidence
 
+Release **1.6.1** collapses dismissed browsing hosts with `display:none!important`, allowing remaining flow-layout cards to fill the space. It removes the card placeholder/Undo UI; the saved-choices panel owns restoration. The native adapter retains the host in Netflix's DOM and restores the original inline display/priority on Undo, recycling or disposal only while its lease is still present. Visible card order and dimensions stay Netflix-owned; no new recommendations are requested. The user's positive panel report is retained in [logs/knowledge.md](../logs/knowledge.md), with its installed-version limit. Actual native carousel paging/reflow after collapse still requires user-side verification.
+
+Verification: **584** tests pass, including the generated release's collapse/reentry/panel restoration and exact host-display restoration through recycling/disposal. Build consistency, syntax and whitespace checks pass; metadata/internal/package versions agree at **1.6.1**.
+
 Release **1.6.0** adds a right-side saved-recommendation panel on browsing/search pages. It lists profile-specific watched and hidden choices even without mounted cards, with compact **×** Undo controls and title links. New saves include bounded title labels in an optional field of the existing version-1 record; older choices remain readable and removable with ID fallbacks. Panel and card Undo share the guarded persistence path; profile changes close/clear the panel and stale input is rejected. Route disposal removes its DOM/listeners. Replacement recommendations remain deferred. Live Netflix layout remains unverified.
 
 Verification: all **583** tests pass; build consistency, syntax and whitespace checks pass. Coverage includes restoring absent and duplicate cards, persistence of title labels, version-1 records without labels, stale profile/row input, failed saves, close/Escape/disposal and all supported UI locales. Package/lock and metadata/internal versions agree at **1.6.0**.

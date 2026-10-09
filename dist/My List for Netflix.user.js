@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.6.0
+// @version      1.6.1
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -19214,6 +19214,7 @@ ${CARD_ACTION_STYLES}
       const restoreOverflow = styleLease(host, "overflow", "visible", "important");
       const releaseSpace = reserveActions(scroller);
       let hidden = false, originalVisibility = "", visibilityPriority = "", originalPointer = "", pointerPriority = "";
+      let restoreDisplay = null;
       const originalAria = card.getAttribute("aria-hidden"), originalTab = card.getAttribute("tabindex");
       function current() {
         const value = describe(card);
@@ -19221,6 +19222,8 @@ ${CARD_ACTION_STYLES}
       }
       function restore() {
         if (!hidden) return;
+        restoreDisplay?.();
+        restoreDisplay = null;
         for (const [key, applied, previous, priority] of [
           ["visibility", "hidden", originalVisibility, visibilityPriority],
           ["pointer-events", "none", originalPointer, pointerPriority]
@@ -19249,6 +19252,7 @@ ${CARD_ACTION_STYLES}
             return true;
           }
           if (!hidden) {
+            restoreDisplay = styleLease(host, "display", "none", "important");
             originalVisibility = card.style.getPropertyValue("visibility");
             visibilityPriority = card.style.getPropertyPriority("visibility");
             originalPointer = card.style.getPropertyValue("pointer-events");
@@ -19301,7 +19305,6 @@ ${CARD_ACTION_STYLES}
     }
     function release(entry) {
       entry.controls.remove();
-      entry.label.remove();
       entry.lease.release();
       entries.delete(entry.host);
     }
@@ -19414,10 +19417,7 @@ ${CARD_ACTION_STYLES}
       entry.controls.setAttribute("data-tm-rec-hidden", reason ? "true" : "false");
       entry.watched.hidden = Boolean(reason);
       entry.hide.hidden = Boolean(reason);
-      entry.undo.hidden = !reason;
-      entry.label.hidden = !reason;
-      entry.label.textContent = tUi(reason === "watched" ? "recommendationWatched" : "recommendationHidden");
-      for (const button of [entry.watched, entry.hide, entry.undo]) {
+      for (const button of [entry.watched, entry.hide]) {
         button.disabled = !profile || failed;
         button.title = failed || !profile ? tUi("viewingChoiceStorageFailed") : button.textContent;
       }
@@ -19426,13 +19426,10 @@ ${CARD_ACTION_STYLES}
       const existing = entries.get(value.host);
       if (existing && existing.id === value.id && existing.card === value.card && existing.controls.parentElement === value.host) return;
       if (existing) release(existing);
-      const actions = [["watched", "watched", "markWatched"], ["hide", "hide", "hideRecommendation"], ["undo", "undo", "undoRecommendation"]];
+      const actions = [["watched", "watched", "markWatched"], ["hide", "hide", "hideRecommendation"]];
       const { root: controls, buttons: actionButtons } = createCardActions(document, actions.map(([, , message]) => tUi(message)));
       controls.className = "tm-rec-controls";
       const entry = { ...value, controls, lease: dom.lease(value) };
-      const label = document.createElement("span");
-      label.className = "tm-rec-placeholder";
-      entry.label = label;
       for (const [index, [action, field, message]] of actions.entries()) {
         const button = actionButtons[index];
         button.setAttribute("aria-label", tUi(message));
@@ -19440,7 +19437,6 @@ ${CARD_ACTION_STYLES}
         entry[field] = button;
       }
       entries.set(value.host, entry);
-      value.host.appendChild(label);
       value.host.appendChild(controls);
       paint(entry);
     }
@@ -19455,7 +19451,7 @@ ${CARD_ACTION_STYLES}
       for (const value of dom.scan(root)) decorate(value);
       if (!style) {
         style = document.createElement("style");
-        style.textContent = CARD_ACTION_STYLES + "\n.tm-rec-placeholder{position:absolute;inset:0;background:#181818;display:flex;align-items:center;justify-content:center;font:13px system-ui;color:#bbb;pointer-events:none}.tm-rec-placeholder[hidden]{display:none!important}.tm-rec-controls{opacity:1;pointer-events:auto}";
+        style.textContent = CARD_ACTION_STYLES + "\n.tm-rec-controls{opacity:1;pointer-events:auto}";
         style.textContent += "\n.tm-rec-manager{position:fixed;right:16px;top:100px;z-index:10000;font:14px system-ui;color:#fff}.tm-rec-manager[hidden],.tm-rec-manager [hidden]{display:none!important}.tm-rec-manager button{background:#242424;color:#fff;border:1px solid #777;border-radius:5px;padding:8px;cursor:pointer}.tm-rec-manager button:focus-visible,.tm-rec-manager a:focus-visible{outline:2px solid #fff;outline-offset:2px}.tm-rec-manager section{margin-top:8px;width:min(360px,calc(100vw - 32px));max-height:70vh;overflow:auto;background:#181818;border:1px solid #555;border-radius:8px;padding:12px;box-sizing:border-box;box-shadow:0 8px 24px #0008}.tm-rec-manager section>button{display:block;margin-left:auto}.tm-rec-saved-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #333}.tm-rec-saved-row a{flex:1;color:#eee;text-decoration:none;overflow-wrap:anywhere}.tm-rec-saved-row button{border:0;background:transparent;font-size:22px;padding:0 8px}.tm-rec-manager h3{font-size:14px}";
         document.head.appendChild(style);
       }
@@ -19558,10 +19554,10 @@ ${CARD_ACTION_STYLES}
           return;
         }
         for (const record of records) {
-          if (record.target?.closest?.(".tm-rec-controls, .tm-rec-placeholder, .tm-rec-manager") || record.target === style) continue;
+          if (record.target?.closest?.(".tm-rec-controls, .tm-rec-manager") || record.target === style) continue;
           if (record.type === "attributes") schedule(record.target.parentElement || document);
           else if (record.type === "childList") {
-            if ([...record.addedNodes || [], ...record.removedNodes || []].every((node) => node === style || ["tm-rec-controls", "tm-rec-placeholder", "tm-rec-manager"].includes(node.className))) continue;
+            if ([...record.addedNodes || [], ...record.removedNodes || []].every((node) => node === style || ["tm-rec-controls", "tm-rec-manager"].includes(node.className))) continue;
             schedule(record.target);
           }
         }
@@ -19767,7 +19763,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.6.0";
+  var SCRIPT_VERSION = "1.6.1";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
