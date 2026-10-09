@@ -836,4 +836,134 @@ for (const [locale, values] of Object.entries(RECOMMENDATION_UI_MESSAGES)) {
         .forEach((key, index) => { UI_MESSAGES[locale][key] = values[index]; });
 }
 
+const RECOMMENDATION_PANEL_MESSAGES = {
+    "da": [
+        "Luk",
+        "Ingen gemte valg."
+    ],
+    "de": [
+        "Schlie\u00dfen",
+        "Keine gespeicherten Auswahlen."
+    ],
+    "en": [
+        "Close",
+        "No saved choices."
+    ],
+    "es": [
+        "Cerrar",
+        "No hay elecciones guardadas."
+    ],
+    "fil": [
+        "Isara",
+        "Walang naka-save na pagpili."
+    ],
+    "fr": [
+        "Fermer",
+        "Aucun choix enregistr\u00e9."
+    ],
+    "hr": [
+        "Zatvori",
+        "Nema spremljenih odabira."
+    ],
+    "id": [
+        "Tutup",
+        "Belum ada pilihan tersimpan."
+    ],
+    "it": [
+        "Chiudi",
+        "Nessuna scelta salvata."
+    ],
+    "hu": [
+        "Bez\u00e1r\u00e1s",
+        "Nincsenek mentett v\u00e1laszt\u00e1sok."
+    ],
+    "ms": [
+        "Tutup",
+        "Tiada pilihan disimpan."
+    ],
+    "nl": [
+        "Sluiten",
+        "Geen opgeslagen keuzes."
+    ],
+    "nb": [
+        "Lukk",
+        "Ingen lagrede valg."
+    ],
+    "pl": [
+        "Zamknij",
+        "Brak zapisanych wybor\u00f3w."
+    ],
+    "pt": [
+        "Fechar",
+        "Nenhuma escolha salva."
+    ],
+    "ro": [
+        "\u00cenchide",
+        "Nu exist\u0103 alegeri salvate."
+    ],
+    "fi": [
+        "Sulje",
+        "Ei tallennettuja valintoja."
+    ],
+    "sv": [
+        "St\u00e4ng",
+        "Inga sparade val."
+    ],
+    "vi": [
+        "\u0110\u00f3ng",
+        "Ch\u01b0a c\u00f3 l\u1ef1a ch\u1ecdn \u0111\u00e3 l\u01b0u."
+    ],
+    "tr": [
+        "Kapat",
+        "Kaydedilmi\u015f se\u00e7im yok."
+    ],
+    "cs": [
+        "Zav\u0159\u00edt",
+        "\u017d\u00e1dn\u00e9 ulo\u017een\u00e9 volby."
+    ],
+    "el": [
+        "\u039a\u03bb\u03b5\u03af\u03c3\u03b9\u03bc\u03bf",
+        "\u0394\u03b5\u03bd \u03c5\u03c0\u03ac\u03c1\u03c7\u03bf\u03c5\u03bd \u03b1\u03c0\u03bf\u03b8\u03b7\u03ba\u03b5\u03c5\u03bc\u03ad\u03bd\u03b5\u03c2 \u03b5\u03c0\u03b9\u03bb\u03bf\u03b3\u03ad\u03c2."
+    ],
+    "ru": [
+        "\u0417\u0430\u043a\u0440\u044b\u0442\u044c",
+        "\u041d\u0435\u0442 \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d\u043d\u044b\u0445 \u0432\u044b\u0431\u043e\u0440\u043e\u0432."
+    ],
+    "uk": [
+        "\u0417\u0430\u043a\u0440\u0438\u0442\u0438",
+        "\u041d\u0435\u043c\u0430\u0454 \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043d\u0438\u0445 \u0432\u0438\u0431\u043e\u0440\u0456\u0432."
+    ],
+    "he": [
+        "\u05e1\u05d2\u05d9\u05e8\u05d4",
+        "\u05d0\u05d9\u05df \u05d1\u05d7\u05d9\u05e8\u05d5\u05ea \u05e9\u05de\u05d5\u05e8\u05d5\u05ea."
+    ],
+    "ar": [
+        "\u0625\u063a\u0644\u0627\u0642",
+        "\u0644\u0627 \u062a\u0648\u062c\u062f \u062e\u064a\u0627\u0631\u0627\u062a \u0645\u062d\u0641\u0648\u0638\u0629."
+    ],
+    "hi": [
+        "\u092c\u0902\u0926 \u0915\u0930\u0947\u0902",
+        "\u0915\u094b\u0908 \u0938\u0939\u0947\u091c\u093e \u0917\u092f\u093e \u091a\u092f\u0928 \u0928\u0939\u0940\u0902\u0964"
+    ],
+    "th": [
+        "\u0e1b\u0e34\u0e14",
+        "\u0e22\u0e31\u0e07\u0e44\u0e21\u0e48\u0e21\u0e35\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e17\u0e35\u0e48\u0e1a\u0e31\u0e19\u0e17\u0e36\u0e01"
+    ],
+    "zh": [
+        "\u5173\u95ed",
+        "\u6682\u65e0\u5df2\u4fdd\u5b58\u7684\u9009\u62e9\u3002"
+    ],
+    "ja": [
+        "\u9589\u3058\u308b",
+        "\u4fdd\u5b58\u3057\u305f\u9078\u629e\u306f\u3042\u308a\u307e\u305b\u3093\u3002"
+    ],
+    "ko": [
+        "\ub2eb\uae30",
+        "\uc800\uc7a5\ub41c \uc120\ud0dd\uc774 \uc5c6\uc2b5\ub2c8\ub2e4."
+    ]
+};
+for (const [locale, values] of Object.entries(RECOMMENDATION_PANEL_MESSAGES)) {
+    ['closeRecommendationPanel', 'noRecommendationChoices'].forEach((key, index) => { UI_MESSAGES[locale][key] = values[index]; });
+}
+
 export const NETFLIX_PRIMARY_UI_LOCALES = new Set(Object.keys(UI_MESSAGES));

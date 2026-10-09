@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.5.1
+// @version      1.6.0
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -18720,6 +18720,137 @@ ${CARD_ACTION_STYLES}
       UI_MESSAGES[locale][key] = values[index];
     });
   }
+  var RECOMMENDATION_PANEL_MESSAGES = {
+    "da": [
+      "Luk",
+      "Ingen gemte valg."
+    ],
+    "de": [
+      "Schlie\xDFen",
+      "Keine gespeicherten Auswahlen."
+    ],
+    "en": [
+      "Close",
+      "No saved choices."
+    ],
+    "es": [
+      "Cerrar",
+      "No hay elecciones guardadas."
+    ],
+    "fil": [
+      "Isara",
+      "Walang naka-save na pagpili."
+    ],
+    "fr": [
+      "Fermer",
+      "Aucun choix enregistr\xE9."
+    ],
+    "hr": [
+      "Zatvori",
+      "Nema spremljenih odabira."
+    ],
+    "id": [
+      "Tutup",
+      "Belum ada pilihan tersimpan."
+    ],
+    "it": [
+      "Chiudi",
+      "Nessuna scelta salvata."
+    ],
+    "hu": [
+      "Bez\xE1r\xE1s",
+      "Nincsenek mentett v\xE1laszt\xE1sok."
+    ],
+    "ms": [
+      "Tutup",
+      "Tiada pilihan disimpan."
+    ],
+    "nl": [
+      "Sluiten",
+      "Geen opgeslagen keuzes."
+    ],
+    "nb": [
+      "Lukk",
+      "Ingen lagrede valg."
+    ],
+    "pl": [
+      "Zamknij",
+      "Brak zapisanych wybor\xF3w."
+    ],
+    "pt": [
+      "Fechar",
+      "Nenhuma escolha salva."
+    ],
+    "ro": [
+      "\xCEnchide",
+      "Nu exist\u0103 alegeri salvate."
+    ],
+    "fi": [
+      "Sulje",
+      "Ei tallennettuja valintoja."
+    ],
+    "sv": [
+      "St\xE4ng",
+      "Inga sparade val."
+    ],
+    "vi": [
+      "\u0110\xF3ng",
+      "Ch\u01B0a c\xF3 l\u1EF1a ch\u1ECDn \u0111\xE3 l\u01B0u."
+    ],
+    "tr": [
+      "Kapat",
+      "Kaydedilmi\u015F se\xE7im yok."
+    ],
+    "cs": [
+      "Zav\u0159\xEDt",
+      "\u017D\xE1dn\xE9 ulo\u017Een\xE9 volby."
+    ],
+    "el": [
+      "\u039A\u03BB\u03B5\u03AF\u03C3\u03B9\u03BC\u03BF",
+      "\u0394\u03B5\u03BD \u03C5\u03C0\u03AC\u03C1\u03C7\u03BF\u03C5\u03BD \u03B1\u03C0\u03BF\u03B8\u03B7\u03BA\u03B5\u03C5\u03BC\u03AD\u03BD\u03B5\u03C2 \u03B5\u03C0\u03B9\u03BB\u03BF\u03B3\u03AD\u03C2."
+    ],
+    "ru": [
+      "\u0417\u0430\u043A\u0440\u044B\u0442\u044C",
+      "\u041D\u0435\u0442 \u0441\u043E\u0445\u0440\u0430\u043D\u0451\u043D\u043D\u044B\u0445 \u0432\u044B\u0431\u043E\u0440\u043E\u0432."
+    ],
+    "uk": [
+      "\u0417\u0430\u043A\u0440\u0438\u0442\u0438",
+      "\u041D\u0435\u043C\u0430\u0454 \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043D\u0438\u0445 \u0432\u0438\u0431\u043E\u0440\u0456\u0432."
+    ],
+    "he": [
+      "\u05E1\u05D2\u05D9\u05E8\u05D4",
+      "\u05D0\u05D9\u05DF \u05D1\u05D7\u05D9\u05E8\u05D5\u05EA \u05E9\u05DE\u05D5\u05E8\u05D5\u05EA."
+    ],
+    "ar": [
+      "\u0625\u063A\u0644\u0627\u0642",
+      "\u0644\u0627 \u062A\u0648\u062C\u062F \u062E\u064A\u0627\u0631\u0627\u062A \u0645\u062D\u0641\u0648\u0638\u0629."
+    ],
+    "hi": [
+      "\u092C\u0902\u0926 \u0915\u0930\u0947\u0902",
+      "\u0915\u094B\u0908 \u0938\u0939\u0947\u091C\u093E \u0917\u092F\u093E \u091A\u092F\u0928 \u0928\u0939\u0940\u0902\u0964"
+    ],
+    "th": [
+      "\u0E1B\u0E34\u0E14",
+      "\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E21\u0E35\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E17\u0E35\u0E48\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01"
+    ],
+    "zh": [
+      "\u5173\u95ED",
+      "\u6682\u65E0\u5DF2\u4FDD\u5B58\u7684\u9009\u62E9\u3002"
+    ],
+    "ja": [
+      "\u9589\u3058\u308B",
+      "\u4FDD\u5B58\u3057\u305F\u9078\u629E\u306F\u3042\u308A\u307E\u305B\u3093\u3002"
+    ],
+    "ko": [
+      "\uB2EB\uAE30",
+      "\uC800\uC7A5\uB41C \uC120\uD0DD\uC774 \uC5C6\uC2B5\uB2C8\uB2E4."
+    ]
+  };
+  for (const [locale, values] of Object.entries(RECOMMENDATION_PANEL_MESSAGES)) {
+    ["closeRecommendationPanel", "noRecommendationChoices"].forEach((key, index) => {
+      UI_MESSAGES[locale][key] = values[index];
+    });
+  }
   var NETFLIX_PRIMARY_UI_LOCALES = new Set(Object.keys(UI_MESSAGES));
 
   // src/i18n/log-messages.js
@@ -19061,7 +19192,8 @@ ${CARD_ACTION_STYLES}
       }
       if (!/^\d+$/.test(id)) return null;
       const scroller = host.closest('[data-uia="carousel-scroller"], .slider') || row;
-      return { host, card, id, scroller };
+      const title = (card.querySelector("img[alt]")?.getAttribute("alt") || card.querySelector(".fallback-text")?.textContent || card.getAttribute("aria-label") || "").trim().slice(0, 300);
+      return { host, card, id, scroller, title };
     }
     function scan(root = document) {
       const result = [], seen = /* @__PURE__ */ new Set();
@@ -19151,6 +19283,7 @@ ${CARD_ACTION_STYLES}
     const dom = createRecommendationDom(environment), entries = /* @__PURE__ */ new Map(), buttons = /* @__PURE__ */ new WeakMap();
     const key = "legacyMyListForNetflix.recommendationChoices.v1.";
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
+    let titles = {}, manager = null;
     const pending = /* @__PURE__ */ new Set();
     const allowed = () => location.origin === "https://www.netflix.com" && (location.pathname === "/browse" || location.pathname.startsWith("/browse/") && location.pathname !== "/browse/my-list" || location.pathname === "/search");
     const readProfile = () => {
@@ -19160,9 +19293,11 @@ ${CARD_ACTION_STYLES}
     function read(p) {
       if (typeof userscript.getValue !== "function" || typeof userscript.setValue !== "function") throw new Error("storage-unavailable");
       const value = userscript.getValue(key + encodeURIComponent(p), null);
-      if (value === null) return {};
+      if (value === null) return { choices: {}, titles: {} };
       if (value?.version !== 1 || !value.choices || typeof value.choices !== "object" || Array.isArray(value.choices) || Object.keys(value.choices).length > 5e3) throw new Error("invalid-storage");
-      return Object.fromEntries(Object.entries(value.choices).filter(([id, reason]) => /^\d+$/.test(id) && ["watched", "hide"].includes(reason)));
+      const choices2 = Object.fromEntries(Object.entries(value.choices).filter(([id, reason]) => /^\d+$/.test(id) && ["watched", "hide"].includes(reason)));
+      const titles2 = Object.fromEntries(Object.keys(choices2).filter((id) => typeof value.titles?.[id] === "string").map((id) => [id, value.titles[id].slice(0, 300)]));
+      return { choices: choices2, titles: titles2 };
     }
     function release(entry) {
       entry.controls.remove();
@@ -19176,17 +19311,101 @@ ${CARD_ACTION_STYLES}
       for (const entry of [...entries.values()]) release(entry);
       profile = next;
       choices = {};
+      titles = {};
       failed = false;
       epoch++;
       pending.clear();
       queued = false;
+      if (manager) {
+        manager.panel.hidden = true;
+        manager.toggle.setAttribute("aria-expanded", "false");
+      }
       if (next) try {
         const loaded = read(next);
-        if (readProfile() === next) choices = loaded;
+        if (readProfile() === next) ({ choices, titles } = loaded);
         else profile = null;
       } catch (error) {
         failed = true;
         warn("Recommendation choices unavailable", { reason: error.message });
+      }
+      paintManager();
+    }
+    function paintManager() {
+      if (!manager) return;
+      const focusedIndex = [...manager.list.querySelectorAll("button")].indexOf(document.activeElement);
+      manager.root.hidden = !profile;
+      manager.toggle.textContent = `${tUi("recommendationWatched")} / ${tUi("recommendationHidden")} (${Object.keys(choices).length})`;
+      if (manager.panel.hidden) {
+        manager.list.replaceChildren();
+        return;
+      }
+      const nodes = [];
+      if (failed || !Object.keys(choices).length) {
+        const message = document.createElement("p");
+        message.textContent = tUi(failed ? "viewingChoiceStorageFailed" : "noRecommendationChoices");
+        nodes.push(message);
+      } else for (const reason of ["watched", "hide"]) {
+        const ids = Object.keys(choices).filter((id) => choices[id] === reason);
+        if (!ids.length) continue;
+        const heading = document.createElement("h3");
+        heading.textContent = tUi(reason === "watched" ? "recommendationWatched" : "recommendationHidden");
+        nodes.push(heading);
+        for (const id of ids) {
+          const row = document.createElement("div");
+          row.className = "tm-rec-saved-row";
+          const name = document.createElement("a");
+          name.textContent = titles[id] || [...entries.values()].find((entry) => entry.id === id && entry.title)?.title || `#${id}`;
+          name.setAttribute("href", `/title/${id}`);
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.textContent = "\xD7";
+          remove.setAttribute("aria-label", `${tUi("undoRecommendation")}: ${name.textContent}`);
+          remove.title = tUi("undoRecommendation");
+          buttons.set(remove, { action: "undo", id, profile, epoch });
+          row.appendChild(name);
+          row.appendChild(remove);
+          nodes.push(row);
+        }
+      }
+      manager.list.replaceChildren(...nodes);
+      if (focusedIndex >= 0) {
+        const remaining = manager.list.querySelectorAll("button");
+        (remaining[Math.min(focusedIndex, remaining.length - 1)] || manager.close).focus?.();
+      }
+    }
+    function mountManager() {
+      if (manager) return;
+      const root = document.createElement("aside");
+      root.className = "tm-rec-manager";
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.setAttribute("aria-controls", "tm-rec-saved-panel");
+      buttons.set(toggle, { action: "manager" });
+      const panel = document.createElement("section");
+      panel.id = "tm-rec-saved-panel";
+      panel.hidden = true;
+      panel.setAttribute("aria-label", `${tUi("recommendationWatched")} / ${tUi("recommendationHidden")}`);
+      const close = document.createElement("button");
+      close.type = "button";
+      close.textContent = "\xD7";
+      close.setAttribute("aria-label", tUi("closeRecommendationPanel"));
+      buttons.set(close, { action: "close" });
+      const list = document.createElement("div");
+      panel.appendChild(close);
+      panel.appendChild(list);
+      root.appendChild(toggle);
+      root.appendChild(panel);
+      manager = { root, toggle, panel, close, list };
+      document.body.appendChild(root);
+      paintManager();
+    }
+    function keydown(event) {
+      if (event.key === "Escape" && manager && !manager.panel.hidden) {
+        manager.panel.hidden = true;
+        manager.toggle.setAttribute("aria-expanded", "false");
+        manager.list.replaceChildren();
+        manager.toggle.focus?.();
       }
     }
     function paint(entry) {
@@ -19229,13 +19448,15 @@ ${CARD_ACTION_STYLES}
       if (!active || !allowed()) return;
       const previous = profile;
       syncProfile();
+      mountManager();
       if (!profile) return;
       if (previous !== profile) root = document;
       for (const entry of [...entries.values()]) if (!entry.lease.current()) release(entry);
       for (const value of dom.scan(root)) decorate(value);
-      if (entries.size && !style) {
+      if (!style) {
         style = document.createElement("style");
         style.textContent = CARD_ACTION_STYLES + "\n.tm-rec-placeholder{position:absolute;inset:0;background:#181818;display:flex;align-items:center;justify-content:center;font:13px system-ui;color:#bbb;pointer-events:none}.tm-rec-placeholder[hidden]{display:none!important}.tm-rec-controls{opacity:1;pointer-events:auto}";
+        style.textContent += "\n.tm-rec-manager{position:fixed;right:16px;top:100px;z-index:10000;font:14px system-ui;color:#fff}.tm-rec-manager[hidden],.tm-rec-manager [hidden]{display:none!important}.tm-rec-manager button{background:#242424;color:#fff;border:1px solid #777;border-radius:5px;padding:8px;cursor:pointer}.tm-rec-manager button:focus-visible,.tm-rec-manager a:focus-visible{outline:2px solid #fff;outline-offset:2px}.tm-rec-manager section{margin-top:8px;width:min(360px,calc(100vw - 32px));max-height:70vh;overflow:auto;background:#181818;border:1px solid #555;border-radius:8px;padding:12px;box-sizing:border-box;box-shadow:0 8px 24px #0008}.tm-rec-manager section>button{display:block;margin-left:auto}.tm-rec-saved-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #333}.tm-rec-saved-row a{flex:1;color:#eee;text-decoration:none;overflow-wrap:anywhere}.tm-rec-saved-row button{border:0;background:transparent;font-size:22px;padding:0 8px}.tm-rec-manager h3{font-size:14px}";
         document.head.appendChild(style);
       }
     }
@@ -19258,39 +19479,56 @@ ${CARD_ACTION_STYLES}
     }
     function click(event) {
       const button = event.target?.closest?.("button"), input = buttons.get(button);
-      if (!input || entries.get(input.entry.host) !== input.entry) return;
+      if (!input || input.entry && entries.get(input.entry.host) !== input.entry) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (!active || !allowed()) {
         check();
         return;
       }
+      if (input.action === "manager" || input.action === "close") {
+        syncProfile();
+        if (!profile || !manager) return;
+        manager.panel.hidden = input.action === "close" || !manager.panel.hidden;
+        manager.toggle.setAttribute("aria-expanded", String(!manager.panel.hidden));
+        paintManager();
+        (manager.panel.hidden ? manager.toggle : manager.close).focus?.();
+        return;
+      }
       const before = profile;
       syncProfile();
-      if (!profile || failed || profile !== before || !input.entry.lease.current()) {
+      if (!profile || failed || profile !== before || (input.entry ? !input.entry.lease.current() : input.profile !== profile || input.epoch !== epoch || !button.isConnected)) {
         scan();
         return;
       }
       try {
         const p = profile, owner = epoch, latest = read(p);
-        if (input.action === "undo") delete latest[input.entry.id];
-        else latest[input.entry.id] = input.action;
-        if (Object.keys(latest).length > 5e3) throw new Error("storage-full");
+        const id = input.entry?.id || input.id;
+        if (input.action === "undo") {
+          delete latest.choices[id];
+          delete latest.titles[id];
+        } else {
+          latest.choices[id] = input.action;
+          if (input.entry.title) latest.titles[id] = input.entry.title;
+        }
+        if (Object.keys(latest.choices).length > 5e3) throw new Error("storage-full");
         if (readProfile() !== p || epoch !== owner) {
           scan();
           return;
         }
-        userscript.setValue(key + encodeURIComponent(p), { version: 1, choices: latest });
+        userscript.setValue(key + encodeURIComponent(p), { version: 1, ...latest });
         if (readProfile() !== p || epoch !== owner || !active || !allowed()) {
           check();
           return;
         }
-        choices = latest;
+        ({ choices, titles } = latest);
         for (const entry of entries.values()) paint(entry);
+        paintManager();
         log("Recommendation visibility choice saved", { action: input.action, hiddenCount: Object.keys(choices).length });
       } catch (error) {
         failed = true;
         for (const entry of entries.values()) paint(entry);
+        paintManager();
         warn("Recommendation choice could not be saved", { reason: error.message });
       }
     }
@@ -19304,7 +19542,7 @@ ${CARD_ACTION_STYLES}
         observe();
         return;
       }
-      if (event.target?.closest?.(".tm-rec-controls")) return;
+      if (event.target?.closest?.(".tm-rec-controls, .tm-rec-manager")) return;
       const card = event.target?.closest?.('a[data-uia="standard-card"], .title-card');
       if (!card) return;
       const value = dom.describe(card), entry = value && entries.get(value.host);
@@ -19320,10 +19558,10 @@ ${CARD_ACTION_STYLES}
           return;
         }
         for (const record of records) {
-          if (record.target?.closest?.(".tm-rec-controls, .tm-rec-placeholder") || record.target === style) continue;
+          if (record.target?.closest?.(".tm-rec-controls, .tm-rec-placeholder, .tm-rec-manager") || record.target === style) continue;
           if (record.type === "attributes") schedule(record.target.parentElement || document);
           else if (record.type === "childList") {
-            if ([...record.addedNodes || [], ...record.removedNodes || []].every((node) => node === style || ["tm-rec-controls", "tm-rec-placeholder"].includes(node.className))) continue;
+            if ([...record.addedNodes || [], ...record.removedNodes || []].every((node) => node === style || ["tm-rec-controls", "tm-rec-placeholder", "tm-rec-manager"].includes(node.className))) continue;
             schedule(record.target);
           }
         }
@@ -19340,6 +19578,7 @@ ${CARD_ACTION_STYLES}
         epoch++;
         document.addEventListener("click", click, true);
         document.addEventListener("pointerover", pointer, true);
+        document.addEventListener("keydown", keydown, true);
       }
       scan();
       observe();
@@ -19353,11 +19592,15 @@ ${CARD_ACTION_STYLES}
       observer = null;
       document.removeEventListener("click", click, true);
       document.removeEventListener("pointerover", pointer, true);
+      document.removeEventListener("keydown", keydown, true);
+      manager?.root.remove();
+      manager = null;
       for (const entry of [...entries.values()]) release(entry);
       style?.remove();
       style = null;
       profile = null;
       choices = {};
+      titles = {};
       failed = false;
     }
     return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(choices).length, storageFailed: failed }) });
@@ -19524,7 +19767,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.5.1";
+  var SCRIPT_VERSION = "1.6.0";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

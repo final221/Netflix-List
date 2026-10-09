@@ -37,7 +37,7 @@ test('live recommendation controls persist both reasons, hide duplicates and Und
     assert.equal(other.card.style.visibility, undefined); assert.equal(b.requests.length, 0);
     b.click(duplicate.host, 'Undo'); assert.equal(a.card.style.visibility, undefined);
     b.click(other.host, 'Hide suggestion'); assert.equal(other.card.style.visibility, 'hidden');
-    assert.deepEqual([...b.saved.values()][0], { version: 1, choices: { 2: 'hide' } });
+    assert.deepEqual([...b.saved.values()][0], { version: 1, choices: { 2: 'hide' }, titles: {} });
     b.feature.dispose(); b.feature.check(); assert.equal(other.card.style.visibility, 'hidden');
     b.feature.dispose(); assert.equal(other.card.style.visibility, undefined);
     assert.equal(b.document.head.querySelectorAll('style').length, 0); assert.equal(b.requests.length, 0);
@@ -99,9 +99,67 @@ test('real application wires browsing controls and retires them before playback'
     app.dispose(); assert.equal(b.observers.filter(o => o.active).length, 0); assert.equal(b.requests.length, 0);
 });
 test('recommendation controls translate every supported UI locale', () => {
-    for (const [locale, messages] of Object.entries(UI_MESSAGES)) for (const key of ['hideRecommendation', 'undoRecommendation', 'recommendationWatched', 'recommendationHidden']) {
+    for (const [locale, messages] of Object.entries(UI_MESSAGES)) for (const key of ['hideRecommendation', 'undoRecommendation', 'recommendationWatched', 'recommendationHidden', 'closeRecommendationPanel', 'noRecommendationChoices']) {
         assert.equal(typeof messages[key], 'string', locale + ': ' + key); assert.ok(messages[key].length);
     }
+});
+
+test('saved-choices panel restores both reasons without mounted cards and remembers safe title labels', () => {
+    const b = setup(), watched = mount(b, '11'), hidden = mount(b, '22');
+    watched.card.appendChild(new Element('img')).setAttribute('alt', '<Watched film>');
+    hidden.card.setAttribute('aria-label', 'Hidden series');
+    b.feature.check(); b.click(watched.host, 'Mark watched'); b.click(hidden.host, 'Hide suggestion');
+    watched.row.remove(); hidden.row.remove(); b.feature.dispose(); b.feature.check();
+    const root = b.document.querySelector('.tm-rec-manager'); b.click(root, 'Already watched / Suggestion hidden (2)');
+    assert.equal(root.querySelector('section').hidden, false);
+    assert.deepEqual(root.querySelectorAll('a').map(a => a.textContent), ['<Watched film>', 'Hidden series']);
+    assert.equal(root.querySelectorAll('a')[0].getAttribute('href'), '/title/11');
+    b.click(root, '\u00d7'); // Panel close comes first.
+    b.click(root, 'Already watched / Suggestion hidden (2)');
+    const remove = root.querySelectorAll('.tm-rec-saved-row')[0].querySelector('button');
+    b.document.dispatchEvent({ type: 'click', target: remove, preventDefault() {}, stopImmediatePropagation() {} });
+    assert.deepEqual([...b.saved.values()][0], { version: 1, choices: { 22: 'hide' }, titles: { 22: 'Hidden series' } });
+    const next = root.querySelector('.tm-rec-saved-row').querySelector('button');
+    b.document.dispatchEvent({ type: 'click', target: next, preventDefault() {}, stopImmediatePropagation() {} });
+    assert.equal(root.querySelectorAll('.tm-rec-saved-row').length, 0);
+    assert.equal(root.querySelector('p').textContent, 'No saved choices.');
+    b.document.dispatchEvent({ type: 'keydown', key: 'Escape' }); assert.equal(root.querySelector('section').hidden, true);
+    assert.equal(root.querySelector('button').getAttribute('aria-expanded'), 'false');
+    assert.equal(b.requests.length, 0);
+    b.feature.dispose(); assert.equal(root.isConnected, false); assert.equal(b.document.listenerCount('keydown'), 0);
+});
+
+test('old choices can be restored from the panel and visible duplicate cards return immediately', () => {
+    const b = setup(); b.saved.set('legacyMyListForNetflix.recommendationChoices.v1.A', { version: 1, choices: { 1: 'watched', 2: 'hide' } });
+    const a = mount(b), duplicate = mount(b); b.feature.check();
+    const root = b.document.querySelector('.tm-rec-manager'); b.click(root, 'Already watched / Suggestion hidden (2)');
+    assert.equal(root.querySelector('a').textContent, '#1');
+    const remove = root.querySelector('.tm-rec-saved-row').querySelector('button');
+    b.document.dispatchEvent({ type: 'click', target: remove, preventDefault() {}, stopImmediatePropagation() {} });
+    assert.equal(a.card.style.visibility, undefined); assert.equal(duplicate.card.style.visibility, undefined);
+    assert.deepEqual([...b.saved.values()][0].choices, { 2: 'hide' });
+});
+
+test('profile replacement closes the panel and stale row actions cannot restore another profile', () => {
+    const b = setup(), a = mount(b); b.feature.check(); b.click(a.host, 'Mark watched');
+    const root = b.document.querySelector('.tm-rec-manager'); b.click(root, 'Already watched / Suggestion hidden (1)');
+    const remove = root.querySelector('.tm-rec-saved-row').querySelector('button'); b.select('B');
+    b.document.dispatchEvent({ type: 'click', target: remove, preventDefault() {}, stopImmediatePropagation() {} });
+    assert.equal(root.querySelector('section').hidden, true); assert.equal(root.querySelectorAll('a').length, 0);
+    assert.equal(b.saved.size, 1); assert.deepEqual([...b.saved.values()][0].choices, { 1: 'watched' });
+    b.select('A'); b.feature.check(); b.click(root, 'Already watched / Suggestion hidden (1)');
+    b.document.dispatchEvent({ type: 'click', target: remove, preventDefault() {}, stopImmediatePropagation() {} });
+    assert.deepEqual([...b.saved.values()][0].choices, { 1: 'watched' });
+});
+
+test('failed panel restoration preserves the saved dismissal and reports unavailable storage', () => {
+    const b = setup(), a = mount(b); b.feature.check(); b.click(a.host, 'Hide suggestion');
+    const root = b.document.querySelector('.tm-rec-manager'); b.click(root, 'Already watched / Suggestion hidden (1)');
+    b.userscript.setValue = () => { throw new Error('denied'); };
+    const remove = root.querySelector('.tm-rec-saved-row').querySelector('button');
+    b.document.dispatchEvent({ type: 'click', target: remove, preventDefault() {}, stopImmediatePropagation() {} });
+    assert.equal(a.card.style.visibility, 'hidden'); assert.deepEqual([...b.saved.values()][0].choices, { 1: 'hide' });
+    assert.ok(root.querySelector('p').textContent.includes('Could not save'));
 });
 
 test('profile replacement during storage cannot publish a dismissal into the new profile', () => {

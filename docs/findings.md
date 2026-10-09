@@ -6,6 +6,10 @@ This file records the code-review findings and the agreed follow-up plan for My 
 
 ## User live-test evidence
 
+Release **1.6.0** adds a right-side saved-recommendation panel on browsing/search pages. It lists profile-specific watched and hidden choices even without mounted cards, with compact **×** Undo controls and title links. New saves include bounded title labels in an optional field of the existing version-1 record; older choices remain readable and removable with ID fallbacks. Panel and card Undo share the guarded persistence path; profile changes close/clear the panel and stale input is rejected. Route disposal removes its DOM/listeners. Replacement recommendations remain deferred. Live Netflix layout remains unverified.
+
+Verification: all **583** tests pass; build consistency, syntax and whitespace checks pass. Coverage includes restoring absent and duplicate cards, persistence of title labels, version-1 records without labels, stale profile/row input, failed saves, close/Escape/disposal and all supported UI locales. Package/lock and metadata/internal versions agree at **1.6.0**.
+
 User-supplied Netflix evidence is distilled in [logs/knowledge.md](../logs/knowledge.md), with capture provenance and version-specific limitations. This file owns actionable interpretation, decisions and follow-up; raw exports are removed after completed review under AGENTS.md's retention workflow. Automated acceptance remains separate.
 
 ## Current work and deferred items

@@ -37,7 +37,9 @@ export function createRecommendationDom({ document, location, getComputedStyle }
         if (!id) try { id = new URL(href, location.href).pathname.match(/^\/watch\/(\d+)(?:\/|$)/)?.[1] || ''; } catch (_) {}
         if (!/^\d+$/.test(id)) return null;
         const scroller = host.closest('[data-uia="carousel-scroller"], .slider') || row;
-        return { host, card, id, scroller };
+        const title = (card.querySelector('img[alt]')?.getAttribute('alt') ||
+            card.querySelector('.fallback-text')?.textContent || card.getAttribute('aria-label') || '').trim().slice(0, 300);
+        return { host, card, id, scroller, title };
     }
     function scan(root = document) {
         const result = [], seen = new Set();
