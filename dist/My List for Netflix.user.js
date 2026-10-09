@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.4.69
+// @version      1.4.70
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -2811,9 +2811,11 @@
     }
     const netflixDom = Object.freeze({
       selectors: NETFLIX_DOM_SELECTORS,
-      sectionVideoIds(section) {
+      sectionVideoIds(section, cardLimit = Infinity) {
         const ids = /* @__PURE__ */ new Set();
+        let examined = 0;
         for (const card of section?.querySelectorAll?.(this.selectors.standardCardWithHref) || []) {
+          if (examined++ >= cardLimit) break;
           const id = videoIdFromHref(card.getAttribute("href") || card.href || "");
           if (id) ids.add(String(id));
         }
@@ -2898,14 +2900,14 @@
         return this.directSlots(track).filter((slot) => slot.querySelector(this.selectors.standardCard));
       }
     });
-    function readMyListAnchor() {
+    function readMyListAnchor(cardLimit = Infinity) {
       const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
       const section = host?.querySelector?.(`:scope > ${NETFLIX_DOM_SELECTORS.carouselRowOneSection}`) || null;
       let videoIds;
       return {
         sectionId: String(section?.id || ""),
         get videoIds() {
-          return videoIds ||= [...netflixDom.sectionVideoIds(section)];
+          return videoIds ||= [...netflixDom.sectionVideoIds(section, cardLimit)];
         }
       };
     }
@@ -7659,6 +7661,29 @@
         finishRequest(fetchState);
       }
     }
+    function observeSelectedRow(entry) {
+      try {
+        const anchor = pageDom.readMyListAnchor(3);
+        const nativeSectionId = anchor.sectionId || null;
+        const requestedSectionId = String(entry?.value?.id || "") || null;
+        const nativeRow = nativeSectionId ? graphqlCarouselCandidates(graphqlData()).find(([, value]) => String(value.id || "") === nativeSectionId)?.[1] : null;
+        const selectedVideoIds = [...graphqlSectionVideoIds({ entities: {
+          edges: (entry?.value?.entities?.edges || []).slice(0, 3)
+        } })];
+        return {
+          available: Boolean(nativeSectionId),
+          nativeSectionId,
+          requestedSectionId,
+          sectionIdMatches: nativeSectionId && requestedSectionId ? nativeSectionId === requestedSectionId : null,
+          selectedCachedCount: listCount(entry?.value?.entities?.totalCount),
+          nativeRowCachedCount: listCount(nativeRow?.entities?.totalCount),
+          selectedVideoIds,
+          nativeVideoIds: anchor.videoIds.slice(0, 3)
+        };
+      } catch (_) {
+        return { available: false, reason: "observation-failed" };
+      }
+    }
     async function fetchFreshMyListBootstrapViaCarousel(sessionToken = null) {
       assertCurrent(sessionToken);
       const entry = findMyListGraphqlEntry();
@@ -7671,6 +7696,14 @@
           { graphqlKey: entry?.key || null, detectionReason: entry?.reason || null }
         );
       }
+      const beforeRequest = observeSelectedRow(entry);
+      const rowSelection = {
+        selectionReason: entry.reason,
+        requestedRowId: typeof rowId === "string" ? rowId : null,
+        requestedSectionId: beforeRequest.requestedSectionId ?? null,
+        beforeRequest
+      };
+      assertCurrent(sessionToken);
       const request = {
         body: {
           operationName: "CarouselPage",
@@ -7706,10 +7739,18 @@
           graphqlEndCursor: page.endCursor,
           graphqlRequest: request
         };
+        rowSelection.afterResponse = observeSelectedRow(entry);
+        assertCurrent(sessionToken);
+        const beforeId = rowSelection.beforeRequest.nativeSectionId, afterId = rowSelection.afterResponse.nativeSectionId;
+        rowSelection.nativeSectionChanged = beforeId && afterId ? beforeId !== afterId : null;
+        rowSelection.responseVideoIds = page.edges.slice(0, 3).map((edge) => videoIdFromGraphqlNode(edge?.node)).filter(Boolean);
+        const nativeFirst = rowSelection.afterResponse.nativeVideoIds?.[0];
+        rowSelection.responseFirstMatchesNative = nativeFirst && fresh.firstVideoId ? nativeFirst === fresh.firstVideoId : null;
         log("Fresh Netflix My List carousel bootstrap fetched", {
           totalCount: fresh.totalCount,
           firstVideoId: fresh.firstVideoId || null,
           graphqlKey: entry?.key || null,
+          rowSelection,
           responseUrl: page.responseUrl,
           responseBytes: page.responseBytes,
           elapsedMs: Math.round(performance.now() - started),
@@ -18848,7 +18889,7 @@
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.4.69";
+  var SCRIPT_VERSION = "1.4.70";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

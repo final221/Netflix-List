@@ -276,6 +276,24 @@ export function createListData({ context, pageDom, location, fetch, performance,
         }
     }
 
+    // Passive bounded facts only; a diagnostic failure cannot select a row or a fallback.
+    function observeSelectedRow(entry) {
+        try {
+            const anchor = pageDom.readMyListAnchor(3);
+            const nativeSectionId = anchor.sectionId || null;
+            const requestedSectionId = String(entry?.value?.id || '') || null;
+            const nativeRow = nativeSectionId ? graphqlCarouselCandidates(graphqlData())
+                .find(([, value]) => String(value.id || '') === nativeSectionId)?.[1] : null;
+            const selectedVideoIds = [...graphqlSectionVideoIds({ entities: {
+                edges: (entry?.value?.entities?.edges || []).slice(0, 3) } })];
+            return { available: Boolean(nativeSectionId), nativeSectionId, requestedSectionId,
+                sectionIdMatches: nativeSectionId && requestedSectionId ? nativeSectionId === requestedSectionId : null,
+                selectedCachedCount: listCount(entry?.value?.entities?.totalCount),
+                nativeRowCachedCount: listCount(nativeRow?.entities?.totalCount),
+                selectedVideoIds, nativeVideoIds: anchor.videoIds.slice(0, 3) };
+        } catch (_) { return { available: false, reason: 'observation-failed' }; }
+    }
+
     async function fetchFreshMyListBootstrapViaCarousel(sessionToken = null) {
         assertCurrent(sessionToken);
         const entry = findMyListGraphqlEntry();
@@ -285,6 +303,10 @@ export function createListData({ context, pageDom, location, fetch, performance,
                 'Could not identify the current Netflix My List carousel id',
                 { graphqlKey: entry?.key || null, detectionReason: entry?.reason || null });
         }
+        const beforeRequest = observeSelectedRow(entry);
+        const rowSelection = { selectionReason: entry.reason, requestedRowId: typeof rowId === 'string' ? rowId : null,
+            requestedSectionId: beforeRequest.requestedSectionId ?? null, beforeRequest };
+        assertCurrent(sessionToken);
         const request = {
             body: {
                 operationName: 'CarouselPage',
@@ -319,9 +341,16 @@ export function createListData({ context, pageDom, location, fetch, performance,
                 graphqlEndCursor: page.endCursor,
                 graphqlRequest: request
             };
+            rowSelection.afterResponse = observeSelectedRow(entry);
+            assertCurrent(sessionToken);
+            const beforeId = rowSelection.beforeRequest.nativeSectionId, afterId = rowSelection.afterResponse.nativeSectionId;
+            rowSelection.nativeSectionChanged = beforeId && afterId ? beforeId !== afterId : null;
+            rowSelection.responseVideoIds = page.edges.slice(0, 3).map(edge => videoIdFromGraphqlNode(edge?.node)).filter(Boolean);
+            const nativeFirst = rowSelection.afterResponse.nativeVideoIds?.[0];
+            rowSelection.responseFirstMatchesNative = nativeFirst && fresh.firstVideoId ? nativeFirst === fresh.firstVideoId : null;
             log('Fresh Netflix My List carousel bootstrap fetched', {
                 totalCount: fresh.totalCount, firstVideoId: fresh.firstVideoId || null,
-                graphqlKey: entry?.key || null, responseUrl: page.responseUrl,
+                graphqlKey: entry?.key || null, rowSelection, responseUrl: page.responseUrl,
                 responseBytes: page.responseBytes, elapsedMs: Math.round(performance.now() - started),
                 operationName: 'CarouselPage', carouselPageSize: GRAPHQL_COLLECTION_PAGE_SIZE,
                 graphqlPageCount: 1, graphqlEdgeCount: fresh.graphqlEdges.length,

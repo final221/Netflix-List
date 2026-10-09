@@ -118,9 +118,11 @@ export function createNetflixPageDom({ document, Element, location, readGraphqlI
     const netflixDom = Object.freeze({
         selectors: NETFLIX_DOM_SELECTORS,
 
-        sectionVideoIds(section) {
+        sectionVideoIds(section, cardLimit = Infinity) {
             const ids = new Set();
+            let examined = 0;
             for (const card of section?.querySelectorAll?.(this.selectors.standardCardWithHref) || []) {
+                if (examined++ >= cardLimit) break;
                 const id = videoIdFromHref(card.getAttribute('href') || card.href || '');
                 if (id) ids.add(String(id));
             }
@@ -236,13 +238,13 @@ export function createNetflixPageDom({ document, Element, location, readGraphqlI
         }
     });
 
-    function readMyListAnchor() {
+    function readMyListAnchor(cardLimit = Infinity) {
         const host = document.querySelector(NETFLIX_DOM_SELECTORS.browseSections);
         const section = host?.querySelector?.(`:scope > ${NETFLIX_DOM_SELECTORS.carouselRowOneSection}`) || null;
         let videoIds;
         // A section-ID match needs no card scan. Cache the fallback facts for this one read.
         return { sectionId: String(section?.id || ''),
-            get videoIds() { return videoIds ||= [...netflixDom.sectionVideoIds(section)]; } };
+            get videoIds() { return videoIds ||= [...netflixDom.sectionVideoIds(section, cardLimit)]; } };
     }
     function readHeadingTypography(section) {
         const heading = section?.querySelector('h2') || document.querySelector(`${NETFLIX_DOM_SELECTORS.browseSections} section h2`);

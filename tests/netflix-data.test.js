@@ -5,6 +5,8 @@ import { createNetflixContext } from '../src/netflix/context.js';
 import { createNetflixPageDom } from '../src/netflix/page-dom.js';
 import { createCardMarkup } from '../src/netflix/card-markup.js';
 import { createGrid } from '../src/grid/grid.js';
+import { createReport } from '../src/diagnostics/report.js';
+import { createLogger } from '../src/diagnostics/logger.js';
 import { createListData } from '../src/netflix/list-data.js';
 import { createViewingData } from '../src/netflix/viewing-data.js';
 import { createPopupInspection } from '../src/netflix/popup-inspection.js';
@@ -298,6 +300,83 @@ function dataEnvironment(count = 4, overrides = {}) {
     return { ...e, scheduler, adapter, graph, requests, responses, logs, warnings, scope, inspection,
         page, collect, setToken: value => { while (scope.token < value) scope.begin(); }, assertCurrent };
 }
+
+test('bootstrap diagnostics compare the selected row with the bounded live anchor without changing selection', async () => {
+    for (const cached of [false, true]) {
+        const e = dataEnvironment(9);
+        const host = e.document.body.appendChild(new Element('main'));
+        host.setAttribute('data-uia', 'browse-page-sections');
+        const row = section(host, 'carousel-row-section-1'); row.id = 'actual-list';
+        for (const id of ['2', '3', '4', '5']) row.append(slot(id));
+        e.graph.Actual = { __typename: 'PinotCarouselSection', _id: 'actual-request', id: 'actual-list',
+            entities: { totalCount: 500, edges: [] } };
+        if (cached) assert.equal(e.adapter.readMyListTotalCount(), 9);
+        e.responses.push(e.page(9, [1, 2, 3, 4, 5, 6, 7, 8, 9]));
+        const bootstrap = await e.adapter.fetchBootstrap(1);
+        const details = e.logs.find(log => log.name === 'Fresh Netflix My List carousel bootstrap fetched').details;
+        assert.equal(details.rowSelection.selectionReason, cached ? 'cached-key' : 'playlist-event-listeners');
+        const before = details.rowSelection.beforeRequest;
+        assert.equal(details.rowSelection.requestedRowId, 'row-id');
+        assert.equal(details.rowSelection.requestedSectionId, 'list-section');
+        assert.equal(before.nativeSectionId, 'actual-list');
+        assert.equal(before.sectionIdMatches, false);
+        assert.equal(before.selectedCachedCount, 9);
+        assert.equal(before.nativeRowCachedCount, 500);
+        assert.deepEqual(before.nativeVideoIds, ['2', '3', '4']);
+        assert.deepEqual(before.selectedVideoIds, ['1']);
+        assert.equal(details.rowSelection.afterResponse.nativeSectionId, 'actual-list');
+        assert.equal(details.rowSelection.nativeSectionChanged, false);
+        assert.deepEqual(details.rowSelection.responseVideoIds, ['1', '2', '3']);
+        assert.equal(details.rowSelection.responseFirstMatchesNative, false);
+        assert.equal(bootstrap.totalCount, 9);
+        assert.equal(e.requests[0].body.variables.rowId, 'row-id');
+        assert.equal(e.requests.length, 1);
+        const rejected = await e.adapter.collectRecords({ bootstrap, totalCount: 500, sessionToken: 1 });
+        assert.equal(rejected.records, null);
+        assert.equal(e.requests.length, 1, 'diagnostics add no requests or count-mismatch retry');
+        const logger = createLogger({ name: 'test', version: 'test', Element, console: { log() {}, warn() {} } });
+        for (const event of e.logs) logger.log(event.name, event.details);
+        let copied;
+        const report = createReport({ logger, version: 'test', readEnvironment: () => ({}), readRuntime: () => ({}),
+            readSeriesViewing: () => [], readThumbnails: () => ({}), readNativePopup: () => ({}),
+            navigator: { clipboard: { writeText: text => { copied = text; } } } });
+        await report.copy();
+        const exported = copied.split('\n').find(line => line.includes('INFO  Fresh Netflix My List carousel bootstrap fetched'));
+        assert.deepEqual(JSON.parse(exported.slice(exported.indexOf(' {') + 1)).rowSelection, details.rowSelection);
+        assert.match(copied, /exportMode: compact/);
+        assert.equal(e.requests.length, 1);
+    }
+});
+
+test('bootstrap diagnostics distinguish unavailable observations and source changes without causing fallback', async () => {
+    const failing = dataEnvironment(4, { pageDom: { readMyListAnchor() { throw new Error('diagnostic read failed'); } } });
+    failing.responses.push(failing.page(4, [1, 2, 3, 4]));
+    assert.equal((await failing.adapter.fetchBootstrap(1)).totalCount, 4);
+    const failed = failing.logs.find(log => log.name.includes('bootstrap fetched')).details.rowSelection;
+    assert.equal(failed.beforeRequest.available, false);
+    assert.equal(failed.beforeRequest.reason, 'observation-failed');
+    assert.equal(failing.requests.length, 1);
+    assert.equal(failing.warnings.length, 0);
+
+    const e = dataEnvironment();
+    const host = e.document.body.appendChild(new Element('main')); host.setAttribute('data-uia', 'browse-page-sections');
+    const row = section(host, 'carousel-row-section-1'); row.id = 'list-section'; row.append(slot('1'));
+    e.responses.push({ ...e.page(4, [1, 2, 3, 4]), waitBody: async () => { row.id = 'replacement-section'; } });
+    await e.adapter.fetchBootstrap(1);
+    const changed = e.logs.find(log => log.name.includes('bootstrap fetched')).details.rowSelection;
+    assert.equal(changed.beforeRequest.sectionIdMatches, true);
+    assert.equal(changed.afterResponse.sectionIdMatches, false);
+    assert.equal(changed.nativeSectionChanged, true);
+    assert.equal(e.requests.length, 1);
+    assert.equal(e.warnings.length, 0);
+    let retired;
+    retired = dataEnvironment(4, { pageDom: { readMyListAnchor() {
+        retired.scope.begin(); return { sectionId: 'new-owner', videoIds: [] };
+    } } });
+    await assert.rejects(retired.adapter.fetchBootstrap(1), error => error.code === 'LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED');
+    assert.equal(retired.requests.length, 0);
+    assert.equal(retired.warnings.length, 0);
+});
 
 test('list data hides wire responses and continuation while resuming the original row once', async () => {
     const e = dataEnvironment(150);
