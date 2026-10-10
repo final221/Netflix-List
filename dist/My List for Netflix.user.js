@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.10
+// @version      1.9.11
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -19595,16 +19595,19 @@ ${CARD_ACTION_STYLES}
   // src/netflix/recommendation-dom.js
   var RECOMMENDATION_ARROW_STYLES = `
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev){
-    width:56px!important;min-width:56px!important;min-height:64px!important;height:100%!important;
+    width:56px!important;min-width:56px!important;min-height:64px!important;height:100%!important;max-height:none!important;max-width:none!important;box-sizing:border-box!important;
     position:absolute!important;top:0!important;bottom:0!important;transform:none!important;
     display:flex!important;align-items:center!important;justify-content:center!important;border-radius:8px!important;
     opacity:1!important;visibility:visible!important;
-    z-index:10001!important;background:rgba(20,20,20,.85)!important;color:#fff!important;
+    z-index:10001!important;background:#252525!important;border:1px solid #777!important;box-shadow:0 0 12px #0008!important;color:#fff!important;
     cursor:pointer;pointer-events:auto;
 }
 :is(section,.lolomoRow):has(.tm-rec-controls) :is(.handleNext,.handlePrev){width:56px!important}
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia*="carousel"][data-uia$="button"],.handleNext,.handlePrev):focus-visible{outline:3px solid #fff!important;outline-offset:-3px}
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia*="carousel"][data-uia$="button"],.handleNext,.handlePrev) :is(svg,.indicator-icon){width:32px!important;height:32px!important;font-size:32px!important;pointer-events:none}
+
+:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev)::after{content:"";position:absolute;inset:0;border:1px solid #777;border-radius:8px;pointer-events:none}
+:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev) :is(button,[role="button"]){width:100%!important;height:100%!important;max-height:none!important;align-self:stretch!important;border-radius:8px!important;background:#252525!important;display:flex!important;align-items:center!important;justify-content:center!important}
 `;
   function createRecommendationDom(environment) {
     const { document, location, getComputedStyle, performance, PerformanceObserver } = environment;
@@ -19853,9 +19856,27 @@ ${CARD_ACTION_STYLES}
           }
           if (depth === 23 && fiber.return) truncated = true;
         }
-        return { at: diagnosticTime(), components, truncated };
+        return { at: diagnosticTime(), components, truncated, control: controlFacts(control) };
       } catch (_) {
         return { at: diagnosticTime(), unavailable: true, components };
+      }
+    }
+    function controlFacts(control) {
+      try {
+        const nodes = [control, control.querySelector?.('button, [role="button"]')].filter(Boolean);
+        return nodes.map((node) => {
+          const rect = node.getBoundingClientRect(), style = getComputedStyle?.(node);
+          return {
+            tag: node.tagName,
+            rect: [rect.left, rect.top, rect.width, rect.height].map((value) => Number.isFinite(value) ? Math.round(value) : null),
+            background: String(style?.backgroundColor || "").slice(0, 80),
+            opacity: style?.opacity,
+            borderRadius: style?.borderRadius,
+            clipPath: String(style?.clipPath || "").slice(0, 120)
+          };
+        });
+      } catch (_) {
+        return { unavailable: true };
       }
     }
     function diagnosticTime() {
@@ -19982,6 +20003,12 @@ ${CARD_ACTION_STYLES}
           hidden: items.filter((item) => choices[item.id]).length,
           ids: items.slice(0, 120).map((item) => item.id),
           idsTruncated: items.length > 120,
+          visibleIds: items.filter((item) => {
+            if (choices[item.id]) return false;
+            const rect = item.host.getBoundingClientRect(), bounds = state.scroller.getBoundingClientRect();
+            const center = rect.left + rect.width / 2;
+            return rect.width > 1 && center >= bounds.left && center <= bounds.right;
+          }).slice(0, 120).map((item) => item.id),
           pageIndex: indicators.findIndex((item) => item.getAttribute("data-indicator-selected") === "true"),
           scrollLeft: Number(state.scroller.scrollLeft) || 0,
           transform: String(getComputedStyle?.(track).transform || track.style.getPropertyValue("transform") || "").slice(0, 160),
@@ -20081,9 +20108,74 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/recommendations/navigation.js
-  function createNavigationDiagnostics({ dom, readChoices, admitted, log }) {
-    let sequence = 0, failures = 0, requests = null;
-    const recent = [];
+  function createNavigationDiagnostics({ environment, dom, readChoices, admitted, log }) {
+    let sequence = 0, failures = 0, requests = null, history = /* @__PURE__ */ new WeakMap(), lastHover = null, generation = 0, movementCount = 0;
+    const recent = [], movements = [], timers = /* @__PURE__ */ new Map();
+    const now = () => environment.performance?.now() ?? Date.now();
+    function remember(row, state) {
+      let seen = history.get(row);
+      if (!seen) {
+        seen = /* @__PURE__ */ new Set();
+        history.set(row, seen);
+      }
+      for (const id of state?.ids || []) if (seen.size < 1200) seen.add(id);
+      return seen;
+    }
+    function cancel(record) {
+      for (const [timer, owner] of timers) if (owner === record) {
+        environment.clearTimeout(timer);
+        timers.delete(timer);
+      }
+    }
+    function sample(record, reason) {
+      if (record.owner !== generation || !admitted() || !record.row.isConnected) return;
+      const state = dom.rowDiagnostics(record.row, readChoices());
+      if (!state) return;
+      const { loading, ...facts } = state;
+      record.samples.push({
+        at: now(),
+        reason,
+        state: facts,
+        addedCount: state.ids.filter((id) => !record.before.ids.includes(id)).length,
+        removedCount: record.before.ids.filter((id) => !state.ids.includes(id)).length,
+        firstObservedCount: state.ids.filter((id) => !record.seenBefore.has(id)).length,
+        comparisonTruncated: Boolean(state.idsTruncated || record.before.idsTruncated || record.seenBefore.size >= 1200)
+      });
+      remember(record.row, state);
+    }
+    function close(record, reason) {
+      if (record.closed || record.owner !== generation) return;
+      sample(record, reason);
+      cancel(record);
+      record.closed = true;
+      record.requestFacts = dom.navigationRequests(record.loading.at, now(), requests?.read());
+    }
+    function movement(kind, target, detail = {}) {
+      if (!admitted()) return;
+      try {
+        const card = target?.closest?.('a[data-uia="standard-card"], .title-card'), value = card && dom.describe(card), id = value?.id;
+        const arrow = !card && dom.navigationTarget(target), row = value?.row || arrow?.row;
+        const rowId = (row?.id || row?.getAttribute?.("data-uia") || "").slice(0, 160), hoverKey = `${rowId}:${id || arrow?.direction || ""}`;
+        if (kind === "hover" && !id && !arrow) {
+          lastHover = null;
+          return;
+        }
+        if (kind === "hover" && lastHover === hoverKey) return;
+        if (kind === "hover") lastHover = hoverKey;
+        if (!id && !arrow && kind !== "scroll" && kind !== "action") return;
+        movements.push({
+          at: now(),
+          kind,
+          ...id ? { id, rowId } : arrow ? { rowId, direction: arrow.direction } : {},
+          scrollY: Math.round(environment.scrollY || environment.window?.scrollY || 0),
+          ...Object.fromEntries(Object.entries(detail).filter(([key, value2]) => ["x", "y", "action", "id"].includes(key) && ["string", "number"].includes(typeof value2)))
+        });
+        movementCount++;
+        if (movements.length > 80) movements.shift();
+      } catch (_) {
+        failures++;
+      }
+    }
     function click(target) {
       if (!admitted()) return;
       try {
@@ -20091,14 +20183,36 @@ ${CARD_ACTION_STYLES}
         if (!navigation) return;
         const before = dom.rowDiagnostics(navigation.row, readChoices());
         if (!before) return;
+        const previous = recent.at(-1);
+        if (previous) close(previous, "before-next-arrow");
         requests ||= dom.observeRequests();
         requests.begin();
         const loading = dom.navigationStart(navigation.control);
-        const previous = recent.at(-1);
-        if (previous) previous.until = loading.at;
-        const record = { sequence: ++sequence, direction: navigation.direction, row: navigation.row, before, loading };
+        const record = {
+          sequence: ++sequence,
+          direction: navigation.direction,
+          row: navigation.row,
+          before,
+          loading,
+          owner: generation,
+          seenBefore: new Set(remember(navigation.row, before)),
+          samples: [],
+          closed: false
+        };
         recent.push(record);
-        if (recent.length > 20) recent.shift();
+        if (recent.length > 20) cancel(recent.shift());
+        for (const delay of [200, 1200, 5e3]) {
+          const timer = environment.setTimeout(() => {
+            timers.delete(timer);
+            try {
+              if (delay === 5e3) close(record, "5000ms");
+              else sample(record, `${delay}ms`);
+            } catch (_) {
+              failures++;
+            }
+          }, delay);
+          timers.set(timer, record);
+        }
         log("Native recommendation arrow clicked", { sequence: record.sequence, direction: record.direction, before });
       } catch (_) {
         failures++;
@@ -20106,27 +20220,48 @@ ${CARD_ACTION_STYLES}
     }
     function snapshot() {
       const capture = admitted() ? requests?.read() : null;
-      return { interactions: sequence, failures, retained: recent.length, recent: recent.map(({ sequence: sequence2, direction, row, before, loading, until }) => {
-        const after = admitted() && row.isConnected ? dom.rowDiagnostics(row, readChoices()) : null;
-        return {
-          sequence: sequence2,
-          direction,
-          before,
-          afterAtExport: after,
-          loading,
-          requests: admitted() ? dom.navigationRequests(loading.at, until, capture) : { unavailable: true },
-          addedIdSample: after ? after.ids.filter((id) => !before.ids.includes(id)).slice(0, 16) : [],
-          removedIdSample: after ? before.ids.filter((id) => !after.ids.includes(id)).slice(0, 16) : [],
-          idComparisonTruncated: Boolean(before.idsTruncated || after?.idsTruncated)
-        };
-      }) };
+      return {
+        interactions: sequence,
+        failures,
+        retained: recent.length,
+        movements: movements.slice(),
+        movementCount,
+        movementsDropped: movementCount - movements.length,
+        pendingSamples: timers.size,
+        recent: recent.map((record) => {
+          const { sequence: sequence2, direction, row, before, loading, samples, requestFacts, seenBefore } = record;
+          const after = admitted() && row.isConnected ? dom.rowDiagnostics(row, readChoices()) : null;
+          return {
+            sequence: sequence2,
+            direction,
+            before,
+            afterAtExport: after,
+            loading,
+            samples: samples.slice(),
+            requests: requestFacts || (admitted() ? dom.navigationRequests(loading.at, now(), capture) : { unavailable: true }),
+            addedCount: after ? after.ids.filter((id) => !before.ids.includes(id)).length : null,
+            firstObservedCount: after ? after.ids.filter((id) => !seenBefore.has(id)).length : null,
+            addedIdSample: after ? after.ids.filter((id) => !before.ids.includes(id)).slice(0, 16) : [],
+            removedIdSample: after ? before.ids.filter((id) => !after.ids.includes(id)).slice(0, 16) : [],
+            idComparisonTruncated: Boolean(before.idsTruncated || after?.idsTruncated),
+            historyTruncated: seenBefore.size >= 1200
+          };
+        })
+      };
     }
-    return Object.freeze({ click, snapshot, dispose() {
+    return Object.freeze({ click, movement, snapshot, dispose() {
+      generation++;
+      for (const timer of timers.keys()) environment.clearTimeout(timer);
+      timers.clear();
       requests?.dispose();
       requests = null;
       recent.length = 0;
+      movements.length = 0;
+      history = /* @__PURE__ */ new WeakMap();
+      lastHover = null;
       sequence = 0;
       failures = 0;
+      movementCount = 0;
     } });
   }
 
@@ -20196,6 +20331,7 @@ ${CARD_ACTION_STYLES}
       warn
     });
     const navigation = createNavigationDiagnostics({
+      environment,
       dom,
       readChoices: visibleChoices,
       admitted: () => active && allowed() && Boolean(profile) && readProfile() === profile,
@@ -20218,7 +20354,10 @@ ${CARD_ACTION_STYLES}
       if (scrollTimer !== null) return;
       scrollTimer = environment.setTimeout(() => {
         scrollTimer = null;
-        if (active && allowed()) updateRefill();
+        if (active && allowed()) {
+          navigation.movement("scroll");
+          updateRefill();
+        }
       }, 250);
     }
     function read(p) {
@@ -20422,6 +20561,7 @@ ${CARD_ACTION_STYLES}
     }
     function click(event) {
       navigation.click(event.target);
+      navigation.movement("click", event.target, { x: event.clientX, y: event.clientY });
       const button = event.target?.closest?.("button"), input = buttons.get(button);
       if (!input || input.entry && entries.get(input.entry.host) !== input.entry) return;
       event.preventDefault();
@@ -20482,6 +20622,7 @@ ${CARD_ACTION_STYLES}
         for (const entry of entries.values()) paint(entry);
         paintManager();
         updateRefill(input.action !== "undo" ? input.entry : null);
+        navigation.movement("action", input.entry?.card, { action: input.action, id });
         log("Recommendation visibility choice saved", { action: input.action, hiddenCount: Object.keys(choices).length });
       } catch (error) {
         failed = true;
@@ -20491,6 +20632,7 @@ ${CARD_ACTION_STYLES}
       }
     }
     function pointer(event) {
+      navigation.movement("hover", event.target, { x: event.clientX, y: event.clientY });
       if (!allowed()) {
         check();
         return;
@@ -20830,7 +20972,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.10";
+  var SCRIPT_VERSION = "1.9.11";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

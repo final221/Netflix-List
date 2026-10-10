@@ -2,7 +2,7 @@
 
 ## Historical sessions — 1.4.52–1.4.58
 
-Historical originals logs/<version>.txt at8ca0de7ea22f3f5b7a0bdeadb6b091bfb9161d46; full retained dates/environment/measurements in this file at98e1266. Signatures:.53 routeSessionToken ReferenceError;.54 native mapping changed;.67/.69 fallback despite500cards;.70 stable cached/live IDs init2526ms versus cached9/live500 mismatch init8282ms. Lifecycle/Undo/popup unverified.
+Historical originals at8ca0de7ea22f3f5b7a0bdeadb6b091bfb9161d46, logs/<version>.txt;dates/environment/measurements at98e1266. .53 routeSessionToken ReferenceError;.54 mapping changed;.67/.69 fallback500;.70 cached9/live500 mismatch. Lifecycle/Undo/popup unverified.
 
 ## Session — 1.4.64
 
@@ -29,7 +29,7 @@ Folder memory/playback overlay confirmed;checked160→186/pending26→0.
 
 ## Session — 1.9.3
 
-`1.9.3/18-33-21-508Z-8b0f7ecb`; SHA256 c3c2752bad24f0140bf250af1812275d03d5fe36d04cce8a1e79b96867af5345. CopiedAt 2026-10-10T20:33:21.508+02:00. Baseline3events/no refill/prior pages/completion. User: arrow reveals more, then CopyLogs unclickable(Shift/normal); cause unproven.
+`1.9.3/18-33-21-508Z-8b0f7ecb`; SHA256 c3c2752bad24f0140bf250af1812275d03d5fe36d04cce8a1e79b96867af5345. CopiedAt 2026-10-10T20:33:21.508+02:00. User:arrow reveals more/CopyLogs unclickable;baseline/no post-arrow proof;details at7689b02.
 
 ## Session — 1.9.4
 
@@ -42,13 +42,13 @@ Repeated saves/pending0;decorated263→275/checked262→275;arrow confirmed/no r
 - `1.9.5/18-50-04-861Z-50175928`, copiedAt 20:50:04.860; SHA256 80715fcce6f40734fec5578b6a3c87f7fdf70d43ca0221a30a94c29287570c21.
 - `1.9.5/18-50-14-550Z-83ea815f`, copiedAt 20:50:14.550; SHA256 70218a5d89a718fa9efa8ce3d0e3f066f3800b98b269e73fa441a1c860b3b30d.
 - `1.9.5/18-50-23-271Z-4674aef4`, copiedAt 20:50:23.270; SHA256 09784c45ebf5e1575068183da3b90baccd88370122443689617bcd642e400f92.
-Same startup/3→6→9events/20rows/no truncation,warnings,refill,pending saves. Row11 “Because you watched The First Purge” arrows20:50:11.529/21.311:mounted13→25→26/added12,8/removed0,7;visible5→7→8/hidden8→10→9/offscreen0→8→9/decorated263→275→276. totalCount:number/depth14;pageIndex=-1/scrollLeft0/transform:none;origin unknown.
+Row11 arrows:13→25→26mounted/12,8added/0,7removed;visible5→7→8/hidden8→10→9/offscreen0→8→9. Untruncated/no warnings;totalCount:number/depth14;pageIndex=-1/transform:none/origin unknown. Detailed times at7689b02.
 
 ## Session — 1.9.6
 
 - `1.9.6/19-05-01-105Z-a24ce44f`, copiedAt 21:05:01.105; SHA256 e8b9ec6551df552ec495f1ea3f1a6a79de2b41ebd2a280098351b3386ff7526f.
 - `1.9.6/19-05-09-360Z-9bb398ee`, copiedAt 21:05:09.359; SHA256 b84db13abfdb56ac091cab2d0458084787a7d22c03e6e5d36d70bd6a2d7979e0.
-Same startup21:04:51.860;3→6events/20rows/untruncated/no warnings/refill/pending saves. Arrow21:05:06.996 repeats row11 13→25/12added/0removed/visible5→7/hidden8→10/offscreen0→8;decorated267→279/choices140. Window2363ms/250buffered/0matches;retention unknown. React10/truncated:onClick0/1,hook-next4/8,pageCounts13;no loader/cache proof.
+Row11 13→25/12added/0removed. Window2363ms/250buffered/0matches;React10/truncated;no loader/cache proof. Details at7689b02.
 
 ## Session — 1.9.7
 
@@ -70,7 +70,7 @@ Later:493→500checked/0pending;row29 17→26;row8 13→25→26 then8/8recycling
 - 22:10:03.012, 1.9.8/20-10-03-014Z-542dafc6; SHA256 050292138b9b8589d52775d889c14fa0304b5362f0b9e809fbdb625e3b57c39e.
 - 22:12:00.246, 1.9.8/20-12-00-255Z-636f66d6; SHA256 af1235a2e8b1efb37779efe0b33182f00fe9b64cdad8ec0172d8ef7f1168de3d.
 - 22:12:33.956, 1.9.8/20-12-33-966Z-63f8d4f0; SHA256 b4b556fe656ae8f4243b680f42f194a85ce32afce99941cdb5ef0883a61e8a93.
-Same startup/five exports. Viewing163→299requests/375→572checked/3→4failed/0pending/not running;windowRequests163→12. Decorated461→608. Row34:13→26mounted/offscreen1→9. Row42:13→25→26 then8/8recycling/offscreen4→18. Five dismissals/checks. Multiple windows/two GraphQL fetches;installed lease/no failures/zero records. Observer drops0→119;early windows become empty later. Props40-element stateArray;no independent loader observed. Missing title/coverage reasons and exact latency unrecorded.
+Viewing163→299requests/375→572checked/3→4failed/0pending;decorated461→608. Row34:13→26/offscreen1→9;row42:13→25→26 then8/8/offscreen4→18. GraphQL timing/installed lease zero records;observer119drops/early windows lost;no independent loader/precise latency. Details at7689b02.
 
 ## Session — 1.9.9
 
@@ -78,7 +78,14 @@ Same startup/five exports. Viewing163→299requests/375→572checked/3→4failed
 - 22:45:05.075, 1.9.9/20-45-05-078Z-de105405; SHA256 c5d1ce0f80beedbd6e66f3444a1eaa5a4355abc6790a339f541a42bd148de777.
 - 22:45:30.054, 1.9.9/20-45-30-058Z-244474e2; SHA256 4f0842cd0cc7e3b89eb24a51884c7e009e93cfd17efeaf85a93f195a6598d4a6.
 - 22:45:40.877, 1.9.9/20-45-40-880Z-7a45db73; SHA256 34071eab8dadb7c26163c10e5c8271d3e4a673d603972e5ac7faa95a74fde36f.
-Same startup/20rows/eight arrows. Viewing95→166requests/184→288checked/3→6failed/all sampled failures series coverage/three attempts;final0pending/not running. Row6:13→25→26mounted/offscreen3→18;row19:13→25→26/offscreen0→9. Timing includes paired GraphQL fetches;lease10→58intercepted/0GraphQL/no failures/drops. No global queue stall;native GraphQL bodies remain uncaptured. Screenshot/user:arrow remains short versus desired full card-height edge.
+Viewing95→166requests/184→288checked/3→6failed/all series coverage/three attempts/final0pending. Row6:13→25→26/offscreen3→18;row19:13→25→26/offscreen0→9. GraphQL timing/lease10→58intercepted/0GraphQL/no drops;no global stall. Screenshot:arrow short;details at7689b02.
+
+## Session — 1.9.10
+
+- 22:53:06.757, 1.9.10/20-53-06-765Z-58510614; SHA256 1acffe150ba2d533f32c59974896ac48ec49fdc0536ddd1e68393d622468ca49.
+- 22:53:11.778, 1.9.10/20-53-11-786Z-691342cc; SHA256 49d964535a5fb1d43a5724c47c3f19a5b3a763f905863866bf0e74fbf4ca66fc.
+- 22:53:17.819, 1.9.10/20-53-17-827Z-77448113; SHA256 e6a6e3733bd841d5dcb177d2e9653a3e58fbaf117372e56361eb2434cf5b431c.
+Same startup/three exports/399decorated/317checked/161requests/2failed series coverage(attempts4,3)/0pending. Row20 consecutive before states:two previous arrows add2 then3IDs(first observed2 then1);nine forward arrows add2IDs each,all previously observed;26mounted. Same-origin GraphQL timing/empty query keys;lease8intercepted/0GraphQL/no failures. Some older timing windows disappear;no causal payload proof. Screenshots:arrow hit area tall/visible button small;user reports repeated titles.
 
 ## Evidence limits
 

@@ -41,7 +41,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     const refill = createRefill({ environment, dom, readChoices: visibleChoices,
         admitted: () => active && allowed() && Boolean(profile) && !failed && readProfile() === profile,
         onPage: row => scan(row), log, warn });
-    const navigation = createNavigationDiagnostics({ dom, readChoices: visibleChoices,
+    const navigation = createNavigationDiagnostics({ environment, dom, readChoices: visibleChoices,
         admitted: () => active && allowed() && Boolean(profile) && readProfile() === profile, log });
     function rowDiagnostics() {
         if (!active || !allowed() || !profile || readProfile() !== profile) return { total: 0, truncated: false, rows: [] };
@@ -53,7 +53,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     function updateRefill(dismissal = null) { refill.update(new Set([...entries.values()].map(entry => entry.row)), dismissal); }
     function scroll() {
         if (scrollTimer !== null) return;
-        scrollTimer = environment.setTimeout(() => { scrollTimer = null; if (active && allowed()) updateRefill(); }, 250);
+        scrollTimer = environment.setTimeout(() => { scrollTimer = null; if (active && allowed()) { navigation.movement('scroll'); updateRefill(); } }, 250);
     }
     function read(p) {
         if (typeof userscript.getValue !== 'function' || typeof userscript.setValue !== 'function') throw new Error('storage-unavailable');
@@ -190,7 +190,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         });
     }
     function click(event) {
-        navigation.click(event.target);
+        navigation.click(event.target); navigation.movement('click', event.target, { x: event.clientX, y: event.clientY });
         const button = event.target?.closest?.('button'), input = buttons.get(button);
         if (!input || (input.entry && entries.get(input.entry.host) !== input.entry)) return;
         event.preventDefault(); event.stopImmediatePropagation();
@@ -225,11 +225,13 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             for (const entry of entries.values()) paint(entry);
             paintManager();
             updateRefill(input.action !== 'undo' ? input.entry : null);
+            navigation.movement('action', input.entry?.card, { action: input.action, id });
             log('Recommendation visibility choice saved', { action: input.action, hiddenCount: Object.keys(choices).length });
         } catch (error) { failed = true; for (const entry of entries.values()) paint(entry); paintManager();
             warn('Recommendation choice could not be saved', { reason: error.message }); }
     }
     function pointer(event) {
+        navigation.movement('hover', event.target, { x: event.clientX, y: event.clientY });
         if (!allowed()) { check(); return; }
         if (readProfile() !== profile) { scan(); observe(); return; }
         if (event.target?.closest?.('.tm-rec-controls, .tm-rec-manager')) return;

@@ -4,16 +4,19 @@ import { createRecommendationRequests } from './recommendation-requests.js';
 
 export const RECOMMENDATION_ARROW_STYLES = `
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev){
-    width:56px!important;min-width:56px!important;min-height:64px!important;height:100%!important;
+    width:56px!important;min-width:56px!important;min-height:64px!important;height:100%!important;max-height:none!important;max-width:none!important;box-sizing:border-box!important;
     position:absolute!important;top:0!important;bottom:0!important;transform:none!important;
     display:flex!important;align-items:center!important;justify-content:center!important;border-radius:8px!important;
     opacity:1!important;visibility:visible!important;
-    z-index:10001!important;background:rgba(20,20,20,.85)!important;color:#fff!important;
+    z-index:10001!important;background:#252525!important;border:1px solid #777!important;box-shadow:0 0 12px #0008!important;color:#fff!important;
     cursor:pointer;pointer-events:auto;
 }
 :is(section,.lolomoRow):has(.tm-rec-controls) :is(.handleNext,.handlePrev){width:56px!important}
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia*="carousel"][data-uia$="button"],.handleNext,.handlePrev):focus-visible{outline:3px solid #fff!important;outline-offset:-3px}
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia*="carousel"][data-uia$="button"],.handleNext,.handlePrev) :is(svg,.indicator-icon){width:32px!important;height:32px!important;font-size:32px!important;pointer-events:none}
+
+:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev)::after{content:"";position:absolute;inset:0;border:1px solid #777;border-radius:8px;pointer-events:none}
+:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev) :is(button,[role="button"]){width:100%!important;height:100%!important;max-height:none!important;align-self:stretch!important;border-radius:8px!important;background:#252525!important;display:flex!important;align-items:center!important;justify-content:center!important}
 `;
 
 // Visible slot size/order remains Netflix-owned. No private mutation or playback API.
@@ -207,8 +210,19 @@ export function createRecommendationDom(environment) {
                 }
                 if (depth === 23 && fiber.return) truncated = true;
             }
-            return { at: diagnosticTime(), components, truncated };
+            return { at: diagnosticTime(), components, truncated, control: controlFacts(control) };
         } catch (_) { return { at: diagnosticTime(), unavailable: true, components }; }
+    }
+    function controlFacts(control) {
+        try {
+            const nodes = [control, control.querySelector?.('button, [role="button"]')].filter(Boolean);
+            return nodes.map(node => {
+                const rect = node.getBoundingClientRect(), style = getComputedStyle?.(node);
+                return { tag: node.tagName, rect: [rect.left, rect.top, rect.width, rect.height].map(value => Number.isFinite(value) ? Math.round(value) : null),
+                    background: String(style?.backgroundColor || '').slice(0, 80), opacity: style?.opacity,
+                    borderRadius: style?.borderRadius, clipPath: String(style?.clipPath || '').slice(0, 120) };
+            });
+        } catch (_) { return { unavailable: true }; }
     }
     function diagnosticTime() {
         try { const value = performance?.now(); return Number.isFinite(value) ? value : null; } catch (_) { return null; }
@@ -274,6 +288,12 @@ export function createRecommendationDom(environment) {
                 mounted: state.mounted, visible: state.remaining, offscreen: state.offscreen,
                 hidden: items.filter(item => choices[item.id]).length,
                 ids: items.slice(0, 120).map(item => item.id), idsTruncated: items.length > 120,
+                visibleIds: items.filter(item => {
+                    if (choices[item.id]) return false;
+                    const rect = item.host.getBoundingClientRect(), bounds = state.scroller.getBoundingClientRect();
+                    const center = rect.left + rect.width / 2;
+                    return rect.width > 1 && center >= bounds.left && center <= bounds.right;
+                }).slice(0, 120).map(item => item.id),
                 pageIndex: indicators.findIndex(item => item.getAttribute('data-indicator-selected') === 'true'),
                 scrollLeft: Number(state.scroller.scrollLeft) || 0,
                 transform: String(getComputedStyle?.(track).transform || track.style.getPropertyValue('transform') || '').slice(0, 160),
