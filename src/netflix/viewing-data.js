@@ -2,7 +2,7 @@
 export function createViewingData({ context, fetch, createCancelledError }) {
     const limits = Object.freeze({ titleBatch: 50, episodeBatch: 200, seasons: 40, episodes: 500 });
     const VIEWING_MAX_SEASONS = limits.seasons, VIEWING_MAX_EPISODES = limits.episodes;
-    const credentials = new WeakMap();
+    const credentials = new WeakMap(), seasonFailures = new Map();
 
     function beginRead() {
         const request = context.viewingRequestContext();
@@ -160,29 +160,34 @@ export function createViewingData({ context, fetch, createCancelledError }) {
     }
 
 
-    function viewingSeasonPlan(graph, record) {
+    function viewingSeasonPlan(graph, record, reject) {
         const count = record.seasonCount ?? viewingCount(readViewingGraph(graph, ['videos', record.videoId, 'seasonList', 'length']));
         const expected = record.episodeCount;
-        if (!Number.isSafeInteger(count) || count < 1 || count > VIEWING_MAX_SEASONS ||
-            (expected !== null && (!Number.isSafeInteger(expected) || expected < 1 || expected > VIEWING_MAX_EPISODES))) return null;
+        const facts = { seasonCount: Number.isFinite(count) ? count : null, episodeCount: Number.isFinite(expected) ? expected : null };
+        const fail = (reason, detail = {}) => { reject({ reason, ...facts, ...detail }); return null; };
+        if (count === null) return fail('season-count-missing');
+        if (!Number.isSafeInteger(count) || count < 1 || count > VIEWING_MAX_SEASONS) return fail('season-count-invalid');
+        if (expected !== null && (!Number.isSafeInteger(expected) || expected < 1 || expected > VIEWING_MAX_EPISODES)) return fail('episode-count-invalid');
         const list = readViewingGraph(graph, ['videos', record.videoId, 'seasonList']);
-        if (!list || typeof list !== 'object') return null;
-        if (Object.keys(list).some(key => /^\d+$/.test(key) && Number(key) >= count)) return null;
-        const seasons = [];
-        const seen = new Set();
-        let total = 0;
+        if (!list || typeof list !== 'object') return fail('season-list-missing');
+        if (Object.keys(list).some(key => /^\d+$/.test(key) && Number(key) >= count)) return fail('season-list-exceeds-count');
+        const seasons = [], seen = new Set(); let total = 0;
         for (let index = 0; index < count; index++) {
             const id = viewingReferenceId(list[index], 'seasons');
             const summary = id ? readViewingGraph(graph, ['seasons', id, 'summary']) : null;
             const length = viewingCount(summary?.length ?? readViewingGraph(graph, ['seasons', id, 'length']));
-            if (!id || seen.has(id) || !Number.isSafeInteger(length) || length > VIEWING_MAX_EPISODES) return null;
-            seen.add(id);
-            total += length;
-            if (total > VIEWING_MAX_EPISODES || (expected !== null && total > expected)) return null;
+            if (!id) return fail('season-reference-missing', { index });
+            if (seen.has(id)) return fail('season-reference-duplicate', { index });
+            if (length === null) return fail('season-length-missing', { index });
+            if (!Number.isSafeInteger(length) || length > VIEWING_MAX_EPISODES) return fail('season-length-invalid', { index });
+            seen.add(id); total += length;
+            if (total > VIEWING_MAX_EPISODES) return fail('episode-total-limit', { total });
+            if (expected !== null && total > expected) return fail('episode-count-mismatch', { total });
             seasons.push({ id, count: length });
         }
-        return total > 0 && (expected === null || total === expected)
-            ? { videoId: record.videoId, expected: total, seasons } : null;
+        if (!total) return fail('season-list-empty');
+        if (expected !== null && total !== expected) return fail('episode-count-mismatch', { total });
+        return { videoId: record.videoId, expected: total, seasons };
     }
 
 
@@ -199,6 +204,7 @@ export function createViewingData({ context, fetch, createCancelledError }) {
 
     async function readSeasons(records, access, owner) {
         requireBatch(records, limits.titleBatch);
+        for (const record of records) seasonFailures.delete(record.videoId);
         let requested = 0;
         const paths = records.flatMap(record => {
             const count = Number.isSafeInteger(record.seasonCount) && record.seasonCount > 0
@@ -211,7 +217,12 @@ export function createViewingData({ context, fetch, createCancelledError }) {
         });
         if (requested > limits.episodeBatch) throw new Error('VIEWING_STATUS_BATCH');
         const graph = await requestGraph(paths, access, owner);
-        return records.map(record => viewingSeasonPlan(graph, record)).filter(Boolean);
+        return records.map(record => {
+            seasonFailures.delete(record.videoId);
+            const plan = viewingSeasonPlan(graph, record, facts => seasonFailures.set(record.videoId, facts));
+            while (seasonFailures.size > 24) seasonFailures.delete(seasonFailures.keys().next().value);
+            return plan;
+        }).filter(Boolean);
     }
 
     function episodeData(graph, id) {
@@ -251,5 +262,6 @@ export function createViewingData({ context, fetch, createCancelledError }) {
         return new Map(ids.map(id => [String(id), episodeData(graph, String(id))]));
     }
 
-    return Object.freeze({ limits, beginRead, readTitles, readSeasons, readEpisodes, readDirectEpisodes });
+    return Object.freeze({ limits, beginRead, readTitles, readSeasons, readEpisodes, readDirectEpisodes,
+        coverageDiagnostic: id => seasonFailures.has(id) ? { ...seasonFailures.get(id) } : null });
 }

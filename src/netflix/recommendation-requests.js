@@ -1,7 +1,8 @@
 // Temporary copied evidence for the native GraphQL pagination/render contract.
 export function createRecommendationRequests(environment) {
     const { location, performance } = environment;
-    const original = environment.fetch, records = [], readers = new Set();
+    const original = environment.fetch, records = [], readers = new Set(), responseLeases = [], responseRecords = new WeakMap();
+    let responseReads = 0;
     let active = true, until = -1, dropped = 0, failures = 0, intercepted = 0, graphqlCalls = 0;
     const now = () => performance?.now() ?? Date.now();
     function responseFacts(root) {
@@ -68,17 +69,58 @@ export function createRecommendationRequests(environment) {
                 if (/^[a-f0-9]{64}$/i.test(hash || '')) record.queryHash = hash;
             }
             records.push(record); if (records.length > 20) { records.shift(); dropped++; }
-            Promise.resolve(result).then(response => { if (active) void inspect(response, record); }, () => { if (active) record.failed = true; });
+            Promise.resolve(result).then(response => { if (active) { responseRecords.set(response, record); void inspect(response, record); } }, () => { if (active) record.failed = true; });
         } catch (_) { failures++; }
         return result;
+    }
+    // Reading the response can still be observed when a client retained fetch before our lease.
+    const prototypes = new Set();
+    for (const root of [environment, environment.window, environment.window?.wrappedJSObject]) {
+        try { const prototype = root?.Response?.prototype; if (prototype) prototypes.add(prototype); } catch (_) {}
+    }
+    for (const prototype of prototypes) for (const method of ['json', 'text']) {
+        try {
+            const descriptor = Object.getOwnPropertyDescriptor(prototype, method), original = descriptor?.value;
+            if (typeof original !== 'function' || !descriptor.writable) continue;
+            function wrappedRead(...args) {
+                const result = original.apply(this, args);
+                try {
+                    if (!active || now() > until) return result;
+                    const url = new URL(this.url, location.href);
+                    if (url.origin !== location.origin || !/graphql/i.test(url.pathname)) return result;
+                    responseReads++;
+                    const response = this, at = now();
+                    Promise.resolve(result).then(value => {
+                        if (!active) return;
+                        try {
+                            if (method === 'text' && (typeof value !== 'string' || value.length > 256 * 1024)) { dropped++; return; }
+                            let record = responseRecords.get(response);
+                            if (!record) {
+                                record = { at, source: 'response-' + method, operation: 'unknown', variables: [], persistedQuery: false };
+                                responseRecords.set(response, record); records.push(record);
+                                if (records.length > 20) { records.shift(); dropped++; }
+                            }
+                            record.response = responseFacts(method === 'text' ? JSON.parse(value) : value);
+                        } catch (_) { failures++; }
+                    }, () => {});
+                } catch (_) { failures++; }
+                return result;
+            }
+            Object.defineProperty(prototype, method, { ...descriptor, value: wrappedRead });
+            responseLeases.push({ prototype, method, descriptor, wrappedRead });
+        } catch (_) { failures++; }
     }
     let installed = false;
     try { if (typeof original === 'function') { environment.fetch = wrapped; installed = environment.fetch === wrapped; } } catch (_) {}
     return { begin() { try { until = now() + 5000; } catch (_) { until = -1; failures++; } }, read() {
-        return { installed, intercepted, graphqlCalls, failures, dropped, pendingResponses: readers.size, records: JSON.parse(JSON.stringify(records)) };
+        return { installed, responseHooks: responseLeases.length, responseReads, intercepted, graphqlCalls, failures, dropped, pendingResponses: readers.size, records: JSON.parse(JSON.stringify(records)) };
     }, dispose() {
         active = false;
         try { if (environment.fetch === wrapped) environment.fetch = original; } catch (_) {}
+        for (const { prototype, method, descriptor, wrappedRead } of responseLeases) try {
+            if (Object.getOwnPropertyDescriptor(prototype, method)?.value === wrappedRead) Object.defineProperty(prototype, method, descriptor);
+        } catch (_) {}
+        responseLeases.length = 0;
         for (const reader of readers) try { Promise.resolve(reader.cancel()).catch(() => {}); } catch (_) {}
         readers.clear(); records.length = 0;
     } };

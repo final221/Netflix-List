@@ -230,7 +230,13 @@ export function createRecommendationDom(environment) {
                     const keys = Object.keys(value), fields = Array.isArray(value) ? [{ name: 'stateArray', type: 'array', length: value.length,
                         elements: Array.from({ length: Math.min(value.length, 4) }, (_, index) => {
                             const descriptor = Object.getOwnPropertyDescriptor(value, String(index)), child = descriptor?.value;
-                            return { type: descriptor?.get ? 'accessor' : typeof child, ...(Array.isArray(child) ? { length: child.length } : {}) };
+                            return { type: descriptor?.get ? 'accessor' : typeof child, ...(Array.isArray(child) ? { length: child.length } : {}),
+                                ...(child && typeof child === 'object' ? { fields: Object.keys(child).filter(key => !/auth|token|cookie|credential|profile|account|session/i.test(key)).slice(0, 12).map(key => {
+                                    const descriptor = Object.getOwnPropertyDescriptor(child, key), value = descriptor?.value;
+                                    return { name: key.slice(0, 80), type: descriptor?.get ? 'accessor' : typeof value,
+                                        ...(Array.isArray(value) ? { length: value.length } : {}),
+                                        ...(/count|index|offset|limit|pageSize/i.test(key) && Number.isSafeInteger(value) && value >= 0 ? { value } : {}) };
+                                }) } : {}) };
                         }), elementsTruncated: value.length > 4 }] : [];
                     for (const name of keys.slice(0, 40)) {
                         if (/^data-|^tabIndex$|^next$|^baseState$|^baseQueue$|^queue$/i.test(name)) continue;

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.13
+// @version      1.9.14
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -8027,7 +8027,7 @@ ${CARD_ACTION_STYLES}
   function createViewingData({ context, fetch, createCancelledError }) {
     const limits = Object.freeze({ titleBatch: 50, episodeBatch: 200, seasons: 40, episodes: 500 });
     const VIEWING_MAX_SEASONS = limits.seasons, VIEWING_MAX_EPISODES = limits.episodes;
-    const credentials = /* @__PURE__ */ new WeakMap();
+    const credentials = /* @__PURE__ */ new WeakMap(), seasonFailures = /* @__PURE__ */ new Map();
     function beginRead() {
       const request = context.viewingRequestContext();
       if (!request) return null;
@@ -8166,27 +8166,39 @@ ${CARD_ACTION_STYLES}
       const path = Array.isArray(value) ? value : value?.$type === "ref" ? value.value : null;
       return Array.isArray(path) && path.length === 2 && path[0] === kind && /^\d+$/.test(String(path[1])) ? String(path[1]) : "";
     }
-    function viewingSeasonPlan(graph, record) {
+    function viewingSeasonPlan(graph, record, reject) {
       const count = record.seasonCount ?? viewingCount(readViewingGraph(graph, ["videos", record.videoId, "seasonList", "length"]));
       const expected = record.episodeCount;
-      if (!Number.isSafeInteger(count) || count < 1 || count > VIEWING_MAX_SEASONS || expected !== null && (!Number.isSafeInteger(expected) || expected < 1 || expected > VIEWING_MAX_EPISODES)) return null;
+      const facts = { seasonCount: Number.isFinite(count) ? count : null, episodeCount: Number.isFinite(expected) ? expected : null };
+      const fail = (reason, detail = {}) => {
+        reject({ reason, ...facts, ...detail });
+        return null;
+      };
+      if (count === null) return fail("season-count-missing");
+      if (!Number.isSafeInteger(count) || count < 1 || count > VIEWING_MAX_SEASONS) return fail("season-count-invalid");
+      if (expected !== null && (!Number.isSafeInteger(expected) || expected < 1 || expected > VIEWING_MAX_EPISODES)) return fail("episode-count-invalid");
       const list = readViewingGraph(graph, ["videos", record.videoId, "seasonList"]);
-      if (!list || typeof list !== "object") return null;
-      if (Object.keys(list).some((key) => /^\d+$/.test(key) && Number(key) >= count)) return null;
-      const seasons = [];
-      const seen = /* @__PURE__ */ new Set();
+      if (!list || typeof list !== "object") return fail("season-list-missing");
+      if (Object.keys(list).some((key) => /^\d+$/.test(key) && Number(key) >= count)) return fail("season-list-exceeds-count");
+      const seasons = [], seen = /* @__PURE__ */ new Set();
       let total = 0;
       for (let index = 0; index < count; index++) {
         const id = viewingReferenceId(list[index], "seasons");
         const summary = id ? readViewingGraph(graph, ["seasons", id, "summary"]) : null;
         const length = viewingCount(summary?.length ?? readViewingGraph(graph, ["seasons", id, "length"]));
-        if (!id || seen.has(id) || !Number.isSafeInteger(length) || length > VIEWING_MAX_EPISODES) return null;
+        if (!id) return fail("season-reference-missing", { index });
+        if (seen.has(id)) return fail("season-reference-duplicate", { index });
+        if (length === null) return fail("season-length-missing", { index });
+        if (!Number.isSafeInteger(length) || length > VIEWING_MAX_EPISODES) return fail("season-length-invalid", { index });
         seen.add(id);
         total += length;
-        if (total > VIEWING_MAX_EPISODES || expected !== null && total > expected) return null;
+        if (total > VIEWING_MAX_EPISODES) return fail("episode-total-limit", { total });
+        if (expected !== null && total > expected) return fail("episode-count-mismatch", { total });
         seasons.push({ id, count: length });
       }
-      return total > 0 && (expected === null || total === expected) ? { videoId: record.videoId, expected: total, seasons } : null;
+      if (!total) return fail("season-list-empty");
+      if (expected !== null && total !== expected) return fail("episode-count-mismatch", { total });
+      return { videoId: record.videoId, expected: total, seasons };
     }
     function requireBatch(values, max) {
       if (!Array.isArray(values) || !values.length || values.length > max) throw new Error("VIEWING_STATUS_BATCH");
@@ -8202,6 +8214,7 @@ ${CARD_ACTION_STYLES}
     }
     async function readSeasons(records, access, owner) {
       requireBatch(records, limits.titleBatch);
+      for (const record of records) seasonFailures.delete(record.videoId);
       let requested = 0;
       const paths = records.flatMap((record) => {
         const count = Number.isSafeInteger(record.seasonCount) && record.seasonCount > 0 ? Math.min(record.seasonCount, limits.seasons) : limits.seasons;
@@ -8218,7 +8231,12 @@ ${CARD_ACTION_STYLES}
       });
       if (requested > limits.episodeBatch) throw new Error("VIEWING_STATUS_BATCH");
       const graph = await requestGraph(paths, access, owner);
-      return records.map((record) => viewingSeasonPlan(graph, record)).filter(Boolean);
+      return records.map((record) => {
+        seasonFailures.delete(record.videoId);
+        const plan = viewingSeasonPlan(graph, record, (facts) => seasonFailures.set(record.videoId, facts));
+        while (seasonFailures.size > 24) seasonFailures.delete(seasonFailures.keys().next().value);
+        return plan;
+      }).filter(Boolean);
     }
     function episodeData(graph, id) {
       const fetched = id ? viewingVideoRecord(graph, id) : null;
@@ -8262,7 +8280,15 @@ ${CARD_ACTION_STYLES}
       ]], access, owner);
       return new Map(ids.map((id) => [String(id), episodeData(graph, String(id))]));
     }
-    return Object.freeze({ limits, beginRead, readTitles, readSeasons, readEpisodes, readDirectEpisodes });
+    return Object.freeze({
+      limits,
+      beginRead,
+      readTitles,
+      readSeasons,
+      readEpisodes,
+      readDirectEpisodes,
+      coverageDiagnostic: (id) => seasonFailures.has(id) ? { ...seasonFailures.get(id) } : null
+    });
   }
 
   // src/viewing/completion.js
@@ -9207,7 +9233,7 @@ ${CARD_ACTION_STYLES}
     const cancelled = () => new Error("BROWSING_VIEWING_RETIRED");
     data ||= createViewingData({ context, fetch: (...args) => environment.fetch(...args), createCancelledError: cancelled });
     let generation = 0, profile = null, running = false, requests = 0, controller = null, timer = null, retryTimer = null, windowStart = 0, windowRequests = 0, cooldownUntil = 0;
-    const types = /* @__PURE__ */ new Map(), coverage = /* @__PURE__ */ new Map(), pending = /* @__PURE__ */ new Map(), checked = /* @__PURE__ */ new Set(), attempts = /* @__PURE__ */ new Map(), failed = /* @__PURE__ */ new Set();
+    const inFlight = /* @__PURE__ */ new Set(), types = /* @__PURE__ */ new Map(), coverage = /* @__PURE__ */ new Map(), pending = /* @__PURE__ */ new Map(), checked = /* @__PURE__ */ new Set(), attempts = /* @__PURE__ */ new Map(), failed = /* @__PURE__ */ new Set();
     function guard(owner = generation) {
       if (owner !== generation || !profile || context.activeProfile() !== profile || !isCurrent()) throw cancelled();
     }
@@ -9227,6 +9253,7 @@ ${CARD_ACTION_STYLES}
       cooldownUntil = 0;
       attempts.clear();
       failed.clear();
+      inFlight.clear();
       pending.clear();
       checked.clear();
       types.clear();
@@ -9251,7 +9278,7 @@ ${CARD_ACTION_STYLES}
           failed.delete(id);
           updated = true;
         }
-        if (!ready(id) && !failed.has(id) && !pending.has(id) && pending.size < 500) pending.set(id, 0);
+        if (!ready(id) && !failed.has(id) && !inFlight.has(id) && !pending.has(id) && pending.size < 500) pending.set(id, 0);
       }
       pump();
       return updated;
@@ -9312,6 +9339,7 @@ ${CARD_ACTION_STYLES}
           if (!ids.length) break;
           ids.forEach((id) => {
             pending.delete(id);
+            inFlight.add(id);
             attempts.set(id, (attempts.get(id) || 0) + 1);
           });
           try {
@@ -9334,6 +9362,7 @@ ${CARD_ACTION_STYLES}
           }
           guard(owner);
           for (const id of ids) {
+            inFlight.delete(id);
             if (ready(id)) {
               checked.add(id);
               attempts.delete(id);
@@ -9354,7 +9383,7 @@ ${CARD_ACTION_STYLES}
     }
     function retry(id) {
       guard();
-      if (ready(id)) return false;
+      if (ready(id) || inFlight.has(id)) return false;
       failed.delete(id);
       attempts.delete(id);
       pending.set(id, 0);
@@ -9393,7 +9422,7 @@ ${CARD_ACTION_STYLES}
       choice: choices.choice,
       ids: () => choices.ids().filter((id) => choices.status(id) === "complete"),
       presentation: choices.presentation,
-      diagnostics: () => ({ requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, failedTitles: [...failed].slice(0, 12).map((id) => ({ id, type: type(id) || "unknown", attempts: attempts.get(id) || 0, missing: type(id) === "series" ? "coverage" : "type" })), failedTitlesTruncated: failed.size > 12, retrying: retryTimer !== null, windowRequests })
+      diagnostics: () => ({ requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, failedTitles: [...failed].slice(0, 12).map((id) => ({ id, type: type(id) || "unknown", attempts: attempts.get(id) || 0, missing: type(id) === "series" ? "coverage" : "type", coverageFailure: data.coverageDiagnostic?.(id) || null })), failedTitlesTruncated: failed.size > 12, retrying: retryTimer !== null, windowRequests })
     });
   }
 
@@ -19441,7 +19470,8 @@ ${CARD_ACTION_STYLES}
   // src/netflix/recommendation-requests.js
   function createRecommendationRequests(environment) {
     const { location, performance } = environment;
-    const original = environment.fetch, records = [], readers = /* @__PURE__ */ new Set();
+    const original = environment.fetch, records = [], readers = /* @__PURE__ */ new Set(), responseLeases = [], responseRecords = /* @__PURE__ */ new WeakMap();
+    let responseReads = 0;
     let active = true, until = -1, dropped = 0, failures = 0, intercepted = 0, graphqlCalls = 0;
     const now = () => performance?.now() ?? Date.now();
     function responseFacts(root) {
@@ -19551,7 +19581,10 @@ ${CARD_ACTION_STYLES}
           dropped++;
         }
         Promise.resolve(result).then((response) => {
-          if (active) void inspect(response, record);
+          if (active) {
+            responseRecords.set(response, record);
+            void inspect(response, record);
+          }
         }, () => {
           if (active) record.failed = true;
         });
@@ -19559,6 +19592,60 @@ ${CARD_ACTION_STYLES}
         failures++;
       }
       return result;
+    }
+    const prototypes = /* @__PURE__ */ new Set();
+    for (const root of [environment, environment.window, environment.window?.wrappedJSObject]) {
+      try {
+        const prototype = root?.Response?.prototype;
+        if (prototype) prototypes.add(prototype);
+      } catch (_) {
+      }
+    }
+    for (const prototype of prototypes) for (const method of ["json", "text"]) {
+      try {
+        let wrappedRead = function(...args) {
+          const result = original2.apply(this, args);
+          try {
+            if (!active || now() > until) return result;
+            const url = new URL(this.url, location.href);
+            if (url.origin !== location.origin || !/graphql/i.test(url.pathname)) return result;
+            responseReads++;
+            const response = this, at = now();
+            Promise.resolve(result).then((value) => {
+              if (!active) return;
+              try {
+                if (method === "text" && (typeof value !== "string" || value.length > 256 * 1024)) {
+                  dropped++;
+                  return;
+                }
+                let record = responseRecords.get(response);
+                if (!record) {
+                  record = { at, source: "response-" + method, operation: "unknown", variables: [], persistedQuery: false };
+                  responseRecords.set(response, record);
+                  records.push(record);
+                  if (records.length > 20) {
+                    records.shift();
+                    dropped++;
+                  }
+                }
+                record.response = responseFacts(method === "text" ? JSON.parse(value) : value);
+              } catch (_) {
+                failures++;
+              }
+            }, () => {
+            });
+          } catch (_) {
+            failures++;
+          }
+          return result;
+        };
+        const descriptor = Object.getOwnPropertyDescriptor(prototype, method), original2 = descriptor?.value;
+        if (typeof original2 !== "function" || !descriptor.writable) continue;
+        Object.defineProperty(prototype, method, { ...descriptor, value: wrappedRead });
+        responseLeases.push({ prototype, method, descriptor, wrappedRead });
+      } catch (_) {
+        failures++;
+      }
     }
     let installed = false;
     try {
@@ -19576,13 +19663,18 @@ ${CARD_ACTION_STYLES}
         failures++;
       }
     }, read() {
-      return { installed, intercepted, graphqlCalls, failures, dropped, pendingResponses: readers.size, records: JSON.parse(JSON.stringify(records)) };
+      return { installed, responseHooks: responseLeases.length, responseReads, intercepted, graphqlCalls, failures, dropped, pendingResponses: readers.size, records: JSON.parse(JSON.stringify(records)) };
     }, dispose() {
       active = false;
       try {
         if (environment.fetch === wrapped) environment.fetch = original;
       } catch (_) {
       }
+      for (const { prototype, method, descriptor, wrappedRead } of responseLeases) try {
+        if (Object.getOwnPropertyDescriptor(prototype, method)?.value === wrappedRead) Object.defineProperty(prototype, method, descriptor);
+      } catch (_) {
+      }
+      responseLeases.length = 0;
       for (const reader of readers) try {
         Promise.resolve(reader.cancel()).catch(() => {
         });
@@ -19884,7 +19976,19 @@ ${CARD_ACTION_STYLES}
               length: value.length,
               elements: Array.from({ length: Math.min(value.length, 4) }, (_, index) => {
                 const descriptor = Object.getOwnPropertyDescriptor(value, String(index)), child = descriptor?.value;
-                return { type: descriptor?.get ? "accessor" : typeof child, ...Array.isArray(child) ? { length: child.length } : {} };
+                return {
+                  type: descriptor?.get ? "accessor" : typeof child,
+                  ...Array.isArray(child) ? { length: child.length } : {},
+                  ...child && typeof child === "object" ? { fields: Object.keys(child).filter((key2) => !/auth|token|cookie|credential|profile|account|session/i.test(key2)).slice(0, 12).map((key2) => {
+                    const descriptor2 = Object.getOwnPropertyDescriptor(child, key2), value2 = descriptor2?.value;
+                    return {
+                      name: key2.slice(0, 80),
+                      type: descriptor2?.get ? "accessor" : typeof value2,
+                      ...Array.isArray(value2) ? { length: value2.length } : {},
+                      .../count|index|offset|limit|pageSize/i.test(key2) && Number.isSafeInteger(value2) && value2 >= 0 ? { value: value2 } : {}
+                    };
+                  }) } : {}
+                };
               }),
               elementsTruncated: value.length > 4
             }] : [];
@@ -21113,7 +21217,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.13";
+  var SCRIPT_VERSION = "1.9.14";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

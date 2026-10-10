@@ -67,3 +67,23 @@ test('an old profile batch rejection cannot pause the new profile queue', async 
     rejectOld(Error('VIEWING_STATUS_HTTP_429')); await b.scheduler.flush();
     b.viewing.observe([{ id: '2' }]); await b.scheduler.flush(); assert.equal(b.viewing.ready('2'), true); b.viewing.dispose();
 });
+
+
+test('observing an in-flight title cannot re-admit it or reset its attempt budget', async () => {
+    let resolve, reads = 0;
+    const b = setup({ readTitles(ids) { reads++; return new Promise(done => { resolve = () => done(movies(ids)); }); } });
+    b.viewing.observe([{ id: '1' }]); await b.scheduler.flush();
+    b.viewing.observe([{ id: '1' }]); assert.equal(b.viewing.retry('1'), false);
+    assert.equal(b.viewing.diagnostics().pending, 0); resolve(); await b.scheduler.flush();
+    assert.equal(reads, 1); assert.equal(b.viewing.ready('1'), true); b.viewing.dispose();
+});
+
+test('failed series export the season-validation reason and stop after three attempts despite rescans', async () => {
+    let b, reads = 0;
+    b = setup({ async readTitles(ids) { reads++; b.viewing.observe(ids.map(id => ({ id })));
+        return new Map(ids.map(videoId => [videoId, { videoId, type: 'show' }])); },
+        async readSeasons() { return []; }, coverageDiagnostic: () => ({ reason: 'season-length-missing', index: 0 }) });
+    b.viewing.observe([{ id: '1' }]); await b.scheduler.flush(); await b.scheduler.advance(1000); await b.scheduler.advance(2000);
+    assert.equal(reads, 3); assert.equal(b.viewing.diagnostics().pending, 0);
+    assert.equal(b.viewing.diagnostics().failedTitles[0].coverageFailure.reason, 'season-length-missing'); b.viewing.dispose();
+});

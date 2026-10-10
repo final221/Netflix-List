@@ -950,3 +950,17 @@ test('episode normalization preserves reference identity and diagnostic shapes w
     assert.equal(episodes[2].record, null, 'a movie reference cannot qualify as episode progress');
     assert.ok(!JSON.stringify(episodes).includes('$type'));
 });
+
+
+test('series coverage failures identify the exact rejected metadata and clear on recovery', async () => {
+    const e = viewingDataEnvironment(), access = e.data.beginRead(), record = { videoId: '1', seasonCount: 1, episodeCount: 3 };
+    const graph = { videos: { 1: { seasonList: { 0: reference('seasons', 10) } } }, seasons: { 10: { length: atom(2) } } };
+    e.responses.push({ graph }); assert.deepEqual(await e.data.readSeasons([record], access, e.owner), []);
+    assert.deepEqual(e.data.coverageDiagnostic('1'), { reason: 'episode-count-mismatch', seasonCount: 1, episodeCount: 3, total: 2 });
+    delete graph.seasons[10].length; e.responses.push({ graph }); await e.data.readSeasons([record], access, e.owner);
+    assert.equal(e.data.coverageDiagnostic('1').reason, 'season-length-missing');
+    graph.seasons[10].length = atom(3); e.responses.push({ graph });
+    assert.equal((await e.data.readSeasons([record], access, e.owner)).length, 1); assert.equal(e.data.coverageDiagnostic('1'), null);
+    e.responses.push({ graph: {} }); await e.data.readSeasons(Array.from({ length: 40 }, (_, i) => ({ ...record, videoId: String(i) })), access, e.owner);
+    assert.equal(e.data.coverageDiagnostic('0'), null); assert.equal(e.data.coverageDiagnostic('39').reason, 'season-list-missing');
+});

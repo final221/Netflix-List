@@ -72,12 +72,16 @@ Same startup/five exports/five arrows/six dismissals. Arrow BUTTON56×64/rgb37/o
 
 ## Session — 1.9.12
 
-Four detailed captures, Windows/Firefox157/2560×1279/DPR1;2026-10-11 UTC+02;runtime ref unknown. Uncommitted sources in logs/:
-- 1.9.12-2026-10-10T22-54-51-308Z-4d4007f1.txt; 2026-10-11T00:54:51.306+02:00; SHA256 e26e6f1138a917747e1be10524e99353f1aa336a0ac083996495dd450797235f.
-- 1.9.12-2026-10-10T22-55-20-524Z-679bc558.txt; 2026-10-11T00:55:20.520+02:00; SHA256 3c9169d6f2ed212c9df2a3296f3a2a80e05099bfbc5ecaf8a010eaad30dc49ca.
-- 1.9.12-2026-10-10T22-55-42-259Z-77b29f49.txt; 2026-10-11T00:55:42.255+02:00; SHA256 07be9618c5f75b99fa7920a250f5a19d516c6abca5289d877c8e0073f2c34ebd.
-- 1.9.12-2026-10-10T22-56-38-068Z-94716a3d.txt; 2026-10-11T00:56:38.053+02:00; SHA256 46e93955aeb7f247138689c619931afda46d797533842bb57036f1bd85fd827a.
+Four detailed captures, Windows/Firefox157/2560×1279/DPR1;2026-10-11 UTC+02;runtime ref unknown. Uncommitted source filenames/copiedAt/SHA256 retained in logs/knowledge.md at d9dcc9b (summary revision, not runtime).
 Same visit:0→7arrows/6watched actions/89→162movements/no drops or diagnostic failures. Actual arrow[2460,568,56,238]/right2516 vs viewport2560;opaque rgb37. Parent0×0 at[2488,704];next parent2560×279. All vertical hit samples inside. Seven arrows:0→8→8first-observed IDs at200/1200/5000ms (first closed before next arrow);not proof of fresh ranking or isolated arrow causality. GraphQL timings present/0GraphQL wrapper captures. Final284checked/132requests/3series coverage failures after3attempts/0pending. One cancelled download followed by successful exports. Compact mode untested by these captures;no horizontal hit tests or timed action outcomes.
+
+## Session — 1.9.13
+
+Three detailed captures, 2026-10-11 UTC+02;Windows/Firefox157/2560×1279/DPR1;runtime ref unknown. Uncommitted logs/ sources:
+- 1.9.13-2026-10-10T23-49-07-974Z-fcaa07eb.txt; 2026-10-11T01:49:07.973+02:00; SHA256 1146840aa1c104ec087035bf0ab4717cd06b0cdf20851f9ebea65cd407e1a3c0.
+- 1.9.13-2026-10-10T23-49-17-922Z-6a949035.txt; 2026-10-11T01:49:17.919+02:00; SHA256 980012f7548d689c1a190c4c896a31ad309469da4cbc0da7c01877bbe7852870.
+- 1.9.13-2026-10-10T23-49-25-948Z-847ac05f.txt; 2026-10-11T01:49:25.944+02:00; SHA256 e31065fdd2ee77a7aeeb327350039813297b940ac78dadf6b3c879573cc20f0c.
+Same visit/baseline+2next arrows;no saved actions. Row6:13→25→26mounted;first arrow4/12/12first-observed at200/1200/5000ms;second0/8(final timer pending). Arrow[2460,284,100,199]/right2560/rgba37,.32;edge2559hit inside. Two GraphQL timings+3/+116ms;wrapper4intercepted/0GraphQL. Hook dependencies only shallow shapes. Viewing170→177checked/87→93requests;three series(81663323,81969861,81171925) lack coverage after3attempts/0pending;field rejection unspecified. No warnings/dropped movements;compact mode, saved-action outcomes and independent preload untested.
 
 ## Evidence limits
 

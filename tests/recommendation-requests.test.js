@@ -57,3 +57,49 @@ test('URL fetch inputs retain native identity and expose interception versus Gra
     assert.equal(probe.read().intercepted, 2); assert.equal(probe.read().graphqlCalls, 1);
     assert.equal(probe.read().records[0].operation, 'Recommendations'); probe.dispose();
 });
+
+
+test('saved fetch clients remain observable at response reads without changing method promise or receiver', async () => {
+    const payload = { data: { titles: [{ id: 123 }], pageInfo: { hasNextPage: true, endCursor: 'secret' }, authToken: 'secret' } };
+    const promise = Promise.resolve(payload); let receiver;
+    class PageResponse { constructor() { this.url = 'https://www.netflix.com/graphql?auth=secret'; }
+        json() { receiver = this; return promise; } text() { return Promise.resolve(JSON.stringify(payload)); } }
+    const original = PageResponse.prototype.json, env = { Response: PageResponse,
+        location: { href: 'https://www.netflix.com/browse', origin: 'https://www.netflix.com' }, performance: { now: () => 100 }, fetch: () => promise };
+    const probe = createRecommendationRequests(env); probe.begin(); const response = new PageResponse();
+    assert.equal(response.json(), promise); assert.equal(receiver, response); await promise; await Promise.resolve();
+    const facts = probe.read(); assert.equal(facts.graphqlCalls, 0); assert.equal(facts.responseReads, 1);
+    assert.equal(facts.responseHooks, 2); assert.equal(facts.records[0].source, 'response-json');
+    assert.deepEqual(facts.records[0].response.collections[0].ids, ['123']); assert.doesNotMatch(JSON.stringify(facts), /secret|authToken|endCursor/);
+    probe.dispose(); assert.equal(PageResponse.prototype.json, original);
+});
+
+test('response leases respect window, origin, newer overrides and retired callbacks', async () => {
+    let resolve, time = 0; const promise = new Promise(done => { resolve = done; });
+    class PageResponse { constructor(url) { this.url = url; } json() { return promise; } text() { throw Error('native'); } }
+    const env = { Response: PageResponse, location: { href: 'https://www.netflix.com/browse', origin: 'https://www.netflix.com' }, performance: { now: () => time } };
+    const probe = createRecommendationRequests(env), response = new PageResponse('https://www.netflix.com/graphql');
+    assert.equal(response.json(), promise); assert.equal(probe.read().responseReads, 0);
+    probe.begin(); assert.equal(new PageResponse('https://other.com/graphql').json(), promise);
+    time = 5001; response.json(); assert.equal(probe.read().responseReads, 0);
+    time = 10; response.json(); assert.equal(probe.read().responseReads, 1);
+    assert.throws(() => response.text(), /native/); const newer = () => {}; PageResponse.prototype.json = newer;
+    probe.dispose(); resolve({ data: { titles: [{ id: 1 }] } }); await promise; await Promise.resolve();
+    assert.deepEqual(probe.read().records, []); assert.equal(PageResponse.prototype.json, newer);
+});
+
+
+test('text response evidence copies pagination and respects its size bound without consuming another body', async () => {
+    let text = JSON.stringify({ data: { items: [{ videoId: 12 }], pageInfo: { totalCount: 80 } } });
+    class PageResponse { constructor() { this.url = 'https://www.netflix.com/graphql'; } text() { return Promise.resolve(text); } }
+    const original = PageResponse.prototype.text;
+    const env = { Response: PageResponse, window: { Response: PageResponse },
+        location: { href: 'https://www.netflix.com/browse', origin: 'https://www.netflix.com' }, performance: { now: () => 10 } };
+    const probe = createRecommendationRequests(env); probe.begin();
+    assert.equal(await new PageResponse().text(), text); await Promise.resolve();
+    assert.equal(probe.read().responseHooks, 1); assert.equal(probe.read().records[0].source, 'response-text');
+    assert.deepEqual(probe.read().records[0].response.collections[0].ids, ['12']);
+    text = 'x'.repeat(256 * 1024 + 1); assert.equal((await new PageResponse().text()).length, text.length); await Promise.resolve();
+    assert.equal(probe.read().dropped, 1); assert.equal(probe.read().records.length, 1);
+    probe.dispose(); assert.equal(PageResponse.prototype.text, original);
+});
