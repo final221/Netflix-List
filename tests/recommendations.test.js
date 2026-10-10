@@ -462,3 +462,19 @@ test('row diagnostics explicitly bound row and ID samples and safely tolerate fa
     a.row.getBoundingClientRect = () => { throw new Error('native geometry unavailable'); };
     assert.doesNotThrow(() => b.feature.diagnostics()); b.feature.dispose();
 });
+
+test('consecutive native clicks partition request windows and retire the handler survey on profile replacement', () => {
+    const b = setup(), a = mount(b); let now = 100, calls = 0;
+    b.context.performance.now = () => now;
+    b.context.performance.getEntriesByType = () => [120, 220].map(startTime => ({
+        name: 'https://www.netflix.com/graphql?secret=excluded', startTime, initiatorType: 'fetch', duration: 10, transferSize: 10 }));
+    const next = nextControl(b, a.row, () => { calls++; });
+    next.__reactFiber$test = { memoizedProps: { onClick() { calls++; }, rowData: { items: [1, 2, 3] } } };
+    b.feature.check(); b.document.dispatchEvent({ type: 'click', target: next });
+    now = 200; b.document.dispatchEvent({ type: 'click', target: next }); now = 300;
+    const recent = b.feature.diagnostics().navigation.recent;
+    assert.deepEqual(recent.map(x => x.requests.entries.map(e => e.offsetMs)), [[20], [20]]);
+    assert.equal(recent[0].loading.components[0].fields[0].name, 'onClick'); assert.equal(calls, 0);
+    b.select('B'); b.feature.check(); assert.equal(b.feature.diagnostics().navigation.retained, 0);
+    b.feature.dispose();
+});

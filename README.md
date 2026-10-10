@@ -41,6 +41,8 @@ Logs remain available across Netflix SPA page/profile navigation. The export inc
 
 ## Live testing
 
+For recommendation-loader investigation in 1.9.6: update and reload Netflix, Shift-click CopyLogs for a baseline, click the affected carousel’s arrow, wait about three seconds and Shift-click CopyLogs again. Optionally repeat with a second arrow/capture. The detailed report includes bounded arrow-handler/data shapes and completed Netflix request timings; timing correlation alone cannot attribute a request to the row or prove cached recommendations.
+
 Test released versions in Netflix on Windows. Save CopyLogs downloads under logs/ for review; [logs/knowledge.md](logs/knowledge.md) retains distilled observations. Follow [the log-review procedure](AGENTS.md#live-log-review-and-retention) for retention and issue extraction.
 
 ## Repository layout

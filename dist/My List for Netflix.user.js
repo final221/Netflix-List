@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.5
+// @version      1.9.6
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -19383,7 +19383,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/netflix/recommendation-dom.js
-  function createRecommendationDom({ document, location, getComputedStyle }) {
+  function createRecommendationDom({ document, location, getComputedStyle, performance }) {
     const selector = 'a[data-uia="standard-card"][href], .title-card';
     const scrollerLeases = /* @__PURE__ */ new WeakMap();
     function styleLease(node, name, value, priority = "") {
@@ -19560,7 +19560,98 @@ ${CARD_ACTION_STYLES}
       const next = target?.closest?.('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext');
       const previous = next ? null : target?.closest?.('[data-uia="carousel-hawkins-left-button"], [data-uia="carousel-left-button"], .handlePrev');
       const control = next || previous, row = control?.closest("section, .lolomoRow");
-      return control?.isConnected && row && scan(row).length ? { row, direction: next ? "next" : "previous" } : null;
+      return control?.isConnected && row && scan(row).length ? { row, control, direction: next ? "next" : "previous" } : null;
+    }
+    function navigationStart(control) {
+      const components = [];
+      let truncated = false;
+      try {
+        const key = Object.getOwnPropertyNames(control).find((name) => name.startsWith("__reactFiber$") || name.startsWith("__reactInternalInstance$"));
+        let fiber = key && Object.getOwnPropertyDescriptor(control, key)?.value;
+        const seen = /* @__PURE__ */ new Set();
+        for (let depth = 0; fiber && depth < 24 && !seen.has(fiber); depth++, fiber = fiber.return) {
+          seen.add(fiber);
+          for (const source of ["memoizedProps", "memoizedState"]) {
+            const value = Object.getOwnPropertyDescriptor(fiber, source)?.value;
+            if (!value || typeof value !== "object") continue;
+            const keys = Object.keys(value), fields = [];
+            for (const name of keys.slice(0, 40)) {
+              if (!/click|load|fetch|pagin|cursor|item|video|title|row|list|count|next|prev|index|data|cache/i.test(name)) continue;
+              const descriptor = Object.getOwnPropertyDescriptor(value, name), child = descriptor?.value;
+              const fact = { name: name.slice(0, 80), type: descriptor?.get ? "accessor" : typeof child };
+              if (Array.isArray(child)) fact.length = child.length;
+              else if (child && typeof child === "object") {
+                const nested = Object.keys(child);
+                fact.fields = nested.slice(0, 12).map((key2) => {
+                  const descriptor2 = Object.getOwnPropertyDescriptor(child, key2), value2 = descriptor2?.value;
+                  return {
+                    name: key2.slice(0, 80),
+                    type: descriptor2?.get ? "accessor" : typeof value2,
+                    ...Array.isArray(value2) ? { length: value2.length } : {}
+                  };
+                });
+                fact.fieldsTruncated = nested.length > 12;
+              } else if (/count|index/i.test(name) && Number.isSafeInteger(child) && child >= 0) fact.value = child;
+              fields.push(fact);
+            }
+            truncated ||= keys.length > 40;
+            if (fields.length) {
+              if (components.length >= 10) {
+                truncated = true;
+                break;
+              }
+              const type = fiber.elementType || fiber.type;
+              components.push({ depth, source, component: String(typeof type === "string" ? type : type?.displayName || type?.name || "unknown").slice(0, 80), fields });
+            }
+          }
+          if (depth === 23 && fiber.return) truncated = true;
+        }
+        return { at: diagnosticTime(), components, truncated };
+      } catch (_) {
+        return { at: diagnosticTime(), unavailable: true, components };
+      }
+    }
+    function diagnosticTime() {
+      try {
+        const value = performance?.now();
+        return Number.isFinite(value) ? value : null;
+      } catch (_) {
+        return null;
+      }
+    }
+    function navigationRequests(start, stop = diagnosticTime()) {
+      try {
+        if (!Number.isFinite(start) || !Number.isFinite(stop) || !performance?.getEntriesByType) return { unavailable: true };
+        const end = Math.min(stop, start + 5e3), all = performance.getEntriesByType("resource"), entries = [];
+        let matched = 0;
+        for (const entry of all.slice(-2e3)) {
+          if (!["fetch", "xmlhttprequest"].includes(entry.initiatorType) || entry.startTime < start || entry.startTime >= end) continue;
+          const url = new URL(entry.name, location.href);
+          if (url.hostname !== "netflix.com" && !url.hostname.endsWith(".netflix.com")) continue;
+          matched++;
+          if (entries.length >= 24) continue;
+          const endpoint = /graphql/i.test(url.pathname) ? "graphql" : /\/api\//i.test(url.pathname) ? "api" : /falcor|pathEvaluator/i.test(url.pathname) ? "falcor" : "other";
+          entries.push({
+            endpoint,
+            initiator: entry.initiatorType,
+            offsetMs: Math.round(entry.startTime - start),
+            durationMs: Math.round(entry.duration),
+            transferBytes: Number(entry.transferSize) || 0
+          });
+        }
+        return {
+          windowMs: Math.max(0, end - start),
+          inspected: Math.min(all.length, 2e3),
+          bufferTruncated: all.length > 2e3,
+          matched,
+          entries,
+          truncated: matched > entries.length,
+          attribution: "time-window-only",
+          limitation: "Completed buffered entries only; absent entries do not prove cached data, and zero transfer does not prove cache use."
+        };
+      } catch (_) {
+        return { unavailable: true };
+      }
     }
     function rowDiagnostics(row, choices) {
       try {
@@ -19588,7 +19679,17 @@ ${CARD_ACTION_STYLES}
         return null;
       }
     }
-    return Object.freeze({ scan, lease, describe, refillState, loadingFacts, navigationTarget, rowDiagnostics });
+    return Object.freeze({
+      scan,
+      lease,
+      describe,
+      refillState,
+      loadingFacts,
+      navigationTarget,
+      rowDiagnostics,
+      navigationStart,
+      navigationRequests
+    });
   }
 
   // src/recommendations/refill.js
@@ -19673,7 +19774,10 @@ ${CARD_ACTION_STYLES}
         if (!navigation) return;
         const before = dom.rowDiagnostics(navigation.row, readChoices());
         if (!before) return;
-        const record = { sequence: ++sequence, direction: navigation.direction, row: navigation.row, before };
+        const loading = dom.navigationStart(navigation.control);
+        const previous = recent.at(-1);
+        if (previous) previous.until = loading.at;
+        const record = { sequence: ++sequence, direction: navigation.direction, row: navigation.row, before, loading };
         recent.push(record);
         if (recent.length > 20) recent.shift();
         log("Native recommendation arrow clicked", { sequence: record.sequence, direction: record.direction, before });
@@ -19682,13 +19786,15 @@ ${CARD_ACTION_STYLES}
       }
     }
     function snapshot() {
-      return { interactions: sequence, failures, retained: recent.length, recent: recent.map(({ sequence: sequence2, direction, row, before }) => {
+      return { interactions: sequence, failures, retained: recent.length, recent: recent.map(({ sequence: sequence2, direction, row, before, loading, until }) => {
         const after = admitted() && row.isConnected ? dom.rowDiagnostics(row, readChoices()) : null;
         return {
           sequence: sequence2,
           direction,
           before,
           afterAtExport: after,
+          loading,
+          requests: admitted() ? dom.navigationRequests(loading.at, until) : { unavailable: true },
           addedIdSample: after ? after.ids.filter((id) => !before.ids.includes(id)).slice(0, 16) : [],
           removedIdSample: after ? before.ids.filter((id) => !after.ids.includes(id)).slice(0, 16) : [],
           idComparisonTruncated: Boolean(before.idsTruncated || after?.idsTruncated)
@@ -20395,7 +20501,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.5";
+  var SCRIPT_VERSION = "1.9.6";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
