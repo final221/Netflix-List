@@ -1,3 +1,4 @@
+import { resolveObjectURL } from 'node:buffer';
 import assert from 'node:assert/strict';
 import { createApplication } from '../../src/app/application.js';
 import { createBrowser } from './browser.js';
@@ -86,10 +87,8 @@ export function sessionBrowser({ count = 6, columns = 6, viewing = false, logica
         return getReply(url, options);
     };
     paint();
-    b.context.GM_xmlhttpRequest = options => {
-        if (options.method === 'POST') savedReports.push(JSON.parse(options.data).text);
-        queueMicrotask(() => options.onload({ status: 200, responseText: JSON.stringify(options.method === 'GET'
-            ? { token: 'a'.repeat(64) } : { file: 'test-fixture.txt' }) }));
+    b.context.GM_download = options => {
+        resolveObjectURL(options.url).text().then(text => { savedReports.push(text); options.onload(); });
         return { abort() {} };
     };
     const app = createApplication({ environment: b.context, version: 'test' });

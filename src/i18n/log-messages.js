@@ -8,7 +8,7 @@ export const LOG_MESSAGES = {
     routeChangeDetected: { en: 'Route change detected', ja: '\u30da\u30fc\u30b8\u9077\u79fb\u691c\u51fa' },
     clipboardFallback: { en: 'Clipboard API failed; using fallback', ja: '\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9API\u306b\u5931\u6557\u3002fallback\u3078\u79fb\u884c' },
     execCommandCopyFailed: { en: 'execCommand(copy) failed.', ja: 'execCommand(copy) \u304c\u5931\u6557\u3057\u307e\u3057\u305f\u3002' },
-    copyLogsTooltip: { en: 'Save a compact report to the repository logs folder; Shift-click for full detail', ja: '\u7c21\u6f54\u306a\u8a3a\u65ad\u30ec\u30dd\u30fc\u30c8\u3092\u4fdd\u5b58\u3057\u307e\u3059\u3002Shift\u30af\u30ea\u30c3\u30af\u3067\u8a73\u7d30\u3092\u4fdd\u5b58\u3057\u307e\u3059' },
+    copyLogsTooltip: { en: 'Save As a compact report; choose the repository logs folder. Shift-click for full detail', ja: '\u7c21\u6f54\u306a\u8a3a\u65ad\u30ec\u30dd\u30fc\u30c8\u3092\u4fdd\u5b58\u3057\u307e\u3059\u3002Shift\u30af\u30ea\u30c3\u30af\u3067\u8a73\u7d30\u3092\u4fdd\u5b58\u3057\u307e\u3059' },
     copied: { en: 'Saved.', ja: '\u4fdd\u5b58\u3057\u307e\u3057\u305f\u3002' },
     copyLogsRequested: { en: 'CopyLogs requested', ja: 'CopyLogs\u8981\u6c42' },
     copyLogsCompleted: { en: 'CopyLogs completed', ja: 'CopyLogs\u5b8c\u4e86' },

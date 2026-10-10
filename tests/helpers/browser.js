@@ -23,7 +23,7 @@ export function createBrowser({ pathname = '/browse', grants = true, visualViewp
         };
     }
     const context = {
-        window, document, location, history, Element, HTMLElement: Element, MutationObserver, ResizeObserver: class extends MutationObserver {}, URL, AbortController,
+        window, document, location, history, Element, HTMLElement: Element, MutationObserver, ResizeObserver: class extends MutationObserver {}, URL, Blob, AbortController,
         navigator: { userAgent: 'offline-bundle-test', language: 'en',
             clipboard: { writeText: async text => { clipboard.push(text); } } },
         localStorage: storage ? { getItem: () => null, setItem() {} } : { getItem() { throw new Error('denied'); } },

@@ -10,7 +10,7 @@ import { createRecommendations } from '../recommendations/recommendations.js';
 
 export function createApplication({ environment = globalThis, version = '', createSession = createMyListSession,
     userscript = { registerMenu: environment.GM_registerMenuCommand, unregisterMenu: environment.GM_unregisterMenuCommand,
-        getValue: environment.GM_getValue, setValue: environment.GM_setValue, request: environment.GM_xmlhttpRequest } } = {}) {
+        getValue: environment.GM_getValue, setValue: environment.GM_setValue, download: environment.GM_download, downloadMode: () => environment.GM_info?.downloadMode } } = {}) {
     const { window, document, location, history, navigator, Element, queueMicrotask } = environment;
     const context = createNetflixContext({ window, document, navigator, location });
     const i18n = createI18n({ readLanguage: context.getNetflixLanguage });
@@ -18,7 +18,7 @@ export function createApplication({ environment = globalThis, version = '', crea
         isTraceEnabled: () => false });
     let active = false, session = null, settings = null, lastObservedUrl = '', routeChangeSequence = 0, revision = 0, sessionEpoch = 0;
     const hooks = [], logHistory = [];
-    const saver = createLogSaver({ request: userscript.request, version });
+    const saver = createLogSaver({ download: userscript.download, readMode: userscript.downloadMode, version, Blob: environment.Blob, URL: environment.URL });
     const browsingReport = createReport({ logger, version, document, navigator, tLog: i18n.tLog, writeText: saver.save,
         readEnvironment: () => ({ url: location.href, userAgent: navigator.userAgent, browserLanguage: navigator.language,
             htmlLanguage: context.getHtmlLanguage(), netflixLanguage: context.getNetflixLanguage(), displayLanguage: i18n.getUiLocale(),

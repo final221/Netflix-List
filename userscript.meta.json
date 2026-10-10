@@ -13,13 +13,10 @@
     "GM_unregisterMenuCommand",
     "GM_getValue",
     "GM_setValue",
-    "GM_xmlhttpRequest"
+    "GM_download"
   ],
   "noframes": true,
   "namespace": "local.netflix.mylist.grid",
   "updateURL": "https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js",
-  "downloadURL": "https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js",
-  "connect": [
-    "127.0.0.1"
-  ]
+  "downloadURL": "https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js"
 }

@@ -1,3 +1,4 @@
+import { resolveObjectURL } from 'node:buffer';
 import { viewingVideo, atom, reference } from './helpers/fixtures.js';
 import { mountPopulatedMyList } from './helpers/populated-browser.js';
 import { createBrowser } from './helpers/browser.js';
@@ -165,14 +166,12 @@ test('generated runtime localizes live menu commands and releases stylesheet on 
     await b.navigate('/browse');
 });
 
-test('generated CopyLogs saves reports through the receiver and retains logs across route entries', async () => {
+test('generated CopyLogs saves reports through Save As and retains logs across route entries', async () => {
     const b = browser();
-    const saved = [], local = [];
-    b.context.GM_xmlhttpRequest = options => {
-        local.push(options);
-        if (options.method === 'POST') saved.push(JSON.parse(options.data).text);
-        queueMicrotask(() => options.onload({ status: 200, responseText: JSON.stringify(options.method === 'GET'
-            ? { token: 'a'.repeat(64) } : { file: `${releaseVersion}-fixture.txt` }) }));
+    const saved = [];
+    b.context.GM_download = options => {
+        assert.equal(options.saveAs, true); assert.ok(options.url.startsWith('blob:'));
+        resolveObjectURL(options.url).text().then(text => { saved.push(text); options.onload(); });
         return { abort() {} };
     };
     b.mountMyList();
@@ -206,16 +205,14 @@ test('generated CopyLogs saves reports through the receiver and retains logs acr
     assert.match(saved[2], /exportMode: detailed/);
     assert.equal(saved[2].match(/Script started/g).length, 1);
     assert.equal(b.requests.length, beforeDetailed);
-    assert.equal(local.length, 6); assert.ok(local.every(options => options.url.startsWith('http://127.0.0.1:43127/')));
     await b.navigate('/browse');
 });
 
 test('one universal CopyLogs button survives Netflix routes and exports the retired My List snapshot', async () => {
     const b = browser(), saved = [];
-    b.context.GM_xmlhttpRequest = options => {
-        if (options.method === 'POST') saved.push(JSON.parse(options.data).text);
-        queueMicrotask(() => options.onload({ status: 200, responseText: JSON.stringify(options.method === 'GET'
-            ? { token: 'a'.repeat(64) } : { file: 'capture.txt' }) }));
+    b.context.GM_download = options => {
+        assert.equal(options.saveAs, true); assert.ok(options.url.startsWith('blob:'));
+        resolveObjectURL(options.url).text().then(text => { saved.push(text); options.onload(); });
         return { abort() {} };
     };
     b.mountMyList(); b.start(); const button = b.document.getElementById('tm-netflix-copylogs'); assert.ok(button);
@@ -308,7 +305,7 @@ test('build is deterministic, self-contained and preserves metadata/version', as
     assert.match(header, /@run-at\s+document-idle/);
     assert.match(header, /@noframes\s*$/m);
     assert.deepEqual([...header.matchAll(/@grant\s+(\S+)/g)].map(match => match[1]),
-        ['GM_registerMenuCommand', 'GM_unregisterMenuCommand', 'GM_getValue', 'GM_setValue', 'GM_xmlhttpRequest']);
+        ['GM_registerMenuCommand', 'GM_unregisterMenuCommand', 'GM_getValue', 'GM_setValue', 'GM_download']);
     assert.doesNotMatch(header, /@require|@resource/);
     assert.ok(Object.values(first.metafile.outputs).every(output => output.imports.length === 0));
     new vm.Script(first.code);

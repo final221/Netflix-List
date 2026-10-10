@@ -5,7 +5,7 @@ import { createDocument } from './helpers/dom.js';
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 const click = (button, shiftKey = false) => button.dispatchEvent({ type: 'click', shiftKey, preventDefault() {} });
-test('universal log control saves compact/detailed captures, prevents double clicks and shows receiver failure', async () => {
+test('universal log control saves compact/detailed captures, prevents double clicks and shows download failure', async () => {
     const document = createDocument(), pending = [], options = [];
     const control = createLogControl({ document, tLog: (key, data) => key + (data?.message || ''),
         copyLogs: value => { options.push(value); return new Promise((resolve, reject) => pending.push({ resolve, reject })); } });
@@ -14,8 +14,8 @@ test('universal log control saves compact/detailed captures, prevents double cli
     pending[0].resolve('logs/capture.txt'); await flush();
     assert.match(document.querySelector('[role="status"]').textContent, /logs\/capture.txt/);
     assert.equal(button.disabled, false); click(button, true); assert.deepEqual(options[1], { detailed: true });
-    pending[1].reject(new Error('Start npm run logs')); await flush();
-    assert.match(document.querySelector('[role="status"]').textContent, /npm run logs/); control.dispose();
+    pending[1].reject(new Error('Download cancelled')); await flush();
+    assert.match(document.querySelector('[role="status"]').textContent, /Download cancelled/); control.dispose();
     assert.equal(button.listenerCount('click'), 0); assert.equal(document.head.querySelectorAll('style').length, 0);
 });
 
