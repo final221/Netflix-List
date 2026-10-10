@@ -54,6 +54,7 @@ export function createApplication({ environment = globalThis, version = '', crea
         const currentUrl = location.href;
         if (currentUrl === lastObservedUrl && source !== 'initial') return;
         const previousUrl = lastObservedUrl; lastObservedUrl = currentUrl;
+        logControl.setVisible(!/^\/watch(?:\/|$)/.test(location.pathname));
         const target = isTargetPage();
         logger.log(i18n.tLog('routeChangeDetected'), { seq: ++routeChangeSequence, source, previousUrl, currentUrl, target });
         if (!target) {

@@ -220,6 +220,7 @@ test('one universal CopyLogs button survives Netflix routes and exports the reti
         await b.navigate(route); await b.scheduler.advance();
         assert.equal(b.document.getElementById('tm-netflix-copylogs'), button);
         assert.equal(b.document.querySelectorAll('#tm-netflix-copylogs').length, 1);
+        assert.equal(b.document.getElementById('tm-netflix-log-control').hidden, route.startsWith('/watch/'));
         assert.equal(b.document.getElementById('tm-netflix-mylist-v20-log'), null);
     }
     button.dispatchEvent({ type: 'click', shiftKey: true, preventDefault() {} }); await b.scheduler.flush();
@@ -230,6 +231,16 @@ test('one universal CopyLogs button survives Netflix routes and exports the reti
     assert.ok(myList.facts.runtime); assert.ok(Array.isArray(myList.facts.seriesViewing));
     assert.match(saved[0], /Script started/); assert.match(saved[0], /Route change detected/);
     assert.match(b.document.querySelector('[role="status"]').textContent, /Saved/);
+});
+
+test('CopyLogs starts hidden on direct playback entry and returns with retained events after leaving playback', async () => {
+    const b = browser({ pathname: '/watch/123' }); b.start();
+    const control = b.document.getElementById('tm-netflix-log-control'); assert.equal(control.hidden, true);
+    await b.navigate('/browse'); assert.equal(control.hidden, false);
+    await b.navigate('/watch/456'); assert.equal(control.hidden, true);
+    await b.navigate('/browse', 'replaceState'); assert.equal(control.hidden, false);
+    assert.equal(b.document.getElementById('tm-netflix-log-control'), control);
+    assert.equal(b.logs.filter(args => args.some(value => typeof value === 'string' && value.includes('Script started'))).length, 1);
 });
 
 test('generated startup retains optional grants, storage and viewport fallbacks', async () => {

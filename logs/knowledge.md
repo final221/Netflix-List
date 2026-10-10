@@ -1,24 +1,14 @@
 # Distilled live-log evidence
 
-Interpretation: [findings](../docs/findings.md).
-
 ## Historical sessions — 1.4.52–1.4.58
 
 Originals `logs/<version>.txt` at **8ca0de7ea22f3f5b7a0bdeadb6b091bfb9161d46**. Retired 2026-10-08; copiedAt 2026, UTC+02:00; uncontrolled benchmarks. Windows/Firefox 157, DPR 1. Viewports: 1.4.52/.53/.55 2560×1279; others 1920×919.
 
-| Tested version / copiedAt | Distinct observed evidence |
-| --- | --- |
-| 1.4.52 / Oct 7 15:01:31.853 | SPA count 9→498; native fallback completes grid/page-zero restoration, eight columns. Warnings describe fallback. |
-| 1.4.53 / Oct 7 15:27:14.420 | Same complete 9→498 fallback. Hover replay/preparation: ReferenceError: routeSessionToken is not defined in findMountedSourceSlot. |
-| 1.4.54 / Oct 7 18:49:20.923 | 75→500/native fallback/page-zero restoration, seven columns. Hover: “Observed native page mapping changed”; no successful replay captured. |
-| 1.4.55–1.4.57 / Oct 7 19:54:45.064; 20:15:12.939; 20:47:27.991 | 500 titles/no WARN/ERROR/no real refresh. .55: zero hover, 123 resources/82 images. .56/.57: native hover activity. .57: two pointer accepts/48 preview observations/33 transfers/no diagnostic failure; 48-replay sample limit. Unchanged checks: 1/4/3; parked exception in .55/.56. |
-| 1.4.58 / Oct 8 00:00:24.153 | Fresh GraphQL collection initializes 500 titles in 3,357 ms; seven columns/72 finalized pages, mapping not stale. All 14 replay attempts dispatch; nine matching preview transfers are retained/released. No WARN/ERROR or reported cleanup/diagnostic failures. |
-
-### 1.4.58 measurements
-
-- Viewing: 23 successes/peak two, 199 complete/270 unknown; no failures/rate limits/aborts. Unknown progress remains despite successful transport.
-- Delay: main preparation max 1,593 ms; native queue wait max 1,051 ms. Slowest move 1,920 ms: ack 1,913 ms/settle 6 ms. Graft/alignment/replay maxima: 3/7/1 ms. Not a controlled benchmark.
-- Scope: six unchanged responsive checks/one parked-height exception; no viewport refresh or target-route exit/reentry. No pending membership/Undo/popup/preview at export; displayed 167 is filtered from 500.
+CopiedAt Oct7 (UTC+02): .52 15:01:31.853/.53 15:27:14.420/.54 18:49:20.923/.55 19:54:45.064/.56 20:15:12.939/.57 20:47:27.991; .58 Oct8 00:00:24.153.
+- .52/.53 nine→498/native fallback/page0/eight columns; warnings. .53 hover ReferenceError: routeSessionToken undefined in findMountedSourceSlot.
+- .54 75→500/native fallback/page0/seven columns; hover “Observed native page mapping changed”; no successful replay.
+- .55–.57 500/no WARN/ERROR/refresh; .55 no hover/123 resources/82 images; .56/.57 hover; .57 two pointer accepts/48 previews/33 transfers/no failure, 48-replay sample limit. Unchanged checks1/4/3; parked exception.55/.56.
+- .58 init500/3,357ms/seven columns/72pages/not stale;14replays/9transfers/no WARN/ERROR/cleanup failure. Viewing23successes/peak2/199complete/270unknown/no failure/rate-limit/abort. Max preparation/queue1593/1051ms; slowest move1920(ack1913/settle6); graft/alignment/replay max3/7/1ms. Six unchanged checks/parked exception/no refresh/exit/pending membership/Undo/popup/preview;167displayed(filtered).
 
 ## Session — 1.4.64
 
@@ -57,8 +47,15 @@ Uncommitted `logs/Textdokument (neu).txt`: 63,370 bytes, SHA256 **0fb1b128244939
 - Later detailed `logs/Textdokument (neu).txt`, **2026-10-09T23:58:29.467+02:00**, 517,617 bytes/509 events/46 names, SHA256 **aa4260fed0fe075e7d0e6262b10839377b79055dcc11a2913163e1f3232dd727**; same version/environment, different session. Starts already on My List (no recorded Browse transition). Init 8,282 ms/native scan 7,521 ms; 500 cards/72 pages, mapping not stale. Two count-reconciliation/fallback warnings, no error.
 - Cached-key selects count nine; selected/live section IDs mismatch before/after request, their decoded page identities differ and card samples disagree. Live ID is stable; nativeRowCachedCount=null. Response nine edges/count nine/hasNextPage=false; native count 500. Six replays/transfers/no replay failure; viewing 23 successes/197 complete/272 unknown, no request failure.
 
+## Session — 1.9.1
+
+Uncommitted captures, copiedAt **2026-10-10** UTC+02, Windows/Firefox157, English, 2560×1279/DPR1/homepage; runtime revision unavailable:
+- **20:19:33.852**, `1.9.1-2026-10-10T18-19-33-853Z-01657356.txt`, 1711bytes/3events, SHA256 **59e5f4f52f2a28de68e67ac7038f2595648fada60ce5d493d209f44bc949a23f**.
+- **20:20:20.484**, `1.9.1-2026-10-10T18-20-20-485Z-3f42d96b.txt`, 2730bytes/7occurrences, SHA256 **b97d3d8488e08763f6f23832f17696f5bd1e6af9179917c19c2d9b24e4396c02**.
+Same startup; second retains first completion/user-cancellation warning. Both reached logs/. User confirms folder remembering; CopyLogs overlays playback. No navigation/prior snapshots/refill checks. Decorated156/hidden140; checked160→186/pending26→0/no storage failure. Compact: no groups/sections/examples omitted.
+
 ## Evidence limits
 
 Chat **2026-10-10** (versions/environment unconfirmed): 1.5.0 previews cover buttons; 1.6.0/.1 panel/collapse work; 1.8.0 needs manual arrows; 1.8.1 auto-advances the row, disrupting browsing. No capture/timings.
 
-Warning absence cannot certify the 1.4.54 mapping failure resolved. Unverified: real resize/zoom/remapping, route retirement/reentry, membership/Undo, manual viewing, exact timer retirement, every popup control/pointer outcome. Successful requests can leave metadata unknown. No captures test 1.4.59–1.4.63, 1.4.65–1.4.66, 1.4.68 or 1.4.71 onward.
+Warning absence cannot certify the 1.4.54 mapping failure resolved. Unverified: real resize/zoom/remapping, route retirement/reentry, membership/Undo, manual viewing, exact timer retirement, every popup control/pointer outcome. Successful requests can leave metadata unknown. No captures test 1.4.59–1.4.63, 1.4.65–1.4.66, 1.4.68 or 1.4.71–1.9.0.

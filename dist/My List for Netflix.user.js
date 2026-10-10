@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.1
+// @version      1.9.2
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -19347,7 +19347,7 @@ ${CARD_ACTION_STYLES}
       };
       button.addEventListener("click", listener);
       style = document.createElement("style");
-      style.textContent = "#tm-netflix-log-control{position:fixed;right:16px;bottom:16px;z-index:2147483646;font:13px system-ui;color:#fff;max-width:min(360px,calc(100vw - 32px))}#tm-netflix-log-control button{background:#242424;color:#fff;border:1px solid #777;border-radius:5px;padding:8px;cursor:pointer}#tm-netflix-log-control button:focus-visible{outline:2px solid #fff;outline-offset:2px}#tm-netflix-log-control p{background:#181818;border:1px solid #555;padding:8px;overflow-wrap:anywhere;margin:6px 0 0}#tm-netflix-log-control [hidden]{display:none!important}";
+      style.textContent = "#tm-netflix-log-control{position:fixed;right:16px;bottom:16px;z-index:2147483646;font:13px system-ui;color:#fff;max-width:min(360px,calc(100vw - 32px))}#tm-netflix-log-control button{background:#242424;color:#fff;border:1px solid #777;border-radius:5px;padding:8px;cursor:pointer}#tm-netflix-log-control button:focus-visible{outline:2px solid #fff;outline-offset:2px}#tm-netflix-log-control p{background:#181818;border:1px solid #555;padding:8px;overflow-wrap:anywhere;margin:6px 0 0}#tm-netflix-log-control[hidden],#tm-netflix-log-control [hidden]{display:none!important}";
       document.head.appendChild(style);
       document.body.appendChild(root);
     }
@@ -19358,7 +19358,9 @@ ${CARD_ACTION_STYLES}
       style?.remove();
       root = button = feedback = listener = style = null;
     }
-    return Object.freeze({ start, dispose });
+    return Object.freeze({ start, dispose, setVisible(visible) {
+      if (root) root.hidden = !visible;
+    } });
   }
 
   // src/netflix/recommendation-dom.js
@@ -20137,6 +20139,7 @@ ${CARD_ACTION_STYLES}
       if (currentUrl === lastObservedUrl && source !== "initial") return;
       const previousUrl = lastObservedUrl;
       lastObservedUrl = currentUrl;
+      logControl.setVisible(!/^\/watch(?:\/|$)/.test(location.pathname));
       const target = isTargetPage();
       logger.log(i18n.tLog("routeChangeDetected"), { seq: ++routeChangeSequence, source, previousUrl, currentUrl, target });
       if (!target) {
@@ -20276,7 +20279,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.1";
+  var SCRIPT_VERSION = "1.9.2";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
