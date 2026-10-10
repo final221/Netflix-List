@@ -34,6 +34,105 @@ function setup(options = {}) {
         },
         mutate(target, extra = {}) { this.observers.find(o => o.active).callback([{ type: 'childList', target, ...extra }]); } };
 }
+function nextControl(b, row, click, hawkins = true) {
+    const button = row.appendChild(new Element('button'));
+    button.setAttribute('data-uia', hawkins ? 'carousel-hawkins-right-button' : 'carousel-right-button'); button.click = click;
+    return button;
+}
+async function settleRefill(b, ticks = 3) { for (let i = 0; i < ticks; i++) await b.scheduler.advance(150); }
+
+test('empty-row refill clicks Netflix next and decorates arriving recommendations without cloning or direct requests', async () => {
+    const b = setup(), a = mount(b); let clicks = 0;
+    nextControl(b, a.row, () => { clicks++; a.card.setAttribute('href', '/title/2'); });
+    b.feature.check(); await b.scheduler.advance(300); assert.equal(clicks, 0);
+    b.click(a.host, 'Hide suggestion'); await b.scheduler.advance(250); assert.equal(clicks, 1);
+    await settleRefill(b); assert.equal(a.host.style.getPropertyValue('display'), '');
+    assert.equal(a.host.querySelectorAll('button').length, 2); assert.equal(b.feature.diagnostics().refill.filled, 1);
+    assert.equal(b.scheduler.timers.size, 0); assert.equal(a.host.querySelector('a'), a.card);
+    assert.equal(b.requests.length, 0);
+});
+
+test('refill skips pages of previously dismissed titles and stops when Netflix wraps', async () => {
+    const b = setup(), a = mount(b); let clicks = 0;
+    b.saved.set('legacyMyListForNetflix.recommendationChoices.v1.A', { version: 1, choices: { 1: 'hide', 2: 'watched' } });
+    nextControl(b, a.row, () => { clicks++; a.card.setAttribute('href', `/title/${clicks % 2 ? 2 : 1}`); }, false);
+    b.feature.check(); await b.scheduler.advance(250); await settleRefill(b);
+    await b.scheduler.advance(250); await settleRefill(b); await b.scheduler.advance(250);
+    assert.equal(clicks, 2); assert.equal(b.feature.diagnostics().refill.stopped, 1);
+    b.feature.check(); await b.scheduler.advance(500); assert.equal(clicks, 2);
+    assert.equal(b.scheduler.timers.size, 0);
+});
+
+test('refill waits for slow native loading and never clicks again while a page is pending', async () => {
+    const b = setup(), a = mount(b); let clicks = 0;
+    nextControl(b, a.row, () => { clicks++; }); b.feature.check(); b.click(a.host, 'Mark watched');
+    await b.scheduler.advance(250); await settleRefill(b, 6); b.feature.check();
+    assert.equal(clicks, 1); a.card.setAttribute('href', '/title/2'); await settleRefill(b);
+    assert.equal(a.host.style.getPropertyValue('display'), ''); assert.equal(clicks, 1);
+    assert.equal(b.scheduler.timers.size, 0);
+});
+
+test('unchanged native pages time out without a retry loop', async () => {
+    const b = setup(), a = mount(b); let clicks = 0;
+    nextControl(b, a.row, () => { clicks++; }); b.feature.check(); b.click(a.host, 'Mark watched');
+    await b.scheduler.advance(250); await settleRefill(b, 20); b.feature.check(); await b.scheduler.advance(500);
+    assert.equal(clicks, 1); assert.equal(b.feature.diagnostics().refill.timeouts, 1); assert.equal(b.scheduler.timers.size, 0);
+});
+
+test('refill cancels before clicking on Undo, profile change, route exit and disposal', async () => {
+    for (const change of [b => b.restore('1'), b => b.select('B'), b => { b.location.pathname = '/watch/1'; }, b => b.feature.dispose()]) {
+        const b = setup(), a = mount(b); let clicks = 0;
+        nextControl(b, a.row, () => { clicks++; }); b.feature.check(); b.click(a.host, 'Mark watched'); change(b);
+        await b.scheduler.advance(250); assert.equal(clicks, 0); b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
+    }
+});
+
+test('refill skips offscreen rows and disabled controls and resumes when a usable control appears', async () => {
+    const b = setup(), a = mount(b); let clicks = 0;
+    const next = nextControl(b, a.row, () => { clicks++; a.card.setAttribute('href', '/title/2'); }); next.disabled = true;
+    a.row.getBoundingClientRect = () => ({ top: 1000, bottom: 1200 }); b.feature.check(); b.click(a.host, 'Hide suggestion');
+    await b.scheduler.advance(250); assert.equal(clicks, 0); assert.equal(b.scheduler.timers.size, 0);
+    a.row.getBoundingClientRect = () => ({ top: 100, bottom: 200 }); b.feature.check(); await b.scheduler.advance(250);
+    assert.equal(clicks, 0); next.disabled = false; b.feature.check(); await b.scheduler.advance(250); await settleRefill(b);
+    assert.equal(clicks, 1); assert.equal(a.host.style.getPropertyValue('display'), '');
+});
+
+test('refill page budget bounds distinct but entirely dismissed native pages', async () => {
+    const b = setup(), a = mount(b); let clicks = 0;
+    b.saved.set('legacyMyListForNetflix.recommendationChoices.v1.A', { version: 1,
+        choices: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [i + 1, 'hide'])) });
+    nextControl(b, a.row, () => { clicks++; a.card.setAttribute('href', `/title/${clicks + 1}`); }); b.feature.check();
+    for (let i = 0; i < 25; i++) { await b.scheduler.advance(250); await settleRefill(b); }
+    assert.equal(clicks, 24); assert.equal(b.scheduler.timers.size, 0); assert.equal(b.feature.diagnostics().refill.stopped, 1);
+});
+
+test('offscreen prefetch cards cannot prevent refill, and scrolling admits an empty row', async () => {
+    const b = setup(), a = mount(b), prefetch = mount(b, '9'); let clicks = 0;
+    a.row.appendChild(prefetch.host); prefetch.row.remove();
+    prefetch.host.getBoundingClientRect = () => ({ left: 2000, right: 2200, width: 200 });
+    a.row.getBoundingClientRect = () => ({ top: 1000, bottom: 1200 });
+    nextControl(b, a.row, () => { clicks++; a.card.setAttribute('href', '/title/2'); });
+    b.feature.check(); b.click(a.host, 'Mark watched'); assert.equal(b.scheduler.timers.size, 0);
+    a.row.getBoundingClientRect = () => ({ top: 100, bottom: 200 });
+    b.window.dispatchEvent({ type: 'scroll' }); b.window.dispatchEvent({ type: 'scroll' });
+    assert.equal(b.scheduler.timers.size, 1); await b.scheduler.advance(250); await b.scheduler.advance(250); await settleRefill(b);
+    assert.equal(clicks, 1); assert.equal(a.host.style.getPropertyValue('display'), '');
+    b.window.dispatchEvent({ type: 'scroll' }); b.feature.dispose();
+    assert.equal(b.scheduler.timers.size, 0); assert.equal(b.window.listenerCount('scroll'), 0);
+});
+
+test('indicator-based carousels can advance cached pages without changing mounted title identities', async () => {
+    const b = setup(), a = mount(b), other = mount(b, '2'); let clicks = 0;
+    a.row.appendChild(other.host); other.row.remove();
+    let page = 0;
+    other.host.getBoundingClientRect = () => ({ left: page < 2 ? 2000 : 0, right: page < 2 ? 2200 : 200, width: 200 });
+    const indicators = [0, 1, 2].map(() => a.row.appendChild(new Element('span')));
+    const select = () => indicators.forEach((node, index) => node.setAttribute('data-indicator-selected', String(index === page)));
+    select(); nextControl(b, a.row, () => { clicks++; page++; select(); });
+    b.feature.check(); b.click(a.host, 'Mark watched');
+    await b.scheduler.advance(250); await settleRefill(b); await b.scheduler.advance(250); await settleRefill(b);
+    assert.equal(clicks, 2); assert.equal(b.feature.diagnostics().refill.filled, 1); assert.equal(b.scheduler.timers.size, 0);
+});
 test('live recommendation controls persist both reasons, hide duplicates and Undo without server requests', () => {
     const b = setup(), a = mount(b), duplicate = mount(b), other = mount(b, '2', { legacy: true });
     other.card.querySelector('a').setAttribute('href', '/watch/2');

@@ -1,7 +1,7 @@
 import { readVideoIdFromHref } from './page-dom.js';
 
 // Visible slot size/order remains Netflix-owned. No private mutation or playback API.
-export function createRecommendationDom({ document, location, getComputedStyle }) {
+export function createRecommendationDom({ document, location, getComputedStyle, window }) {
     const selector = 'a[data-uia="standard-card"][href], .title-card';
     const scrollerLeases = new WeakMap();
     function styleLease(node, name, value, priority = '') {
@@ -39,7 +39,7 @@ export function createRecommendationDom({ document, location, getComputedStyle }
         const scroller = host.closest('[data-uia="carousel-scroller"], .slider') || row;
         const title = (card.querySelector('img[alt]')?.getAttribute('alt') ||
             card.querySelector('.fallback-text')?.textContent || card.getAttribute('aria-label') || '').trim().slice(0, 300);
-        return { host, card, id, scroller, title };
+        return { host, card, id, scroller, title, row };
     }
     function scan(root = document) {
         const result = [], seen = new Set();
@@ -95,5 +95,26 @@ export function createRecommendationDom({ document, location, getComputedStyle }
             } }
         };
     }
-    return Object.freeze({ scan, lease, describe });
+    function refillState(row, choices) {
+        if (!row?.isConnected) return null;
+        const items = scan(row).filter(item => item.row === row);
+        if (!items.length) return null;
+        const scroller = items[0].scroller;
+        const next = scroller.querySelector('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"]') ||
+            row.querySelector('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext');
+        const rect = row.getBoundingClientRect();
+        const bounds = scroller.getBoundingClientRect();
+        const remaining = items.filter(item => {
+            if (choices[item.id]) return false;
+            const cardRect = item.host.getBoundingClientRect(), center = cardRect.left + cardRect.width / 2;
+            return cardRect.width > 1 && center >= bounds.left && center <= bounds.right;
+        });
+        const indicators = [...row.querySelectorAll('[data-indicator-selected]')];
+        const selected = indicators.findIndex(item => item.getAttribute('data-indicator-selected') === 'true');
+        return { scroller, next, signature: `${selected}:${items.map(item => item.id).join(',')}`, remaining: remaining.length,
+            inViewport: rect.bottom > 0 && rect.top < (window?.innerHeight || 1080),
+            canAdvance: Boolean(next?.isConnected && typeof next.click === 'function' && !next.disabled &&
+                next.getAttribute('aria-disabled') !== 'true' && next.getAttribute('tabindex') !== '-1') };
+    }
+    return Object.freeze({ scan, lease, describe, refillState });
 }

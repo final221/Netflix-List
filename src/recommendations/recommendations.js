@@ -1,16 +1,25 @@
 import { createRecommendationDom } from '../netflix/recommendation-dom.js';
 import { createCardActions, CARD_ACTION_STYLES } from '../card-actions.js';
+import { createRefill } from './refill.js';
 
 export function createRecommendations({ environment, context, userscript, tUi, log = () => {}, warn = () => {} }) {
     const { document, location, MutationObserver, queueMicrotask } = environment;
     const dom = createRecommendationDom(environment), entries = new Map(), buttons = new WeakMap();
     const key = 'legacyMyListForNetflix.recommendationChoices.v1.';
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
-    let titles = {}, manager = null;
+    let titles = {}, manager = null, scrollTimer = null;
     const pending = new Set();
     const allowed = () => location.origin === 'https://www.netflix.com' &&
         (location.pathname === '/browse' || (location.pathname.startsWith('/browse/') && location.pathname !== '/browse/my-list') || location.pathname === '/search');
     const readProfile = () => { const value = context.activeProfile(); return typeof value === 'string' && value ? value : null; };
+    const refill = createRefill({ environment, dom, readChoices: () => choices,
+        admitted: () => active && allowed() && Boolean(profile) && !failed && readProfile() === profile,
+        onPage: row => scan(row), log, warn });
+    function updateRefill() { refill.update(new Set([...entries.values()].map(entry => entry.row))); }
+    function scroll() {
+        if (scrollTimer !== null) return;
+        scrollTimer = environment.setTimeout(() => { scrollTimer = null; if (active && allowed()) updateRefill(); }, 250);
+    }
     function read(p) {
         if (typeof userscript.getValue !== 'function' || typeof userscript.setValue !== 'function') throw new Error('storage-unavailable');
         const value = userscript.getValue(key + encodeURIComponent(p), null);
@@ -26,6 +35,7 @@ export function createRecommendations({ environment, context, userscript, tUi, l
     function syncProfile() {
         const next = readProfile();
         if (next === profile) return;
+        refill.dispose();
         for (const entry of [...entries.values()]) release(entry);
         profile = next; choices = {}; titles = {}; failed = false; epoch++; pending.clear(); queued = false;
         if (manager) { manager.panel.hidden = true; manager.toggle.setAttribute('aria-expanded', 'false'); }
@@ -118,6 +128,7 @@ export function createRecommendations({ environment, context, userscript, tUi, l
             style.textContent += '\n.tm-rec-manager{position:fixed;right:16px;top:100px;z-index:10000;font:14px system-ui;color:#fff}.tm-rec-manager[hidden],.tm-rec-manager [hidden]{display:none!important}.tm-rec-manager button{background:#242424;color:#fff;border:1px solid #777;border-radius:5px;padding:8px;cursor:pointer}.tm-rec-manager button:focus-visible,.tm-rec-manager a:focus-visible{outline:2px solid #fff;outline-offset:2px}.tm-rec-manager section{margin-top:8px;width:min(360px,calc(100vw - 32px));max-height:70vh;overflow:auto;background:#181818;border:1px solid #555;border-radius:8px;padding:12px;box-sizing:border-box;box-shadow:0 8px 24px #0008}.tm-rec-manager section>button{display:block;margin-left:auto}.tm-rec-saved-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #333}.tm-rec-saved-row a{flex:1;color:#eee;text-decoration:none;overflow-wrap:anywhere}.tm-rec-saved-row button{border:0;background:transparent;font-size:22px;padding:0 8px}.tm-rec-manager h3{font-size:14px}';
             document.head.appendChild(style);
         }
+        updateRefill();
     }
     function schedule(root) {
         pending.add(root); if (pending.size > 24) { pending.clear(); pending.add(document); } if (queued) return;
@@ -152,6 +163,7 @@ export function createRecommendations({ environment, context, userscript, tUi, l
             ({ choices, titles } = latest);
             for (const entry of entries.values()) paint(entry);
             paintManager();
+            updateRefill();
             log('Recommendation visibility choice saved', { action: input.action, hiddenCount: Object.keys(choices).length });
         } catch (error) { failed = true; for (const entry of entries.values()) paint(entry); paintManager();
             warn('Recommendation choice could not be saved', { reason: error.message }); }
@@ -185,15 +197,20 @@ export function createRecommendations({ environment, context, userscript, tUi, l
     function check() {
         if (!allowed()) { dispose(); return; }
         if (!active) { active = true; epoch++;
+            environment.window?.addEventListener('scroll', scroll, { passive: true });
             document.addEventListener('click', click, true); document.addEventListener('pointerover', pointer, true); document.addEventListener('keydown', keydown, true); }
         scan(); observe();
     }
     function dispose() {
+        refill.dispose();
+        environment.window?.removeEventListener('scroll', scroll);
+        if (scrollTimer !== null) environment.clearTimeout(scrollTimer); scrollTimer = null;
         active = false; epoch++; queued = false; pending.clear(); observer?.disconnect(); observer = null;
         document.removeEventListener('click', click, true); document.removeEventListener('pointerover', pointer, true);
         document.removeEventListener('keydown', keydown, true); manager?.root.remove(); manager = null;
         for (const entry of [...entries.values()]) release(entry);
         style?.remove(); style = null; profile = null; choices = {}; titles = {}; failed = false;
     }
-    return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(choices).length, storageFailed: failed }) });
+    return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(choices).length,
+        storageFailed: failed, refill: refill.diagnostics() }) });
 }

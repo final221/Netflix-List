@@ -17,6 +17,25 @@ const releaseVersion = JSON.parse(await readFile(path.join(root, 'package.json')
 
 function browser(options) { const b=createBrowser(options);vm.createContext(b.context);return {...b,start:()=>vm.runInContext(shipped,b.context,{filename:distribution,timeout:1000})}; }
 
+test('generated release refills an empty browsing row through the native next control', async () => {
+    const b = browser(), stored = new Map(); let moves = 0;
+    b.window.netflix.reactContext = { models: { userInfo: { data: { userGuid: 'A' } } } };
+    b.context.GM_getValue = (key, fallback) => stored.get(key) ?? fallback;
+    b.context.GM_setValue = (key, value) => stored.set(key, value);
+    const row = b.document.body.appendChild(new Element('section'));
+    const slot = row.appendChild(new Element('div')); slot.setAttribute('data-virtual-slot', '0');
+    const card = slot.appendChild(new Element('a')); card.setAttribute('data-uia', 'standard-card'); card.setAttribute('href', '/title/123');
+    const next = row.appendChild(new Element('button')); next.setAttribute('data-uia', 'carousel-hawkins-right-button');
+    next.click = () => { moves++; card.setAttribute('href', '/title/456'); };
+    b.start(); const hide = slot.querySelectorAll('button').find(button => button.textContent === 'Hide suggestion');
+    b.document.dispatchEvent({ type: 'click', target: hide, preventDefault() {}, stopImmediatePropagation() {} });
+    assert.equal(slot.style.getPropertyValue('display'), 'none'); await b.scheduler.advance(250);
+    for (let i = 0; i < 3; i++) await b.scheduler.advance(150);
+    assert.equal(moves, 1); assert.equal(card.getAttribute('href'), '/title/456'); assert.equal(slot.style.getPropertyValue('display'), '');
+    assert.equal([...stored.values()][0].choices['123'], 'hide'); assert.equal(b.requests.length, 0);
+    await b.navigate('/watch/456'); assert.equal(b.scheduler.timers.size, 0); assert.equal(b.window.listenerCount('scroll'), 0);
+});
+
 test('generated browsing release saves a dismissal and restores native visibility before playback', async () => {
     const b = browser(), stored = new Map();
     b.window.netflix.reactContext = { models: { userInfo: { data: { userGuid: 'A' } } } };

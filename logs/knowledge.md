@@ -61,6 +61,6 @@ Uncommitted `logs/Textdokument (neu).txt`: 63,370 bytes, SHA256 **0fb1b128244939
 
 Chat **2026-10-10**, after 1.5.0 (version/environment unconfirmed): enlarged previews cover artwork buttons; no capture/timings.
 
-Chat **2026-10-10**, after 1.6.0: saved-choices panel works well; installed version unconfirmed.
+Chat **2026-10-10**, after 1.6.0/.1: panel and card collapse work well; installed version unconfirmed.
 
-Warning absence cannot certify the 1.4.54 mapping failure resolved. Unverified: real resize/zoom/remapping, route retirement/reentry, membership/Undo, manual viewing, exact timer retirement, every popup control/pointer outcome. Successful requests leave unknown metadata unresolved. No captures test 1.4.59–1.4.63, 1.4.65–1.4.66, 1.4.68 or 1.4.71 onward.
+Warning absence cannot certify the 1.4.54 mapping failure resolved. Unverified: real resize/zoom/remapping, route retirement/reentry, membership/Undo, manual viewing, exact timer retirement, every popup control/pointer outcome. Successful requests can leave metadata unknown. No captures test 1.4.59–1.4.63, 1.4.65–1.4.66, 1.4.68 or 1.4.71 onward.
