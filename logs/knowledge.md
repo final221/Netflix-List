@@ -25,7 +25,7 @@ For 1.9.x: `version/suffix` identifies uncommitted `logs/<version>-2026-10-10T<s
 
 - 20:19:33.852, `1.9.1/18-19-33-853Z-01657356`/3events, SHA256 59e5f4f52f2a28de68e67ac7038f2595648fada60ce5d493d209f44bc949a23f.
 - 20:20:20.484, `1.9.1/18-20-20-485Z-3f42d96b`/7occurrences, SHA256 b97d3d8488e08763f6f23832f17696f5bd1e6af9179917c19c2d9b24e4396c02.
-Same startup/saves/cancellation; folder memory/playback overlay confirmed. Decorated156/hidden140/checked160→186/pending26→0; no failures/refill/omissions.
+Folder memory/playback overlay confirmed;checked160→186/pending26→0.
 
 ## Session — 1.9.3
 
@@ -35,7 +35,7 @@ Same startup/saves/cancellation; folder memory/playback overlay confirmed. Decor
 
 - 20:40:15.662, `1.9.4/18-40-15-662Z-7329ed01`/5events; SHA256 6d218ffbd0a7f62a08cd9bfdcf6e2c133307e9fcd99b3ddd5d734f3bcdfc1707.
 - 20:40:26.160, `1.9.4/18-40-26-160Z-a62b34b7`/7events; SHA256 ce1970bb9efce8824ef5c870017b05f26da67ccd39fab52257ee13d2d20f69d0.
-Same startup/saves/cancellation/pending0;decorated263→275/checked262→275/hidden140; user arrow confirmed, no row facts/refill/prior pages.
+Repeated saves/pending0;decorated263→275/checked262→275;arrow confirmed/no row facts.
 
 ## Session — 1.9.5
 
@@ -71,6 +71,14 @@ Later:493→500checked/0pending;row29 17→26;row8 13→25→26 then8/8recycling
 - 22:12:00.246, 1.9.8/20-12-00-255Z-636f66d6; SHA256 af1235a2e8b1efb37779efe0b33182f00fe9b64cdad8ec0172d8ef7f1168de3d.
 - 22:12:33.956, 1.9.8/20-12-33-966Z-63f8d4f0; SHA256 b4b556fe656ae8f4243b680f42f194a85ce32afce99941cdb5ef0883a61e8a93.
 Same startup/five exports. Viewing163→299requests/375→572checked/3→4failed/0pending/not running;windowRequests163→12. Decorated461→608. Row34:13→26mounted/offscreen1→9. Row42:13→25→26 then8/8recycling/offscreen4→18. Five dismissals/checks. Multiple windows/two GraphQL fetches;installed lease/no failures/zero records. Observer drops0→119;early windows become empty later. Props40-element stateArray;no independent loader observed. Missing title/coverage reasons and exact latency unrecorded.
+
+## Session — 1.9.9
+
+- 22:44:42.495, 1.9.9/20-44-42-496Z-c10d2027; SHA256 86f36e2dad025fed6095fe72987948e363123f89b391cc506fbecb4dfcf2467b.
+- 22:45:05.075, 1.9.9/20-45-05-078Z-de105405; SHA256 c5d1ce0f80beedbd6e66f3444a1eaa5a4355abc6790a339f541a42bd148de777.
+- 22:45:30.054, 1.9.9/20-45-30-058Z-244474e2; SHA256 4f0842cd0cc7e3b89eb24a51884c7e009e93cfd17efeaf85a93f195a6598d4a6.
+- 22:45:40.877, 1.9.9/20-45-40-880Z-7a45db73; SHA256 34071eab8dadb7c26163c10e5c8271d3e4a673d603972e5ac7faa95a74fde36f.
+Same startup/20rows/eight arrows. Viewing95→166requests/184→288checked/3→6failed/all sampled failures series coverage/three attempts;final0pending/not running. Row6:13→25→26mounted/offscreen3→18;row19:13→25→26/offscreen0→9. Timing includes paired GraphQL fetches;lease10→58intercepted/0GraphQL/no failures/drops. No global queue stall;native GraphQL bodies remain uncaptured. Screenshot/user:arrow remains short versus desired full card-height edge.
 
 ## Evidence limits
 

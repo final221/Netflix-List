@@ -84,3 +84,14 @@ test('future request observation drains queued delivery, bounds sanitized record
     assert.equal(dom.observeRequests().read().available, true);
     assert.equal(createRecommendationDom({ location }).observeRequests().read().available, false);
 });
+
+test('timing-only GraphQL facts distinguish another origin while omitting query values', () => {
+    const entries = ['https://www.netflix.com/graphql?operationName=Row&variables=secret&auth=secret',
+        'https://api.netflix.com/graphql?operationName=More&cursor=secret'].map(name => ({ name, initiatorType: 'fetch', startTime: 120, duration: 8, transferSize: 12 }));
+    const dom = createRecommendationDom({ location, performance: { getEntriesByType: () => entries } });
+    const facts = dom.navigationRequests(100, 200);
+    assert.deepEqual(facts.entries.map(x => x.sameOrigin), [true, false]);
+    assert.deepEqual(facts.entries.map(x => x.operation), ['Row', 'More']);
+    assert.deepEqual(facts.entries[0].queryKeys, ['operationName', 'variables']);
+    assert.doesNotMatch(JSON.stringify(facts), /secret|api\.netflix|auth/);
+});

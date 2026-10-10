@@ -53,6 +53,7 @@ what it should not contain
 - Marking or reversing a viewing choice should preserve the user's browsing position instead of scrolling to the destination section.
 - Dismissing already-watched or unwanted browsing recommendations must preserve Netflix ratings and taste feedback. Load further recommendations in the affected carousel after each dismissal rather than waiting for an empty row or a manual arrow click; preserve the current carousel page and remaining cards while replacing dismissed titles; automatic arrow navigation is unacceptable; watched elsewhere is a valid manual choice.
 - Keep one or two recommendation pages ready ahead of the visible carousel so manual paging does not immediately exhaust the mounted buffer.
+- Keep native carousel arrows prominent as a full card-height strip at the edge, with a large click target that card hover cannot cover.
 - Keep browsing actions visible underneath cards, following My List's shared control presentation rather than requiring artwork hover or duplicating its UI implementation.
 - Collapse dismissed browsing cards completely so the remaining cards fill their space; restore them through the saved-choices panel rather than leaving Undo placeholders.
 - Keep saved browsing dismissals accessible from a right-side panel, grouped by watched and hidden, with small remove icons for quick individual restoration even when the native card is absent.

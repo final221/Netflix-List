@@ -4,7 +4,10 @@ import { createRecommendationRequests } from './recommendation-requests.js';
 
 export const RECOMMENDATION_ARROW_STYLES = `
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev){
-    min-width:56px!important;min-height:64px!important;opacity:1!important;visibility:visible!important;
+    width:56px!important;min-width:56px!important;min-height:64px!important;height:100%!important;
+    position:absolute!important;top:0!important;bottom:0!important;transform:none!important;
+    display:flex!important;align-items:center!important;justify-content:center!important;border-radius:8px!important;
+    opacity:1!important;visibility:visible!important;
     z-index:10001!important;background:rgba(20,20,20,.85)!important;color:#fff!important;
     cursor:pointer;pointer-events:auto;
 }
@@ -215,7 +218,10 @@ export function createRecommendationDom(environment) {
         const url = new URL(entry.name, location.href);
         if (url.hostname !== 'netflix.com' && !url.hostname.endsWith('.netflix.com')) return null;
         return { startTime: entry.startTime, endpoint: /graphql/i.test(url.pathname) ? 'graphql' : /\/api\//i.test(url.pathname) ? 'api' : /falcor|pathEvaluator/i.test(url.pathname) ? 'falcor' : 'other',
-            initiator: entry.initiatorType, durationMs: Math.round(entry.duration), transferBytes: Number(entry.transferSize) || 0 };
+            initiator: entry.initiatorType, durationMs: Math.round(entry.duration), transferBytes: Number(entry.transferSize) || 0,
+            ...(/graphql/i.test(url.pathname) ? { sameOrigin: url.origin === new URL(location.href).origin,
+                queryKeys: [...new Set(url.searchParams.keys())].filter(key => /^[A-Za-z_][A-Za-z_0-9]{0,63}$/.test(key) && !/auth|token|cookie|credential|profile|account|session/i.test(key)).slice(0, 12),
+                ...(/^[A-Za-z_][A-Za-z_0-9]{0,99}$/.test(url.searchParams.get('operationName') || '') ? { operation: url.searchParams.get('operationName') } : {}) } : {}) };
     }
     function observeRequests() {
         const graphql = createRecommendationRequests(environment);

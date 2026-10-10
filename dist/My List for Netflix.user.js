@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.9
+// @version      1.9.10
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -19595,7 +19595,10 @@ ${CARD_ACTION_STYLES}
   // src/netflix/recommendation-dom.js
   var RECOMMENDATION_ARROW_STYLES = `
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev){
-    min-width:56px!important;min-height:64px!important;opacity:1!important;visibility:visible!important;
+    width:56px!important;min-width:56px!important;min-height:64px!important;height:100%!important;
+    position:absolute!important;top:0!important;bottom:0!important;transform:none!important;
+    display:flex!important;align-items:center!important;justify-content:center!important;border-radius:8px!important;
+    opacity:1!important;visibility:visible!important;
     z-index:10001!important;background:rgba(20,20,20,.85)!important;color:#fff!important;
     cursor:pointer;pointer-events:auto;
 }
@@ -19872,7 +19875,12 @@ ${CARD_ACTION_STYLES}
         endpoint: /graphql/i.test(url.pathname) ? "graphql" : /\/api\//i.test(url.pathname) ? "api" : /falcor|pathEvaluator/i.test(url.pathname) ? "falcor" : "other",
         initiator: entry.initiatorType,
         durationMs: Math.round(entry.duration),
-        transferBytes: Number(entry.transferSize) || 0
+        transferBytes: Number(entry.transferSize) || 0,
+        .../graphql/i.test(url.pathname) ? {
+          sameOrigin: url.origin === new URL(location.href).origin,
+          queryKeys: [...new Set(url.searchParams.keys())].filter((key) => /^[A-Za-z_][A-Za-z_0-9]{0,63}$/.test(key) && !/auth|token|cookie|credential|profile|account|session/i.test(key)).slice(0, 12),
+          .../^[A-Za-z_][A-Za-z_0-9]{0,99}$/.test(url.searchParams.get("operationName") || "") ? { operation: url.searchParams.get("operationName") } : {}
+        } : {}
       };
     }
     function observeRequests() {
@@ -20822,7 +20830,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.9";
+  var SCRIPT_VERSION = "1.9.10";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
