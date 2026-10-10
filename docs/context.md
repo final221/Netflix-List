@@ -30,6 +30,8 @@ what it should not contain
 
 ## User working preferences
 
+- Once a goal is clear, continue its necessary investigation, diagnostic improvements and implementation without asking for repeated approval of each next step. Ask for live user-side evidence only when the local environment cannot supply it.
+
 - The user uses this personal script on Windows and wants work limited to Windows. Linux and other operating-system support are out of scope unless explicitly requested.
 - For this repository, the user authorizes commits and pushes of changes to `origin` without per-commit confirmation. Use the configured GitHub SSH remote, which is authenticated without requiring the user to supply credentials. This is user authorization; it does not bypass the app's sandbox or automated-review gates. Follow those system gates without asking the user to repeat the standing authorization.
 - During code reviews, the user authorizes implementing worthwhile simplifications that preserve capabilities, then reviewing again and continuing while concrete reductions remain. Implement verified reductions directly rather than repeatedly producing a full assessment and discarding working prototypes. Discussion or suggestions outside that simplification scope do not authorize unrelated implementation.

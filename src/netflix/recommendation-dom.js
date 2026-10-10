@@ -1,7 +1,7 @@
 import { readVideoIdFromHref } from './page-dom.js';
 
 // Visible slot size/order remains Netflix-owned. No private mutation or playback API.
-export function createRecommendationDom({ document, location, getComputedStyle, performance }) {
+export function createRecommendationDom({ document, location, getComputedStyle, performance, PerformanceObserver }) {
     const selector = 'a[data-uia="standard-card"][href], .title-card';
     const scrollerLeases = new WeakMap();
     function styleLease(node, name, value, priority = '') {
@@ -145,11 +145,25 @@ export function createRecommendationDom({ document, location, getComputedStyle, 
             const seen = new Set();
             for (let depth = 0; fiber && depth < 24 && !seen.has(fiber); depth++, fiber = fiber.return) {
                 seen.add(fiber);
-                for (const source of ['memoizedProps', 'memoizedState']) {
-                    const value = Object.getOwnPropertyDescriptor(fiber, source)?.value;
+                const sources = [['memoizedProps', Object.getOwnPropertyDescriptor(fiber, 'memoizedProps')?.value]];
+                let state = Object.getOwnPropertyDescriptor(fiber, 'memoizedState')?.value;
+                const hooks = new Set();
+                if (state && Object.hasOwn(state, 'memoizedState') && Object.hasOwn(state, 'next')) {
+                    for (let i = 0; state && i < 16 && !hooks.has(state); i++) {
+                        hooks.add(state); sources.push([`hookState:${i}`, Object.getOwnPropertyDescriptor(state, 'memoizedState')?.value]);
+                        state = Object.getOwnPropertyDescriptor(state, 'next')?.value;
+                    }
+                    truncated ||= Boolean(state);
+                } else sources.push(['memoizedState', state]);
+                for (const [source, value] of sources) {
                     if (!value || typeof value !== 'object') continue;
-                    const keys = Object.keys(value), fields = [];
+                    const keys = Object.keys(value), fields = Array.isArray(value) ? [{ name: 'stateArray', type: 'array', length: value.length,
+                        elements: Array.from({ length: Math.min(value.length, 4) }, (_, index) => {
+                            const descriptor = Object.getOwnPropertyDescriptor(value, String(index)), child = descriptor?.value;
+                            return { type: descriptor?.get ? 'accessor' : typeof child, ...(Array.isArray(child) ? { length: child.length } : {}) };
+                        }), elementsTruncated: value.length > 4 }] : [];
                     for (const name of keys.slice(0, 40)) {
+                        if (/^data-|^tabIndex$|^next$|^baseState$|^baseQueue$|^queue$/i.test(name)) continue;
                         if (!/click|load|fetch|pagin|cursor|item|video|title|row|list|count|next|prev|index|data|cache/i.test(name)) continue;
                         const descriptor = Object.getOwnPropertyDescriptor(value, name), child = descriptor?.value;
                         const fact = { name: name.slice(0, 80), type: descriptor?.get ? 'accessor' : typeof child };
@@ -180,24 +194,49 @@ export function createRecommendationDom({ document, location, getComputedStyle, 
     function diagnosticTime() {
         try { const value = performance?.now(); return Number.isFinite(value) ? value : null; } catch (_) { return null; }
     }
-    function navigationRequests(start, stop = diagnosticTime()) {
+    function requestRecord(entry) {
+        if (!['fetch', 'xmlhttprequest'].includes(entry.initiatorType)) return null;
+        const url = new URL(entry.name, location.href);
+        if (url.hostname !== 'netflix.com' && !url.hostname.endsWith('.netflix.com')) return null;
+        return { startTime: entry.startTime, endpoint: /graphql/i.test(url.pathname) ? 'graphql' : /\/api\//i.test(url.pathname) ? 'api' : /falcor|pathEvaluator/i.test(url.pathname) ? 'falcor' : 'other',
+            initiator: entry.initiatorType, durationMs: Math.round(entry.duration), transferBytes: Number(entry.transferSize) || 0 };
+    }
+    function observeRequests() {
+        let observer = null, active = true, dropped = 0, failures = 0; const records = [];
+        function accept(entries) {
+            if (!active) return;
+            for (const entry of entries) try {
+                const record = requestRecord(entry); if (!record) continue;
+                if (records.length === 200) { records.shift(); dropped++; }
+                records.push(record);
+            } catch (_) { failures++; }
+        }
         try {
-            if (!Number.isFinite(start) || !Number.isFinite(stop) || !performance?.getEntriesByType) return { unavailable: true };
-            const end = Math.min(stop, start + 5000), all = performance.getEntriesByType('resource'), entries = [];
+            observer = new PerformanceObserver(list => { if (active) try { accept(list.getEntries()); } catch (_) { failures++; } });
+            observer.observe({ type: 'resource', buffered: false });
+        } catch (_) { try { observer?.disconnect(); } catch (_) {} observer = null; }
+        return { read() {
+            if (observer && active) try { accept(observer.takeRecords()); } catch (_) { failures++; }
+            return { available: Boolean(observer && active), records: records.slice(), dropped, failures };
+        }, dispose() { active = false; try { observer?.disconnect(); } catch (_) {} observer = null; records.length = 0; } };
+    }
+    function navigationRequests(start, stop = diagnosticTime(), capture = null) {
+        try {
+            if (!Number.isFinite(start) || !Number.isFinite(stop) || (!capture?.available && !performance?.getEntriesByType)) return { unavailable: true };
+            const end = Math.min(stop, start + 5000), all = capture?.available ? capture.records : performance.getEntriesByType('resource'), entries = [];
             let matched = 0;
             for (const entry of all.slice(-2000)) {
-                if (!['fetch', 'xmlhttprequest'].includes(entry.initiatorType) || entry.startTime < start || entry.startTime >= end) continue;
-                const url = new URL(entry.name, location.href);
-                if (url.hostname !== 'netflix.com' && !url.hostname.endsWith('.netflix.com')) continue;
+                if (entry.startTime < start || entry.startTime >= end) continue;
+                const record = capture?.available ? entry : requestRecord(entry); if (!record) continue;
                 matched++;
                 if (entries.length >= 24) continue;
-                const endpoint = /graphql/i.test(url.pathname) ? 'graphql' : /\/api\//i.test(url.pathname) ? 'api' : /falcor|pathEvaluator/i.test(url.pathname) ? 'falcor' : 'other';
-                entries.push({ endpoint, initiator: entry.initiatorType, offsetMs: Math.round(entry.startTime - start),
-                    durationMs: Math.round(entry.duration), transferBytes: Number(entry.transferSize) || 0 });
+                const { startTime, ...facts } = record;
+                entries.push({ ...facts, offsetMs: Math.round(startTime - start) });
             }
             return { windowMs: Math.max(0, end - start), inspected: Math.min(all.length, 2000), bufferTruncated: all.length > 2000,
                 matched, entries, truncated: matched > entries.length, attribution: 'time-window-only',
-                limitation: 'Completed buffered entries only; absent entries do not prove cached data, and zero transfer does not prove cache use.' };
+                source: capture?.available ? 'future-observer' : 'buffered-fallback', dropped: capture?.dropped || 0, failures: capture?.failures || 0,
+                limitation: 'Completed entries only; absent entries do not prove cached data, and zero transfer does not prove cache use.' };
         } catch (_) { return { unavailable: true }; }
     }
     function rowDiagnostics(row, choices) {
@@ -220,5 +259,5 @@ export function createRecommendationDom({ document, location, getComputedStyle, 
         } catch (_) { return null; }
     }
     return Object.freeze({ scan, lease, describe, refillState, loadingFacts, navigationTarget, rowDiagnostics,
-        navigationStart, navigationRequests });
+        navigationStart, navigationRequests, observeRequests });
 }

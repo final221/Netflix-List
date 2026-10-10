@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.6
+// @version      1.9.7
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -19383,7 +19383,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/netflix/recommendation-dom.js
-  function createRecommendationDom({ document, location, getComputedStyle, performance }) {
+  function createRecommendationDom({ document, location, getComputedStyle, performance, PerformanceObserver }) {
     const selector = 'a[data-uia="standard-card"][href], .title-card';
     const scrollerLeases = /* @__PURE__ */ new WeakMap();
     function styleLease(node, name, value, priority = "") {
@@ -19571,11 +19571,31 @@ ${CARD_ACTION_STYLES}
         const seen = /* @__PURE__ */ new Set();
         for (let depth = 0; fiber && depth < 24 && !seen.has(fiber); depth++, fiber = fiber.return) {
           seen.add(fiber);
-          for (const source of ["memoizedProps", "memoizedState"]) {
-            const value = Object.getOwnPropertyDescriptor(fiber, source)?.value;
+          const sources = [["memoizedProps", Object.getOwnPropertyDescriptor(fiber, "memoizedProps")?.value]];
+          let state = Object.getOwnPropertyDescriptor(fiber, "memoizedState")?.value;
+          const hooks = /* @__PURE__ */ new Set();
+          if (state && Object.hasOwn(state, "memoizedState") && Object.hasOwn(state, "next")) {
+            for (let i = 0; state && i < 16 && !hooks.has(state); i++) {
+              hooks.add(state);
+              sources.push([`hookState:${i}`, Object.getOwnPropertyDescriptor(state, "memoizedState")?.value]);
+              state = Object.getOwnPropertyDescriptor(state, "next")?.value;
+            }
+            truncated ||= Boolean(state);
+          } else sources.push(["memoizedState", state]);
+          for (const [source, value] of sources) {
             if (!value || typeof value !== "object") continue;
-            const keys = Object.keys(value), fields = [];
+            const keys = Object.keys(value), fields = Array.isArray(value) ? [{
+              name: "stateArray",
+              type: "array",
+              length: value.length,
+              elements: Array.from({ length: Math.min(value.length, 4) }, (_, index) => {
+                const descriptor = Object.getOwnPropertyDescriptor(value, String(index)), child = descriptor?.value;
+                return { type: descriptor?.get ? "accessor" : typeof child, ...Array.isArray(child) ? { length: child.length } : {} };
+              }),
+              elementsTruncated: value.length > 4
+            }] : [];
             for (const name of keys.slice(0, 40)) {
+              if (/^data-|^tabIndex$|^next$|^baseState$|^baseQueue$|^queue$/i.test(name)) continue;
               if (!/click|load|fetch|pagin|cursor|item|video|title|row|list|count|next|prev|index|data|cache/i.test(name)) continue;
               const descriptor = Object.getOwnPropertyDescriptor(value, name), child = descriptor?.value;
               const fact = { name: name.slice(0, 80), type: descriptor?.get ? "accessor" : typeof child };
@@ -19619,25 +19639,81 @@ ${CARD_ACTION_STYLES}
         return null;
       }
     }
-    function navigationRequests(start, stop = diagnosticTime()) {
+    function requestRecord(entry) {
+      if (!["fetch", "xmlhttprequest"].includes(entry.initiatorType)) return null;
+      const url = new URL(entry.name, location.href);
+      if (url.hostname !== "netflix.com" && !url.hostname.endsWith(".netflix.com")) return null;
+      return {
+        startTime: entry.startTime,
+        endpoint: /graphql/i.test(url.pathname) ? "graphql" : /\/api\//i.test(url.pathname) ? "api" : /falcor|pathEvaluator/i.test(url.pathname) ? "falcor" : "other",
+        initiator: entry.initiatorType,
+        durationMs: Math.round(entry.duration),
+        transferBytes: Number(entry.transferSize) || 0
+      };
+    }
+    function observeRequests() {
+      let observer = null, active = true, dropped = 0, failures = 0;
+      const records = [];
+      function accept(entries) {
+        if (!active) return;
+        for (const entry of entries) try {
+          const record = requestRecord(entry);
+          if (!record) continue;
+          if (records.length === 200) {
+            records.shift();
+            dropped++;
+          }
+          records.push(record);
+        } catch (_) {
+          failures++;
+        }
+      }
       try {
-        if (!Number.isFinite(start) || !Number.isFinite(stop) || !performance?.getEntriesByType) return { unavailable: true };
-        const end = Math.min(stop, start + 5e3), all = performance.getEntriesByType("resource"), entries = [];
+        observer = new PerformanceObserver((list) => {
+          if (active) try {
+            accept(list.getEntries());
+          } catch (_) {
+            failures++;
+          }
+        });
+        observer.observe({ type: "resource", buffered: false });
+      } catch (_) {
+        try {
+          observer?.disconnect();
+        } catch (_2) {
+        }
+        observer = null;
+      }
+      return { read() {
+        if (observer && active) try {
+          accept(observer.takeRecords());
+        } catch (_) {
+          failures++;
+        }
+        return { available: Boolean(observer && active), records: records.slice(), dropped, failures };
+      }, dispose() {
+        active = false;
+        try {
+          observer?.disconnect();
+        } catch (_) {
+        }
+        observer = null;
+        records.length = 0;
+      } };
+    }
+    function navigationRequests(start, stop = diagnosticTime(), capture = null) {
+      try {
+        if (!Number.isFinite(start) || !Number.isFinite(stop) || !capture?.available && !performance?.getEntriesByType) return { unavailable: true };
+        const end = Math.min(stop, start + 5e3), all = capture?.available ? capture.records : performance.getEntriesByType("resource"), entries = [];
         let matched = 0;
         for (const entry of all.slice(-2e3)) {
-          if (!["fetch", "xmlhttprequest"].includes(entry.initiatorType) || entry.startTime < start || entry.startTime >= end) continue;
-          const url = new URL(entry.name, location.href);
-          if (url.hostname !== "netflix.com" && !url.hostname.endsWith(".netflix.com")) continue;
+          if (entry.startTime < start || entry.startTime >= end) continue;
+          const record = capture?.available ? entry : requestRecord(entry);
+          if (!record) continue;
           matched++;
           if (entries.length >= 24) continue;
-          const endpoint = /graphql/i.test(url.pathname) ? "graphql" : /\/api\//i.test(url.pathname) ? "api" : /falcor|pathEvaluator/i.test(url.pathname) ? "falcor" : "other";
-          entries.push({
-            endpoint,
-            initiator: entry.initiatorType,
-            offsetMs: Math.round(entry.startTime - start),
-            durationMs: Math.round(entry.duration),
-            transferBytes: Number(entry.transferSize) || 0
-          });
+          const { startTime, ...facts } = record;
+          entries.push({ ...facts, offsetMs: Math.round(startTime - start) });
         }
         return {
           windowMs: Math.max(0, end - start),
@@ -19647,7 +19723,10 @@ ${CARD_ACTION_STYLES}
           entries,
           truncated: matched > entries.length,
           attribution: "time-window-only",
-          limitation: "Completed buffered entries only; absent entries do not prove cached data, and zero transfer does not prove cache use."
+          source: capture?.available ? "future-observer" : "buffered-fallback",
+          dropped: capture?.dropped || 0,
+          failures: capture?.failures || 0,
+          limitation: "Completed entries only; absent entries do not prove cached data, and zero transfer does not prove cache use."
         };
       } catch (_) {
         return { unavailable: true };
@@ -19688,7 +19767,8 @@ ${CARD_ACTION_STYLES}
       navigationTarget,
       rowDiagnostics,
       navigationStart,
-      navigationRequests
+      navigationRequests,
+      observeRequests
     });
   }
 
@@ -19765,7 +19845,7 @@ ${CARD_ACTION_STYLES}
 
   // src/recommendations/navigation.js
   function createNavigationDiagnostics({ dom, readChoices, admitted, log }) {
-    let sequence = 0, failures = 0;
+    let sequence = 0, failures = 0, requests = null;
     const recent = [];
     function click(target) {
       if (!admitted()) return;
@@ -19774,6 +19854,7 @@ ${CARD_ACTION_STYLES}
         if (!navigation) return;
         const before = dom.rowDiagnostics(navigation.row, readChoices());
         if (!before) return;
+        requests ||= dom.observeRequests();
         const loading = dom.navigationStart(navigation.control);
         const previous = recent.at(-1);
         if (previous) previous.until = loading.at;
@@ -19786,6 +19867,7 @@ ${CARD_ACTION_STYLES}
       }
     }
     function snapshot() {
+      const capture = admitted() ? requests?.read() : null;
       return { interactions: sequence, failures, retained: recent.length, recent: recent.map(({ sequence: sequence2, direction, row, before, loading, until }) => {
         const after = admitted() && row.isConnected ? dom.rowDiagnostics(row, readChoices()) : null;
         return {
@@ -19794,7 +19876,7 @@ ${CARD_ACTION_STYLES}
           before,
           afterAtExport: after,
           loading,
-          requests: admitted() ? dom.navigationRequests(loading.at, until) : { unavailable: true },
+          requests: admitted() ? dom.navigationRequests(loading.at, until, capture) : { unavailable: true },
           addedIdSample: after ? after.ids.filter((id) => !before.ids.includes(id)).slice(0, 16) : [],
           removedIdSample: after ? before.ids.filter((id) => !after.ids.includes(id)).slice(0, 16) : [],
           idComparisonTruncated: Boolean(before.idsTruncated || after?.idsTruncated)
@@ -19802,6 +19884,8 @@ ${CARD_ACTION_STYLES}
       }) };
     }
     return Object.freeze({ click, snapshot, dispose() {
+      requests?.dispose();
+      requests = null;
       recent.length = 0;
       sequence = 0;
       failures = 0;
@@ -20501,7 +20585,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.6";
+  var SCRIPT_VERSION = "1.9.7";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

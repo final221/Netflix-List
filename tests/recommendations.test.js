@@ -20,6 +20,7 @@ function mount(b, id = '1', { legacy = false, progress = false } = {}) {
 }
 function setup(options = {}) {
     const b = createBrowser(), saved = new Map(); let profile = 'A';
+    if (options.PerformanceObserver) b.context.PerformanceObserver = options.PerformanceObserver;
     const userscript = { getValue: (key, fallback) => saved.get(key) ?? fallback,
         setValue: (key, value) => saved.set(key, value), ...options };
     const tUi = createI18n({ readLanguage: () => 'en' }).tUi;
@@ -477,4 +478,22 @@ test('consecutive native clicks partition request windows and retire the handler
     assert.equal(recent[0].loading.components[0].fields[0].name, 'onClick'); assert.equal(calls, 0);
     b.select('B'); b.feature.check(); assert.equal(b.feature.diagnostics().navigation.retained, 0);
     b.feature.dispose();
+});
+
+test('native request observation starts only on user navigation and disconnects on profile and route retirement', () => {
+    const instances = [];
+    class PerformanceObserver {
+        constructor(callback) { this.callback = callback; this.disconnected = false; instances.push(this); }
+        observe() {}
+        takeRecords() { return []; }
+        disconnect() { this.disconnected = true; }
+    }
+    const b = setup({ PerformanceObserver }), a = mount(b), next = nextControl(b, a.row, () => {});
+    b.feature.check(); b.feature.diagnostics(); assert.equal(instances.length, 0);
+    b.document.dispatchEvent({ type: 'click', target: next }); assert.equal(instances.length, 1);
+    b.select('B'); b.feature.check(); assert.equal(instances[0].disconnected, true);
+    instances[0].callback({ getEntries() { throw Error('retired callback read'); } });
+    b.document.dispatchEvent({ type: 'click', target: next }); assert.equal(instances.length, 2);
+    b.location.pathname = '/watch/1'; b.feature.check(); assert.equal(instances[1].disconnected, true);
+    assert.equal(b.feature.diagnostics().navigation.retained, 0); b.feature.dispose();
 });
