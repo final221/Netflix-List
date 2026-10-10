@@ -45,7 +45,7 @@ test('generated browsing series captures real Falcor coverage and expires shared
     assert.equal(paths.length, 4); await b.navigate('/watch/123'); assert.equal(b.scheduler.timers.size, 0);
 });
 
-test('generated release refills an empty browsing row through the native next control', async () => {
+test('generated release loads a partial browsing row after dismissal through the native next control', async () => {
     const b = browser(), stored = new Map(); let moves = 0;
     b.window.netflix.reactContext = { models: { userInfo: { data: { userGuid: 'A' } } } };
     b.context.GM_getValue = (key, fallback) => stored.get(key) ?? fallback;
@@ -53,6 +53,9 @@ test('generated release refills an empty browsing row through the native next co
     const row = b.document.body.appendChild(new Element('section'));
     const slot = row.appendChild(new Element('div')); slot.setAttribute('data-virtual-slot', '0');
     const card = slot.appendChild(new Element('a')); card.setAttribute('data-uia', 'standard-card'); card.setAttribute('href', '/title/123');
+    const remaining = row.appendChild(new Element('div')); remaining.setAttribute('data-virtual-slot', '1');
+    const remainingCard = remaining.appendChild(new Element('a'));
+    remainingCard.setAttribute('data-uia', 'standard-card'); remainingCard.setAttribute('href', '/title/789');
     const next = row.appendChild(new Element('button')); next.setAttribute('data-uia', 'carousel-hawkins-right-button');
     next.click = () => { moves++; card.setAttribute('href', '/title/456'); };
     b.start(); const hide = slot.querySelectorAll('button').find(button => button.textContent === 'Hide suggestion');
@@ -60,6 +63,7 @@ test('generated release refills an empty browsing row through the native next co
     assert.equal(slot.style.getPropertyValue('display'), 'none'); await b.scheduler.advance(250);
     for (let i = 0; i < 3; i++) await b.scheduler.advance(150);
     assert.equal(moves, 1); assert.equal(card.getAttribute('href'), '/title/456'); assert.equal(slot.style.getPropertyValue('display'), '');
+    assert.equal(remaining.style.getPropertyValue('display'), ''); assert.equal(remainingCard.getAttribute('href'), '/title/789');
     assert.equal([...stored.values()][0].choices['123'], 'hide'); assert.equal(b.requests.length, 0);
     await b.navigate('/watch/456'); assert.equal(b.scheduler.timers.size, 0); assert.equal(b.window.listenerCount('scroll'), 0);
 });

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.8.0
+// @version      1.8.1
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -19474,6 +19474,7 @@ ${CARD_ACTION_STYLES}
     }
     function stop(job, reason) {
       cancel(job);
+      if (reason !== "no-next-control") job.requests.clear();
       job.stopped = true;
       job.reason = reason;
       counters.stopped++;
@@ -19482,7 +19483,9 @@ ${CARD_ACTION_STYLES}
     }
     function current(job) {
       if (job.generation !== generation || rows.get(job.row) !== job || !admitted()) return null;
-      const state = dom.refillState(job.row, readChoices());
+      const choices = readChoices();
+      for (const [id, reason] of job.requests) if (choices[id] !== reason) job.requests.delete(id);
+      const state = dom.refillState(job.row, choices);
       return state?.scroller === job.scroller ? state : null;
     }
     function later(job, callback, delay = 150) {
@@ -19498,7 +19501,7 @@ ${CARD_ACTION_STYLES}
         return;
       }
       job.signature = state.signature;
-      if (state.remaining) {
+      if (state.remaining && !job.requests.size) {
         cancel(job);
         return;
       }
@@ -19528,7 +19531,7 @@ ${CARD_ACTION_STYLES}
         warn("Recommendation refill click failed", { reason: error.message });
         return;
       }
-      log("Recommendation refill page requested", { pages: job.moves });
+      log("Recommendation refill page requested", { pages: job.moves, trigger: job.requests.size ? "dismissal" : "empty-row" });
       if (current(job)) later(job, () => settle(job));
     }
     function settle(job) {
@@ -19538,13 +19541,14 @@ ${CARD_ACTION_STYLES}
         return;
       }
       job.waited += 150;
-      if ((state.signature !== job.signature || state.remaining) && job.waited >= 450) {
+      if ((state.signature !== job.signature || !job.requests.size && state.remaining) && job.waited >= 450) {
         onPage(job.row);
         const updated = current(job);
         if (!updated) return;
         job.waiting = false;
         if (updated.remaining) {
           counters.filled++;
+          job.requests.clear();
           job.seen.clear();
           job.moves = 0;
           log("Recommendation row refilled", { remaining: updated.remaining });
@@ -19560,14 +19564,15 @@ ${CARD_ACTION_STYLES}
       }
       later(job, () => settle(job));
     }
-    function update(currentRows) {
+    function update(currentRows, dismissal = null) {
       for (const [row, job] of rows) if (!currentRows.has(row) || !row.isConnected) {
         cancel(job);
         rows.delete(row);
       }
       if (!admitted()) return;
+      const choices = readChoices();
       for (const row of currentRows) {
-        const state = dom.refillState(row, readChoices());
+        const state = dom.refillState(row, choices);
         if (!state) continue;
         let job = rows.get(row);
         if (job && job.scroller !== state.scroller) {
@@ -19585,12 +19590,22 @@ ${CARD_ACTION_STYLES}
             moves: 0,
             timer: null,
             waiting: false,
-            stopped: false
+            stopped: false,
+            requests: /* @__PURE__ */ new Map()
           };
           rows.set(row, job);
         }
+        for (const [id, reason] of job.requests) if (choices[id] !== reason) job.requests.delete(id);
+        if (dismissal?.row === row && choices[dismissal.id]) {
+          job.requests.set(dismissal.id, choices[dismissal.id]);
+          if (!job.waiting) {
+            job.stopped = false;
+            job.seen.clear();
+            job.moves = 0;
+          }
+        }
         if (job.waiting || job.timer !== null) continue;
-        if (state.remaining) {
+        if (state.remaining && !job.requests.size) {
           job.stopped = false;
           job.seen.clear();
           job.moves = 0;
@@ -19678,8 +19693,8 @@ ${CARD_ACTION_STYLES}
       log,
       warn
     });
-    function updateRefill() {
-      refill.update(new Set([...entries.values()].map((entry) => entry.row)));
+    function updateRefill(dismissal = null) {
+      refill.update(new Set([...entries.values()].map((entry) => entry.row)), dismissal);
     }
     function scroll() {
       if (scrollTimer !== null) return;
@@ -19940,7 +19955,7 @@ ${CARD_ACTION_STYLES}
         ({ choices, titles } = latest);
         for (const entry of entries.values()) paint(entry);
         paintManager();
-        updateRefill();
+        updateRefill(input.action !== "undo" ? input.entry : null);
         log("Recommendation visibility choice saved", { action: input.action, hiddenCount: Object.keys(choices).length });
       } catch (error) {
         failed = true;
@@ -20197,7 +20212,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.8.0";
+  var SCRIPT_VERSION = "1.8.1";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

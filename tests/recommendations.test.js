@@ -42,6 +42,79 @@ function nextControl(b, row, click, hawkins = true) {
 }
 async function settleRefill(b, ticks = 3) { for (let i = 0; i < ticks; i++) await b.scheduler.advance(150); }
 
+test('every dismissal loads the clicked partial row while leaving other rows alone', async () => {
+    for (const label of ['Mark watched', 'Mark caught up', 'Hide suggestion']) {
+        const b = setup({ viewingData: seriesMetadata() }), a = mount(b), remaining = mount(b, '2'), other = mount(b, '3');
+        a.row.appendChild(remaining.host); remaining.row.remove();
+        if (label === 'Mark caught up') a.card.removeAttribute('data-video-type');
+        let moves = 0, unrelated = 0;
+        nextControl(b, a.row, () => { moves++; a.card.setAttribute('href', `/title/${moves + 3}`); });
+        nextControl(b, other.row, () => { unrelated++; });
+        b.feature.check(); await b.scheduler.flush();
+        assert.equal(moves, 0); b.click(a.host, label);
+        assert.equal(remaining.host.style.getPropertyValue('display'), '');
+        await b.scheduler.advance(250); await settleRefill(b);
+        assert.equal(moves, 1); assert.equal(unrelated, 0);
+        assert.equal(a.host.style.getPropertyValue('display'), '');
+        assert.equal(b.feature.diagnostics().refill.filled, 1);
+        b.feature.check(); await b.scheduler.advance(1000); assert.equal(moves, 1);
+        b.click(a.host, 'Hide suggestion'); await b.scheduler.advance(250); await settleRefill(b);
+        assert.equal(moves, 2); assert.equal(unrelated, 0); assert.equal(b.feature.diagnostics().refill.filled, 2);
+        b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
+    }
+});
+
+test('rapid dismissals coalesce before dispatch and while a partial-row move is loading', async () => {
+    const b = setup(), a = mount(b), second = mount(b, '2'), third = mount(b, '3'), remaining = mount(b, '4');
+    for (const item of [second, third, remaining]) { a.row.appendChild(item.host); item.row.remove(); }
+    let moves = 0;
+    nextControl(b, a.row, () => { moves++; }); b.feature.check();
+    b.click(a.host, 'Hide suggestion'); b.click(second.host, 'Mark watched');
+    await b.scheduler.advance(250); assert.equal(moves, 1);
+    b.click(third.host, 'Hide suggestion'); await settleRefill(b, 2); assert.equal(moves, 1);
+    a.card.setAttribute('href', '/title/5'); b.feature.check(); await settleRefill(b);
+    assert.equal(b.feature.diagnostics().refill.filled, 1);
+    await b.scheduler.advance(1000); assert.equal(moves, 1);
+    b.feature.dispose();
+});
+
+test('partial-row existing cards cannot acknowledge a stalled native request or cause retry loops', async () => {
+    const b = setup(), a = mount(b), remaining = mount(b, '2');
+    a.row.appendChild(remaining.host); remaining.row.remove(); let moves = 0;
+    nextControl(b, a.row, () => { moves++; }); b.feature.check(); b.click(a.host, 'Hide suggestion');
+    await b.scheduler.advance(250); await settleRefill(b, 20);
+    assert.equal(moves, 1); assert.equal(b.feature.diagnostics().refill.timeouts, 1);
+    assert.equal(b.feature.diagnostics().refill.filled, 0);
+    b.feature.check(); await b.scheduler.advance(1000); assert.equal(moves, 1);
+    assert.equal(remaining.host.style.getPropertyValue('display'), '');
+    b.feature.dispose();
+});
+
+test('partial-row dismissal waits for an enabled control and never loads after a failed save', async () => {
+    const b = setup(), a = mount(b), remaining = mount(b, '2');
+    a.row.appendChild(remaining.host); remaining.row.remove(); let moves = 0;
+    const next = nextControl(b, a.row, () => { moves++; a.card.setAttribute('href', '/title/3'); });
+    next.disabled = true; b.feature.check(); b.click(a.host, 'Hide suggestion');
+    await b.scheduler.advance(250); b.feature.check(); await b.scheduler.advance(250); assert.equal(moves, 0);
+    next.disabled = false; b.feature.check(); await b.scheduler.advance(250); await settleRefill(b);
+    assert.equal(moves, 1);
+    b.userscript.setValue = () => { throw new Error('save failed'); }; b.click(remaining.host, 'Hide suggestion');
+    await b.scheduler.advance(1000); assert.equal(moves, 1);
+    assert.equal(remaining.host.style.getPropertyValue('display'), ''); b.feature.dispose();
+});
+
+test('restoring all rapid partial-row dismissals cancels dispatch; one remaining choice still loads', async () => {
+    for (const restoreAll of [true, false]) {
+        const b = setup(), a = mount(b), second = mount(b, '2'), remaining = mount(b, '3');
+        for (const item of [second, remaining]) { a.row.appendChild(item.host); item.row.remove(); }
+        let moves = 0; nextControl(b, a.row, () => { moves++; a.card.setAttribute('href', '/title/4'); });
+        b.feature.check(); b.click(a.host, 'Mark watched'); b.click(second.host, 'Hide suggestion');
+        b.restore('1'); if (restoreAll) b.restore('2');
+        await b.scheduler.advance(250); await settleRefill(b);
+        assert.equal(moves, restoreAll ? 0 : 1); b.feature.dispose();
+    }
+});
+
 function seriesMetadata(readCoverage = () => [['101', 2]]) {
     return { beginRead: () => ({ profileGuid: 'A' }),
         async readTitles(ids) { return new Map(ids.map(id => [id, { videoId: id, type: 'show' }])); },
@@ -157,7 +230,8 @@ test('unchanged native pages time out without a retry loop', async () => {
 
 test('refill cancels before clicking on Undo, profile change, route exit and disposal', async () => {
     for (const change of [b => b.restore('1'), b => b.select('B'), b => { b.location.pathname = '/watch/1'; }, b => b.feature.dispose()]) {
-        const b = setup(), a = mount(b); let clicks = 0;
+        const b = setup(), a = mount(b), remaining = mount(b, '2'); let clicks = 0;
+        a.row.appendChild(remaining.host); remaining.row.remove();
         nextControl(b, a.row, () => { clicks++; }); b.feature.check(); b.click(a.host, 'Mark watched'); change(b);
         await b.scheduler.advance(250); assert.equal(clicks, 0); b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
     }

@@ -38,7 +38,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     const refill = createRefill({ environment, dom, readChoices: visibleChoices,
         admitted: () => active && allowed() && Boolean(profile) && !failed && readProfile() === profile,
         onPage: row => scan(row), log, warn });
-    function updateRefill() { refill.update(new Set([...entries.values()].map(entry => entry.row))); }
+    function updateRefill(dismissal = null) { refill.update(new Set([...entries.values()].map(entry => entry.row)), dismissal); }
     function scroll() {
         if (scrollTimer !== null) return;
         scrollTimer = environment.setTimeout(() => { scrollTimer = null; if (active && allowed()) updateRefill(); }, 250);
@@ -209,7 +209,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             ({ choices, titles } = latest);
             for (const entry of entries.values()) paint(entry);
             paintManager();
-            updateRefill();
+            updateRefill(input.action !== 'undo' ? input.entry : null);
             log('Recommendation visibility choice saved', { action: input.action, hiddenCount: Object.keys(choices).length });
         } catch (error) { failed = true; for (const entry of entries.values()) paint(entry); paintManager();
             warn('Recommendation choice could not be saved', { reason: error.message }); }
