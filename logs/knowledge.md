@@ -22,49 +22,54 @@ Windows/Firefox157, English, 1920×919/DPR1; runtime revisions unavailable. Unco
 - 1.4.69 `logs/1.4.69.txt`, **2026-10-09T22:28:47.012+02:00**, 68,631bytes; SHA256 **ad3bf51f611d47927db061468f0dc83e4f4e311f7f2d418189e28b90fe749da3**. Compact650occurrences/67groups/49names; no groups/sections omitted,28examples omitted.
 - 1.4.69 `logs/Textdokument (neu).txt`, **2026-10-09T22:34:04.461+02:00**, 576,804bytes/694events; SHA256 **eeafdbe078b7b497463dc28df25f1deb11d1a1f99ac4f1dc433575ae690699ec**. Same startup/first650events; totals match; page65 slowest340ms.
 
-Both Browse→My List captures reconcile bootstrap10(.67)/nine(.69) against mounted500 with two fallback warnings; seven columns/page-zero restoration/not stale,136displayed(filtered). .67 bootstrap344ms/native6961ms/72pages/init7.45s; sampled hover/no errors/resize/route exit; identity/pagination/page timings omitted.
-.69 bootstrap365ms/page size75/hasNextPage=false; init8016ms/native7509ms;72settle samples total4326/max340ms;72moves3129ms incl16ms restoration (individual pages unpaired). Requested key idx=-999; no live row ID/selection reason in either export. Recovered .52/.54/.58 (revision above): idx=-999; count/edges/hasNextPage=9/9/false,75/75/false,500/75/true.
+Browse→My List: bootstrap10(.67)/9(.69),mounted500,two fallback warnings;seven columns/page0/not stale/136filtered. .67 bootstrap344/native6961ms/72pages/init7.45s; sampled hover/no errors/resize/exit; identity/pagination/page timings omitted.
+.69 bootstrap365ms/page75/hasNextPage=false;init8016/native7509ms;72settles4326/max340ms;72moves3129ms incl16ms restoration,unpaired. Key idx=-999; live row/selection reason omitted. Recovered .52/.54/.58 (revision above):idx=-999;count/edges/hasNextPage=9/9/false,75/75/false,500/75/true.
 .69 hover/cleanup/viewing succeed; metadata partly unknown. No refresh/route exit.
 
 ## Session — 1.4.70
 
-Uncommitted `logs/Textdokument (neu).txt`: 63,370 bytes, SHA256 **0fb1b1282449390cbf73f7f20342dc6c9449a6a09c83b63b40bdc67063ded4f9**. Header 1.4.70, copiedAt **2026-10-09T23:04:59.936+02:00**, Windows/Firefox 157, English, 1920×919, DPR 1; runtime ref unknown. Compact278/39names; no group/section omissions,25examples omitted.
+Uncommitted `logs/Textdokument (neu).txt`: 63,370 bytes, SHA256 **0fb1b1282449390cbf73f7f20342dc6c9449a6a09c83b63b40bdc67063ded4f9**. Header 1.4.70, copiedAt **2026-10-09T23:04:59.936+02:00**, same environment as1.4.69; runtime ref unknown. Compact278/39names; no group/section omissions,25examples omitted.
 
 - Initial My List: init2526ms/500titles/seven GraphQL pages; continuation1472/bootstrap532ms; no native scan. Seven columns/72pages/not stale/no WARN/ERROR.
-- Selector cached-key; selected/native section IDs match before/after response, both cached counts 500, first three selected/native/response card IDs agree; no native section change. Response 75 edges/500 total/hasNextPage=true.
+- Cached-key matches stable selected/native IDs and first3 card samples before/after; both cached counts500. Response75edges/500total/hasNextPage=true.
 - Viewing/hover/cleanup succeed; 197 complete/272 unknown metadata. No refresh/route exit.
 
-- Later detailed `logs/Textdokument (neu).txt`, **2026-10-09T23:58:29.467+02:00**, 517,617 bytes/509 events/46 names, SHA256 **aa4260fed0fe075e7d0e6262b10839377b79055dcc11a2913163e1f3232dd727**; same version/environment, different session. Starts already on My List (no recorded Browse transition). Init 8,282 ms/native scan 7,521 ms; 500 cards/72 pages, mapping not stale. Two count-reconciliation/fallback warnings, no error.
-- Cached-key selects count nine; selected/live section IDs mismatch before/after request, their decoded page identities differ and card samples disagree. Live ID is stable; nativeRowCachedCount=null. Response nine edges/count nine/hasNextPage=false; native count 500. Hover/viewing requests succeed; metadata partly unknown.
+- Later detailed `logs/Textdokument (neu).txt`, **2026-10-09T23:58:29.467+02:00**, 517,617 bytes/509 events/46 names, SHA256 **aa4260fed0fe075e7d0e6262b10839377b79055dcc11a2913163e1f3232dd727**; same version/environment,new session,initial My List. Init8282/native7521ms;500cards/72pages/not stale;two reconciliation/fallback warnings,no error.
+- Cached-key9; stable live ID differs from selected ID before/after, decoded page/card samples disagree; nativeRowCachedCount=null. Response9edges/count9/hasNextPage=false vs native500. Hover/viewing succeed; metadata partly unknown.
+
+For 1.9.x: `version/suffix` identifies uncommitted `logs/<version>-2026-10-10T<suffix>.txt`; capture times are 2026-10-10 UTC+02. Windows/Firefox157/English/2560×1279/DPR1/homepage; runtime refs unknown.
 
 ## Session — 1.9.1
 
-Uncommitted captures, copiedAt **2026-10-10** UTC+02, Windows/Firefox157, English, 2560×1279/DPR1/homepage; runtime ref unknown:
-- **20:19:33.852**, `1.9.1-2026-10-10T18-19-33-853Z-01657356.txt`, 1711bytes/3events, SHA256 **59e5f4f52f2a28de68e67ac7038f2595648fada60ce5d493d209f44bc949a23f**.
-- **20:20:20.484**, `1.9.1-2026-10-10T18-20-20-485Z-3f42d96b.txt`, 2730bytes/7occurrences, SHA256 **b97d3d8488e08763f6f23832f17696f5bd1e6af9179917c19c2d9b24e4396c02**.
-Same startup; completion/cancellation retained, both saved. User confirms folder memory/playback overlay. Decorated156/hidden140/checked160→186/pending26→0; no storage failure/navigation/refill/compact omissions.
+- **20:19:33.852**, `1.9.1/18-19-33-853Z-01657356`, 1711bytes/3events, SHA256 **59e5f4f52f2a28de68e67ac7038f2595648fada60ce5d493d209f44bc949a23f**.
+- **20:20:20.484**, `1.9.1/18-20-20-485Z-3f42d96b`, 2730bytes/7occurrences, SHA256 **b97d3d8488e08763f6f23832f17696f5bd1e6af9179917c19c2d9b24e4396c02**.
+Same startup; saves/cancellation retained; folder memory/playback overlay confirmed. Decorated156/hidden140/checked160→186/pending26→0; no storage failure/navigation/refill/omissions.
 
 ## Session — 1.9.3
 
-Uncommitted `1.9.3-2026-10-10T18-33-21-508Z-8b0f7ecb.txt`, 1463bytes; SHA256 **c3c2752bad24f0140bf250af1812275d03d5fe36d04cce8a1e79b96867af5345**. CopiedAt **2026-10-10T20:33:21.508+02:00**, same Firefox/environment as1.9.1. Baseline3events/no refill/prior pages/completion. User: arrow reveals more, then CopyLogs unclickable(Shift/normal); cause unproven.
+`1.9.3/18-33-21-508Z-8b0f7ecb`, 1463bytes; SHA256 **c3c2752bad24f0140bf250af1812275d03d5fe36d04cce8a1e79b96867af5345**. CopiedAt **2026-10-10T20:33:21.508+02:00**. Baseline3events/no refill/prior pages/completion. User: arrow reveals more, then CopyLogs unclickable(Shift/normal); cause unproven.
 
 ## Session — 1.9.4
 
-Uncommitted; same environment as1.9.1, runtime ref unknown:
-- **20:40:15.662**, `1.9.4-2026-10-10T18-40-15-662Z-7329ed01.txt`,2248bytes/5events; SHA256 **6d218ffbd0a7f62a08cd9bfdcf6e2c133307e9fcd99b3ddd5d734f3bcdfc1707**.
-- **20:40:26.160**, `1.9.4-2026-10-10T18-40-26-160Z-a62b34b7.txt`,2436bytes/7events; SHA256 **ce1970bb9efce8824ef5c870017b05f26da67ccd39fab52257ee13d2d20f69d0**.
-Same startup; completion/cancellation retained, pending0. Decorated263→275/checked262→275/hidden140. User confirms arrow; no per-row facts/refill/prior pages. Repeat saves reached logs/.
+- **20:40:15.662**, `1.9.4/18-40-15-662Z-7329ed01`,2248bytes/5events; SHA256 **6d218ffbd0a7f62a08cd9bfdcf6e2c133307e9fcd99b3ddd5d734f3bcdfc1707**.
+- **20:40:26.160**, `1.9.4/18-40-26-160Z-a62b34b7`,2436bytes/7events; SHA256 **ce1970bb9efce8824ef5c870017b05f26da67ccd39fab52257ee13d2d20f69d0**.
+Same startup; saves/cancellation retained,pending0. Decorated263→275/checked262→275/hidden140; user confirms arrow. No per-row facts/refill/prior pages.
 
 ## Session — 1.9.5
 
-Uncommitted; same environment as1.9.1, runtime ref unknown:
-- `logs/1.9.5-2026-10-10T18-50-04-861Z-50175928.txt`, copiedAt **2026-10-10T20:50:04.860+02:00**; SHA256 **80715fcce6f40734fec5578b6a3c87f7fdf70d43ca0221a30a94c29287570c21**.
-- `logs/1.9.5-2026-10-10T18-50-14-550Z-83ea815f.txt`, copiedAt **2026-10-10T20:50:14.550+02:00**; SHA256 **70218a5d89a718fa9efa8ce3d0e3f066f3800b98b269e73fa441a1c860b3b30d**.
-- `logs/1.9.5-2026-10-10T18-50-23-271Z-4674aef4.txt`, copiedAt **2026-10-10T20:50:23.270+02:00**; SHA256 **09784c45ebf5e1575068183da3b90baccd88370122443689617bcd642e400f92**.
-Detailed,same startup;3/6/9events,20rows/no truncation/warnings/refill/prior pages; export pending0. Only carousel-row-section-11 (“Because you watched The First Purge”) changes. Clicks20:50:11.529/20:50:21.311: mounted13→25→26; added12 then8/removed0 then7; visible5→7→8,hidden8→10→9,offscreen0→8→9. Decorated263→275→276. IDs untruncated; loading facts only totalCount:number at depth14/unknown component. pageIndex=-1/scrollLeft0/transform:none. DOM additions/removal observed; network/cache origin unobserved.
+- `1.9.5/18-50-04-861Z-50175928`, copiedAt **20:50:04.860**; SHA256 **80715fcce6f40734fec5578b6a3c87f7fdf70d43ca0221a30a94c29287570c21**.
+- `1.9.5/18-50-14-550Z-83ea815f`, copiedAt **20:50:14.550**; SHA256 **70218a5d89a718fa9efa8ce3d0e3f066f3800b98b269e73fa441a1c860b3b30d**.
+- `1.9.5/18-50-23-271Z-4674aef4`, copiedAt **20:50:23.270**; SHA256 **09784c45ebf5e1575068183da3b90baccd88370122443689617bcd642e400f92**.
+Detailed,same startup,3/6/9events;20rows/no truncation/warnings/refill/prior pages/pending saves. Only row11 (“Because you watched The First Purge”) changes: arrows20:50:11.529/21.311; mounted13→25→26, added12/8,removed0/7; visible5→7→8,hidden8→10→9,offscreen0→8→9. Decorated263→275→276. Loading: totalCount:number/depth14. pageIndex=-1/scrollLeft0/transform:none. Network/cache origin unobserved.
+
+## Session — 1.9.6
+
+- `1.9.6/19-05-01-105Z-a24ce44f`, copiedAt **21:05:01.105**, 11089bytes; SHA256 **e8b9ec6551df552ec495f1ea3f1a6a79de2b41ebd2a280098351b3386ff7526f**.
+- `1.9.6/19-05-09-360Z-9bb398ee`, copiedAt **21:05:09.359**, 15587bytes; SHA256 **b84db13abfdb56ac091cab2d0458084787a7d22c03e6e5d36d70bd6a2d7979e0**.
+Detailed,same startup21:04:51.860;3→6events,20rows/untruncated/no warnings/refill/prior pages; pending saves0, first completion retained. Arrow21:05:06.996 changes only row11: mounted13→25/added12/removed0,visible5→7/hidden8→10/offscreen0→8; decorated267→279/choices140. Request window2363ms/250buffered entries/0matches; untruncated export, browser retention unknown. React survey10summaries/truncated: onClick:function depths0/1; hook-next shapes4/8, initialPageCounts13; no loader/cache collection exposed. No matching captured request is not proof of cache use.
 
 ## Evidence limits
 
-Chat **2026-10-10** (versions/environment unconfirmed): 1.5.0 previews cover buttons; 1.6.0/.1 panel/collapse work; 1.8.0 needs manual arrows; 1.8.1 auto-advances the row, disrupting browsing. No capture/timings.
+Chat2026-10-10, environment unconfirmed/no captures:1.5.0 previews cover buttons;1.6.0/.1 panel/collapse work;1.8.0 needs arrows;1.8.1 auto-scroll disrupts browsing.
 
-No warning alone certifies the 1.4.54 mapping issue resolved. Unverified: resize/zoom/remapping, route lifecycle, membership/Undo/viewing, timers and popup/pointer controls. Requests can succeed with unknown metadata. No captures:1.4.59–.63/.65–.66/.68 or1.4.71–1.9.0.
+No-warning captures do not certify mapping repair. Unverified: resize/zoom/remapping, route lifecycle, membership/Undo/viewing, timers and popup/pointer controls. Requests can succeed with unknown metadata. No captures:1.4.59–.63/.65–.66/.68 or1.4.71–1.9.0.
