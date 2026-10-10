@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.12
+// @version      1.9.13
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -6825,6 +6825,7 @@ ${CARD_ACTION_STYLES}
       }
     }
     function compact(value, depth = 0, key = "") {
+      if (key === "navigation" && value && typeof value === "object" && Array.isArray(value.recent) && Array.isArray(value.movements)) return value;
       if (typeof value === "string") return value.length > 400 && !DIAGNOSTIC_FIELD.test(key) ? value.slice(0, 400) + " [truncated; original characters: " + value.length + "]" : value;
       if (!value || typeof value !== "object") return value;
       if (depth >= 8) return { omitted: true, kind: Array.isArray(value) ? "array" : "object" };
@@ -19599,7 +19600,7 @@ ${CARD_ACTION_STYLES}
     position:absolute!important;top:0!important;bottom:0!important;transform:none!important;
     display:flex!important;align-items:center!important;justify-content:center!important;border-radius:8px!important;
     opacity:1!important;visibility:visible!important;
-    z-index:10001!important;background:#252525!important;border:1px solid #777!important;box-shadow:0 0 12px #0008!important;color:#fff!important;
+    z-index:10001!important;background:rgba(37,37,37,.32)!important;border:1px solid #777!important;box-shadow:0 0 12px #0008!important;color:#fff!important;
     cursor:pointer;pointer-events:auto;
 }
 :is(section,.lolomoRow):has(.tm-rec-controls) :is(.handleNext,.handlePrev){width:56px!important}
@@ -19607,7 +19608,7 @@ ${CARD_ACTION_STYLES}
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia*="carousel"][data-uia$="button"],.handleNext,.handlePrev) :is(svg,.indicator-icon){width:32px!important;height:32px!important;font-size:32px!important;pointer-events:none}
 
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev)::after{content:"";position:absolute;inset:0;border:1px solid #777;border-radius:8px;pointer-events:none}
-:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev) :is(button,[role="button"]){width:100%!important;height:100%!important;max-height:none!important;align-self:stretch!important;border-radius:8px!important;background:#252525!important;display:flex!important;align-items:center!important;justify-content:center!important}
+:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev) :is(button,[role="button"]){width:100%!important;height:100%!important;max-height:none!important;align-self:stretch!important;border-radius:8px!important;background:transparent!important;display:flex!important;align-items:center!important;justify-content:center!important}
 `;
   function createRecommendationDom(environment) {
     const { document, location, getComputedStyle, performance, PerformanceObserver } = environment;
@@ -19668,25 +19669,36 @@ ${CARD_ACTION_STYLES}
           value.restore.forEach((release) => release());
           resource.controls.delete(control);
         }
-        let card;
+        let card, bottom;
         for (const item of scan(row)) {
           if (item.row !== row) continue;
           const rect = item.card.getBoundingClientRect();
           if (rect.width > 1 && rect.height > 1) {
             card = rect;
+            const actions = item.host.querySelector(".tm-rec-controls")?.getBoundingClientRect();
+            bottom = Math.max(rect.top + rect.height, actions?.height > 1 ? actions.top + actions.height : rect.top + rect.height);
             break;
           }
         }
         if (!card) return false;
         for (const control of controls) {
           const parent = control.offsetParent || row, rect = parent.getBoundingClientRect();
-          const height = Math.round(card.height + 72), top = Math.round(card.top - rect.top - (parent.clientTop || 0) + (parent.scrollTop || 0));
-          const signature = height + ":" + top, previous = resource.controls.get(control);
-          if (previous?.signature === signature && control.style.getPropertyValue("height") === height + "px" && control.style.getPropertyValue("top") === top + "px") continue;
+          const height = Math.round(bottom - card.top), top = Math.round(card.top - rect.top - (parent.clientTop || 0) + (parent.scrollTop || 0));
+          const box = control.getBoundingClientRect(), previous = resource.controls.get(control);
+          const viewport = document.documentElement?.clientWidth || environment.window?.innerWidth || environment.innerWidth;
+          const next = control.matches('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext');
+          const properties = [["height", height + "px"], ["top", top + "px"], ["bottom", "auto"]];
+          if (viewport > 0 && box.width > 1) {
+            const width = Math.min(viewport, previous?.edgeWidth || Math.max(56, next ? viewport - box.left : box.right));
+            const edge = next ? viewport - width : 0;
+            properties.push(["left", Math.round(edge - rect.left - (parent.clientLeft || 0) + (parent.scrollLeft || 0)) + "px"], ["right", "auto"], ["width", Math.round(width) + "px"]);
+          }
+          const signature = JSON.stringify(properties);
+          if (previous?.signature === signature && properties.every(([name, value2]) => control.style.getPropertyValue(name) === value2)) continue;
           previous?.restore.forEach((release) => release());
-          const value = { signature, restore: [] };
+          const value = { signature, edgeWidth: Number.parseFloat(properties.find(([name]) => name === "width")?.[1]) || previous?.edgeWidth, restore: [] };
           resource.controls.set(control, value);
-          for (const [name, applied] of [["height", height + "px"], ["top", top + "px"], ["bottom", "auto"]]) value.restore.push(styleLease(control, name, applied, "important"));
+          for (const [name, applied] of properties) value.restore.push(styleLease(control, name, applied, "important"));
         }
         return true;
       } catch (_) {
@@ -19936,9 +19948,12 @@ ${CARD_ACTION_STYLES}
         let parent = control.parentElement;
         for (let i = 0; parent && i < 4; i++, parent = parent.parentElement) parents.push(describeNode(parent));
         const rect = control.getBoundingClientRect(), hits = [];
-        if (document?.elementFromPoint && rect.height > 0) for (const y of [rect.top + 2, rect.top + rect.height / 2, rect.bottom - 2]) {
-          const hit = document.elementFromPoint(rect.left + rect.width / 2, y);
-          hits.push({ y: Math.round(y), tag: hit?.tagName || null, inside: Boolean(hit && (hit === control || control.contains(hit))) });
+        const viewport = document.documentElement?.clientWidth || environment.window?.innerWidth || environment.innerWidth;
+        const points = [rect.top + 2, rect.top + rect.height / 2, rect.bottom - 2].map((y) => [rect.left + rect.width / 2, y]);
+        for (const x of [rect.left + 2, rect.right - 2, 1, viewport - 1]) if (Number.isFinite(x)) points.push([x, rect.top + rect.height / 2]);
+        if (document?.elementFromPoint && rect.height > 0) for (const [x, y] of points) {
+          const hit = document.elementFromPoint(x, y);
+          hits.push({ x: Math.round(x), y: Math.round(y), tag: hit?.tagName || null, inside: Boolean(hit && (hit === control || control.contains(hit))) });
         }
         return { nodes: nodes.map(describeNode), parents, icon: control.querySelector?.("svg, .indicator-icon") ? describeNode(control.querySelector("svg, .indicator-icon")) : null, hits };
       } catch (_) {
@@ -20069,6 +20084,11 @@ ${CARD_ACTION_STYLES}
           hidden: items.filter((item) => choices[item.id]).length,
           ids: items.slice(0, 120).map((item) => item.id),
           idsTruncated: items.length > 120,
+          cardPositions: items.filter((item) => !choices[item.id] && item.host.getBoundingClientRect().width > 1).slice(0, 24).map((item) => {
+            const rect = item.host.getBoundingClientRect();
+            return { id: item.id, rect: [rect.left, rect.top, rect.width, rect.height].map(Math.round) };
+          }),
+          positionsTruncated: items.filter((item) => !choices[item.id]).length > 24,
           visibleIds: items.filter((item) => {
             if (choices[item.id]) return false;
             const rect = item.host.getBoundingClientRect(), bounds = state.scroller.getBoundingClientRect();
@@ -20177,7 +20197,7 @@ ${CARD_ACTION_STYLES}
   // src/recommendations/navigation.js
   function createNavigationDiagnostics({ environment, dom, readChoices, admitted, log }) {
     let sequence = 0, failures = 0, requests = null, history = /* @__PURE__ */ new WeakMap(), lastHover = null, generation = 0, movementCount = 0;
-    const recent = [], movements = [], timers = /* @__PURE__ */ new Map();
+    const recent = [], actions = [], movements = [], timers = /* @__PURE__ */ new Map();
     const now = () => environment.performance?.now() ?? Date.now();
     function remember(row, state) {
       let seen = history.get(row);
@@ -20217,6 +20237,55 @@ ${CARD_ACTION_STYLES}
       record.closed = true;
       record.requestFacts = dom.navigationRequests(record.loading.at, now(), requests?.read());
     }
+    function schedule(record) {
+      for (const delay of [200, 1200, 5e3]) {
+        const timer = environment.setTimeout(() => {
+          timers.delete(timer);
+          try {
+            if (delay === 5e3) close(record, "5000ms");
+            else sample(record, `${delay}ms`);
+          } catch (_) {
+            failures++;
+          }
+        }, delay);
+        timers.set(timer, record);
+      }
+    }
+    function beforeAction(row) {
+      try {
+        return admitted() && row ? dom.rowDiagnostics(row, readChoices()) : null;
+      } catch (_) {
+        failures++;
+        return null;
+      }
+    }
+    function savedAction(row, before, action, id) {
+      if (!before || !admitted()) return;
+      try {
+        const previous = actions.at(-1);
+        if (previous) close(previous, "before-next-action");
+        requests ||= dom.observeRequests();
+        requests.begin();
+        const record = {
+          sequence: movementCount,
+          action,
+          id,
+          row,
+          before,
+          loading: { at: now() },
+          owner: generation,
+          seenBefore: new Set(remember(row, before)),
+          samples: [],
+          closed: false
+        };
+        actions.push(record);
+        if (actions.length > 20) cancel(actions.shift());
+        sample(record, "saved");
+        schedule(record);
+      } catch (_) {
+        failures++;
+      }
+    }
     function movement(kind, target, detail = {}) {
       if (!admitted()) return;
       try {
@@ -20229,7 +20298,7 @@ ${CARD_ACTION_STYLES}
         }
         if (kind === "hover" && lastHover === hoverKey) return;
         if (kind === "hover") lastHover = hoverKey;
-        if (!id && !arrow && kind !== "scroll" && kind !== "action") return;
+        if (!id && !arrow && kind !== "scroll" && kind !== "action" && kind !== "action-attempt") return;
         movements.push({
           at: now(),
           kind,
@@ -20268,18 +20337,7 @@ ${CARD_ACTION_STYLES}
         };
         recent.push(record);
         if (recent.length > 20) cancel(recent.shift());
-        for (const delay of [200, 1200, 5e3]) {
-          const timer = environment.setTimeout(() => {
-            timers.delete(timer);
-            try {
-              if (delay === 5e3) close(record, "5000ms");
-              else sample(record, `${delay}ms`);
-            } catch (_) {
-              failures++;
-            }
-          }, delay);
-          timers.set(timer, record);
-        }
+        schedule(record);
         log("Native recommendation arrow clicked", { sequence: record.sequence, direction: record.direction, before });
       } catch (_) {
         failures++;
@@ -20295,12 +20353,17 @@ ${CARD_ACTION_STYLES}
         movementCount,
         movementsDropped: movementCount - movements.length,
         pendingSamples: timers.size,
-        recent: recent.map((record) => {
+        recent: serialize(recent),
+        actions: serialize(actions)
+      };
+      function serialize(records) {
+        return records.map((record) => {
           const { sequence: sequence2, direction, row, before, loading, samples, requestFacts, seenBefore } = record;
           const after = admitted() && row.isConnected ? dom.rowDiagnostics(row, readChoices()) : null;
           return {
             sequence: sequence2,
             direction,
+            ...record.action ? { action: record.action, id: record.id } : {},
             before,
             afterAtExport: after,
             loading,
@@ -20313,16 +20376,17 @@ ${CARD_ACTION_STYLES}
             idComparisonTruncated: Boolean(before.idsTruncated || after?.idsTruncated),
             historyTruncated: seenBefore.size >= 1200
           };
-        })
-      };
+        });
+      }
     }
-    return Object.freeze({ click, movement, snapshot, dispose() {
+    return Object.freeze({ click, movement, beforeAction, savedAction, snapshot, dispose() {
       generation++;
       for (const timer of timers.keys()) environment.clearTimeout(timer);
       timers.clear();
       requests?.dispose();
       requests = null;
       recent.length = 0;
+      actions.length = 0;
       movements.length = 0;
       history = /* @__PURE__ */ new WeakMap();
       lastHover = null;
@@ -20657,6 +20721,9 @@ ${CARD_ACTION_STYLES}
       try {
         const p = profile, owner = epoch, latest = read(p);
         const id = input.entry?.id || input.id;
+        const actionBefore = navigation.beforeAction(input.entry?.row);
+        const diagnosticAction = input.action === "watched" && viewing.type(id) === "series" ? "caught-up" : input.action;
+        navigation.movement("action-attempt", input.entry?.card, { action: diagnosticAction, id });
         if (input.action === "watched") {
           if (!viewing.ready(id) && viewing.unavailable(id)) {
             viewing.retry(id);
@@ -20691,7 +20758,8 @@ ${CARD_ACTION_STYLES}
         for (const entry of entries.values()) paint(entry);
         paintManager();
         updateRefill(input.action !== "undo" ? input.entry : null);
-        navigation.movement("action", input.entry?.card, { action: input.action, id });
+        navigation.movement("action", input.entry?.card, { action: diagnosticAction, id });
+        navigation.savedAction(input.entry?.row, actionBefore, diagnosticAction, id);
         log("Recommendation visibility choice saved", { action: input.action, hiddenCount: Object.keys(choices).length });
       } catch (error) {
         failed = true;
@@ -21045,7 +21113,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.12";
+  var SCRIPT_VERSION = "1.9.13";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

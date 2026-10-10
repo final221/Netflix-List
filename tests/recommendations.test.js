@@ -529,10 +529,10 @@ test('arrow height uses card geometry rather than a percentage of its short pare
     arrow.offsetParent = { getBoundingClientRect: () => ({ top: 180 }), clientTop: 2, scrollTop: 0 };
     a.card.getBoundingClientRect = () => ({ left: 0, top: 100, width: 250, height: 140 });
     b.feature.check();
-    assert.equal(arrow.style.getPropertyValue('height'), '212px');
+    assert.equal(arrow.style.getPropertyValue('height'), '140px');
     assert.equal(arrow.style.getPropertyValue('top'), '-82px');
     a.card.getBoundingClientRect = () => ({ left: 0, top: 80, width: 200, height: 112 }); b.feature.check();
-    assert.equal(arrow.style.getPropertyValue('height'), '184px');
+    assert.equal(arrow.style.getPropertyValue('height'), '112px');
     assert.equal(arrow.style.getPropertyValue('top'), '-102px');
     b.feature.dispose(); assert.equal(arrow.style.getPropertyValue('height'), '64px');
     assert.equal(arrow.style.getPropertyValue('top'), '0px'); assert.equal(arrow.style.getPropertyValue('bottom'), '');
@@ -543,4 +543,32 @@ test('arrow retirement preserves a newer native height override', () => {
     const b = setup(), a = mount(b), arrow = nextControl(b, a.row, () => {}); b.feature.check();
     arrow.style.setProperty('height', '333px', 'important'); b.feature.dispose();
     assert.equal(arrow.style.getPropertyValue('height'), '333px');
+});
+
+
+test('arrow edge strip covers viewport margin and ends at measured actions, restoring horizontal leases', () => {
+    const b = setup(), a = mount(b), arrow = nextControl(b, a.row, () => {});
+    b.window.innerWidth = 2560;
+    arrow.offsetParent = { getBoundingClientRect: () => ({ left: 2488, top: 704 }), clientTop: 0 };
+    arrow.getBoundingClientRect = () => ({ left: 2460, right: 2516, top: 568, width: 56, height: 238 });
+    a.card.getBoundingClientRect = () => ({ left: 100, top: 568, width: 296, height: 166 });
+    b.feature.check();
+    const actions = a.host.querySelector('.tm-rec-controls');
+    actions.getBoundingClientRect = () => ({ top: 738, height: 28 }); b.feature.check();
+    assert.equal(arrow.style.getPropertyValue('width'), '100px');
+    assert.equal(arrow.style.getPropertyValue('left'), '-28px');
+    assert.equal(arrow.style.getPropertyValue('height'), '198px');
+    b.window.innerWidth = 1920; b.feature.check();
+    assert.equal(arrow.style.getPropertyValue('width'), '100px');
+    assert.equal(arrow.style.getPropertyValue('left'), '-668px');
+    b.feature.dispose();
+    for (const name of ['left', 'right', 'width']) assert.equal(arrow.style.getPropertyValue(name), '');
+});
+
+test('hiding a suggestion records same-row state before and immediately after collapse', () => {
+    const b = setup(), a = mount(b); b.feature.check(); b.click(a.host, 'Hide suggestion');
+    const action = b.feature.diagnostics().navigation.actions[0];
+    assert.equal(action.action, 'hide'); assert.equal(action.before.hidden, 0);
+    assert.equal(action.samples[0].state.hidden, 1); assert.equal(action.samples[0].reason, 'saved');
+    b.feature.dispose();
 });

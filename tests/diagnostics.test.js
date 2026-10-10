@@ -365,3 +365,17 @@ test('Copy Logs guards inactive routes and isolates private probe failures', () 
     assert.equal(JSON.parse(e.inspection.diagnostics().previewShape).status, 'partial-probe');
     assert.doesNotMatch(e.inspection.diagnostics().previewShape, /private-error/);
 });
+
+
+test('compact logs preserve bounded navigation order, four-coordinate rectangles and deeply nested action samples', async () => {
+    const { logger } = loggerFixture(); let text;
+    const navigation = { recent: [{ loading: { control: { parents: [{ rect: [0, 565, 2560, 279] }] } } }],
+        movements: Array.from({ length: 12 }, (_, at) => ({ at, kind: 'hover', id: String(at) })),
+        actions: [{ before: { ids: ['1','2','3','4'] }, samples: [{ state: { cardPositions: [{ id: '2', rect: [10,20,30,40] }] } }] }] };
+    const report = createReport({ logger, version: 'test', document: createDocument(), navigator: {}, tLog: key => key,
+        readEnvironment: () => ({}), writeText: value => { text = value; }, readRuntime: () => ({ recommendations: { navigation } }),
+        readSeriesViewing: () => [], readThumbnails: () => ({}), readNativePopup: () => ({}) });
+    await report.copy();
+    const snapshot = JSON.parse(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+    assert.deepEqual(snapshot.recommendations.navigation, navigation);
+});

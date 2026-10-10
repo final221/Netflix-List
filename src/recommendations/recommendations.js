@@ -209,6 +209,9 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         try {
             const p = profile, owner = epoch, latest = read(p);
             const id = input.entry?.id || input.id;
+            const actionBefore = navigation.beforeAction(input.entry?.row);
+            const diagnosticAction = input.action === 'watched' && viewing.type(id) === 'series' ? 'caught-up' : input.action;
+            navigation.movement('action-attempt', input.entry?.card, { action: diagnosticAction, id });
             if (input.action === 'watched') {
                 if (!viewing.ready(id) && viewing.unavailable(id)) { viewing.retry(id); paint(input.entry); return; }
                 if (!viewing.mark(id).saved) { paint(input.entry); return; }
@@ -227,7 +230,8 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             for (const entry of entries.values()) paint(entry);
             paintManager();
             updateRefill(input.action !== 'undo' ? input.entry : null);
-            navigation.movement('action', input.entry?.card, { action: input.action, id });
+            navigation.movement('action', input.entry?.card, { action: diagnosticAction, id });
+            navigation.savedAction(input.entry?.row, actionBefore, diagnosticAction, id);
             log('Recommendation visibility choice saved', { action: input.action, hiddenCount: Object.keys(choices).length });
         } catch (error) { failed = true; for (const entry of entries.values()) paint(entry); paintManager();
             warn('Recommendation choice could not be saved', { reason: error.message }); }

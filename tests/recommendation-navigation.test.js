@@ -40,3 +40,15 @@ test('movement history records meaningful transitions, ignores repeated hover an
     const facts = b.probe.snapshot(); assert.equal(facts.movements.length, 240);
     assert.equal(facts.movementsDropped, 61); assert.equal(facts.movements[0].id, '60'); assert.doesNotMatch(JSON.stringify(facts), /omit|secret/); b.probe.dispose();
 });
+
+
+test('saved actions copy before collapse and retain immediate and timed outcomes until retirement', async () => {
+    const b = setup(), before = b.probe.beforeAction(b.row); b.set(['2']);
+    b.probe.savedAction(b.row, before, 'watched', '1');
+    let action = b.probe.snapshot().actions[0];
+    assert.deepEqual(action.before.ids, ['1']); assert.equal(action.samples[0].reason, 'saved');
+    assert.equal(action.samples[0].removedCount, 1);
+    b.set(['2', '3']); await b.scheduler.advance(1200);
+    action = b.probe.snapshot().actions[0]; assert.equal(action.samples.at(-1).firstObservedCount, 2);
+    b.probe.dispose(); assert.equal(b.scheduler.timers.size, 0); assert.deepEqual(b.probe.snapshot().actions, []);
+});

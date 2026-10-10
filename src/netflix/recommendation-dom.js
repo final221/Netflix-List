@@ -8,7 +8,7 @@ export const RECOMMENDATION_ARROW_STYLES = `
     position:absolute!important;top:0!important;bottom:0!important;transform:none!important;
     display:flex!important;align-items:center!important;justify-content:center!important;border-radius:8px!important;
     opacity:1!important;visibility:visible!important;
-    z-index:10001!important;background:#252525!important;border:1px solid #777!important;box-shadow:0 0 12px #0008!important;color:#fff!important;
+    z-index:10001!important;background:rgba(37,37,37,.32)!important;border:1px solid #777!important;box-shadow:0 0 12px #0008!important;color:#fff!important;
     cursor:pointer;pointer-events:auto;
 }
 :is(section,.lolomoRow):has(.tm-rec-controls) :is(.handleNext,.handlePrev){width:56px!important}
@@ -16,7 +16,7 @@ export const RECOMMENDATION_ARROW_STYLES = `
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia*="carousel"][data-uia$="button"],.handleNext,.handlePrev) :is(svg,.indicator-icon){width:32px!important;height:32px!important;font-size:32px!important;pointer-events:none}
 
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev)::after{content:"";position:absolute;inset:0;border:1px solid #777;border-radius:8px;pointer-events:none}
-:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev) :is(button,[role="button"]){width:100%!important;height:100%!important;max-height:none!important;align-self:stretch!important;border-radius:8px!important;background:#252525!important;display:flex!important;align-items:center!important;justify-content:center!important}
+:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev) :is(button,[role="button"]){width:100%!important;height:100%!important;max-height:none!important;align-self:stretch!important;border-radius:8px!important;background:transparent!important;display:flex!important;align-items:center!important;justify-content:center!important}
 `;
 
 // Visible slot size/order remains Netflix-owned. No private mutation or playback API.
@@ -65,21 +65,32 @@ export function createRecommendationDom(environment) {
             for (const [control, value] of resource.controls) if (!controls.includes(control)) {
                 value.restore.forEach(release => release()); resource.controls.delete(control);
             }
-            let card;
+            let card, bottom;
             for (const item of scan(row)) {
                 if (item.row !== row) continue;
                 const rect = item.card.getBoundingClientRect();
-                if (rect.width > 1 && rect.height > 1) { card = rect; break; }
+                if (rect.width > 1 && rect.height > 1) { card = rect;
+                    const actions = item.host.querySelector('.tm-rec-controls')?.getBoundingClientRect();
+                    bottom = Math.max(rect.top + rect.height, actions?.height > 1 ? actions.top + actions.height : rect.top + rect.height); break; }
             }
             if (!card) return false;
             for (const control of controls) {
                 const parent = control.offsetParent || row, rect = parent.getBoundingClientRect();
-                const height = Math.round(card.height + 72), top = Math.round(card.top - rect.top - (parent.clientTop || 0) + (parent.scrollTop || 0));
-                const signature = height + ':' + top, previous = resource.controls.get(control);
-                if (previous?.signature === signature && control.style.getPropertyValue('height') === height + 'px' && control.style.getPropertyValue('top') === top + 'px') continue;
+                const height = Math.round(bottom - card.top), top = Math.round(card.top - rect.top - (parent.clientTop || 0) + (parent.scrollTop || 0));
+                const box = control.getBoundingClientRect(), previous = resource.controls.get(control);
+                const viewport = document.documentElement?.clientWidth || environment.window?.innerWidth || environment.innerWidth;
+                const next = control.matches('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext');
+                const properties = [['height', height + 'px'], ['top', top + 'px'], ['bottom', 'auto']];
+                if (viewport > 0 && box.width > 1) {
+                    const width = Math.min(viewport, previous?.edgeWidth || Math.max(56, next ? viewport - box.left : box.right));
+                    const edge = next ? viewport - width : 0;
+                    properties.push(['left', Math.round(edge - rect.left - (parent.clientLeft || 0) + (parent.scrollLeft || 0)) + 'px'], ['right', 'auto'], ['width', Math.round(width) + 'px']);
+                }
+                const signature = JSON.stringify(properties);
+                if (previous?.signature === signature && properties.every(([name, value]) => control.style.getPropertyValue(name) === value)) continue;
                 previous?.restore.forEach(release => release());
-                const value = { signature, restore: [] }; resource.controls.set(control, value);
-                for (const [name, applied] of [['height', height + 'px'], ['top', top + 'px'], ['bottom', 'auto']]) value.restore.push(styleLease(control, name, applied, 'important'));
+                const value = { signature, edgeWidth: Number.parseFloat(properties.find(([name]) => name === 'width')?.[1]) || previous?.edgeWidth, restore: [] }; resource.controls.set(control, value);
+                for (const [name, applied] of properties) value.restore.push(styleLease(control, name, applied, 'important'));
             }
             return true;
         } catch (_) { return false; }
@@ -265,9 +276,12 @@ export function createRecommendationDom(environment) {
             const parents = []; let parent = control.parentElement;
             for (let i = 0; parent && i < 4; i++, parent = parent.parentElement) parents.push(describeNode(parent));
             const rect = control.getBoundingClientRect(), hits = [];
-            if (document?.elementFromPoint && rect.height > 0) for (const y of [rect.top + 2, rect.top + rect.height / 2, rect.bottom - 2]) {
-                const hit = document.elementFromPoint(rect.left + rect.width / 2, y);
-                hits.push({ y: Math.round(y), tag: hit?.tagName || null, inside: Boolean(hit && (hit === control || control.contains(hit))) });
+            const viewport = document.documentElement?.clientWidth || environment.window?.innerWidth || environment.innerWidth;
+            const points = [rect.top + 2, rect.top + rect.height / 2, rect.bottom - 2].map(y => [rect.left + rect.width / 2, y]);
+            for (const x of [rect.left + 2, rect.right - 2, 1, viewport - 1]) if (Number.isFinite(x)) points.push([x, rect.top + rect.height / 2]);
+            if (document?.elementFromPoint && rect.height > 0) for (const [x, y] of points) {
+                const hit = document.elementFromPoint(x, y);
+                hits.push({ x: Math.round(x), y: Math.round(y), tag: hit?.tagName || null, inside: Boolean(hit && (hit === control || control.contains(hit))) });
             }
             return { nodes: nodes.map(describeNode), parents, icon: control.querySelector?.('svg, .indicator-icon') ? describeNode(control.querySelector('svg, .indicator-icon')) : null, hits };
         } catch (_) { return { unavailable: true }; }
@@ -336,6 +350,10 @@ export function createRecommendationDom(environment) {
                 mounted: state.mounted, visible: state.remaining, offscreen: state.offscreen,
                 hidden: items.filter(item => choices[item.id]).length,
                 ids: items.slice(0, 120).map(item => item.id), idsTruncated: items.length > 120,
+                cardPositions: items.filter(item => !choices[item.id] && item.host.getBoundingClientRect().width > 1).slice(0, 24).map(item => {
+                    const rect = item.host.getBoundingClientRect();
+                    return { id: item.id, rect: [rect.left, rect.top, rect.width, rect.height].map(Math.round) };
+                }), positionsTruncated: items.filter(item => !choices[item.id]).length > 24,
                 visibleIds: items.filter(item => {
                     if (choices[item.id]) return false;
                     const rect = item.host.getBoundingClientRect(), bounds = state.scroller.getBoundingClientRect();

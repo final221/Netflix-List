@@ -42,53 +42,42 @@ Row11 arrows:13→25→26mounted/12,8added/0,7removed;visible5→7→8/hidden8�
 
 Row11 13→25/12added/0removed. Window2363ms/250buffered/0matches;React10/truncated;no loader/cache proof. Details at7689b02.
 
+Source filenames, copiedAt/environment and SHA256 for1.9.7–1.9.11: logs/knowledge.md at e72fa6a (summary revision, not runtime; originals uncommitted).
+
 ## Session — 1.9.7
 
-- `1.9.7/19-19-45-038Z-d73704f4`, copiedAt 21:19:45.035; SHA256 227a11a20ec96e026ddc946850d4e688add2e5bbc4fc069e17ac8857655b7891.
-- `1.9.7/19-20-07-443Z-3492b223`, copiedAt 21:20:07.439; SHA256 f1a05bc0a2c905f27a0101835f5ef6322311d19b91736919a92257773bfbec2f.
 Startup21:17:51.407;45rows/40sampled;refill8visible/13mounted/1offscreen. Row29 arrow13→26/13added;GraphQL+3ms/+224ms,4Falcor/time correlation only. Hooks crowd props;500checked/0pending.
 
 Later same startup, still1.9.7 (not1.9.8), detailed captures:
 
-- 21:40:11.318, 1.9.7/19-40-11-323Z-38bfa55e; SHA256 65a30cd599e81f2eb9480311f24903fed1bb27ea10aae5b2c7b15076b8197d0d.
-- 21:40:49.915, 1.9.7/19-40-49-922Z-ef5f79a0; SHA256 21e1eccb5d6457f7f5fb3fc5f7fc3909a73c202330f6533b29d3d2800534182e.
-- 21:41:53.256, 1.9.7/19-41-53-268Z-a20d2298; SHA256 4c23b049482293cf84f4bde53eb51d9ef21981bbb09d882f0e1f48e87a338a7e.
 Later:493→500checked/0pending;row29 17→26;row8 13→25→26 then8/8recycling/offscreen3→16. Consecutive before states bound intervals;export cumulative/sample16;no precise latency/prefetch proof.
 
 ## Session — 1.9.8
 
-- 22:09:40.662, 1.9.8/20-09-40-664Z-6adffbfb; SHA256 04ee1687002ae65eb59e70e51a873c84e03e71457406d1608c7f05eae7365a08.
-- 22:09:52.703, 1.9.8/20-09-52-704Z-49f3e8bd; SHA256 159e326b16dcad8e13c914527deed8fcd2d61e75d3f7fcda75605601570a5d74.
-- 22:10:03.012, 1.9.8/20-10-03-014Z-542dafc6; SHA256 050292138b9b8589d52775d889c14fa0304b5362f0b9e809fbdb625e3b57c39e.
-- 22:12:00.246, 1.9.8/20-12-00-255Z-636f66d6; SHA256 af1235a2e8b1efb37779efe0b33182f00fe9b64cdad8ec0172d8ef7f1168de3d.
-- 22:12:33.956, 1.9.8/20-12-33-966Z-63f8d4f0; SHA256 b4b556fe656ae8f4243b680f42f194a85ce32afce99941cdb5ef0883a61e8a93.
 Viewing163→299requests/375→572checked/3→4failed/0pending;decorated461→608. Row34:13→26/offscreen1→9;row42:13→25→26 then8/8/offscreen4→18. GraphQL timing/installed lease zero records;observer119drops/early windows lost;no independent loader/precise latency. Details at7689b02.
 
 ## Session — 1.9.9
 
-- 22:44:42.495, 1.9.9/20-44-42-496Z-c10d2027; SHA256 86f36e2dad025fed6095fe72987948e363123f89b391cc506fbecb4dfcf2467b.
-- 22:45:05.075, 1.9.9/20-45-05-078Z-de105405; SHA256 c5d1ce0f80beedbd6e66f3444a1eaa5a4355abc6790a339f541a42bd148de777.
-- 22:45:30.054, 1.9.9/20-45-30-058Z-244474e2; SHA256 4f0842cd0cc7e3b89eb24a51884c7e009e93cfd17efeaf85a93f195a6598d4a6.
-- 22:45:40.877, 1.9.9/20-45-40-880Z-7a45db73; SHA256 34071eab8dadb7c26163c10e5c8271d3e4a673d603972e5ac7faa95a74fde36f.
 Viewing95→166requests/184→288checked/3→6failed/all series coverage/three attempts/final0pending. Row6:13→25→26/offscreen3→18;row19:13→25→26/offscreen0→9. GraphQL timing/lease10→58intercepted/0GraphQL/no drops;no global stall. Screenshot:arrow short;details at7689b02.
 
 ## Session — 1.9.10
 
-- 22:53:06.757, 1.9.10/20-53-06-765Z-58510614; SHA256 1acffe150ba2d533f32c59974896ac48ec49fdc0536ddd1e68393d622468ca49.
-- 22:53:11.778, 1.9.10/20-53-11-786Z-691342cc; SHA256 49d964535a5fb1d43a5724c47c3f19a5b3a763f905863866bf0e74fbf4ca66fc.
-- 22:53:17.819, 1.9.10/20-53-17-827Z-77448113; SHA256 e6a6e3733bd841d5dcb177d2e9653a3e58fbaf117372e56361eb2434cf5b431c.
 Same startup/three exports/399decorated/317checked/161requests/2failed series coverage(attempts4,3)/0pending. Row20 consecutive before states:two previous arrows add2 then3IDs(first observed2 then1);nine forward arrows add2IDs each,all previously observed;26mounted. Same-origin GraphQL timing/empty query keys;lease8intercepted/0GraphQL/no failures. Some older timing windows disappear;no causal payload proof. Screenshots:arrow hit area tall/visible button small;user reports repeated titles.
 
 ## Session — 1.9.11
 
 Capture dates2026-10-11 UTC+02; filenames use2026-10-10 UTC; same Firefox157 environment/runtime ref unknown.
 
-- 00:31:35.763, 1.9.11/22-31-35-765Z-cffa9984; SHA256 54bf039ffb35b3489d5df29e75792439a88a146ddd3a2497a4d1a296a4b853e0.
-- 00:32:24.474, 1.9.11/22-32-24-476Z-5d161ee6; SHA256 e7e6a2bb9b44a4239e3f24918ae10611857374b390b5bb1fca15984683d8439d.
-- 00:32:53.869, 1.9.11/22-32-53-872Z-c98ce17f; SHA256 93a410e63d202cebf730fc9f2d947663948cc268223d9f5ed89eef7d5c60bbd1.
-- 00:33:02.783, 1.9.11/22-33-02-786Z-2237516c; SHA256 8c78aacf12b2cd3ba9b6ba2328a30685ef10edaed1a1aea8a87a76cb44c47744.
-- 00:33:12.145, 1.9.11/22-33-12-149Z-cb15bba9; SHA256 f81f1e10dd63665107a89b1146264520cb3ffd400f7ef94d522e33663ec46a85.
 Same startup/five exports/five arrows/six dismissals. Arrow BUTTON56×64/rgb37/opacity1/no clip;parent/icon/hit unrecorded. Row7 first-observed counts at200/1200/5000ms:0/8/16 then0/8/8 twice. Row8:4/12/12 then0/8(last sample pending). Six series coverage failures/three attempts/222→272checked/137→181requests/0pending at exports. Final trace80/38dropped/no diagnostic failures. Samples establish first-observed mounted IDs, not fresh ranking or isolated arrow causality;dismissals occur in the same visit.
+
+## Session — 1.9.12
+
+Four detailed captures, Windows/Firefox157/2560×1279/DPR1;2026-10-11 UTC+02;runtime ref unknown. Uncommitted sources in logs/:
+- 1.9.12-2026-10-10T22-54-51-308Z-4d4007f1.txt; 2026-10-11T00:54:51.306+02:00; SHA256 e26e6f1138a917747e1be10524e99353f1aa336a0ac083996495dd450797235f.
+- 1.9.12-2026-10-10T22-55-20-524Z-679bc558.txt; 2026-10-11T00:55:20.520+02:00; SHA256 3c9169d6f2ed212c9df2a3296f3a2a80e05099bfbc5ecaf8a010eaad30dc49ca.
+- 1.9.12-2026-10-10T22-55-42-259Z-77b29f49.txt; 2026-10-11T00:55:42.255+02:00; SHA256 07be9618c5f75b99fa7920a250f5a19d516c6abca5289d877c8e0073f2c34ebd.
+- 1.9.12-2026-10-10T22-56-38-068Z-94716a3d.txt; 2026-10-11T00:56:38.053+02:00; SHA256 46e93955aeb7f247138689c619931afda46d797533842bb57036f1bd85fd827a.
+Same visit:0→7arrows/6watched actions/89→162movements/no drops or diagnostic failures. Actual arrow[2460,568,56,238]/right2516 vs viewport2560;opaque rgb37. Parent0×0 at[2488,704];next parent2560×279. All vertical hit samples inside. Seven arrows:0→8→8first-observed IDs at200/1200/5000ms (first closed before next arrow);not proof of fresh ranking or isolated arrow causality. GraphQL timings present/0GraphQL wrapper captures. Final284checked/132requests/3series coverage failures after3attempts/0pending. One cancelled download followed by successful exports. Compact mode untested by these captures;no horizontal hit tests or timed action outcomes.
 
 ## Evidence limits
 
