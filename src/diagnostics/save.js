@@ -10,6 +10,7 @@ export function createLogSaver({ download, readMode = () => undefined, version, 
             if (mode && mode !== 'browser') {
                 reject(new Error('Set Tampermonkey Download Mode to Browser API so CopyLogs can show Save As.')); return;
             }
+            for (const job of [...pending]) job.cancel();
             const file = version + '-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' + Math.random().toString(16).slice(2, 10) + '.txt';
             const job = { url: null, handle: null, cancel: null }; pending.add(job);
             function finish(error) {
@@ -27,6 +28,6 @@ export function createLogSaver({ download, readMode = () => undefined, version, 
             } catch (error) { finish(new Error('Cannot start log download: ' + (error?.message || String(error)))); }
         });
     }
-    return Object.freeze({ start() { active = true; }, save,
+    return Object.freeze({ start() { active = true; }, save, diagnostics: () => ({ pending: pending.size }),
         dispose() { active = false; for (const job of [...pending]) job.cancel(); } });
 }

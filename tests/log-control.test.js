@@ -45,3 +45,18 @@ test('success feedback is above the stationary button, expires after three secon
     assert.equal(document.getElementById('tm-netflix-copylogs'), button); assert.equal(button.textContent, 'CopyLogs');
     control.dispose(); assert.equal(scheduler.timers.size, 0);
 });
+
+test('missing completion does not lock CopyLogs and stale success or failure cannot paint the newer export', async () => {
+    const document = createDocument(), scheduler = createScheduler(), pending = [];
+    const control = createLogControl({ document, ...scheduler, tLog: key => key,
+        copyLogs: options => new Promise((resolve, reject) => pending.push({ resolve, reject, options })) });
+    control.start(); const button = document.getElementById('tm-netflix-copylogs'), message = document.querySelector('[role="status"]');
+    click(button); click(button); assert.equal(pending.length, 1); await flush(); assert.equal(button.disabled, false);
+    click(button, true); await flush(); assert.equal(pending.length, 2); assert.equal(pending[1].options.detailed, true);
+    pending[0].resolve('stale.txt'); await flush(); assert.equal(message.hidden, true); assert.equal(button.disabled, false);
+    pending[1].resolve('latest.txt'); await flush(); assert.match(message.textContent, /latest.txt/);
+    click(button); await flush(); click(button); await flush();
+    pending[3].resolve('newest.txt'); await flush(); pending[2].reject(new Error('stale failure')); await flush();
+    assert.match(message.textContent, /newest.txt/); await scheduler.advance(3000); assert.equal(message.hidden, true);
+    control.dispose();
+});

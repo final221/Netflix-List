@@ -30,7 +30,7 @@ export function createApplication({ environment = globalThis, version = '', crea
         catch (error) { logger.warn(i18n.tLog('copyLogsFailed'), error); throw error; }
     }
     const recommendations = createRecommendations({ environment, context, userscript, tUi: i18n.tUi, log: logger.log, warn: logger.warn });
-    const logControl = createLogControl({ document, tLog: i18n.tLog, setTimeout: environment.setTimeout, clearTimeout: environment.clearTimeout,
+    const logControl = createLogControl({ document, tLog: i18n.tLog, setTimeout: environment.setTimeout, clearTimeout: environment.clearTimeout, queueMicrotask,
         copyLogs: options => session ? session.copyLogs(options) : copyBrowsingLogs(options) });
     function isTargetPage() { return location.origin === 'https://www.netflix.com' && location.pathname === '/browse/my-list'; }
     function rememberPage(feature, read, compactRead, url) {
@@ -123,6 +123,6 @@ export function createApplication({ environment = globalThis, version = '', crea
         }
     }
     function diagnostics() { return Object.freeze({ active, routeChangeSequence,
-        currentSession: session?.diagnostics() || null, recommendations: recommendations.diagnostics(), retainedPages: logHistory.length }); }
+        currentSession: session?.diagnostics() || null, recommendations: recommendations.diagnostics(), logSave: saver.diagnostics(), retainedPages: logHistory.length }); }
     return Object.freeze({ start, dispose, diagnostics });
 }

@@ -12,12 +12,8 @@ CopiedAt Oct7 (UTC+02): .52 15:01:31.853/.53 15:27:14.420/.54 18:49:20.923/.55 1
 
 ## Session — 1.4.64
 
-Uncommitted input `Textdokument (neu).txt`: 419,064 bytes / 441 events, SHA256 **49d6878b560064696d58960aaabc19a8d33be992d2e4fd419a24105980b9812c**. Header version 1.4.64, copiedAt **2026-10-08T16:54:09.828+02:00**, Windows/Firefox 157, English, 2560×1279, DPR 1. Runtime revision unavailable.
-
-- 500-card grid; init 2,265 ms/eight columns/63 logical pages, mapping not stale; displayed 165 filtered. No WARN/ERROR (441 events).
-- Ten native replays/exits/six transfers, no reported failure; manual-choice persistence and popup control coverage untested.
-- Four unchanged responsive checks/one parked-height exception; no viewport refresh/route exit. No pending membership/Undo/native owners at export.
-- Volume: per-series table 154,668 bytes; full 500-item collection event 57,725 bytes; 116 started/completed move pairs about 78 KiB. Export composition only.
+Uncommitted `Textdokument (neu).txt`, 419,064bytes/441events; SHA256 **49d6878b560064696d58960aaabc19a8d33be992d2e4fd419a24105980b9812c**. CopiedAt **2026-10-08T16:54:09.828+02:00**, Windows/Firefox157/English/2560×1279/DPR1; runtime revision unavailable.
+500cards/init2265ms/eight columns/63pages/not stale/165filtered;10replays/exits/6transfers/no WARN/ERROR;4unchanged checks/parked exception. Export volume:series154668bytes/collection57725/116move pairs≈78KiB. No refresh/exit/pending owners; persistence/popup controls untested.
 
 ## Session — 1.4.67
 
@@ -42,7 +38,7 @@ Uncommitted `logs/Textdokument (neu).txt`: 63,370 bytes, SHA256 **0fb1b128244939
 
 - Initial route is already My List. Init 2,526 ms; 500 titles/seven GraphQL pages; continuation 1,472 ms/bootstrap 532 ms. No native scan/capture metadata reads; seven columns/72 finalized logical pages, mapping not stale. No WARN/ERROR.
 - Selector cached-key; selected/native section IDs match before/after response, both cached counts 500, first three selected/native/response card IDs agree; no native section change. Response 75 edges/500 total/hasNextPage=true.
-- Viewing: 23 successes/no failures/rate limits/aborts, 197 complete/272 unknown; four native hover replays/three transfers/no replay or cleanup failure. Two unchanged responsive checks/no refresh/route exit. No Browse→My List transition captured.
+- Viewing: 23 successes/no failures/rate limits/aborts, 197 complete/272 unknown; four native hover replays/three transfers/no replay or cleanup failure. Two unchanged responsive checks/no refresh/route exit.
 
 - Later detailed `logs/Textdokument (neu).txt`, **2026-10-09T23:58:29.467+02:00**, 517,617 bytes/509 events/46 names, SHA256 **aa4260fed0fe075e7d0e6262b10839377b79055dcc11a2913163e1f3232dd727**; same version/environment, different session. Starts already on My List (no recorded Browse transition). Init 8,282 ms/native scan 7,521 ms; 500 cards/72 pages, mapping not stale. Two count-reconciliation/fallback warnings, no error.
 - Cached-key selects count nine; selected/live section IDs mismatch before/after request, their decoded page identities differ and card samples disagree. Live ID is stable; nativeRowCachedCount=null. Response nine edges/count nine/hasNextPage=false; native count 500. Six replays/transfers/no replay failure; viewing 23 successes/197 complete/272 unknown, no request failure.
@@ -54,8 +50,12 @@ Uncommitted captures, copiedAt **2026-10-10** UTC+02, Windows/Firefox157, Englis
 - **20:20:20.484**, `1.9.1-2026-10-10T18-20-20-485Z-3f42d96b.txt`, 2730bytes/7occurrences, SHA256 **b97d3d8488e08763f6f23832f17696f5bd1e6af9179917c19c2d9b24e4396c02**.
 Same startup; second retains first completion/user-cancellation warning. Both reached logs/. User confirms folder remembering; CopyLogs overlays playback. No navigation/prior snapshots/refill checks. Decorated156/hidden140; checked160→186/pending26→0/no storage failure. Compact: no groups/sections/examples omitted.
 
+## Session — 1.9.3
+
+Uncommitted `1.9.3-2026-10-10T18-33-21-508Z-8b0f7ecb.txt`, 1463bytes; SHA256 **c3c2752bad24f0140bf250af1812275d03d5fe36d04cce8a1e79b96867af5345**. CopiedAt **2026-10-10T20:33:21.508+02:00**, same Firefox/environment as1.9.1. Detailed homepage baseline:3events/no refill/prior pages; completion unobserved. User:manual arrow reveals more cards, then CopyLogs unclickable(Shift/normal). No post-arrow capture; cause unproven.
+
 ## Evidence limits
 
 Chat **2026-10-10** (versions/environment unconfirmed): 1.5.0 previews cover buttons; 1.6.0/.1 panel/collapse work; 1.8.0 needs manual arrows; 1.8.1 auto-advances the row, disrupting browsing. No capture/timings.
 
-Warning absence cannot certify the 1.4.54 mapping failure resolved. Unverified: real resize/zoom/remapping, route retirement/reentry, membership/Undo, manual viewing, exact timer retirement, every popup control/pointer outcome. Successful requests can leave metadata unknown. No captures test 1.4.59–1.4.63, 1.4.65–1.4.66, 1.4.68 or 1.4.71–1.9.0.
+No warning alone certifies the 1.4.54 mapping issue resolved. Unverified: resize/zoom/remapping, route lifecycle, membership/Undo/viewing, timers and popup/pointer controls. Requests can succeed with unknown metadata. No captures:1.4.59–.63/.65–.66/.68 or1.4.71–1.9.0.

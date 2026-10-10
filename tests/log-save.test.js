@@ -41,3 +41,12 @@ test('missing download grant and synchronous download errors fail without clipbo
         download() { throw new Error('denied'); } }); saver.start();
     await assert.rejects(saver.save(text), /denied/); assert.equal(revoked, 1);
 });
+
+test('a second explicit capture releases an unresolved download and ignores its late callback', async () => {
+    const f = fixture(); f.saver.start(); const first = f.saver.save(text);
+    const rejected = assert.rejects(first, /cancelled/); const second = f.saver.save(text + 'second capture');
+    await rejected; assert.equal(f.aborted(), 1); assert.equal(f.saver.diagnostics().pending, 1);
+    assert.deepEqual(f.revoked, [f.requests[0].url]); f.requests[0].onload();
+    assert.equal(f.saver.diagnostics().pending, 1); f.requests[1].onload(); await second;
+    assert.equal(f.saver.diagnostics().pending, 0); assert.equal(f.revoked.length, 2);
+});

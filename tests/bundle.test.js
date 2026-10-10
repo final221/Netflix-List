@@ -607,3 +607,20 @@ test('generated populated viewing results update groups and independent filters 
     assert.equal(root.isConnected, false);
     assert.equal(b.scheduler.timers.size, 0); assert.equal(b.scheduler.frames.size, 0);
 });
+
+test('generated CopyLogs can export again after a missing download completion without reloading Netflix', async () => {
+    const b = browser(), downloads = []; let aborted = 0;
+    b.context.GM_download = options => { downloads.push(options); return { abort() { aborted++; } }; };
+    b.start(); const button = b.document.getElementById('tm-netflix-copylogs');
+    const click = detailed => button.dispatchEvent({ type: 'click', shiftKey: detailed, preventDefault() {} });
+    click(true); await b.scheduler.flush(); assert.equal(button.disabled, false);
+    assert.equal(downloads.length, 1); assert.ok(resolveObjectURL(downloads[0].url));
+    click(false); await b.scheduler.flush(); assert.equal(button.disabled, false);
+    assert.equal(downloads.length, 2); assert.equal(aborted, 1); assert.equal(resolveObjectURL(downloads[0].url), undefined);
+    const report = await resolveObjectURL(downloads[1].url).text();
+    assert.match(report, /exportMode: compact/); assert.match(report, /CopyLogs requested/);
+    downloads[0].onload(); await b.scheduler.flush();
+    assert.equal(b.document.querySelector('[role="status"]').hidden, true);
+    downloads[1].onload(); await b.scheduler.flush();
+    assert.match(b.document.querySelector('[role="status"]').textContent, /Saved/); assert.equal(button.disabled, false);
+});

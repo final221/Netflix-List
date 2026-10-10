@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.3
+// @version      1.9.4
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -19265,6 +19265,7 @@ ${CARD_ACTION_STYLES}
           reject(new Error("Set Tampermonkey Download Mode to Browser API so CopyLogs can show Save As."));
           return;
         }
+        for (const job2 of [...pending]) job2.cancel();
         const file = version + "-" + (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-") + "-" + Math.random().toString(16).slice(2, 10) + ".txt";
         const job = { url: null, handle: null, cancel: null };
         pending.add(job);
@@ -19301,6 +19302,7 @@ ${CARD_ACTION_STYLES}
         active = true;
       },
       save,
+      diagnostics: () => ({ pending: pending.size }),
       dispose() {
         active = false;
         for (const job of [...pending]) job.cancel();
@@ -19309,8 +19311,8 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/diagnostics/control.js
-  function createLogControl({ document, tLog, copyLogs, setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout }) {
-    let root = null, button = null, feedback = null, listener = null, style = null, revision = 0, feedbackTimer = null;
+  function createLogControl({ document, tLog, copyLogs, setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout, queueMicrotask = globalThis.queueMicrotask }) {
+    let root = null, button = null, feedback = null, listener = null, style = null, revision = 0, feedbackTimer = null, exportSequence = 0;
     function clearFeedbackTimer() {
       if (feedbackTimer !== null) clearTimeout(feedbackTimer);
       feedbackTimer = null;
@@ -19334,27 +19336,31 @@ ${CARD_ACTION_STYLES}
         event.preventDefault();
         if (owner !== revision || !button?.isConnected || button.disabled) return;
         clearFeedbackTimer();
-        const control = button, message = feedback;
+        const control = button, message = feedback, sequence = ++exportSequence;
+        const current = () => owner === revision && sequence === exportSequence && control.isConnected;
         control.disabled = true;
         message.hidden = true;
+        queueMicrotask(() => {
+          if (current()) control.disabled = false;
+        });
         try {
           const file = await copyLogs({ detailed: Boolean(event.shiftKey) });
-          if (owner !== revision || !control.isConnected) return;
+          if (!current()) return;
           message.textContent = tLog("copied") + " " + file;
           message.hidden = false;
           feedbackTimer = setTimeout(() => {
             feedbackTimer = null;
-            if (owner === revision && control.isConnected) {
+            if (current()) {
               message.hidden = true;
               message.textContent = "";
             }
           }, 3e3);
         } catch (error) {
-          if (owner !== revision || !control.isConnected) return;
+          if (!current()) return;
           message.textContent = tLog("copyFailed", { message: error?.message || String(error) });
           message.hidden = false;
         } finally {
-          if (owner === revision && control.isConnected) control.disabled = false;
+          if (current()) control.disabled = false;
         }
       };
       button.addEventListener("click", listener);
@@ -20114,6 +20120,7 @@ ${CARD_ACTION_STYLES}
       tLog: i18n.tLog,
       setTimeout: environment.setTimeout,
       clearTimeout: environment.clearTimeout,
+      queueMicrotask,
       copyLogs: (options) => session ? session.copyLogs(options) : copyBrowsingLogs(options)
     });
     function isTargetPage() {
@@ -20287,6 +20294,7 @@ ${CARD_ACTION_STYLES}
         routeChangeSequence,
         currentSession: session?.diagnostics() || null,
         recommendations: recommendations.diagnostics(),
+        logSave: saver.diagnostics(),
         retainedPages: logHistory.length
       });
     }
@@ -20294,7 +20302,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.3";
+  var SCRIPT_VERSION = "1.9.4";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
