@@ -32,6 +32,8 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             if (readProfile() !== p || epoch !== owner) { check(); return; }
             ({ choices, titles } = latest);
             for (const entry of entries.values()) paint(entry);
+            // Refill the bounded metadata queue from mounted cards as slots become available.
+            viewing.observe([...entries.values()]);
             paintManager(); updateRefill();
             if (migrated) log('Legacy browsing viewing choices migrated', { count: migrated });
         } catch (error) { warn('Browsing viewing migration unavailable', { reason: error.message }); }
@@ -140,12 +142,13 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             button.title = failed || !profile ? tUi('viewingChoiceStorageFailed') : button.textContent;
         }
         const type = viewing.type(entry.id), facts = viewing.presentation();
-        entry.watched.textContent = tUi(type === 'series' ? 'markCaughtUp' : type === 'movie' ? 'markWatched'
-            : viewing.diagnostics().unavailable ? 'unknownViewingStatus' : 'checkingViewingStatus');
+        const unavailable = viewing.unavailable(entry.id);
+        entry.watched.textContent = tUi(unavailable ? 'refreshViewingStatus' : type === 'series' ? 'markCaughtUp' : type === 'movie' ? 'markWatched'
+            : 'checkingViewingStatus');
         entry.watched.setAttribute('aria-label', entry.watched.textContent);
-        entry.watched.disabled ||= !viewing.ready(entry.id) || facts.disabled;
+        entry.watched.disabled ||= !viewing.ready(entry.id) && !unavailable || facts.disabled;
         entry.watched.title = !profile || failed || facts.manualFailure ? tUi('viewingChoiceStorageFailed')
-            : !viewing.ready(entry.id) ? tUi(viewing.diagnostics().unavailable ? 'unknownViewingStatus' : 'checkingViewingStatus') : entry.watched.textContent;
+            : !viewing.ready(entry.id) ? tUi(unavailable ? 'refreshViewingStatus' : 'checkingViewingStatus') : entry.watched.textContent;
     }
     function decorate(value) {
         const existing = entries.get(value.host);
@@ -205,6 +208,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             const p = profile, owner = epoch, latest = read(p);
             const id = input.entry?.id || input.id;
             if (input.action === 'watched') {
+                if (!viewing.ready(id) && viewing.unavailable(id)) { viewing.retry(id); paint(input.entry); return; }
                 if (!viewing.mark(id).saved) { paint(input.entry); return; }
                 delete latest.choices[id];
             } else if (input.action === 'undo') {

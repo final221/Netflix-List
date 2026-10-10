@@ -1,7 +1,9 @@
 import { readVideoIdFromHref } from './page-dom.js';
+import { createRecommendationRequests } from './recommendation-requests.js';
 
 // Visible slot size/order remains Netflix-owned. No private mutation or playback API.
-export function createRecommendationDom({ document, location, getComputedStyle, performance, PerformanceObserver }) {
+export function createRecommendationDom(environment) {
+    const { document, location, getComputedStyle, performance, PerformanceObserver } = environment;
     const selector = 'a[data-uia="standard-card"][href], .title-card';
     const scrollerLeases = new WeakMap();
     function styleLease(node, name, value, priority = '') {
@@ -138,7 +140,7 @@ export function createRecommendationDom({ document, location, getComputedStyle, 
         return control?.isConnected && row && scan(row).length ? { row, control, direction: next ? 'next' : 'previous' } : null;
     }
     function navigationStart(control) {
-        const components = []; let truncated = false;
+        const components = []; let truncated = false; const quotas = { props: 0, state: 0 };
         try {
             const key = Object.getOwnPropertyNames(control).find(name => name.startsWith('__reactFiber$') || name.startsWith('__reactInternalInstance$'));
             let fiber = key && Object.getOwnPropertyDescriptor(control, key)?.value;
@@ -181,7 +183,9 @@ export function createRecommendationDom({ document, location, getComputedStyle, 
                     }
                     truncated ||= keys.length > 40;
                     if (fields.length) {
-                        if (components.length >= 10) { truncated = true; break; }
+                        const bucket = source === 'memoizedProps' ? 'props' : 'state';
+                        if (quotas[bucket] >= 10) { truncated = true; continue; }
+                        quotas[bucket]++;
                         const type = fiber.elementType || fiber.type;
                         components.push({ depth, source, component: String(typeof type === 'string' ? type : type?.displayName || type?.name || 'unknown').slice(0, 80), fields });
                     }
@@ -202,6 +206,7 @@ export function createRecommendationDom({ document, location, getComputedStyle, 
             initiator: entry.initiatorType, durationMs: Math.round(entry.duration), transferBytes: Number(entry.transferSize) || 0 };
     }
     function observeRequests() {
+        const graphql = createRecommendationRequests(environment);
         let observer = null, active = true, dropped = 0, failures = 0; const records = [];
         function accept(entries) {
             if (!active) return;
@@ -215,10 +220,10 @@ export function createRecommendationDom({ document, location, getComputedStyle, 
             observer = new PerformanceObserver(list => { if (active) try { accept(list.getEntries()); } catch (_) { failures++; } });
             observer.observe({ type: 'resource', buffered: false });
         } catch (_) { try { observer?.disconnect(); } catch (_) {} observer = null; }
-        return { read() {
+        return { begin: graphql.begin, read() {
             if (observer && active) try { accept(observer.takeRecords()); } catch (_) { failures++; }
-            return { available: Boolean(observer && active), records: records.slice(), dropped, failures };
-        }, dispose() { active = false; try { observer?.disconnect(); } catch (_) {} observer = null; records.length = 0; } };
+            return { available: Boolean(observer && active), records: records.slice(), dropped, failures, graphql: graphql.read() };
+        }, dispose() { active = false; graphql.dispose(); try { observer?.disconnect(); } catch (_) {} observer = null; records.length = 0; } };
     }
     function navigationRequests(start, stop = diagnosticTime(), capture = null) {
         try {
@@ -236,6 +241,7 @@ export function createRecommendationDom({ document, location, getComputedStyle, 
             return { windowMs: Math.max(0, end - start), inspected: Math.min(all.length, 2000), bufferTruncated: all.length > 2000,
                 matched, entries, truncated: matched > entries.length, attribution: 'time-window-only',
                 source: capture?.available ? 'future-observer' : 'buffered-fallback', dropped: capture?.dropped || 0, failures: capture?.failures || 0,
+                graphql: capture?.graphql ? { ...capture.graphql, records: capture.graphql.records.filter(record => record.at >= start && record.at < end) } : null,
                 limitation: 'Completed entries only; absent entries do not prove cached data, and zero transfer does not prove cache use.' };
         } catch (_) { return { unavailable: true }; }
     }

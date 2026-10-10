@@ -173,6 +173,31 @@ test('missing series metadata preserves existing coverage and disables new caugh
     assert.deepEqual(b.saved.get('legacyMyListForNetflix.viewingChoices.v1.A').choices['9'].coverage, [['101', 2]]);
 });
 
+test('an exhausted metadata lookup offers status refresh and restores the normal watched action after recovery', async () => {
+    let available = false;
+    const b = setup({ viewingData: { ...seriesMetadata(), async readTitles(ids) {
+        return available ? new Map(ids.map(id => [id, { videoId: id, type: 'movie' }])) : new Map();
+    } } }), a = mount(b); a.card.removeAttribute('data-video-type');
+    b.feature.check(); await b.scheduler.flush(); await b.scheduler.advance(1000); await b.scheduler.advance(2000);
+    const button = a.host.querySelector('button'); assert.equal(button.disabled, false);
+    const label = button.textContent; assert.notEqual(label, 'Checking viewing status...');
+    available = true; b.click(a.host, label); await b.scheduler.flush();
+    assert.equal(button.textContent, 'Mark watched'); assert.equal(button.disabled, false);
+    b.click(a.host, 'Mark watched'); assert.equal(a.host.style.getPropertyValue('display'), 'none'); b.feature.dispose();
+});
+
+test('mounted titles beyond the pending-queue capacity are admitted as earlier metadata batches finish', async () => {
+    const b = setup({ viewingData: { ...seriesMetadata(), async readTitles(ids) {
+        return new Map(ids.map(id => [id, { videoId: id, type: 'movie' }]));
+    } } });
+    const items = [];
+    for (let i = 1; i <= 510; i++) { const item = mount(b, String(i)); item.card.removeAttribute('data-video-type'); items.push(item); }
+    b.feature.check(); for (let i = 0; i < 50; i++) await b.scheduler.flush();
+    const button = items.at(-1).host.querySelector('button');
+    assert.equal(button.textContent, 'Mark watched'); assert.equal(button.disabled, false);
+    assert.equal(b.feature.diagnostics().viewing.checked, 510); b.feature.dispose();
+});
+
 test('metadata delivered after a profile switch cannot classify, expire or write into the new profile', async () => {
     let resolve;
     const b = setup({ viewingData: { ...seriesMetadata(), readTitles: () => new Promise(done => { resolve = done; }) } }), a = mount(b);

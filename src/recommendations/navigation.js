@@ -7,6 +7,7 @@ export function createNavigationDiagnostics({ dom, readChoices, admitted, log })
             const navigation = dom.navigationTarget(target); if (!navigation) return;
             const before = dom.rowDiagnostics(navigation.row, readChoices()); if (!before) return;
             requests ||= dom.observeRequests();
+            requests.begin();
             const loading = dom.navigationStart(navigation.control);
             const previous = recent.at(-1); if (previous) previous.until = loading.at;
             const record = { sequence: ++sequence, direction: navigation.direction, row: navigation.row, before, loading };

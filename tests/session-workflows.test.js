@@ -340,6 +340,9 @@ test('real session route exit retires a pending responsive transaction and its q
     e.resize(3, 300); await e.scheduler.advance(140); e.click('3'); await e.scheduler.flush();
     const old = e.grid(); await e.navigate('/browse');
     assert.equal(old.isConnected, false);
+    assert.equal(e.app.diagnostics().currentSession, null);
+    // Browse now owns bounded metadata retries; leave it before counting all application timers.
+    await e.navigate('/watch/1');
     assert.equal(e.scheduler.timers.size, 0); assert.equal(e.scheduler.frames.size, 0);
     await e.navigate('/browse/my-list'); await e.drain(() => e.app.diagnostics().currentSession.completed);
     assert.notEqual(e.grid(), old); assert.deepEqual(e.cardIds(), Array.from({ length: 12 }, (_, i) => String(i + 1)));

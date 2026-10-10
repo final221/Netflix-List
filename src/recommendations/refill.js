@@ -21,7 +21,9 @@ export function createRefill({ environment, dom, readChoices, admitted, onPage, 
         counters.checks++;
         if (updated.offscreen) counters.buffered++; else counters.unavailable++;
         log('Stationary recommendation refill checked', { remaining: updated.remaining, mounted: updated.mounted,
-            offscreen: updated.offscreen, independentLoader: 'unverified', loading: dom.loadingFacts(job.row) });
+            offscreen: updated.offscreen, targetAhead: Math.max(1, updated.remaining) * 2,
+            bufferShortfall: Math.max(0, Math.max(1, updated.remaining) * 2 - updated.offscreen),
+            independentLoader: 'unverified', loading: dom.loadingFacts(job.row) });
     }
     function update(currentRows, dismissal = null) {
         for (const [row, job] of rows) if (!currentRows.has(row) || !row.isConnected) { cancel(job); rows.delete(row); }
