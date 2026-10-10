@@ -1,6 +1,7 @@
 import { createRecommendationDom } from '../netflix/recommendation-dom.js';
 import { createCardActions, CARD_ACTION_STYLES } from '../card-actions.js';
 import { createRefill } from './refill.js';
+import { createNavigationDiagnostics } from './navigation.js';
 import { createBrowsingViewing } from '../viewing/viewing.js';
 
 export function createRecommendations({ environment, context, userscript, tUi, viewingData, log = () => {}, warn = () => {} }) {
@@ -38,6 +39,15 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     const refill = createRefill({ environment, dom, readChoices: visibleChoices,
         admitted: () => active && allowed() && Boolean(profile) && !failed && readProfile() === profile,
         onPage: row => scan(row), log, warn });
+    const navigation = createNavigationDiagnostics({ dom, readChoices: visibleChoices,
+        admitted: () => active && allowed() && Boolean(profile) && readProfile() === profile, log });
+    function rowDiagnostics() {
+        if (!active || !allowed() || !profile || readProfile() !== profile) return { total: 0, truncated: false, rows: [] };
+        const rows = [...new Set([...entries.values()].map(entry => entry.row))].filter(row => row.isConnected);
+        const selected = visibleChoices();
+        return { total: rows.length, truncated: rows.length > 40,
+            rows: rows.slice(0, 40).map(row => dom.rowDiagnostics(row, selected)).filter(Boolean) };
+    }
     function updateRefill(dismissal = null) { refill.update(new Set([...entries.values()].map(entry => entry.row)), dismissal); }
     function scroll() {
         if (scrollTimer !== null) return;
@@ -58,7 +68,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     function syncProfile() {
         const next = readProfile();
         if (next === profile) return;
-        refill.dispose(); viewing.dispose();
+        refill.dispose(); navigation.dispose(); viewing.dispose();
         for (const entry of [...entries.values()]) release(entry);
         profile = next; choices = {}; titles = {}; failed = false; epoch++; pending.clear(); queued = false;
         if (manager) { manager.panel.hidden = true; manager.toggle.setAttribute('aria-expanded', 'false'); }
@@ -177,6 +187,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         });
     }
     function click(event) {
+        navigation.click(event.target);
         const button = event.target?.closest?.('button'), input = buttons.get(button);
         if (!input || (input.entry && entries.get(input.entry.host) !== input.entry)) return;
         event.preventDefault(); event.stopImmediatePropagation();
@@ -248,7 +259,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         scan(); observe();
     }
     function dispose() {
-        refill.dispose(); viewing.dispose();
+        refill.dispose(); navigation.dispose(); viewing.dispose();
         environment.window?.removeEventListener('scroll', scroll);
         if (scrollTimer !== null) environment.clearTimeout(scrollTimer); scrollTimer = null;
         active = false; epoch++; queued = false; pending.clear(); observer?.disconnect(); observer = null;
@@ -258,5 +269,6 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         style?.remove(); style = null; profile = null; choices = {}; titles = {}; failed = false;
     }
     return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(visibleChoices()).length,
-        storageFailed: failed, refill: refill.diagnostics(), viewing: viewing.diagnostics() }) });
+        storageFailed: failed, refill: refill.diagnostics(), viewing: viewing.diagnostics(),
+        rows: rowDiagnostics(), navigation: navigation.snapshot() }) });
 }

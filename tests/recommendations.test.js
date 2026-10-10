@@ -416,3 +416,49 @@ test('shared scroller space survives one card retirement and restores after the 
     b.feature.check(); a.row.style.setProperty('padding-bottom', '100px'); b.feature.dispose();
     assert.equal(a.row.style.getPropertyValue('padding-bottom'), '100px');
 });
+
+test('native arrow evidence captures the clicked row before navigation and distinguishes buffered visibility from new IDs', async () => {
+    const logs = [], b = setup({ log: (name, facts) => logs.push({ name, facts }) }), a = mount(b), other = mount(b, '2');
+    a.row.appendChild(other.host); other.row.remove();
+    a.row.setAttribute('data-uia', 'carousel-scroller'); a.row.appendChild(new Element('h2')).textContent = 'Because you watched';
+    a.row.getBoundingClientRect = () => ({ left: 0, right: 300, top: 0, bottom: 100 });
+    let page = 0, nativeClicks = 0;
+    a.host.getBoundingClientRect = () => ({ left: page ? 400 : 0, width: 100 });
+    other.host.getBoundingClientRect = () => ({ left: page ? 0 : 400, width: 100 });
+    const next = nextControl(b, a.row, () => { nativeClicks++; page = 1; }); b.feature.check();
+    const event = { type: 'click', target: next, preventDefault() { throw new Error('prevented native click'); }, stopImmediatePropagation() { throw new Error('stopped native click'); } };
+    b.document.dispatchEvent(event); assert.equal(nativeClicks, 0); // Diagnostics never operate the arrow.
+    next.click(); const facts = b.feature.diagnostics().navigation.recent[0];
+    assert.equal(facts.before.label, 'Because you watched'); assert.equal(facts.before.mounted, 2);
+    assert.equal(facts.before.visible, 1); assert.equal(facts.before.offscreen, 1);
+    assert.equal(facts.afterAtExport.mounted, 2); assert.deepEqual(facts.addedIdSample, []);
+    assert.ok(logs.some(value => value.name === 'Native recommendation arrow clicked'));
+    const added = mount(b, '3'); a.row.appendChild(added.host); added.row.remove(); b.feature.check();
+    assert.deepEqual(b.feature.diagnostics().navigation.recent[0].addedIdSample, ['3']);
+    other.card.setAttribute('href', '/title/4'); b.feature.check();
+    const changed = b.feature.diagnostics().navigation.recent[0];
+    assert.deepEqual(changed.removedIdSample, ['2']); assert.ok(changed.addedIdSample.includes('4'));
+    assert.equal(b.feature.diagnostics().refill.checks, 0); assert.equal(nativeClicks, 1);
+    b.feature.dispose(); assert.equal(b.feature.diagnostics().navigation.retained, 0);
+});
+
+test('native arrow records are bounded and profile changes retire exact rows without handling unrelated controls', () => {
+    const b = setup(), a = mount(b), next = nextControl(b, a.row, () => {}); b.feature.check();
+    for (let i = 0; i < 25; i++) b.document.dispatchEvent({ type: 'click', target: next });
+    const facts = b.feature.diagnostics().navigation;
+    assert.equal(facts.interactions, 25); assert.equal(facts.retained, 20); assert.equal(facts.recent[0].sequence, 6);
+    b.document.dispatchEvent({ type: 'click', target: b.document.body }); assert.equal(b.feature.diagnostics().navigation.interactions, 25);
+    b.select('B'); b.feature.check(); assert.equal(b.feature.diagnostics().navigation.retained, 0);
+    a.row.remove(); assert.equal(b.feature.diagnostics().rows.total, 0); b.feature.dispose();
+});
+
+test('row diagnostics explicitly bound row and ID samples and safely tolerate failed native geometry reads', () => {
+    const b = setup(), a = mount(b);
+    for (let i = 2; i <= 125; i++) { const item = mount(b, String(i)); a.row.appendChild(item.host); item.row.remove(); }
+    for (let i = 0; i < 41; i++) mount(b, String(1000 + i));
+    b.feature.check(); const rows = b.feature.diagnostics().rows;
+    assert.equal(rows.total, 42); assert.equal(rows.rows.length, 40); assert.equal(rows.truncated, true);
+    const facts = rows.rows[0]; assert.equal(facts.mounted, 125); assert.equal(facts.ids.length, 120); assert.equal(facts.idsTruncated, true);
+    a.row.getBoundingClientRect = () => { throw new Error('native geometry unavailable'); };
+    assert.doesNotThrow(() => b.feature.diagnostics()); b.feature.dispose();
+});

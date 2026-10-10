@@ -624,3 +624,21 @@ test('generated CopyLogs can export again after a missing download completion wi
     downloads[1].onload(); await b.scheduler.flush();
     assert.match(b.document.querySelector('[role="status"]').textContent, /Saved/); assert.equal(button.disabled, false);
 });
+
+test('generated detailed homepage export includes native arrow before and after facts without requiring a dismissal', async () => {
+    const b = browser(), saved = [], stored = new Map();
+    b.window.netflix.reactContext = { models: { userInfo: { data: { userGuid: 'A' } } } };
+    b.context.GM_getValue = (key, fallback) => stored.get(key) ?? fallback; b.context.GM_setValue = (key, value) => stored.set(key, value);
+    b.context.GM_download = options => { resolveObjectURL(options.url).text().then(text => { saved.push(text); options.onload(); }); return { abort() {} }; };
+    const row = b.document.body.appendChild(new Element('section')); row.appendChild(new Element('h2')).textContent = 'Arrow test row';
+    const mount = id => { const host = row.appendChild(new Element('div')); host.setAttribute('data-virtual-slot', id);
+        const card = host.appendChild(new Element('a')); card.setAttribute('data-uia', 'standard-card'); card.setAttribute('data-video-type', 'movie'); card.setAttribute('href', '/title/' + id); return card; };
+    mount('1'); const arrow = row.appendChild(new Element('button')); arrow.className = 'handleNext'; b.start();
+    b.document.dispatchEvent({ type: 'click', target: arrow }); mount('2');
+    const button = b.document.getElementById('tm-netflix-copylogs'); button.dispatchEvent({ type: 'click', shiftKey: true, preventDefault() {} }); await b.scheduler.flush();
+    const report = saved[0]; assert.match(report, /Native recommendation arrow clicked/);
+    const snapshot = JSON.parse(report.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+    const facts = snapshot.recommendations.navigation.recent[0];
+    assert.equal(facts.before.label, 'Arrow test row'); assert.equal(facts.before.mounted, 1); assert.equal(facts.afterAtExport.mounted, 2);
+    assert.deepEqual(facts.addedIdSample, ['2']); assert.equal(snapshot.recommendations.refill.checks, 0);
+});

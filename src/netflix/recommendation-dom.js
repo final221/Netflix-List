@@ -131,5 +131,30 @@ export function createRecommendationDom({ document, location, getComputedStyle }
         } catch (_) { return [{ unavailable: true }]; }
         return result;
     }
-    return Object.freeze({ scan, lease, describe, refillState, loadingFacts });
+    function navigationTarget(target) {
+        const next = target?.closest?.('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext');
+        const previous = next ? null : target?.closest?.('[data-uia="carousel-hawkins-left-button"], [data-uia="carousel-left-button"], .handlePrev');
+        const control = next || previous, row = control?.closest('section, .lolomoRow');
+        return control?.isConnected && row && scan(row).length ? { row, direction: next ? 'next' : 'previous' } : null;
+    }
+    function rowDiagnostics(row, choices) {
+        try {
+            const items = scan(row).filter(item => item.row === row), state = refillState(row, choices);
+            if (!state) return null;
+            const indicators = [...row.querySelectorAll('[data-indicator-selected]')];
+            const track = state.scroller.querySelector('.sliderContent, .slider-content') || state.scroller;
+            return { rowId: (row.getAttribute('data-list-id') || row.getAttribute('data-uia') || row.id || '').slice(0, 160),
+                label: (row.querySelector('h2, .rowTitle')?.textContent || row.getAttribute('aria-label') || '').trim().slice(0, 160),
+                mounted: state.mounted, visible: state.remaining, offscreen: state.offscreen,
+                hidden: items.filter(item => choices[item.id]).length,
+                ids: items.slice(0, 120).map(item => item.id), idsTruncated: items.length > 120,
+                pageIndex: indicators.findIndex(item => item.getAttribute('data-indicator-selected') === 'true'),
+                scrollLeft: Number(state.scroller.scrollLeft) || 0,
+                transform: String(getComputedStyle?.(track).transform || track.style.getPropertyValue('transform') || '').slice(0, 160),
+                next: Boolean(row.querySelector('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext')),
+                previous: Boolean(row.querySelector('[data-uia="carousel-hawkins-left-button"], [data-uia="carousel-left-button"], .handlePrev')),
+                loading: loadingFacts(row) };
+        } catch (_) { return null; }
+    }
+    return Object.freeze({ scan, lease, describe, refillState, loadingFacts, navigationTarget, rowDiagnostics });
 }

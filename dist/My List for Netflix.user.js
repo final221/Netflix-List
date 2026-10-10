@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.4
+// @version      1.9.5
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -19556,7 +19556,39 @@ ${CARD_ACTION_STYLES}
       }
       return result;
     }
-    return Object.freeze({ scan, lease, describe, refillState, loadingFacts });
+    function navigationTarget(target) {
+      const next = target?.closest?.('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext');
+      const previous = next ? null : target?.closest?.('[data-uia="carousel-hawkins-left-button"], [data-uia="carousel-left-button"], .handlePrev');
+      const control = next || previous, row = control?.closest("section, .lolomoRow");
+      return control?.isConnected && row && scan(row).length ? { row, direction: next ? "next" : "previous" } : null;
+    }
+    function rowDiagnostics(row, choices) {
+      try {
+        const items = scan(row).filter((item) => item.row === row), state = refillState(row, choices);
+        if (!state) return null;
+        const indicators = [...row.querySelectorAll("[data-indicator-selected]")];
+        const track = state.scroller.querySelector(".sliderContent, .slider-content") || state.scroller;
+        return {
+          rowId: (row.getAttribute("data-list-id") || row.getAttribute("data-uia") || row.id || "").slice(0, 160),
+          label: (row.querySelector("h2, .rowTitle")?.textContent || row.getAttribute("aria-label") || "").trim().slice(0, 160),
+          mounted: state.mounted,
+          visible: state.remaining,
+          offscreen: state.offscreen,
+          hidden: items.filter((item) => choices[item.id]).length,
+          ids: items.slice(0, 120).map((item) => item.id),
+          idsTruncated: items.length > 120,
+          pageIndex: indicators.findIndex((item) => item.getAttribute("data-indicator-selected") === "true"),
+          scrollLeft: Number(state.scroller.scrollLeft) || 0,
+          transform: String(getComputedStyle?.(track).transform || track.style.getPropertyValue("transform") || "").slice(0, 160),
+          next: Boolean(row.querySelector('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext')),
+          previous: Boolean(row.querySelector('[data-uia="carousel-hawkins-left-button"], [data-uia="carousel-left-button"], .handlePrev')),
+          loading: loadingFacts(row)
+        };
+      } catch (_) {
+        return null;
+      }
+    }
+    return Object.freeze({ scan, lease, describe, refillState, loadingFacts, navigationTarget, rowDiagnostics });
   }
 
   // src/recommendations/refill.js
@@ -19630,6 +19662,46 @@ ${CARD_ACTION_STYLES}
     });
   }
 
+  // src/recommendations/navigation.js
+  function createNavigationDiagnostics({ dom, readChoices, admitted, log }) {
+    let sequence = 0, failures = 0;
+    const recent = [];
+    function click(target) {
+      if (!admitted()) return;
+      try {
+        const navigation = dom.navigationTarget(target);
+        if (!navigation) return;
+        const before = dom.rowDiagnostics(navigation.row, readChoices());
+        if (!before) return;
+        const record = { sequence: ++sequence, direction: navigation.direction, row: navigation.row, before };
+        recent.push(record);
+        if (recent.length > 20) recent.shift();
+        log("Native recommendation arrow clicked", { sequence: record.sequence, direction: record.direction, before });
+      } catch (_) {
+        failures++;
+      }
+    }
+    function snapshot() {
+      return { interactions: sequence, failures, retained: recent.length, recent: recent.map(({ sequence: sequence2, direction, row, before }) => {
+        const after = admitted() && row.isConnected ? dom.rowDiagnostics(row, readChoices()) : null;
+        return {
+          sequence: sequence2,
+          direction,
+          before,
+          afterAtExport: after,
+          addedIdSample: after ? after.ids.filter((id) => !before.ids.includes(id)).slice(0, 16) : [],
+          removedIdSample: after ? before.ids.filter((id) => !after.ids.includes(id)).slice(0, 16) : [],
+          idComparisonTruncated: Boolean(before.idsTruncated || after?.idsTruncated)
+        };
+      }) };
+    }
+    return Object.freeze({ click, snapshot, dispose() {
+      recent.length = 0;
+      sequence = 0;
+      failures = 0;
+    } });
+  }
+
   // src/recommendations/recommendations.js
   function createRecommendations({ environment, context, userscript, tUi, viewingData, log = () => {
   }, warn = () => {
@@ -19694,6 +19766,22 @@ ${CARD_ACTION_STYLES}
       log,
       warn
     });
+    const navigation = createNavigationDiagnostics({
+      dom,
+      readChoices: visibleChoices,
+      admitted: () => active && allowed() && Boolean(profile) && readProfile() === profile,
+      log
+    });
+    function rowDiagnostics() {
+      if (!active || !allowed() || !profile || readProfile() !== profile) return { total: 0, truncated: false, rows: [] };
+      const rows = [...new Set([...entries.values()].map((entry) => entry.row))].filter((row) => row.isConnected);
+      const selected = visibleChoices();
+      return {
+        total: rows.length,
+        truncated: rows.length > 40,
+        rows: rows.slice(0, 40).map((row) => dom.rowDiagnostics(row, selected)).filter(Boolean)
+      };
+    }
     function updateRefill(dismissal = null) {
       refill.update(new Set([...entries.values()].map((entry) => entry.row)), dismissal);
     }
@@ -19722,6 +19810,7 @@ ${CARD_ACTION_STYLES}
       const next = readProfile();
       if (next === profile) return;
       refill.dispose();
+      navigation.dispose();
       viewing.dispose();
       for (const entry of [...entries.values()]) release(entry);
       profile = next;
@@ -19902,6 +19991,7 @@ ${CARD_ACTION_STYLES}
       });
     }
     function click(event) {
+      navigation.click(event.target);
       const button = event.target?.closest?.("button"), input = buttons.get(button);
       if (!input || input.entry && entries.get(input.entry.host) !== input.entry) return;
       event.preventDefault();
@@ -20019,6 +20109,7 @@ ${CARD_ACTION_STYLES}
     }
     function dispose() {
       refill.dispose();
+      navigation.dispose();
       viewing.dispose();
       environment.window?.removeEventListener("scroll", scroll);
       if (scrollTimer !== null) environment.clearTimeout(scrollTimer);
@@ -20048,7 +20139,9 @@ ${CARD_ACTION_STYLES}
       hiddenCount: Object.keys(visibleChoices()).length,
       storageFailed: failed,
       refill: refill.diagnostics(),
-      viewing: viewing.diagnostics()
+      viewing: viewing.diagnostics(),
+      rows: rowDiagnostics(),
+      navigation: navigation.snapshot()
     }) });
   }
 
@@ -20302,7 +20395,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.4";
+  var SCRIPT_VERSION = "1.9.5";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

@@ -53,7 +53,7 @@ Uncommitted `1.9.3-2026-10-10T18-33-21-508Z-8b0f7ecb.txt`, 1463bytes; SHA256 **c
 Uncommitted detailed homepage captures, **2026-10-10** UTC+02, same environment as1.9.1; runtime revision unavailable:
 - **20:40:15.662**, `1.9.4-2026-10-10T18-40-15-662Z-7329ed01.txt`,2248bytes/5events; SHA256 **6d218ffbd0a7f62a08cd9bfdcf6e2c133307e9fcd99b3ddd5d734f3bcdfc1707**.
 - **20:40:26.160**, `1.9.4-2026-10-10T18-40-26-160Z-a62b34b7.txt`,2436bytes/7events; SHA256 **ce1970bb9efce8824ef5c870017b05f26da67ccd39fab52257ee13d2d20f69d0**.
-Same startup; second retains first save completion after a cancelled dialog. Both logSave.pending=0; decorated263→275/checked262→275/hidden140. No dismissal/refill checks/prior pages; card increase has no recorded cause. Repeat downloads reached logs/.
+Same startup; second retains first save completion after a cancelled dialog. Both logSave.pending=0; decorated263→275/checked262→275/hidden140. No dismissal/refill checks/prior pages; card increase has no recorded cause. User confirms an arrow click between exports. Repeat downloads reached logs/.
 
 ## Evidence limits
 
