@@ -522,3 +522,25 @@ test('native request observation starts only on user navigation and disconnects 
     b.location.pathname = '/watch/1'; b.feature.check(); assert.equal(instances[1].disconnected, true);
     assert.equal(b.feature.diagnostics().navigation.retained, 0); b.feature.dispose();
 });
+
+test('arrow height uses card geometry rather than a percentage of its short parent and restores on retirement', () => {
+    const b = setup(), a = mount(b), arrow = nextControl(b, a.row, () => {});
+    arrow.style.setProperty('height', '64px'); arrow.style.setProperty('top', '0px');
+    arrow.offsetParent = { getBoundingClientRect: () => ({ top: 180 }), clientTop: 2, scrollTop: 0 };
+    a.card.getBoundingClientRect = () => ({ left: 0, top: 100, width: 250, height: 140 });
+    b.feature.check();
+    assert.equal(arrow.style.getPropertyValue('height'), '212px');
+    assert.equal(arrow.style.getPropertyValue('top'), '-82px');
+    a.card.getBoundingClientRect = () => ({ left: 0, top: 80, width: 200, height: 112 }); b.feature.check();
+    assert.equal(arrow.style.getPropertyValue('height'), '184px');
+    assert.equal(arrow.style.getPropertyValue('top'), '-102px');
+    b.feature.dispose(); assert.equal(arrow.style.getPropertyValue('height'), '64px');
+    assert.equal(arrow.style.getPropertyValue('top'), '0px'); assert.equal(arrow.style.getPropertyValue('bottom'), '');
+    assert.equal(b.window.listenerCount('resize'), 0);
+});
+
+test('arrow retirement preserves a newer native height override', () => {
+    const b = setup(), a = mount(b), arrow = nextControl(b, a.row, () => {}); b.feature.check();
+    arrow.style.setProperty('height', '333px', 'important'); b.feature.dispose();
+    assert.equal(arrow.style.getPropertyValue('height'), '333px');
+});

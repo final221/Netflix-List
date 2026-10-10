@@ -36,7 +36,7 @@ test('movement history records meaningful transitions, ignores repeated hover an
     const b = setup(), card = { closest: () => ({}) };
     for (let i = 0; i < 20; i++) b.probe.movement('hover', card, { x: 10, y: 20, secret: 'omit' });
     assert.equal(b.probe.snapshot().movements.length, 1);
-    for (let i = 0; i < 100; i++) b.probe.movement('action', null, { id: String(i), action: 'hide' });
-    const facts = b.probe.snapshot(); assert.equal(facts.movements.length, 80);
-    assert.equal(facts.movementsDropped, 21); assert.equal(facts.movements[0].id, '20'); assert.doesNotMatch(JSON.stringify(facts), /omit|secret/); b.probe.dispose();
+    for (let i = 0; i < 300; i++) b.probe.movement('action', null, { id: String(i), action: 'hide' });
+    const facts = b.probe.snapshot(); assert.equal(facts.movements.length, 240);
+    assert.equal(facts.movementsDropped, 61); assert.equal(facts.movements[0].id, '60'); assert.doesNotMatch(JSON.stringify(facts), /omit|secret/); b.probe.dispose();
 });

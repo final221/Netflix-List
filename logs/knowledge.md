@@ -21,33 +21,25 @@ Uncommitted `logs/Textdokument (neu).txt`: SHA256 0fb1b1282449390cbf73f7f20342dc
 
 For 1.9.x: `version/suffix` identifies uncommitted `logs/<version>-2026-10-10T<suffix>.txt`; capture times are 2026-10-10 UTC+02. Windows/Firefox157/English/2560×1279/DPR1/homepage; runtime refs unknown.
 
+Earlier1.9.1–1.9.6 source filenames, copiedAt and SHA256 records are retained in logs/knowledge.md at7772317 (summary revision, not runtime ref; originals were uncommitted).
+
 ## Session — 1.9.1
 
-- 20:19:33.852, `1.9.1/18-19-33-853Z-01657356`/3events, SHA256 59e5f4f52f2a28de68e67ac7038f2595648fada60ce5d493d209f44bc949a23f.
-- 20:20:20.484, `1.9.1/18-20-20-485Z-3f42d96b`/7occurrences, SHA256 b97d3d8488e08763f6f23832f17696f5bd1e6af9179917c19c2d9b24e4396c02.
 Folder memory/playback overlay confirmed;checked160→186/pending26→0.
 
 ## Session — 1.9.3
 
-`1.9.3/18-33-21-508Z-8b0f7ecb`; SHA256 c3c2752bad24f0140bf250af1812275d03d5fe36d04cce8a1e79b96867af5345. CopiedAt 2026-10-10T20:33:21.508+02:00. User:arrow reveals more/CopyLogs unclickable;baseline/no post-arrow proof;details at7689b02.
 
 ## Session — 1.9.4
 
-- 20:40:15.662, `1.9.4/18-40-15-662Z-7329ed01`/5events; SHA256 6d218ffbd0a7f62a08cd9bfdcf6e2c133307e9fcd99b3ddd5d734f3bcdfc1707.
-- 20:40:26.160, `1.9.4/18-40-26-160Z-a62b34b7`/7events; SHA256 ce1970bb9efce8824ef5c870017b05f26da67ccd39fab52257ee13d2d20f69d0.
 Repeated saves/pending0;decorated263→275/checked262→275;arrow confirmed/no row facts.
 
 ## Session — 1.9.5
 
-- `1.9.5/18-50-04-861Z-50175928`, copiedAt 20:50:04.860; SHA256 80715fcce6f40734fec5578b6a3c87f7fdf70d43ca0221a30a94c29287570c21.
-- `1.9.5/18-50-14-550Z-83ea815f`, copiedAt 20:50:14.550; SHA256 70218a5d89a718fa9efa8ce3d0e3f066f3800b98b269e73fa441a1c860b3b30d.
-- `1.9.5/18-50-23-271Z-4674aef4`, copiedAt 20:50:23.270; SHA256 09784c45ebf5e1575068183da3b90baccd88370122443689617bcd642e400f92.
 Row11 arrows:13→25→26mounted/12,8added/0,7removed;visible5→7→8/hidden8→10→9/offscreen0→8→9. Untruncated/no warnings;totalCount:number/depth14;pageIndex=-1/transform:none/origin unknown. Detailed times at7689b02.
 
 ## Session — 1.9.6
 
-- `1.9.6/19-05-01-105Z-a24ce44f`, copiedAt 21:05:01.105; SHA256 e8b9ec6551df552ec495f1ea3f1a6a79de2b41ebd2a280098351b3386ff7526f.
-- `1.9.6/19-05-09-360Z-9bb398ee`, copiedAt 21:05:09.359; SHA256 b84db13abfdb56ac091cab2d0458084787a7d22c03e6e5d36d70bd6a2d7979e0.
 Row11 13→25/12added/0removed. Window2363ms/250buffered/0matches;React10/truncated;no loader/cache proof. Details at7689b02.
 
 ## Session — 1.9.7
@@ -86,6 +78,17 @@ Viewing95→166requests/184→288checked/3→6failed/all series coverage/three a
 - 22:53:11.778, 1.9.10/20-53-11-786Z-691342cc; SHA256 49d964535a5fb1d43a5724c47c3f19a5b3a763f905863866bf0e74fbf4ca66fc.
 - 22:53:17.819, 1.9.10/20-53-17-827Z-77448113; SHA256 e6a6e3733bd841d5dcb177d2e9653a3e58fbaf117372e56361eb2434cf5b431c.
 Same startup/three exports/399decorated/317checked/161requests/2failed series coverage(attempts4,3)/0pending. Row20 consecutive before states:two previous arrows add2 then3IDs(first observed2 then1);nine forward arrows add2IDs each,all previously observed;26mounted. Same-origin GraphQL timing/empty query keys;lease8intercepted/0GraphQL/no failures. Some older timing windows disappear;no causal payload proof. Screenshots:arrow hit area tall/visible button small;user reports repeated titles.
+
+## Session — 1.9.11
+
+Capture dates2026-10-11 UTC+02; filenames use2026-10-10 UTC; same Firefox157 environment/runtime ref unknown.
+
+- 00:31:35.763, 1.9.11/22-31-35-765Z-cffa9984; SHA256 54bf039ffb35b3489d5df29e75792439a88a146ddd3a2497a4d1a296a4b853e0.
+- 00:32:24.474, 1.9.11/22-32-24-476Z-5d161ee6; SHA256 e7e6a2bb9b44a4239e3f24918ae10611857374b390b5bb1fca15984683d8439d.
+- 00:32:53.869, 1.9.11/22-32-53-872Z-c98ce17f; SHA256 93a410e63d202cebf730fc9f2d947663948cc268223d9f5ed89eef7d5c60bbd1.
+- 00:33:02.783, 1.9.11/22-33-02-786Z-2237516c; SHA256 8c78aacf12b2cd3ba9b6ba2328a30685ef10edaed1a1aea8a87a76cb44c47744.
+- 00:33:12.145, 1.9.11/22-33-12-149Z-cb15bba9; SHA256 f81f1e10dd63665107a89b1146264520cb3ffd400f7ef94d522e33663ec46a85.
+Same startup/five exports/five arrows/six dismissals. Arrow BUTTON56×64/rgb37/opacity1/no clip;parent/icon/hit unrecorded. Row7 first-observed counts at200/1200/5000ms:0/8/16 then0/8/8 twice. Row8:4/12/12 then0/8(last sample pending). Six series coverage failures/three attempts/222→272checked/137→181requests/0pending at exports. Final trace80/38dropped/no diagnostic failures. Samples establish first-observed mounted IDs, not fresh ranking or isolated arrow causality;dismissals occur in the same visit.
 
 ## Evidence limits
 

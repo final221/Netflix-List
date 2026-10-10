@@ -1,10 +1,14 @@
 # Findings and follow-up plan
 
-Updated: 2026-10-10
+Updated: 2026-10-11
 
 This file records the code-review findings and the agreed follow-up plan for My List for Netflix. It is a working record; the user authorizes necessary investigation and implementation steps toward stationary recommendation refill without repeated per-step approval; unrelated work remains outside that goal. Current release and remaining work come first. Historical checkpoints follow; later completion records supersede earlier pending-work statements.
 
 ## User live-test evidence
+
+Release **1.9.12** replaces percentage-only arrow sizing with a row-owned geometry lease. The five **1.9.11** captures ([evidence](../logs/knowledge.md#session--1911)) measure the actual button at56×64 with our background and no clipping, proving that CSS100% did not produce a tall control; its parent/offset geometry was absent, so an undefined/short containing block is an inference. The adapter now aligns existing arrows with card artwork plus the72px reserved action space, using explicit height/top/bottom in offset-parent coordinates. Rescans/resize refresh dimensions; last-card/route retirement restores only still-owned values. Parent/icon boxes and top/middle/bottom elementFromPoint facts extend arrow diagnostics. Live verification remains pending.
+
+These captures show first-observed IDs growing between timed samples, unlike the previously looping row; same-visit dismissals prevent claiming each change came only from an arrow or fresh server ranking. Six series still exhaust coverage reads; direct preloading remains unresolved. Final movement trace lost38events, so retention increases80→240 with the existing dropped count. **639 tests pass**, including short-parent pixel sizing, responsive updates, preservation of newer native overrides and resize retirement; build/check/syntax/whitespace checks pass. Next capture after updating/reloading1.9.12 should verify actual button dimensions and hit samples while reproducing normal browsing.
 
 Release **1.9.11** corrects the arrow's visible/hit-area mismatch: a solid full-height background/border and matching inner native-button sizing retain Netflix handlers. Control diagnostics copy outer/inner rectangles, background, opacity, clipping and border radius to verify the actual rendered target. Live styling remains unverified locally.
 

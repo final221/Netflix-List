@@ -38,7 +38,7 @@ export function createNavigationDiagnostics({ environment, dom, readChoices, adm
             movements.push({ at: now(), kind, ...(id ? { id, rowId } : arrow ? { rowId, direction: arrow.direction } : {}),
                 scrollY: Math.round(environment.scrollY || environment.window?.scrollY || 0),
                 ...Object.fromEntries(Object.entries(detail).filter(([key, value]) => ['x', 'y', 'action', 'id'].includes(key) && ['string', 'number'].includes(typeof value))) });
-            movementCount++; if (movements.length > 80) movements.shift();
+            movementCount++; if (movements.length > 240) movements.shift();
         } catch (_) { failures++; }
     }
     function click(target) {

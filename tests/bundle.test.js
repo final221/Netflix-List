@@ -539,7 +539,7 @@ for (const viewingFailure of ['missing-context', 'http']) {
         assert.equal(b.document.getElementById('tm-netflix-mylist-v15-style'), null);
         assert.equal(section.getAttribute('data-tm-original-mylist-visible'), null);
         assert.equal(b.document.listenerCount('pointermove'), 0);
-        assert.equal(b.window.listenerCount('resize'), 0);
+        assert.equal(b.window.listenerCount('resize'), viewingFailure === 'http' ? 1 : 0);
         // The retained native cards now belong to browsing recommendation controls.
         assert.equal(b.observers.filter(observer => observer.active).length, viewingFailure === 'http' ? 1 : 0);
         assert.equal(b.scheduler.timers.size, 0); assert.equal(b.scheduler.frames.size, 0);

@@ -23,7 +23,7 @@ export const RECOMMENDATION_ARROW_STYLES = `
 export function createRecommendationDom(environment) {
     const { document, location, getComputedStyle, performance, PerformanceObserver } = environment;
     const selector = 'a[data-uia="standard-card"][href], .title-card';
-    const scrollerLeases = new WeakMap();
+    const scrollerLeases = new WeakMap(), arrowRows = new WeakMap();
     function styleLease(node, name, value, priority = '') {
         const previous = node.style.getPropertyValue(name), previousPriority = node.style.getPropertyPriority(name);
         node.style.setProperty(name, value, priority);
@@ -44,6 +44,45 @@ export function createRecommendationDom(environment) {
             if (released) return; released = true;
             if (--resource.users === 0) { resource.restore(); scrollerLeases.delete(scroller); }
         };
+    }
+    const arrowSelector = '[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], [data-uia="carousel-hawkins-left-button"], [data-uia="carousel-left-button"], .handleNext, .handlePrev';
+    function reserveArrows(row) {
+        let resource = arrowRows.get(row);
+        if (!resource) { resource = { users: 0, controls: new Map() }; arrowRows.set(row, resource); }
+        resource.users++; let released = false;
+        return () => {
+            if (released) return; released = true;
+            if (--resource.users === 0) {
+                for (const value of resource.controls.values()) value.restore.forEach(release => release());
+                resource.controls.clear(); arrowRows.delete(row);
+            }
+        };
+    }
+    function updateArrows(row) {
+        try {
+            const resource = arrowRows.get(row); if (!resource) return false;
+            const controls = [...row.querySelectorAll(arrowSelector)];
+            for (const [control, value] of resource.controls) if (!controls.includes(control)) {
+                value.restore.forEach(release => release()); resource.controls.delete(control);
+            }
+            let card;
+            for (const item of scan(row)) {
+                if (item.row !== row) continue;
+                const rect = item.card.getBoundingClientRect();
+                if (rect.width > 1 && rect.height > 1) { card = rect; break; }
+            }
+            if (!card) return false;
+            for (const control of controls) {
+                const parent = control.offsetParent || row, rect = parent.getBoundingClientRect();
+                const height = Math.round(card.height + 72), top = Math.round(card.top - rect.top - (parent.clientTop || 0) + (parent.scrollTop || 0));
+                const signature = height + ':' + top, previous = resource.controls.get(control);
+                if (previous?.signature === signature && control.style.getPropertyValue('height') === height + 'px' && control.style.getPropertyValue('top') === top + 'px') continue;
+                previous?.restore.forEach(release => release());
+                const value = { signature, restore: [] }; resource.controls.set(control, value);
+                for (const [name, applied] of [['height', height + 'px'], ['top', top + 'px'], ['bottom', 'auto']]) value.restore.push(styleLease(control, name, applied, 'important'));
+            }
+            return true;
+        } catch (_) { return false; }
     }
     function describe(card) {
         if (!card?.isConnected) return null;
@@ -71,12 +110,12 @@ export function createRecommendationDom(environment) {
         }
         return result;
     }
-    function lease({ host, card, id, scroller }) {
+    function lease({ host, card, id, scroller, row }) {
         const previousPosition = host.style.getPropertyValue('position'), positionPriority = host.style.getPropertyPriority('position');
         const positioned = !getComputedStyle || !getComputedStyle(host).position || getComputedStyle(host).position === 'static';
         if (positioned) host.style.setProperty('position', 'relative');
         const restoreOverflow = styleLease(host, 'overflow', 'visible', 'important');
-        const releaseSpace = reserveActions(scroller);
+        const releaseSpace = reserveActions(scroller), releaseArrows = reserveArrows(row);
         let hidden = false, originalVisibility = '', visibilityPriority = '', originalPointer = '', pointerPriority = '';
         let restoreDisplay = null;
         const originalAria = card.getAttribute('aria-hidden'), originalTab = card.getAttribute('tabindex');
@@ -111,7 +150,7 @@ export function createRecommendationDom(environment) {
                 }
                 return true;
             },
-            release() { restore(); restoreOverflow(); releaseSpace(); if (positioned && host.style.getPropertyValue('position') === 'relative') {
+            release() { restore(); restoreOverflow(); releaseSpace(); releaseArrows(); if (positioned && host.style.getPropertyValue('position') === 'relative') {
                 if (previousPosition) host.style.setProperty('position', previousPosition, positionPriority); else host.style.removeProperty('position');
             } }
         };
@@ -215,13 +254,22 @@ export function createRecommendationDom(environment) {
     }
     function controlFacts(control) {
         try {
-            const nodes = [control, control.querySelector?.('button, [role="button"]')].filter(Boolean);
-            return nodes.map(node => {
+            function describeNode(node) {
                 const rect = node.getBoundingClientRect(), style = getComputedStyle?.(node);
                 return { tag: node.tagName, rect: [rect.left, rect.top, rect.width, rect.height].map(value => Number.isFinite(value) ? Math.round(value) : null),
                     background: String(style?.backgroundColor || '').slice(0, 80), opacity: style?.opacity,
+                    position: style?.position, height: style?.height, overflow: style?.overflow,
                     borderRadius: style?.borderRadius, clipPath: String(style?.clipPath || '').slice(0, 120) };
-            });
+            }
+            const nodes = [control, control.querySelector?.('button, [role="button"]')].filter(Boolean);
+            const parents = []; let parent = control.parentElement;
+            for (let i = 0; parent && i < 4; i++, parent = parent.parentElement) parents.push(describeNode(parent));
+            const rect = control.getBoundingClientRect(), hits = [];
+            if (document?.elementFromPoint && rect.height > 0) for (const y of [rect.top + 2, rect.top + rect.height / 2, rect.bottom - 2]) {
+                const hit = document.elementFromPoint(rect.left + rect.width / 2, y);
+                hits.push({ y: Math.round(y), tag: hit?.tagName || null, inside: Boolean(hit && (hit === control || control.contains(hit))) });
+            }
+            return { nodes: nodes.map(describeNode), parents, icon: control.querySelector?.('svg, .indicator-icon') ? describeNode(control.querySelector('svg, .indicator-icon')) : null, hits };
         } catch (_) { return { unavailable: true }; }
     }
     function diagnosticTime() {
@@ -302,6 +350,6 @@ export function createRecommendationDom(environment) {
                 loading: loadingFacts(row) };
         } catch (_) { return null; }
     }
-    return Object.freeze({ scan, lease, describe, refillState, loadingFacts, navigationTarget, rowDiagnostics,
+    return Object.freeze({ scan, lease, updateArrows, describe, refillState, loadingFacts, navigationTarget, rowDiagnostics,
         navigationStart, navigationRequests, observeRequests });
 }

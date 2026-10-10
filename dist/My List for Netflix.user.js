@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.11
+// @version      1.9.12
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -19612,7 +19612,7 @@ ${CARD_ACTION_STYLES}
   function createRecommendationDom(environment) {
     const { document, location, getComputedStyle, performance, PerformanceObserver } = environment;
     const selector = 'a[data-uia="standard-card"][href], .title-card';
-    const scrollerLeases = /* @__PURE__ */ new WeakMap();
+    const scrollerLeases = /* @__PURE__ */ new WeakMap(), arrowRows = /* @__PURE__ */ new WeakMap();
     function styleLease(node, name, value, priority = "") {
       const previous = node.style.getPropertyValue(name), previousPriority = node.style.getPropertyPriority(name);
       node.style.setProperty(name, value, priority);
@@ -19639,6 +19639,59 @@ ${CARD_ACTION_STYLES}
           scrollerLeases.delete(scroller);
         }
       };
+    }
+    const arrowSelector = '[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], [data-uia="carousel-hawkins-left-button"], [data-uia="carousel-left-button"], .handleNext, .handlePrev';
+    function reserveArrows(row) {
+      let resource = arrowRows.get(row);
+      if (!resource) {
+        resource = { users: 0, controls: /* @__PURE__ */ new Map() };
+        arrowRows.set(row, resource);
+      }
+      resource.users++;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        if (--resource.users === 0) {
+          for (const value of resource.controls.values()) value.restore.forEach((release) => release());
+          resource.controls.clear();
+          arrowRows.delete(row);
+        }
+      };
+    }
+    function updateArrows(row) {
+      try {
+        const resource = arrowRows.get(row);
+        if (!resource) return false;
+        const controls = [...row.querySelectorAll(arrowSelector)];
+        for (const [control, value] of resource.controls) if (!controls.includes(control)) {
+          value.restore.forEach((release) => release());
+          resource.controls.delete(control);
+        }
+        let card;
+        for (const item of scan(row)) {
+          if (item.row !== row) continue;
+          const rect = item.card.getBoundingClientRect();
+          if (rect.width > 1 && rect.height > 1) {
+            card = rect;
+            break;
+          }
+        }
+        if (!card) return false;
+        for (const control of controls) {
+          const parent = control.offsetParent || row, rect = parent.getBoundingClientRect();
+          const height = Math.round(card.height + 72), top = Math.round(card.top - rect.top - (parent.clientTop || 0) + (parent.scrollTop || 0));
+          const signature = height + ":" + top, previous = resource.controls.get(control);
+          if (previous?.signature === signature && control.style.getPropertyValue("height") === height + "px" && control.style.getPropertyValue("top") === top + "px") continue;
+          previous?.restore.forEach((release) => release());
+          const value = { signature, restore: [] };
+          resource.controls.set(control, value);
+          for (const [name, applied] of [["height", height + "px"], ["top", top + "px"], ["bottom", "auto"]]) value.restore.push(styleLease(control, name, applied, "important"));
+        }
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
     function describe(card) {
       if (!card?.isConnected) return null;
@@ -19670,12 +19723,12 @@ ${CARD_ACTION_STYLES}
       }
       return result;
     }
-    function lease({ host, card, id, scroller }) {
+    function lease({ host, card, id, scroller, row }) {
       const previousPosition = host.style.getPropertyValue("position"), positionPriority = host.style.getPropertyPriority("position");
       const positioned = !getComputedStyle || !getComputedStyle(host).position || getComputedStyle(host).position === "static";
       if (positioned) host.style.setProperty("position", "relative");
       const restoreOverflow = styleLease(host, "overflow", "visible", "important");
-      const releaseSpace = reserveActions(scroller);
+      const releaseSpace = reserveActions(scroller), releaseArrows = reserveArrows(row);
       let hidden = false, originalVisibility = "", visibilityPriority = "", originalPointer = "", pointerPriority = "";
       let restoreDisplay = null;
       const originalAria = card.getAttribute("aria-hidden"), originalTab = card.getAttribute("tabindex");
@@ -19732,6 +19785,7 @@ ${CARD_ACTION_STYLES}
           restore();
           restoreOverflow();
           releaseSpace();
+          releaseArrows();
           if (positioned && host.style.getPropertyValue("position") === "relative") {
             if (previousPosition) host.style.setProperty("position", previousPosition, positionPriority);
             else host.style.removeProperty("position");
@@ -19863,18 +19917,30 @@ ${CARD_ACTION_STYLES}
     }
     function controlFacts(control) {
       try {
-        const nodes = [control, control.querySelector?.('button, [role="button"]')].filter(Boolean);
-        return nodes.map((node) => {
-          const rect = node.getBoundingClientRect(), style = getComputedStyle?.(node);
+        let describeNode = function(node) {
+          const rect2 = node.getBoundingClientRect(), style = getComputedStyle?.(node);
           return {
             tag: node.tagName,
-            rect: [rect.left, rect.top, rect.width, rect.height].map((value) => Number.isFinite(value) ? Math.round(value) : null),
+            rect: [rect2.left, rect2.top, rect2.width, rect2.height].map((value) => Number.isFinite(value) ? Math.round(value) : null),
             background: String(style?.backgroundColor || "").slice(0, 80),
             opacity: style?.opacity,
+            position: style?.position,
+            height: style?.height,
+            overflow: style?.overflow,
             borderRadius: style?.borderRadius,
             clipPath: String(style?.clipPath || "").slice(0, 120)
           };
-        });
+        };
+        const nodes = [control, control.querySelector?.('button, [role="button"]')].filter(Boolean);
+        const parents = [];
+        let parent = control.parentElement;
+        for (let i = 0; parent && i < 4; i++, parent = parent.parentElement) parents.push(describeNode(parent));
+        const rect = control.getBoundingClientRect(), hits = [];
+        if (document?.elementFromPoint && rect.height > 0) for (const y of [rect.top + 2, rect.top + rect.height / 2, rect.bottom - 2]) {
+          const hit = document.elementFromPoint(rect.left + rect.width / 2, y);
+          hits.push({ y: Math.round(y), tag: hit?.tagName || null, inside: Boolean(hit && (hit === control || control.contains(hit))) });
+        }
+        return { nodes: nodes.map(describeNode), parents, icon: control.querySelector?.("svg, .indicator-icon") ? describeNode(control.querySelector("svg, .indicator-icon")) : null, hits };
       } catch (_) {
         return { unavailable: true };
       }
@@ -20023,6 +20089,7 @@ ${CARD_ACTION_STYLES}
     return Object.freeze({
       scan,
       lease,
+      updateArrows,
       describe,
       refillState,
       loadingFacts,
@@ -20171,7 +20238,7 @@ ${CARD_ACTION_STYLES}
           ...Object.fromEntries(Object.entries(detail).filter(([key, value2]) => ["x", "y", "action", "id"].includes(key) && ["string", "number"].includes(typeof value2)))
         });
         movementCount++;
-        if (movements.length > 80) movements.shift();
+        if (movements.length > 240) movements.shift();
       } catch (_) {
         failures++;
       }
@@ -20539,7 +20606,9 @@ ${CARD_ACTION_STYLES}
         style.textContent = CARD_ACTION_STYLES + RECOMMENDATION_ARROW_STYLES + "\n.tm-rec-controls{opacity:1;pointer-events:auto}";
         style.textContent += "\n.tm-rec-manager{position:fixed;right:16px;top:100px;z-index:10000;font:14px system-ui;color:#fff}.tm-rec-manager[hidden],.tm-rec-manager [hidden]{display:none!important}.tm-rec-manager button{background:#242424;color:#fff;border:1px solid #777;border-radius:5px;padding:8px;cursor:pointer}.tm-rec-manager button:focus-visible,.tm-rec-manager a:focus-visible{outline:2px solid #fff;outline-offset:2px}.tm-rec-manager section{margin-top:8px;width:min(360px,calc(100vw - 32px));max-height:70vh;overflow:auto;background:#181818;border:1px solid #555;border-radius:8px;padding:12px;box-sizing:border-box;box-shadow:0 8px 24px #0008}.tm-rec-manager section>button{display:block;margin-left:auto}.tm-rec-saved-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #333}.tm-rec-saved-row a{flex:1;color:#eee;text-decoration:none;overflow-wrap:anywhere}.tm-rec-saved-row button{border:0;background:transparent;font-size:22px;padding:0 8px}.tm-rec-manager h3{font-size:14px}";
         document.head.appendChild(style);
+        environment.window?.addEventListener("resize", resize);
       }
+      for (const row of new Set([...entries.values()].map((entry) => entry.row))) dom.updateArrows(row);
       updateRefill();
     }
     function schedule(root) {
@@ -20668,6 +20737,9 @@ ${CARD_ACTION_STYLES}
       });
       observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["href", "data-uia"] });
     }
+    function resize() {
+      schedule(document);
+    }
     function check() {
       if (!allowed()) {
         dispose();
@@ -20689,6 +20761,7 @@ ${CARD_ACTION_STYLES}
       navigation.dispose();
       viewing.dispose();
       environment.window?.removeEventListener("scroll", scroll);
+      environment.window?.removeEventListener("resize", resize);
       if (scrollTimer !== null) environment.clearTimeout(scrollTimer);
       scrollTimer = null;
       active = false;
@@ -20972,7 +21045,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.11";
+  var SCRIPT_VERSION = "1.9.12";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

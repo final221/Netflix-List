@@ -179,7 +179,9 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             style.textContent = CARD_ACTION_STYLES + RECOMMENDATION_ARROW_STYLES + '\n.tm-rec-controls{opacity:1;pointer-events:auto}';
             style.textContent += '\n.tm-rec-manager{position:fixed;right:16px;top:100px;z-index:10000;font:14px system-ui;color:#fff}.tm-rec-manager[hidden],.tm-rec-manager [hidden]{display:none!important}.tm-rec-manager button{background:#242424;color:#fff;border:1px solid #777;border-radius:5px;padding:8px;cursor:pointer}.tm-rec-manager button:focus-visible,.tm-rec-manager a:focus-visible{outline:2px solid #fff;outline-offset:2px}.tm-rec-manager section{margin-top:8px;width:min(360px,calc(100vw - 32px));max-height:70vh;overflow:auto;background:#181818;border:1px solid #555;border-radius:8px;padding:12px;box-sizing:border-box;box-shadow:0 8px 24px #0008}.tm-rec-manager section>button{display:block;margin-left:auto}.tm-rec-saved-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #333}.tm-rec-saved-row a{flex:1;color:#eee;text-decoration:none;overflow-wrap:anywhere}.tm-rec-saved-row button{border:0;background:transparent;font-size:22px;padding:0 8px}.tm-rec-manager h3{font-size:14px}';
             document.head.appendChild(style);
+            environment.window?.addEventListener('resize', resize);
         }
+        for (const row of new Set([...entries.values()].map(entry => entry.row))) dom.updateArrows(row);
         updateRefill();
     }
     function schedule(root) {
@@ -257,6 +259,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         });
         observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['href', 'data-uia'] });
     }
+    function resize() { schedule(document); }
     function check() {
         if (!allowed()) { dispose(); return; }
         if (!active) { active = true; epoch++;
@@ -267,6 +270,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     function dispose() {
         refill.dispose(); navigation.dispose(); viewing.dispose();
         environment.window?.removeEventListener('scroll', scroll);
+        environment.window?.removeEventListener('resize', resize);
         if (scrollTimer !== null) environment.clearTimeout(scrollTimer); scrollTimer = null;
         active = false; epoch++; queued = false; pending.clear(); observer?.disconnect(); observer = null;
         document.removeEventListener('click', click, true); document.removeEventListener('pointerover', pointer, true);
