@@ -52,6 +52,7 @@ what it should not contain
 - Keep browsing actions visible underneath cards, following My List's shared control presentation rather than requiring artwork hover or duplicating its UI implementation.
 - Collapse dismissed browsing cards completely so the remaining cards fill their space; restore them through the saved-choices panel rather than leaving Undo placeholders.
 - Keep saved browsing dismissals accessible from a right-side panel, grouped by watched and hidden, with small remove icons for quick individual restoration even when the native card is absent.
+- Use the same manual viewing choices in browsing and My List: watched films persist, caught-up series cover available episodes and expire when new episodes are detected. Distinguish Films and Series in the saved panel; keep Hide suggestion separate.
 - Keep card placement controls to one action between My List and Watched / Caught up. Fold returning to automatic classification into that action when it agrees with the destination; show a small passive marker for active manual placements rather than a separate reset button.
 - Known watched/caught-up titles should start in their section on list entry, and newly established viewing results should appear promptly.
 - After initial loading, viewing groups should remain stable while browsing; changes should follow explicit viewing actions/refresh, a new list entry, or actual list/profile changes.

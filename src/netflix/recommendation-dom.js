@@ -39,7 +39,8 @@ export function createRecommendationDom({ document, location, getComputedStyle, 
         const scroller = host.closest('[data-uia="carousel-scroller"], .slider') || row;
         const title = (card.querySelector('img[alt]')?.getAttribute('alt') ||
             card.querySelector('.fallback-text')?.textContent || card.getAttribute('aria-label') || '').trim().slice(0, 300);
-        return { host, card, id, scroller, title, row };
+        const typeHint = card.getAttribute('data-video-type') === 'movie' ? 'movie' : undefined;
+        return { host, card, id, scroller, title, row, typeHint };
     }
     function scan(root = document) {
         const result = [], seen = new Set();

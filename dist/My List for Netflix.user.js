@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.7.0
+// @version      1.8.0
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -9237,6 +9237,163 @@ ${CARD_ACTION_STYLES}
       settled: () => watch.promise || Promise.resolve(),
       freshStatus: (id) => watch.results.get(id),
       freshType: (id) => watch.types.get(id)
+    });
+  }
+
+  // src/viewing/browsing.js
+  function createBrowsingViewing({
+    environment,
+    context,
+    userscript,
+    isCurrent,
+    onChange,
+    data,
+    log = () => {
+    },
+    warn = () => {
+    }
+  }) {
+    const choices = createChoices({
+      activeProfile: () => context.activeProfile(),
+      getValue: (...args) => userscript.getValue(...args),
+      setValue: (...args) => userscript.setValue(...args)
+    });
+    const completion = createCompletion();
+    const cancelled = () => new Error("BROWSING_VIEWING_RETIRED");
+    data ||= createViewingData({ context, fetch: (...args) => environment.fetch(...args), createCancelledError: cancelled });
+    let generation = 0, profile = null, running = false, stopped = false, requests = 0, controller = null, timer = null;
+    const types = /* @__PURE__ */ new Map(), coverage = /* @__PURE__ */ new Map(), pending = /* @__PURE__ */ new Set(), checked = /* @__PURE__ */ new Set();
+    function guard(owner = generation) {
+      if (owner !== generation || !profile || context.activeProfile() !== profile || !isCurrent()) throw cancelled();
+    }
+    function dispose() {
+      generation++;
+      controller?.abort();
+      controller = null;
+      if (timer !== null) environment.clearTimeout(timer);
+      timer = null;
+      profile = null;
+      running = false;
+      stopped = false;
+      requests = 0;
+      pending.clear();
+      checked.clear();
+      types.clear();
+      coverage.clear();
+      choices.retire();
+    }
+    function reset() {
+      dispose();
+      profile = context.activeProfile();
+      choices.sync(() => guard());
+    }
+    function observe(items) {
+      if (!profile) return false;
+      let updated = false;
+      const savedSeries = choices.ids().filter((id) => choices.status(id) === "complete" && choices.type(id) !== "movie").map((id) => ({ id }));
+      for (const { id, typeHint } of [...items, ...savedSeries]) {
+        if (typeHint === "movie" && !types.has(id)) {
+          types.set(id, "movie");
+          pending.delete(id);
+          checked.add(id);
+          updated = true;
+        }
+        if (!stopped && !checked.has(id) && !pending.has(id) && !types.has(id) && checked.size + pending.size < 500) pending.add(id);
+      }
+      if (!running && pending.size) {
+        running = true;
+        const owner = generation;
+        environment.queueMicrotask(() => {
+          if (owner === generation) void run(owner);
+        });
+      }
+      return updated;
+    }
+    async function request(read, owner) {
+      guard(owner);
+      if (++requests > 200) throw new Error("BROWSING_VIEWING_BUDGET");
+      const access = data.beginRead();
+      if (!access || access.profileGuid !== profile) throw new Error("VIEWING_STATUS_CONTEXT");
+      const current = new environment.AbortController();
+      controller = current;
+      timer = environment.setTimeout(() => current.abort(), 8e3);
+      try {
+        const value = await read(access, { signal: current.signal, assertCurrent: () => guard(owner) });
+        guard(owner);
+        return value;
+      } finally {
+        if (controller === current) {
+          environment.clearTimeout(timer);
+          timer = null;
+          controller = null;
+        }
+      }
+    }
+    async function run(owner) {
+      try {
+        while (pending.size) {
+          guard(owner);
+          const ids = [...pending].slice(0, 5);
+          ids.forEach((id) => {
+            pending.delete(id);
+            checked.add(id);
+          });
+          const records = await request((access, handle) => data.readTitles(ids, access, handle), owner);
+          const series = [];
+          for (const id of ids) {
+            const record = records.get(id), type2 = completion.recordType(record);
+            if (type2) types.set(id, type2);
+            if (type2 === "series") series.push(record);
+          }
+          if (series.length) {
+            const plans = await request((access, handle) => data.readSeasons(series, access, handle), owner);
+            for (const plan of plans) coverage.set(plan.videoId, plan.seasons.map((season) => [season.id, season.count]));
+            const expired = choices.reconcile((id) => coverage.get(id), ids, () => guard(owner));
+            if (expired.size) log("Browsing viewing coverage reconciled", { changed: expired.size });
+          }
+          guard(owner);
+          onChange();
+          guard(owner);
+        }
+      } catch (error) {
+        if (owner === generation && profile && isCurrent()) {
+          stopped = true;
+          pending.clear();
+          warn("Browsing viewing metadata unavailable", { reason: error.message, requests });
+          onChange();
+        }
+      } finally {
+        if (owner === generation) running = false;
+      }
+    }
+    function type(id) {
+      return types.get(id) || choices.type(id);
+    }
+    function ready(id) {
+      return type(id) === "movie" || type(id) === "series" && coverage.has(id);
+    }
+    function mark(id) {
+      guard();
+      if (!ready(id)) return { saved: false };
+      return choices.save(/* @__PURE__ */ new Map([[id, { status: "complete", type: type(id), coverage: coverage.get(id) || null }]]), false, () => guard());
+    }
+    function restore(id) {
+      guard();
+      return choices.save(/* @__PURE__ */ new Map([[id, { status: "main", type: type(id) || "unknown", coverage: null }]]), false, () => guard());
+    }
+    return Object.freeze({
+      reset,
+      dispose,
+      observe,
+      type,
+      ready,
+      mark,
+      restore,
+      complete: (id) => choices.status(id) === "complete",
+      choice: choices.choice,
+      ids: () => choices.ids().filter((id) => choices.status(id) === "complete"),
+      presentation: choices.presentation,
+      diagnostics: () => ({ requests, checked: checked.size, pending: pending.size, running, unavailable: stopped })
     });
   }
 
@@ -19193,7 +19350,8 @@ ${CARD_ACTION_STYLES}
       if (!/^\d+$/.test(id)) return null;
       const scroller = host.closest('[data-uia="carousel-scroller"], .slider') || row;
       const title = (card.querySelector("img[alt]")?.getAttribute("alt") || card.querySelector(".fallback-text")?.textContent || card.getAttribute("aria-label") || "").trim().slice(0, 300);
-      return { host, card, id, scroller, title, row };
+      const typeHint = card.getAttribute("data-video-type") === "movie" ? "movie" : void 0;
+      return { host, card, id, scroller, title, row, typeHint };
     }
     function scan(root = document) {
       const result = [], seen = /* @__PURE__ */ new Set();
@@ -19457,7 +19615,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/recommendations/recommendations.js
-  function createRecommendations({ environment, context, userscript, tUi, log = () => {
+  function createRecommendations({ environment, context, userscript, tUi, viewingData, log = () => {
   }, warn = () => {
   } }) {
     const { document, location, MutationObserver, queueMicrotask } = environment;
@@ -19471,10 +19629,50 @@ ${CARD_ACTION_STYLES}
       const value = context.activeProfile();
       return typeof value === "string" && value ? value : null;
     };
+    const viewing = createBrowsingViewing({
+      environment,
+      context,
+      userscript,
+      data: viewingData,
+      isCurrent: () => active && allowed() && Boolean(profile) && readProfile() === profile,
+      onChange: viewingChanged,
+      log,
+      warn
+    });
+    function visibleChoices() {
+      return { ...Object.fromEntries(viewing.ids().map((id) => [id, "watched"])), ...choices };
+    }
+    function viewingChanged() {
+      if (!active || !profile || readProfile() !== profile || !allowed()) return;
+      try {
+        const p = profile, owner = epoch, latest = read(p);
+        let migrated = 0;
+        for (const [id, reason] of Object.entries(latest.choices)) {
+          const type = viewing.type(id);
+          if (reason !== "watched" || !["movie", "series"].includes(type)) continue;
+          if (type === "movie" && !viewing.choice(id) && !viewing.mark(id).saved) continue;
+          delete latest.choices[id];
+          migrated++;
+        }
+        if (readProfile() !== p || epoch !== owner) return;
+        if (migrated) userscript.setValue(key + encodeURIComponent(p), { version: 1, ...latest });
+        if (readProfile() !== p || epoch !== owner) {
+          check();
+          return;
+        }
+        ({ choices, titles } = latest);
+        for (const entry of entries.values()) paint(entry);
+        paintManager();
+        updateRefill();
+        if (migrated) log("Legacy browsing viewing choices migrated", { count: migrated });
+      } catch (error) {
+        warn("Browsing viewing migration unavailable", { reason: error.message });
+      }
+    }
     const refill = createRefill({
       environment,
       dom,
-      readChoices: () => choices,
+      readChoices: visibleChoices,
       admitted: () => active && allowed() && Boolean(profile) && !failed && readProfile() === profile,
       onPage: (row) => scan(row),
       log,
@@ -19496,7 +19694,7 @@ ${CARD_ACTION_STYLES}
       if (value === null) return { choices: {}, titles: {} };
       if (value?.version !== 1 || !value.choices || typeof value.choices !== "object" || Array.isArray(value.choices) || Object.keys(value.choices).length > 5e3) throw new Error("invalid-storage");
       const choices2 = Object.fromEntries(Object.entries(value.choices).filter(([id, reason]) => /^\d+$/.test(id) && ["watched", "hide"].includes(reason)));
-      const titles2 = Object.fromEntries(Object.keys(choices2).filter((id) => typeof value.titles?.[id] === "string").map((id) => [id, value.titles[id].slice(0, 300)]));
+      const titles2 = Object.fromEntries(Object.entries(value.titles || {}).slice(0, 5e3).filter(([id, title]) => /^\d+$/.test(id) && typeof title === "string").map(([id, title]) => [id, title.slice(0, 300)]));
       return { choices: choices2, titles: titles2 };
     }
     function release(entry) {
@@ -19508,6 +19706,7 @@ ${CARD_ACTION_STYLES}
       const next = readProfile();
       if (next === profile) return;
       refill.dispose();
+      viewing.dispose();
       for (const entry of [...entries.values()]) release(entry);
       profile = next;
       choices = {};
@@ -19528,29 +19727,37 @@ ${CARD_ACTION_STYLES}
         failed = true;
         warn("Recommendation choices unavailable", { reason: error.message });
       }
+      if (profile && !failed) {
+        viewing.reset();
+        viewing.observe(Object.keys(choices).filter((id) => choices[id] === "watched").map((id) => ({ id })));
+      }
       paintManager();
     }
     function paintManager() {
       if (!manager) return;
       const focusedIndex = [...manager.list.querySelectorAll("button")].indexOf(document.activeElement);
       manager.root.hidden = !profile;
-      manager.toggle.textContent = `${tUi("recommendationWatched")} / ${tUi("recommendationHidden")} (${Object.keys(choices).length})`;
+      const records = [
+        ...viewing.ids().map((id) => ({ id, reason: "viewing", type: viewing.type(id) })),
+        ...Object.keys(choices).map((id) => ({ id, reason: choices[id], type: "unknown" }))
+      ];
+      manager.toggle.textContent = `${tUi("watchedCaughtUp")} / ${tUi("recommendationHidden")} (${records.length})`;
       if (manager.panel.hidden) {
         manager.list.replaceChildren();
         return;
       }
       const nodes = [];
-      if (failed || !Object.keys(choices).length) {
+      if (failed || !records.length) {
         const message = document.createElement("p");
         message.textContent = tUi(failed ? "viewingChoiceStorageFailed" : "noRecommendationChoices");
         nodes.push(message);
-      } else for (const reason of ["watched", "hide"]) {
-        const ids = Object.keys(choices).filter((id) => choices[id] === reason);
-        if (!ids.length) continue;
+      } else for (const [type, key2] of [["movie", "filterFilms"], ["series", "filterSeries"], ["watched", "watchedCaughtUp"], ["hide", "recommendationHidden"]]) {
+        const selected = records.filter((record) => type === "movie" || type === "series" ? record.reason === "viewing" && record.type === type : record.reason === type || type === "watched" && record.reason === "viewing" && !["movie", "series"].includes(record.type));
+        if (!selected.length) continue;
         const heading = document.createElement("h3");
-        heading.textContent = tUi(reason === "watched" ? "recommendationWatched" : "recommendationHidden");
+        heading.textContent = tUi(key2);
         nodes.push(heading);
-        for (const id of ids) {
+        for (const { id, reason } of selected) {
           const row = document.createElement("div");
           row.className = "tm-rec-saved-row";
           const name = document.createElement("a");
@@ -19561,7 +19768,7 @@ ${CARD_ACTION_STYLES}
           remove.textContent = "\xD7";
           remove.setAttribute("aria-label", `${tUi("undoRecommendation")}: ${name.textContent}`);
           remove.title = tUi("undoRecommendation");
-          buttons.set(remove, { action: "undo", id, profile, epoch });
+          buttons.set(remove, { action: "undo", id, reason, profile, epoch });
           row.appendChild(name);
           row.appendChild(remove);
           nodes.push(row);
@@ -19585,7 +19792,7 @@ ${CARD_ACTION_STYLES}
       const panel = document.createElement("section");
       panel.id = "tm-rec-saved-panel";
       panel.hidden = true;
-      panel.setAttribute("aria-label", `${tUi("recommendationWatched")} / ${tUi("recommendationHidden")}`);
+      panel.setAttribute("aria-label", `${tUi("watchedCaughtUp")} / ${tUi("recommendationHidden")}`);
       const close = document.createElement("button");
       close.type = "button";
       close.textContent = "\xD7";
@@ -19609,7 +19816,7 @@ ${CARD_ACTION_STYLES}
       }
     }
     function paint(entry) {
-      const reason = choices[entry.id];
+      const reason = choices[entry.id] || (viewing.complete(entry.id) ? "watched" : null);
       if (!entry.lease.hide(Boolean(reason))) return;
       entry.controls.setAttribute("data-tm-rec-hidden", reason ? "true" : "false");
       entry.watched.hidden = Boolean(reason);
@@ -19618,6 +19825,11 @@ ${CARD_ACTION_STYLES}
         button.disabled = !profile || failed;
         button.title = failed || !profile ? tUi("viewingChoiceStorageFailed") : button.textContent;
       }
+      const type = viewing.type(entry.id), facts = viewing.presentation();
+      entry.watched.textContent = tUi(type === "series" ? "markCaughtUp" : type === "movie" ? "markWatched" : viewing.diagnostics().unavailable ? "unknownViewingStatus" : "checkingViewingStatus");
+      entry.watched.setAttribute("aria-label", entry.watched.textContent);
+      entry.watched.disabled ||= !viewing.ready(entry.id) || facts.disabled;
+      entry.watched.title = !profile || failed || facts.manualFailure ? tUi("viewingChoiceStorageFailed") : !viewing.ready(entry.id) ? tUi(viewing.diagnostics().unavailable ? "unknownViewingStatus" : "checkingViewingStatus") : entry.watched.textContent;
     }
     function decorate(value) {
       const existing = entries.get(value.host);
@@ -19646,6 +19858,8 @@ ${CARD_ACTION_STYLES}
       if (previous !== profile) root = document;
       for (const entry of [...entries.values()]) if (!entry.lease.current()) release(entry);
       for (const value of dom.scan(root)) decorate(value);
+      if (viewing.observe([...entries.values()])) viewingChanged();
+      for (const entry of entries.values()) paint(entry);
       if (!style) {
         style = document.createElement("style");
         style.textContent = CARD_ACTION_STYLES + "\n.tm-rec-controls{opacity:1;pointer-events:auto}";
@@ -19698,13 +19912,21 @@ ${CARD_ACTION_STYLES}
       try {
         const p = profile, owner = epoch, latest = read(p);
         const id = input.entry?.id || input.id;
-        if (input.action === "undo") {
+        if (input.action === "watched") {
+          if (!viewing.mark(id).saved) {
+            paint(input.entry);
+            return;
+          }
           delete latest.choices[id];
-          delete latest.titles[id];
-        } else {
-          latest.choices[id] = input.action;
-          if (input.entry.title) latest.titles[id] = input.entry.title;
-        }
+        } else if (input.action === "undo") {
+          if (input.reason === "viewing" && !viewing.restore(id).saved) {
+            paintManager();
+            return;
+          }
+          if (input.reason !== "viewing") delete latest.choices[id];
+          if (!viewing.ids().includes(id) && !latest.choices[id]) delete latest.titles[id];
+        } else latest.choices[id] = input.action;
+        if (input.entry?.title) latest.titles[id] = input.entry.title;
         if (Object.keys(latest.choices).length > 5e3) throw new Error("storage-full");
         if (readProfile() !== p || epoch !== owner) {
           scan();
@@ -19781,6 +20003,7 @@ ${CARD_ACTION_STYLES}
     }
     function dispose() {
       refill.dispose();
+      viewing.dispose();
       environment.window?.removeEventListener("scroll", scroll);
       if (scrollTimer !== null) environment.clearTimeout(scrollTimer);
       scrollTimer = null;
@@ -19806,9 +20029,10 @@ ${CARD_ACTION_STYLES}
     return Object.freeze({ check, dispose, diagnostics: () => ({
       active,
       decorated: entries.size,
-      hiddenCount: Object.keys(choices).length,
+      hiddenCount: Object.keys(visibleChoices()).length,
       storageFailed: failed,
-      refill: refill.diagnostics()
+      refill: refill.diagnostics(),
+      viewing: viewing.diagnostics()
     }) });
   }
 
@@ -19973,7 +20197,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.7.0";
+  var SCRIPT_VERSION = "1.8.0";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

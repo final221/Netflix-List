@@ -32,7 +32,7 @@ function allowedImport(from, to) {
     if (owner === 'viewing') return from !== 'src/viewing/completion.js' && viewingAdapters.has(to);
     if (owner === 'grid') return gridAdapters.has(to);
     if (owner === 'hover') return hoverAdapters.has(to);
-    if (owner === 'recommendations') return ['src/netflix/recommendation-dom.js', 'src/netflix/context.js', 'src/card-actions.js'].includes(to);
+    if (owner === 'recommendations') return ['src/netflix/recommendation-dom.js', 'src/netflix/context.js', 'src/card-actions.js', 'src/viewing/viewing.js'].includes(to);
     return false;
 }
 

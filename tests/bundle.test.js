@@ -1,4 +1,4 @@
-import { viewingVideo } from './helpers/fixtures.js';
+import { viewingVideo, atom, reference } from './helpers/fixtures.js';
 import { mountPopulatedMyList } from './helpers/populated-browser.js';
 import { createBrowser } from './helpers/browser.js';
 import { test } from 'node:test';
@@ -16,6 +16,34 @@ const shipped = (await readFile(path.join(root, distribution), 'utf8')).replace(
 const releaseVersion = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
 
 function browser(options) { const b=createBrowser(options);vm.createContext(b.context);return {...b,start:()=>vm.runInContext(shipped,b.context,{filename:distribution,timeout:1000})}; }
+
+test('generated browsing series captures real Falcor coverage and expires shared caught-up placement on added episodes', async () => {
+    const b = browser(), stored = new Map(), paths = []; let episodes = 2;
+    b.context.URLSearchParams = URLSearchParams;
+    b.window.netflix.reactContext = { models: {
+        userInfo: { data: { userGuid: 'A', authURL: 'fixture-auth' } }, services: { data: { memberapi: '/api/shakti/test' } } } };
+    b.context.GM_getValue = (key, fallback) => stored.get(key) ?? fallback;
+    b.context.GM_setValue = (key, value) => stored.set(key, value);
+    b.context.fetch = async (_url, options) => {
+        paths.push(new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value)));
+        return { ok: true, json: async () => ({ jsonGraph: { videos: { 123: {
+            ...viewingVideo('show', false, 0, { seasonCount: atom(1), episodeCount: atom(episodes) }),
+            seasonList: { 0: reference('seasons', '101') } } }, seasons: { 101: { summary: atom({ length: episodes }) } } } }) };
+    };
+    const row = b.document.body.appendChild(new Element('section'));
+    const slot = row.appendChild(new Element('div')); slot.setAttribute('data-virtual-slot', '0');
+    const card = slot.appendChild(new Element('a')); card.setAttribute('data-uia', 'standard-card'); card.setAttribute('href', '/title/123');
+    b.start(); await b.scheduler.flush();
+    const caughtUp = slot.querySelectorAll('button').find(button => button.textContent === 'Mark caught up');
+    assert.ok(caughtUp); assert.equal(caughtUp.disabled, false);
+    b.document.dispatchEvent({ type: 'click', target: caughtUp, preventDefault() {}, stopImmediatePropagation() {} });
+    assert.equal(slot.style.getPropertyValue('display'), 'none');
+    assert.deepEqual(Array.from(stored.get('legacyMyListForNetflix.viewingChoices.v1.A').choices['123'].coverage[0]), ['101', 2]);
+    await b.navigate('/watch/123'); episodes = 3; await b.navigate('/browse'); await b.scheduler.flush();
+    assert.equal(slot.style.getPropertyValue('display'), '');
+    assert.equal(stored.get('legacyMyListForNetflix.viewingChoices.v1.A').choices['123'], undefined);
+    assert.equal(paths.length, 4); await b.navigate('/watch/123'); assert.equal(b.scheduler.timers.size, 0);
+});
 
 test('generated release refills an empty browsing row through the native next control', async () => {
     const b = browser(), stored = new Map(); let moves = 0;

@@ -12,6 +12,7 @@ function mount(b, id = '1', { legacy = false, progress = false } = {}) {
     const host = row.appendChild(new Element('div'));
     if (legacy) host.className = 'slider-item'; else host.setAttribute('data-virtual-slot', '0');
     const card = host.appendChild(new Element(legacy ? 'div' : 'a'));
+    card.setAttribute('data-video-type', 'movie');
     if (legacy) { card.className = 'title-card'; const link = card.appendChild(new Element('a')); link.setAttribute('href', '/title/' + id); }
     else { card.setAttribute('data-uia', 'standard-card'); card.setAttribute('href', '/browse?jbv=' + id); }
     if (progress) row.appendChild(new Element('div')).setAttribute('data-uia', 'progress-card');
@@ -22,7 +23,7 @@ function setup(options = {}) {
     const userscript = { getValue: (key, fallback) => saved.get(key) ?? fallback,
         setValue: (key, value) => saved.set(key, value), ...options };
     const tUi = createI18n({ readLanguage: () => 'en' }).tUi;
-    const feature = createRecommendations({ environment: b.context, context: { activeProfile: () => profile }, userscript, tUi });
+    const feature = createRecommendations({ environment: b.context, context: { activeProfile: () => profile }, userscript, tUi, viewingData: options.viewingData });
     return { ...b, saved, userscript, feature, select: value => { profile = value; },
         click(host, label) { const button = host.querySelectorAll('button').find(node => node.textContent === label);
             assert.ok(button, label); this.document.dispatchEvent({ type: 'click', target: button, preventDefault() {}, stopImmediatePropagation() {} }); },
@@ -40,6 +41,81 @@ function nextControl(b, row, click, hawkins = true) {
     return button;
 }
 async function settleRefill(b, ticks = 3) { for (let i = 0; i < ticks; i++) await b.scheduler.advance(150); }
+
+function seriesMetadata(readCoverage = () => [['101', 2]]) {
+    return { beginRead: () => ({ profileGuid: 'A' }),
+        async readTitles(ids) { return new Map(ids.map(id => [id, { videoId: id, type: 'show' }])); },
+        async readSeasons(records) { return records.map(record => ({ videoId: record.videoId,
+            seasons: readCoverage().map(([id, count]) => ({ id, count })) })); } };
+}
+
+test('series Mark caught up and movie Mark watched share My List storage, with separate panel groups', async () => {
+    const b = setup({ viewingData: seriesMetadata() }), series = mount(b), movie = mount(b, '2'), hidden = mount(b, '3');
+    series.card.removeAttribute('data-video-type'); b.feature.check();
+    assert.equal(series.host.querySelector('button').disabled, true); await b.scheduler.flush();
+    b.click(series.host, 'Mark caught up'); b.click(movie.host, 'Mark watched'); b.click(hidden.host, 'Hide suggestion');
+    const shared = b.saved.get('legacyMyListForNetflix.viewingChoices.v1.A').choices;
+    assert.deepEqual(shared['1'], { status: 'complete', type: 'series', coverage: [['101', 2]] });
+    assert.deepEqual(shared['2'], { status: 'complete', type: 'movie', coverage: null });
+    assert.deepEqual(b.saved.get('legacyMyListForNetflix.recommendationChoices.v1.A').choices, { 3: 'hide' });
+    const root = b.document.querySelector('.tm-rec-manager'); b.click(root, root.querySelector('button').textContent);
+    assert.deepEqual(root.querySelectorAll('h3').map(node => node.textContent), ['Films', 'Series', 'Suggestion hidden']);
+    b.restore('1'); assert.equal(series.host.style.getPropertyValue('display'), '');
+    assert.equal(b.saved.get('legacyMyListForNetflix.viewingChoices.v1.A').choices['1'].status, 'main');
+});
+
+test('caught-up expiry uses shared policy for added episodes and a new season on later page entry', async () => {
+    for (const added of [[['101', 3]], [['101', 2], ['102', 1]]]) {
+        let coverage = [['101', 2]];
+        const b = setup({ viewingData: seriesMetadata(() => coverage) }), a = mount(b); a.card.removeAttribute('data-video-type');
+        b.feature.check(); await b.scheduler.flush(); b.click(a.host, 'Mark caught up');
+        b.feature.dispose(); coverage = added; b.feature.check(); await b.scheduler.flush();
+        assert.equal(a.host.style.getPropertyValue('display'), '');
+        assert.equal(b.saved.get('legacyMyListForNetflix.viewingChoices.v1.A').choices['1'], undefined);
+        assert.equal(b.feature.diagnostics().hiddenCount, 0);
+    }
+});
+
+test('saved caught-up series are rechecked even when Netflix has no mounted card for them', async () => {
+    const b = setup({ viewingData: seriesMetadata(() => [['101', 3]]) });
+    b.saved.set('legacyMyListForNetflix.viewingChoices.v1.A', { version: 1,
+        choices: { 1: { status: 'complete', type: 'series', coverage: [['101', 2]] } } });
+    b.feature.check(); await b.scheduler.flush();
+    assert.equal(b.feature.diagnostics().hiddenCount, 0);
+    assert.equal(b.saved.get('legacyMyListForNetflix.viewingChoices.v1.A').choices['1'], undefined);
+});
+
+test('legacy browsing series without snapshots are restored, while film choices migrate and hides survive', async () => {
+    const b = setup({ viewingData: { ...seriesMetadata(),
+        async readTitles(ids) { return new Map(ids.map(id => [id, { videoId: id, type: id === '2' ? 'movie' : 'show' }])); } } });
+    const a = mount(b), film = mount(b, '2'); a.card.removeAttribute('data-video-type'); film.card.removeAttribute('data-video-type');
+    b.saved.set('legacyMyListForNetflix.recommendationChoices.v1.A', { version: 1, choices: { 1: 'watched', 2: 'watched', 3: 'hide' }, titles: { 1: 'Series', 2: 'Film' } });
+    b.feature.check(); await b.scheduler.flush();
+    assert.equal(a.host.style.getPropertyValue('display'), ''); assert.equal(film.host.style.getPropertyValue('display'), 'none');
+    assert.deepEqual(b.saved.get('legacyMyListForNetflix.recommendationChoices.v1.A').choices, { 3: 'hide' });
+    assert.equal(b.saved.get('legacyMyListForNetflix.viewingChoices.v1.A').choices['1'], undefined);
+    assert.equal(b.saved.get('legacyMyListForNetflix.viewingChoices.v1.A').choices['2'].type, 'movie');
+});
+
+test('missing series metadata preserves existing coverage and disables new caught-up choices without affecting Hide', async () => {
+    const b = setup({ viewingData: { ...seriesMetadata(), async readSeasons() { return []; } } }), a = mount(b); a.card.removeAttribute('data-video-type');
+    b.saved.set('legacyMyListForNetflix.viewingChoices.v1.A', { version: 1,
+        choices: { 9: { status: 'complete', type: 'series', coverage: [['101', 2]] } } });
+    b.feature.check(); await b.scheduler.flush();
+    assert.equal(a.host.querySelector('button').textContent, 'Mark caught up'); assert.equal(a.host.querySelector('button').disabled, true);
+    b.click(a.host, 'Mark caught up'); assert.equal(a.host.style.getPropertyValue('display'), '');
+    b.click(a.host, 'Hide suggestion'); assert.equal(a.host.style.getPropertyValue('display'), 'none');
+    assert.deepEqual(b.saved.get('legacyMyListForNetflix.viewingChoices.v1.A').choices['9'].coverage, [['101', 2]]);
+});
+
+test('metadata delivered after a profile switch cannot classify, expire or write into the new profile', async () => {
+    let resolve;
+    const b = setup({ viewingData: { ...seriesMetadata(), readTitles: () => new Promise(done => { resolve = done; }) } }), a = mount(b);
+    a.card.removeAttribute('data-video-type'); b.feature.check(); await b.scheduler.flush();
+    b.select('B'); b.feature.check(); resolve(new Map([['1', { videoId: '1', type: 'show' }]])); await b.scheduler.flush();
+    assert.equal(b.saved.size, 0); assert.equal(a.host.style.getPropertyValue('display'), '');
+    b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
+});
 
 test('empty-row refill clicks Netflix next and decorates arriving recommendations without cloning or direct requests', async () => {
     const b = setup(), a = mount(b); let clicks = 0;
@@ -142,7 +218,7 @@ test('live recommendation controls persist both reasons, hide duplicates and Und
     assert.equal(other.card.style.visibility, undefined); assert.equal(b.requests.length, 0);
     b.restore('1'); assert.equal(a.card.style.visibility, undefined);
     b.click(other.host, 'Hide suggestion'); assert.equal(other.card.style.visibility, 'hidden');
-    assert.deepEqual([...b.saved.values()][0], { version: 1, choices: { 2: 'hide' }, titles: {} });
+    assert.deepEqual(b.saved.get('legacyMyListForNetflix.recommendationChoices.v1.A'), { version: 1, choices: { 2: 'hide' }, titles: {} });
     b.feature.dispose(); b.feature.check(); assert.equal(other.card.style.visibility, 'hidden');
     b.feature.dispose(); assert.equal(other.card.style.visibility, undefined);
     assert.equal(b.document.head.querySelectorAll('style').length, 0); assert.equal(b.requests.length, 0);
@@ -150,8 +226,8 @@ test('live recommendation controls persist both reasons, hide duplicates and Und
 test('recommendation profile changes reject old controls and isolate saved choices', () => {
     const b = setup(), a = mount(b); b.feature.check(); b.click(a.host, 'Mark watched');
     b.select('B'); b.click(a.host, 'Mark watched'); assert.equal(a.card.style.visibility, undefined);
-    assert.equal(b.saved.size, 1); b.click(a.host, 'Hide suggestion');
-    assert.equal(b.saved.size, 2); b.select('A'); b.feature.check();
+    assert.equal(b.saved.size, 2); b.click(a.host, 'Hide suggestion');
+    assert.equal(b.saved.size, 3); b.select('A'); b.feature.check();
     assert.equal(a.host.style.getPropertyValue('display'), 'none');
     b.select(null); b.feature.check(); assert.equal(a.host.querySelectorAll('button').length, 0);
     assert.equal(a.card.style.visibility, undefined);
@@ -164,7 +240,7 @@ test('recycled native slots retire old visibility and controls; newly mounted ti
     assert.equal(newCard.card.style.visibility, 'hidden');
     const old = a.host.querySelectorAll('button')[0]; a.card.remove(); b.mutate(a.host, { removedNodes: [a.card] }); await b.scheduler.flush();
     b.document.dispatchEvent({ type: 'click', target: old, preventDefault() {}, stopImmediatePropagation() {} });
-    assert.deepEqual([...b.saved.values()][0].choices, { 1: 'hide' });
+    assert.deepEqual(b.saved.get('legacyMyListForNetflix.recommendationChoices.v1.A').choices, { 1: 'hide' });
 });
 test('missing grants, malformed choices and save failures keep titles visible and disable choices', () => {
     for (const options of [{ getValue: undefined }, { getValue: () => ({ version: 2 }) }, { setValue: () => { throw new Error('denied'); } }]) {
@@ -215,15 +291,15 @@ test('saved-choices panel restores both reasons without mounted cards and rememb
     hidden.card.setAttribute('aria-label', 'Hidden series');
     b.feature.check(); b.click(watched.host, 'Mark watched'); b.click(hidden.host, 'Hide suggestion');
     watched.row.remove(); hidden.row.remove(); b.feature.dispose(); b.feature.check();
-    const root = b.document.querySelector('.tm-rec-manager'); b.click(root, 'Already watched / Suggestion hidden (2)');
+    const root = b.document.querySelector('.tm-rec-manager'); b.click(root, 'Watched / Caught up / Suggestion hidden (2)');
     assert.equal(root.querySelector('section').hidden, false);
     assert.deepEqual(root.querySelectorAll('a').map(a => a.textContent), ['<Watched film>', 'Hidden series']);
     assert.equal(root.querySelectorAll('a')[0].getAttribute('href'), '/title/11');
     b.click(root, '\u00d7'); // Panel close comes first.
-    b.click(root, 'Already watched / Suggestion hidden (2)');
+    b.click(root, 'Watched / Caught up / Suggestion hidden (2)');
     const remove = root.querySelectorAll('.tm-rec-saved-row')[0].querySelector('button');
     b.document.dispatchEvent({ type: 'click', target: remove, preventDefault() {}, stopImmediatePropagation() {} });
-    assert.deepEqual([...b.saved.values()][0], { version: 1, choices: { 22: 'hide' }, titles: { 22: 'Hidden series' } });
+    assert.deepEqual(b.saved.get('legacyMyListForNetflix.recommendationChoices.v1.A'), { version: 1, choices: { 22: 'hide' }, titles: { 22: 'Hidden series' } });
     const next = root.querySelector('.tm-rec-saved-row').querySelector('button');
     b.document.dispatchEvent({ type: 'click', target: next, preventDefault() {}, stopImmediatePropagation() {} });
     assert.equal(root.querySelectorAll('.tm-rec-saved-row').length, 0);
@@ -237,33 +313,33 @@ test('saved-choices panel restores both reasons without mounted cards and rememb
 test('old choices can be restored from the panel and visible duplicate cards return immediately', () => {
     const b = setup(); b.saved.set('legacyMyListForNetflix.recommendationChoices.v1.A', { version: 1, choices: { 1: 'watched', 2: 'hide' } });
     const a = mount(b), duplicate = mount(b); b.feature.check();
-    const root = b.document.querySelector('.tm-rec-manager'); b.click(root, 'Already watched / Suggestion hidden (2)');
+    const root = b.document.querySelector('.tm-rec-manager'); b.click(root, 'Watched / Caught up / Suggestion hidden (2)');
     assert.equal(root.querySelector('a').textContent, '#1');
     const remove = root.querySelector('.tm-rec-saved-row').querySelector('button');
     b.document.dispatchEvent({ type: 'click', target: remove, preventDefault() {}, stopImmediatePropagation() {} });
     assert.equal(a.card.style.visibility, undefined); assert.equal(duplicate.card.style.visibility, undefined);
-    assert.deepEqual([...b.saved.values()][0].choices, { 2: 'hide' });
+    assert.deepEqual(b.saved.get('legacyMyListForNetflix.recommendationChoices.v1.A').choices, { 2: 'hide' });
 });
 
 test('profile replacement closes the panel and stale row actions cannot restore another profile', () => {
     const b = setup(), a = mount(b); b.feature.check(); b.click(a.host, 'Mark watched');
-    const root = b.document.querySelector('.tm-rec-manager'); b.click(root, 'Already watched / Suggestion hidden (1)');
+    const root = b.document.querySelector('.tm-rec-manager'); b.click(root, 'Watched / Caught up / Suggestion hidden (1)');
     const remove = root.querySelector('.tm-rec-saved-row').querySelector('button'); b.select('B');
     b.document.dispatchEvent({ type: 'click', target: remove, preventDefault() {}, stopImmediatePropagation() {} });
     assert.equal(root.querySelector('section').hidden, true); assert.equal(root.querySelectorAll('a').length, 0);
-    assert.equal(b.saved.size, 1); assert.deepEqual([...b.saved.values()][0].choices, { 1: 'watched' });
-    b.select('A'); b.feature.check(); b.click(root, 'Already watched / Suggestion hidden (1)');
+    assert.equal(b.saved.size, 2); assert.equal(b.saved.get('legacyMyListForNetflix.viewingChoices.v1.A').choices['1'].status, 'complete');
+    b.select('A'); b.feature.check(); b.click(root, 'Watched / Caught up / Suggestion hidden (1)');
     b.document.dispatchEvent({ type: 'click', target: remove, preventDefault() {}, stopImmediatePropagation() {} });
-    assert.deepEqual([...b.saved.values()][0].choices, { 1: 'watched' });
+    assert.equal(b.saved.get('legacyMyListForNetflix.viewingChoices.v1.A').choices['1'].status, 'complete');
 });
 
 test('failed panel restoration preserves the saved dismissal and reports unavailable storage', () => {
     const b = setup(), a = mount(b); b.feature.check(); b.click(a.host, 'Hide suggestion');
-    const root = b.document.querySelector('.tm-rec-manager'); b.click(root, 'Already watched / Suggestion hidden (1)');
+    const root = b.document.querySelector('.tm-rec-manager'); b.click(root, 'Watched / Caught up / Suggestion hidden (1)');
     b.userscript.setValue = () => { throw new Error('denied'); };
     const remove = root.querySelector('.tm-rec-saved-row').querySelector('button');
     b.document.dispatchEvent({ type: 'click', target: remove, preventDefault() {}, stopImmediatePropagation() {} });
-    assert.equal(a.card.style.visibility, 'hidden'); assert.deepEqual([...b.saved.values()][0].choices, { 1: 'hide' });
+    assert.equal(a.card.style.visibility, 'hidden'); assert.deepEqual(b.saved.get('legacyMyListForNetflix.recommendationChoices.v1.A').choices, { 1: 'hide' });
     assert.ok(root.querySelector('p').textContent.includes('Could not save'));
 });
 

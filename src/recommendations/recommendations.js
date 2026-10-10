@@ -1,8 +1,9 @@
 import { createRecommendationDom } from '../netflix/recommendation-dom.js';
 import { createCardActions, CARD_ACTION_STYLES } from '../card-actions.js';
 import { createRefill } from './refill.js';
+import { createBrowsingViewing } from '../viewing/viewing.js';
 
-export function createRecommendations({ environment, context, userscript, tUi, log = () => {}, warn = () => {} }) {
+export function createRecommendations({ environment, context, userscript, tUi, viewingData, log = () => {}, warn = () => {} }) {
     const { document, location, MutationObserver, queueMicrotask } = environment;
     const dom = createRecommendationDom(environment), entries = new Map(), buttons = new WeakMap();
     const key = 'legacyMyListForNetflix.recommendationChoices.v1.';
@@ -12,7 +13,29 @@ export function createRecommendations({ environment, context, userscript, tUi, l
     const allowed = () => location.origin === 'https://www.netflix.com' &&
         (location.pathname === '/browse' || (location.pathname.startsWith('/browse/') && location.pathname !== '/browse/my-list') || location.pathname === '/search');
     const readProfile = () => { const value = context.activeProfile(); return typeof value === 'string' && value ? value : null; };
-    const refill = createRefill({ environment, dom, readChoices: () => choices,
+    const viewing = createBrowsingViewing({ environment, context, userscript, data: viewingData,
+        isCurrent: () => active && allowed() && Boolean(profile) && readProfile() === profile, onChange: viewingChanged, log, warn });
+    function visibleChoices() { return { ...Object.fromEntries(viewing.ids().map(id => [id, 'watched'])), ...choices }; }
+    function viewingChanged() {
+        if (!active || !profile || readProfile() !== profile || !allowed()) return;
+        try {
+            const p = profile, owner = epoch, latest = read(p); let migrated = 0;
+            for (const [id, reason] of Object.entries(latest.choices)) {
+                const type = viewing.type(id);
+                if (reason !== 'watched' || !['movie', 'series'].includes(type)) continue;
+                if (type === 'movie' && !viewing.choice(id) && !viewing.mark(id).saved) continue;
+                delete latest.choices[id]; migrated++;
+            }
+            if (readProfile() !== p || epoch !== owner) return;
+            if (migrated) userscript.setValue(key + encodeURIComponent(p), { version: 1, ...latest });
+            if (readProfile() !== p || epoch !== owner) { check(); return; }
+            ({ choices, titles } = latest);
+            for (const entry of entries.values()) paint(entry);
+            paintManager(); updateRefill();
+            if (migrated) log('Legacy browsing viewing choices migrated', { count: migrated });
+        } catch (error) { warn('Browsing viewing migration unavailable', { reason: error.message }); }
+    }
+    const refill = createRefill({ environment, dom, readChoices: visibleChoices,
         admitted: () => active && allowed() && Boolean(profile) && !failed && readProfile() === profile,
         onPage: row => scan(row), log, warn });
     function updateRefill() { refill.update(new Set([...entries.values()].map(entry => entry.row))); }
@@ -27,44 +50,51 @@ export function createRecommendations({ environment, context, userscript, tUi, l
         if (value?.version !== 1 || !value.choices || typeof value.choices !== 'object' || Array.isArray(value.choices) ||
             Object.keys(value.choices).length > 5000) throw new Error('invalid-storage');
         const choices = Object.fromEntries(Object.entries(value.choices).filter(([id, reason]) => /^\d+$/.test(id) && ['watched', 'hide'].includes(reason)));
-        const titles = Object.fromEntries(Object.keys(choices).filter(id => typeof value.titles?.[id] === 'string')
-            .map(id => [id, value.titles[id].slice(0, 300)]));
+        const titles = Object.fromEntries(Object.entries(value.titles || {}).slice(0, 5000)
+            .filter(([id, title]) => /^\d+$/.test(id) && typeof title === 'string').map(([id, title]) => [id, title.slice(0, 300)]));
         return { choices, titles };
     }
     function release(entry) { entry.controls.remove(); entry.lease.release(); entries.delete(entry.host); }
     function syncProfile() {
         const next = readProfile();
         if (next === profile) return;
-        refill.dispose();
+        refill.dispose(); viewing.dispose();
         for (const entry of [...entries.values()]) release(entry);
         profile = next; choices = {}; titles = {}; failed = false; epoch++; pending.clear(); queued = false;
         if (manager) { manager.panel.hidden = true; manager.toggle.setAttribute('aria-expanded', 'false'); }
         if (next) try { const loaded = read(next); if (readProfile() === next) ({ choices, titles } = loaded); else profile = null; }
         catch (error) { failed = true; warn('Recommendation choices unavailable', { reason: error.message }); }
+        if (profile && !failed) {
+            viewing.reset(); viewing.observe(Object.keys(choices).filter(id => choices[id] === 'watched').map(id => ({ id })));
+        }
         paintManager();
     }
     function paintManager() {
         if (!manager) return;
         const focusedIndex = [...manager.list.querySelectorAll('button')].indexOf(document.activeElement);
         manager.root.hidden = !profile;
-        manager.toggle.textContent = `${tUi('recommendationWatched')} / ${tUi('recommendationHidden')} (${Object.keys(choices).length})`;
+        const records = [...viewing.ids().map(id => ({ id, reason: 'viewing', type: viewing.type(id) })),
+            ...Object.keys(choices).map(id => ({ id, reason: choices[id], type: 'unknown' }))];
+        manager.toggle.textContent = `${tUi('watchedCaughtUp')} / ${tUi('recommendationHidden')} (${records.length})`;
         if (manager.panel.hidden) { manager.list.replaceChildren(); return; }
         const nodes = [];
-        if (failed || !Object.keys(choices).length) {
+        if (failed || !records.length) {
             const message = document.createElement('p');
             message.textContent = tUi(failed ? 'viewingChoiceStorageFailed' : 'noRecommendationChoices'); nodes.push(message);
-        } else for (const reason of ['watched', 'hide']) {
-            const ids = Object.keys(choices).filter(id => choices[id] === reason);
-            if (!ids.length) continue;
-            const heading = document.createElement('h3'); heading.textContent = tUi(reason === 'watched' ? 'recommendationWatched' : 'recommendationHidden'); nodes.push(heading);
-            for (const id of ids) {
+        } else for (const [type, key] of [['movie', 'filterFilms'], ['series', 'filterSeries'], ['watched', 'watchedCaughtUp'], ['hide', 'recommendationHidden']]) {
+            const selected = records.filter(record => type === 'movie' || type === 'series'
+                ? record.reason === 'viewing' && record.type === type : record.reason === type || type === 'watched' && record.reason === 'viewing' && !['movie', 'series'].includes(record.type));
+            if (!selected.length) continue;
+            const heading = document.createElement('h3');
+            heading.textContent = tUi(key); nodes.push(heading);
+            for (const { id, reason } of selected) {
                 const row = document.createElement('div'); row.className = 'tm-rec-saved-row';
                 const name = document.createElement('a');
                 name.textContent = titles[id] || [...entries.values()].find(entry => entry.id === id && entry.title)?.title || `#${id}`;
                 name.setAttribute('href', `/title/${id}`);
                 const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '\u00d7';
                 remove.setAttribute('aria-label', `${tUi('undoRecommendation')}: ${name.textContent}`); remove.title = tUi('undoRecommendation');
-                buttons.set(remove, { action: 'undo', id, profile, epoch }); row.appendChild(name); row.appendChild(remove); nodes.push(row);
+                buttons.set(remove, { action: 'undo', id, reason, profile, epoch }); row.appendChild(name); row.appendChild(remove); nodes.push(row);
             }
         }
         manager.list.replaceChildren(...nodes);
@@ -79,7 +109,7 @@ export function createRecommendations({ environment, context, userscript, tUi, l
         const toggle = document.createElement('button'); toggle.type = 'button'; toggle.setAttribute('aria-expanded', 'false');
         toggle.setAttribute('aria-controls', 'tm-rec-saved-panel'); buttons.set(toggle, { action: 'manager' });
         const panel = document.createElement('section'); panel.id = 'tm-rec-saved-panel'; panel.hidden = true;
-        panel.setAttribute('aria-label', `${tUi('recommendationWatched')} / ${tUi('recommendationHidden')}`);
+        panel.setAttribute('aria-label', `${tUi('watchedCaughtUp')} / ${tUi('recommendationHidden')}`);
         const close = document.createElement('button'); close.type = 'button'; close.textContent = '\u00d7';
         close.setAttribute('aria-label', tUi('closeRecommendationPanel')); buttons.set(close, { action: 'close' });
         const list = document.createElement('div'); panel.appendChild(close); panel.appendChild(list); root.appendChild(toggle); root.appendChild(panel);
@@ -91,7 +121,7 @@ export function createRecommendations({ environment, context, userscript, tUi, l
         }
     }
     function paint(entry) {
-        const reason = choices[entry.id];
+        const reason = choices[entry.id] || (viewing.complete(entry.id) ? 'watched' : null);
         if (!entry.lease.hide(Boolean(reason))) return;
         entry.controls.setAttribute('data-tm-rec-hidden', reason ? 'true' : 'false');
         entry.watched.hidden = Boolean(reason); entry.hide.hidden = Boolean(reason);
@@ -99,6 +129,13 @@ export function createRecommendations({ environment, context, userscript, tUi, l
             button.disabled = !profile || failed;
             button.title = failed || !profile ? tUi('viewingChoiceStorageFailed') : button.textContent;
         }
+        const type = viewing.type(entry.id), facts = viewing.presentation();
+        entry.watched.textContent = tUi(type === 'series' ? 'markCaughtUp' : type === 'movie' ? 'markWatched'
+            : viewing.diagnostics().unavailable ? 'unknownViewingStatus' : 'checkingViewingStatus');
+        entry.watched.setAttribute('aria-label', entry.watched.textContent);
+        entry.watched.disabled ||= !viewing.ready(entry.id) || facts.disabled;
+        entry.watched.title = !profile || failed || facts.manualFailure ? tUi('viewingChoiceStorageFailed')
+            : !viewing.ready(entry.id) ? tUi(viewing.diagnostics().unavailable ? 'unknownViewingStatus' : 'checkingViewingStatus') : entry.watched.textContent;
     }
     function decorate(value) {
         const existing = entries.get(value.host);
@@ -122,6 +159,8 @@ export function createRecommendations({ environment, context, userscript, tUi, l
         if (previous !== profile) root = document;
         for (const entry of [...entries.values()]) if (!entry.lease.current()) release(entry);
         for (const value of dom.scan(root)) decorate(value);
+        if (viewing.observe([...entries.values()])) viewingChanged();
+        for (const entry of entries.values()) paint(entry);
         if (!style) {
             style = document.createElement('style');
             style.textContent = CARD_ACTION_STYLES + '\n.tm-rec-controls{opacity:1;pointer-events:auto}';
@@ -154,8 +193,15 @@ export function createRecommendations({ environment, context, userscript, tUi, l
         try {
             const p = profile, owner = epoch, latest = read(p);
             const id = input.entry?.id || input.id;
-            if (input.action === 'undo') { delete latest.choices[id]; delete latest.titles[id]; }
-            else { latest.choices[id] = input.action; if (input.entry.title) latest.titles[id] = input.entry.title; }
+            if (input.action === 'watched') {
+                if (!viewing.mark(id).saved) { paint(input.entry); return; }
+                delete latest.choices[id];
+            } else if (input.action === 'undo') {
+                if (input.reason === 'viewing' && !viewing.restore(id).saved) { paintManager(); return; }
+                if (input.reason !== 'viewing') delete latest.choices[id];
+                if (!viewing.ids().includes(id) && !latest.choices[id]) delete latest.titles[id];
+            } else latest.choices[id] = input.action;
+            if (input.entry?.title) latest.titles[id] = input.entry.title;
             if (Object.keys(latest.choices).length > 5000) throw new Error('storage-full');
             if (readProfile() !== p || epoch !== owner) { scan(); return; }
             userscript.setValue(key + encodeURIComponent(p), { version: 1, ...latest });
@@ -202,7 +248,7 @@ export function createRecommendations({ environment, context, userscript, tUi, l
         scan(); observe();
     }
     function dispose() {
-        refill.dispose();
+        refill.dispose(); viewing.dispose();
         environment.window?.removeEventListener('scroll', scroll);
         if (scrollTimer !== null) environment.clearTimeout(scrollTimer); scrollTimer = null;
         active = false; epoch++; queued = false; pending.clear(); observer?.disconnect(); observer = null;
@@ -211,6 +257,6 @@ export function createRecommendations({ environment, context, userscript, tUi, l
         for (const entry of [...entries.values()]) release(entry);
         style?.remove(); style = null; profile = null; choices = {}; titles = {}; failed = false;
     }
-    return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(choices).length,
-        storageFailed: failed, refill: refill.diagnostics() }) });
+    return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(visibleChoices()).length,
+        storageFailed: failed, refill: refill.diagnostics(), viewing: viewing.diagnostics() }) });
 }

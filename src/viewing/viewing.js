@@ -2,6 +2,7 @@ import { createCompletion, completionRatio } from './completion.js';
 import { createChoices } from './choices.js';
 import { createCache } from './cache.js';
 import { createScan } from './scan.js';
+export { createBrowsingViewing } from './browsing.js';
 
 // Internal policy access stays inside the viewing capability.
 function createPolicy(options) {
