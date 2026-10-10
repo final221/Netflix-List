@@ -8,8 +8,8 @@ export const LOG_MESSAGES = {
     routeChangeDetected: { en: 'Route change detected', ja: '\u30da\u30fc\u30b8\u9077\u79fb\u691c\u51fa' },
     clipboardFallback: { en: 'Clipboard API failed; using fallback', ja: '\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9API\u306b\u5931\u6557\u3002fallback\u3078\u79fb\u884c' },
     execCommandCopyFailed: { en: 'execCommand(copy) failed.', ja: 'execCommand(copy) \u304c\u5931\u6557\u3057\u307e\u3057\u305f\u3002' },
-    copyLogsTooltip: { en: 'Copy a compact diagnostic report; Shift-click for full detail', ja: '\u7c21\u6f54\u306a\u8a3a\u65ad\u30ec\u30dd\u30fc\u30c8\u3092\u30b3\u30d4\u30fc\u3057\u307e\u3059\u3002Shift\u30af\u30ea\u30c3\u30af\u3067\u8a73\u7d30\u3092\u30b3\u30d4\u30fc\u3057\u307e\u3059' },
-    copied: { en: 'Copied.', ja: '\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f\u3002' },
+    copyLogsTooltip: { en: 'Save a compact report to the repository logs folder; Shift-click for full detail', ja: '\u7c21\u6f54\u306a\u8a3a\u65ad\u30ec\u30dd\u30fc\u30c8\u3092\u4fdd\u5b58\u3057\u307e\u3059\u3002Shift\u30af\u30ea\u30c3\u30af\u3067\u8a73\u7d30\u3092\u4fdd\u5b58\u3057\u307e\u3059' },
+    copied: { en: 'Saved.', ja: '\u4fdd\u5b58\u3057\u307e\u3057\u305f\u3002' },
     copyLogsRequested: { en: 'CopyLogs requested', ja: 'CopyLogs\u8981\u6c42' },
     copyLogsCompleted: { en: 'CopyLogs completed', ja: 'CopyLogs\u5b8c\u4e86' },
     copyLogsFailed: { en: 'CopyLogs failed', ja: 'CopyLogs\u5931\u6557' },
@@ -134,5 +134,5 @@ export const LOG_MESSAGES = {
     initializationFailed: { en: 'Initialization failed', ja: '\u521d\u671f\u5316\u5931\u6557' },
     scriptStarted: { en: 'Script started', ja: '\u30b9\u30af\u30ea\u30d7\u30c8\u958b\u59cb' },
     originalMyListVisibilityChanged: { en: 'Original My List visibility changed', ja: '\u7d14\u6b63\u30de\u30a4\u30ea\u30b9\u30c8\u8868\u793a\u72b6\u614b\u5909\u66f4' },
-    copyFailed: { en: 'Copy failed: {message}', ja: '\u30b3\u30d4\u30fc\u5931\u6557: {message}' },
+    copyFailed: { en: 'Save failed: {message}', ja: '\u4fdd\u5b58\u5931\u6557: {message}' },
 };

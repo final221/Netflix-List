@@ -19,7 +19,7 @@ import { createCarousel } from '../netflix/carousel/carousel.js';
 
 // Page-session composition: admitted cross-feature transactions and lifecycle only.
 export function createMyListSession({ environment = globalThis, version, context: netflixContext, i18n, logger,
-    settings, userscript = {}, nextSessionToken, onNavigation = () => {} }) {
+    settings, userscript = {}, saveLogs, readLogHistory, nextSessionToken, onNavigation = () => {} }) {
     const { window, document, navigator, location, Element, HTMLElement, getComputedStyle, performance,
         setTimeout, clearTimeout, requestAnimationFrame, cancelAnimationFrame, MutationObserver, fetch,
         AbortController, queueMicrotask, console } = environment;
@@ -64,7 +64,7 @@ export function createMyListSession({ environment = globalThis, version, context
         createError: (code, message) => initializationError(code, 'grid-cards', message),
         installHover: grid => hover.install(grid), readPage: pageForItem,
         onRetire: (handle, detail) => { nativePopup.retire(handle); hover.retire(handle, detail); },
-        tLog, tUi, formatUiNumber, formatItemCount, copyLogs: copyDiagnosticLogs, setTimeout, clearTimeout,
+        tUi, formatUiNumber, formatItemCount,
         readEmptyContent: section => netflixDom.readEmptyContent(section), readEmptyShell: () => netflixDom.readEmptyShell(),
         isActive: () => targetSessionActive && isTargetPage() });
 
@@ -124,7 +124,7 @@ export function createMyListSession({ environment = globalThis, version, context
         isCurrentSession: token => targetSessionActive && isRouteSessionActive(token),
         readSessionToken: () => sessionScope.token, isSourceMounted: () => Boolean(sourceState?.grid?.isConnected),
         readSourceCard: () => sourceState.track?.querySelector(NETFLIX_DOM_SELECTORS.standardCard) });
-    const diagnosticReport = createReport({ logger, version: SCRIPT_VERSION, document, navigator, tLog,
+    const diagnosticReport = createReport({ logger, version: SCRIPT_VERSION, document, navigator, tLog, writeText: saveLogs, readHistory: readLogHistory,
         readEnvironment: () => ({ url: location.href, userAgent: navigator.userAgent, browserLanguage: navigator.language || '',
             htmlLanguage: getHtmlLanguage(), netflixLanguage: getNetflixLanguage(), displayLanguage: getUiLocale(),
             logLanguage: getLogLocale(), viewport: `${window.innerWidth}x${window.innerHeight}`, devicePixelRatio: window.devicePixelRatio }),
@@ -2664,7 +2664,7 @@ export function createMyListSession({ environment = globalThis, version, context
         if (disposed) return;
         disposed = true; suspendTargetSession(reason);
     }
-    return Object.freeze({ start, dispose,
+    return Object.freeze({ start, dispose, copyLogs: copyDiagnosticLogs, diagnosticSnapshot: diagnosticReport.snapshot,
         check() { if (!started || disposed) return; resetDetachedTargetState(); scheduleRun(0, sessionScope.token); },
         preferencesChanged() {
             if (!started || disposed) return;

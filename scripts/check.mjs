@@ -8,7 +8,7 @@ import { distributionName, generateUserscript, repositoryRoot } from './build.mj
 const publicFeatures = new Set(['src/list/list.js', 'src/viewing/viewing.js', 'src/grid/grid.js', 'src/hover/hover.js', 'src/recommendations/recommendations.js']);
 const netflixEntries = new Set(['context', 'page-dom', 'list-data', 'viewing-data', 'card-markup', 'native-popup', 'popup-inspection', 'recommendation-dom']
     .map(name => `src/netflix/${name}.js`).concat('src/netflix/carousel/carousel.js'));
-const supportEntries = new Set(['src/dom-names.js', 'src/card-actions.js', 'src/i18n/i18n.js', 'src/diagnostics/logger.js', 'src/diagnostics/report.js']);
+const supportEntries = new Set(['src/dom-names.js', 'src/card-actions.js', 'src/i18n/i18n.js', 'src/diagnostics/logger.js', 'src/diagnostics/report.js', 'src/diagnostics/save.js', 'src/diagnostics/control.js']);
 const listAdapters = new Set(['src/netflix/list-data.js', 'src/netflix/page-dom.js', 'src/netflix/carousel/carousel.js']);
 const viewingAdapters = new Set(['src/netflix/context.js', 'src/netflix/viewing-data.js']);
 const gridAdapters = new Set(['src/netflix/card-markup.js', 'src/dom-names.js', 'src/card-actions.js', 'src/i18n/i18n.js']);
@@ -122,8 +122,9 @@ function checkInstallation(metadata) {
     assert.equal(metadata.downloadURL, releaseURL, 'Metadata downloadURL must use the published dist artifact');
     assert.deepEqual(metadata.match, ['https://www.netflix.com/*'], 'Metadata match must preserve the Netflix scope');
     assert.deepEqual(metadata.grant,
-        ['GM_registerMenuCommand', 'GM_unregisterMenuCommand', 'GM_getValue', 'GM_setValue'],
-        'Metadata grants must preserve the baseline permissions');
+        ['GM_registerMenuCommand', 'GM_unregisterMenuCommand', 'GM_getValue', 'GM_setValue', 'GM_xmlhttpRequest'],
+        'Metadata grants must match the explicit installed permissions');
+    assert.deepEqual(metadata.connect, ['127.0.0.1'], 'Log saving connects only to loopback');
     assert.equal(metadata['run-at'], 'document-idle', 'Metadata run-at must remain document-idle');
     assert.equal(metadata.sandbox, 'raw', 'Metadata sandbox must preserve the page environment');
     assert.equal(metadata.noframes, true, 'Metadata noframes must remain enabled');

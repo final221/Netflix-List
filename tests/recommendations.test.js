@@ -23,7 +23,7 @@ function setup(options = {}) {
     const userscript = { getValue: (key, fallback) => saved.get(key) ?? fallback,
         setValue: (key, value) => saved.set(key, value), ...options };
     const tUi = createI18n({ readLanguage: () => 'en' }).tUi;
-    const feature = createRecommendations({ environment: b.context, context: { activeProfile: () => profile }, userscript, tUi, viewingData: options.viewingData });
+    const feature = createRecommendations({ environment: b.context, context: { activeProfile: () => profile }, userscript, tUi, viewingData: options.viewingData, log: options.log });
     return { ...b, saved, userscript, feature, select: value => { profile = value; },
         click(host, label) { const button = host.querySelectorAll('button').find(node => node.textContent === label);
             assert.ok(button, label); this.document.dispatchEvent({ type: 'click', target: button, preventDefault() {}, stopImmediatePropagation() {} }); },
@@ -40,78 +40,69 @@ function nextControl(b, row, click, hawkins = true) {
     button.setAttribute('data-uia', hawkins ? 'carousel-hawkins-right-button' : 'carousel-right-button'); button.click = click;
     return button;
 }
-async function settleRefill(b, ticks = 3) { for (let i = 0; i < ticks; i++) await b.scheduler.advance(150); }
-
-test('every dismissal loads the clicked partial row while leaving other rows alone', async () => {
+test('dismissals preserve the page while native flow pulls mounted later cards into view', async () => {
     for (const label of ['Mark watched', 'Mark caught up', 'Hide suggestion']) {
-        const b = setup({ viewingData: seriesMetadata() }), a = mount(b), remaining = mount(b, '2'), other = mount(b, '3');
-        a.row.appendChild(remaining.host); remaining.row.remove();
+        const b = setup({ viewingData: seriesMetadata() }), a = mount(b), second = mount(b, '2'), buffered = mount(b, '3'), other = mount(b, '4');
+        for (const item of [second, buffered]) { a.row.appendChild(item.host); item.row.remove(); }
+        a.row.setAttribute('data-uia', 'carousel-scroller'); a.row.scrollLeft = 400;
+        a.row.getBoundingClientRect = () => ({ left: 0, right: 400, top: 0, bottom: 100 });
+        for (const item of [a, second, buffered]) item.host.getBoundingClientRect = () => {
+            const visible = [a, second, buffered].filter(item => item.host.style.getPropertyValue('display') !== 'none');
+            const left = visible.indexOf(item) * 200;
+            return { left, right: left + 200, width: visible.includes(item) ? 200 : 0 };
+        };
+        const indicator = a.row.appendChild(new Element('span')); indicator.setAttribute('data-indicator-selected', 'true');
         if (label === 'Mark caught up') a.card.removeAttribute('data-video-type');
-        let moves = 0, unrelated = 0;
-        nextControl(b, a.row, () => { moves++; a.card.setAttribute('href', `/title/${moves + 3}`); });
-        nextControl(b, other.row, () => { unrelated++; });
-        b.feature.check(); await b.scheduler.flush();
-        assert.equal(moves, 0); b.click(a.host, label);
-        assert.equal(remaining.host.style.getPropertyValue('display'), '');
-        await b.scheduler.advance(250); await settleRefill(b);
-        assert.equal(moves, 1); assert.equal(unrelated, 0);
-        assert.equal(a.host.style.getPropertyValue('display'), '');
-        assert.equal(b.feature.diagnostics().refill.filled, 1);
-        b.feature.check(); await b.scheduler.advance(1000); assert.equal(moves, 1);
-        b.click(a.host, 'Hide suggestion'); await b.scheduler.advance(250); await settleRefill(b);
-        assert.equal(moves, 2); assert.equal(unrelated, 0); assert.equal(b.feature.diagnostics().refill.filled, 2);
+        let moves = 0; nextControl(b, a.row, () => { moves++; a.row.scrollLeft += 400; });
+        nextControl(b, other.row, () => { moves++; });
+        b.feature.check(); await b.scheduler.flush(); assert.equal(buffered.host.getBoundingClientRect().left, 400);
+        b.click(a.host, label); await b.scheduler.advance(250);
+        assert.equal(moves, 0); assert.equal(a.row.scrollLeft, 400);
+        assert.equal(indicator.getAttribute('data-indicator-selected'), 'true');
+        assert.equal(second.host.getBoundingClientRect().left, 0); assert.equal(buffered.host.getBoundingClientRect().left, 200);
+        assert.equal(buffered.card.getAttribute('href'), '/browse?jbv=3');
+        assert.equal(buffered.host.parentElement, a.row); assert.equal(second.host.style.getPropertyValue('display'), '');
+        assert.equal(b.feature.diagnostics().refill.checks, 1);
+        b.feature.check(); await b.scheduler.advance(1000); assert.equal(moves, 0);
         b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
     }
 });
 
-test('rapid dismissals coalesce before dispatch and while a partial-row move is loading', async () => {
-    const b = setup(), a = mount(b), second = mount(b, '2'), third = mount(b, '3'), remaining = mount(b, '4');
-    for (const item of [second, third, remaining]) { a.row.appendChild(item.host); item.row.remove(); }
-    let moves = 0;
+test('rapid dismissals share one stationary check without replaying navigation', async () => {
+    const b = setup(), a = mount(b), second = mount(b, '2');
+    a.row.appendChild(second.host); second.row.remove(); let moves = 0;
     nextControl(b, a.row, () => { moves++; }); b.feature.check();
     b.click(a.host, 'Hide suggestion'); b.click(second.host, 'Mark watched');
-    await b.scheduler.advance(250); assert.equal(moves, 1);
-    b.click(third.host, 'Hide suggestion'); await settleRefill(b, 2); assert.equal(moves, 1);
-    a.card.setAttribute('href', '/title/5'); b.feature.check(); await settleRefill(b);
-    assert.equal(b.feature.diagnostics().refill.filled, 1);
-    await b.scheduler.advance(1000); assert.equal(moves, 1);
-    b.feature.dispose();
+    assert.equal(b.feature.diagnostics().refill.pending, 1);
+    await b.scheduler.advance(250); assert.equal(b.feature.diagnostics().refill.checks, 1);
+    b.feature.check(); await b.scheduler.advance(5000); assert.equal(moves, 0); assert.equal(b.scheduler.timers.size, 0);
+    assert.equal(b.feature.diagnostics().refill.unavailable, 1); b.feature.dispose();
 });
 
-test('partial-row existing cards cannot acknowledge a stalled native request or cause retry loops', async () => {
-    const b = setup(), a = mount(b), remaining = mount(b, '2');
-    a.row.appendChild(remaining.host); remaining.row.remove(); let moves = 0;
-    nextControl(b, a.row, () => { moves++; }); b.feature.check(); b.click(a.host, 'Hide suggestion');
-    await b.scheduler.advance(250); await settleRefill(b, 20);
-    assert.equal(moves, 1); assert.equal(b.feature.diagnostics().refill.timeouts, 1);
-    assert.equal(b.feature.diagnostics().refill.filled, 0);
-    b.feature.check(); await b.scheduler.advance(1000); assert.equal(moves, 1);
-    assert.equal(remaining.host.style.getPropertyValue('display'), '');
-    b.feature.dispose();
+test('empty rows and saved dismissals never auto-advance, including after scrolling or control changes', async () => {
+    const b = setup(), a = mount(b); let moves = 0;
+    b.saved.set('legacyMyListForNetflix.recommendationChoices.v1.A', { version: 1, choices: { 1: 'hide' } });
+    const next = nextControl(b, a.row, () => { moves++; }); next.disabled = true;
+    b.feature.check(); await b.scheduler.advance(250); next.disabled = false;
+    b.feature.check(); b.window.dispatchEvent({ type: 'scroll' }); await b.scheduler.advance(5000);
+    assert.equal(moves, 0); assert.equal(b.scheduler.timers.size, 0); b.feature.dispose();
 });
 
-test('partial-row dismissal waits for an enabled control and never loads after a failed save', async () => {
-    const b = setup(), a = mount(b), remaining = mount(b, '2');
-    a.row.appendChild(remaining.host); remaining.row.remove(); let moves = 0;
-    const next = nextControl(b, a.row, () => { moves++; a.card.setAttribute('href', '/title/3'); });
-    next.disabled = true; b.feature.check(); b.click(a.host, 'Hide suggestion');
-    await b.scheduler.advance(250); b.feature.check(); await b.scheduler.advance(250); assert.equal(moves, 0);
-    next.disabled = false; b.feature.check(); await b.scheduler.advance(250); await settleRefill(b);
-    assert.equal(moves, 1);
-    b.userscript.setValue = () => { throw new Error('save failed'); }; b.click(remaining.host, 'Hide suggestion');
-    await b.scheduler.advance(1000); assert.equal(moves, 1);
-    assert.equal(remaining.host.style.getPropertyValue('display'), ''); b.feature.dispose();
+test('failed saves cannot schedule stationary checks or navigation', async () => {
+    const b = setup(), a = mount(b); let moves = 0; nextControl(b, a.row, () => { moves++; }); b.feature.check();
+    b.userscript.setValue = () => { throw new Error('save failed'); }; b.click(a.host, 'Hide suggestion');
+    await b.scheduler.advance(1000); assert.equal(moves, 0); assert.equal(b.feature.diagnostics().refill.checks, 0);
+    assert.equal(a.host.style.getPropertyValue('display'), ''); b.feature.dispose();
 });
 
-test('restoring all rapid partial-row dismissals cancels dispatch; one remaining choice still loads', async () => {
+test('restoring rapid dismissals cancels the check only when every triggering choice is restored', async () => {
     for (const restoreAll of [true, false]) {
-        const b = setup(), a = mount(b), second = mount(b, '2'), remaining = mount(b, '3');
-        for (const item of [second, remaining]) { a.row.appendChild(item.host); item.row.remove(); }
-        let moves = 0; nextControl(b, a.row, () => { moves++; a.card.setAttribute('href', '/title/4'); });
+        const b = setup(), a = mount(b), second = mount(b, '2');
+        a.row.appendChild(second.host); second.row.remove();
         b.feature.check(); b.click(a.host, 'Mark watched'); b.click(second.host, 'Hide suggestion');
         b.restore('1'); if (restoreAll) b.restore('2');
-        await b.scheduler.advance(250); await settleRefill(b);
-        assert.equal(moves, restoreAll ? 0 : 1); b.feature.dispose();
+        await b.scheduler.advance(250); assert.equal(b.feature.diagnostics().refill.checks, restoreAll ? 0 : 1);
+        b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
     }
 });
 
@@ -190,99 +181,48 @@ test('metadata delivered after a profile switch cannot classify, expire or write
     b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
 });
 
-test('empty-row refill clicks Netflix next and decorates arriving recommendations without cloning or direct requests', async () => {
-    const b = setup(), a = mount(b); let clicks = 0;
-    nextControl(b, a.row, () => { clicks++; a.card.setAttribute('href', '/title/2'); });
-    b.feature.check(); await b.scheduler.advance(300); assert.equal(clicks, 0);
-    b.click(a.host, 'Hide suggestion'); await b.scheduler.advance(250); assert.equal(clicks, 1);
-    await settleRefill(b); assert.equal(a.host.style.getPropertyValue('display'), '');
-    assert.equal(a.host.querySelectorAll('button').length, 2); assert.equal(b.feature.diagnostics().refill.filled, 1);
-    assert.equal(b.scheduler.timers.size, 0); assert.equal(a.host.querySelector('a'), a.card);
-    assert.equal(b.requests.length, 0);
-});
-
-test('refill skips pages of previously dismissed titles and stops when Netflix wraps', async () => {
-    const b = setup(), a = mount(b); let clicks = 0;
-    b.saved.set('legacyMyListForNetflix.recommendationChoices.v1.A', { version: 1, choices: { 1: 'hide', 2: 'watched' } });
-    nextControl(b, a.row, () => { clicks++; a.card.setAttribute('href', `/title/${clicks % 2 ? 2 : 1}`); }, false);
-    b.feature.check(); await b.scheduler.advance(250); await settleRefill(b);
-    await b.scheduler.advance(250); await settleRefill(b); await b.scheduler.advance(250);
-    assert.equal(clicks, 2); assert.equal(b.feature.diagnostics().refill.stopped, 1);
-    b.feature.check(); await b.scheduler.advance(500); assert.equal(clicks, 2);
-    assert.equal(b.scheduler.timers.size, 0);
-});
-
-test('refill waits for slow native loading and never clicks again while a page is pending', async () => {
-    const b = setup(), a = mount(b); let clicks = 0;
-    nextControl(b, a.row, () => { clicks++; }); b.feature.check(); b.click(a.host, 'Mark watched');
-    await b.scheduler.advance(250); await settleRefill(b, 6); b.feature.check();
-    assert.equal(clicks, 1); a.card.setAttribute('href', '/title/2'); await settleRefill(b);
-    assert.equal(a.host.style.getPropertyValue('display'), ''); assert.equal(clicks, 1);
-    assert.equal(b.scheduler.timers.size, 0);
-});
-
-test('unchanged native pages time out without a retry loop', async () => {
-    const b = setup(), a = mount(b); let clicks = 0;
-    nextControl(b, a.row, () => { clicks++; }); b.feature.check(); b.click(a.host, 'Mark watched');
-    await b.scheduler.advance(250); await settleRefill(b, 20); b.feature.check(); await b.scheduler.advance(500);
-    assert.equal(clicks, 1); assert.equal(b.feature.diagnostics().refill.timeouts, 1); assert.equal(b.scheduler.timers.size, 0);
-});
-
-test('refill cancels before clicking on Undo, profile change, route exit and disposal', async () => {
+test('stationary checks cancel on Undo, profile change, route exit and disposal', async () => {
     for (const change of [b => b.restore('1'), b => b.select('B'), b => { b.location.pathname = '/watch/1'; }, b => b.feature.dispose()]) {
-        const b = setup(), a = mount(b), remaining = mount(b, '2'); let clicks = 0;
-        a.row.appendChild(remaining.host); remaining.row.remove();
-        nextControl(b, a.row, () => { clicks++; }); b.feature.check(); b.click(a.host, 'Mark watched'); change(b);
-        await b.scheduler.advance(250); assert.equal(clicks, 0); b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
+        const b = setup(), a = mount(b); b.feature.check(); b.click(a.host, 'Mark watched'); change(b);
+        await b.scheduler.advance(250); assert.equal(b.feature.diagnostics().refill.checks, 0);
+        b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
     }
 });
 
-test('refill skips offscreen rows and disabled controls and resumes when a usable control appears', async () => {
-    const b = setup(), a = mount(b); let clicks = 0;
-    const next = nextControl(b, a.row, () => { clicks++; a.card.setAttribute('href', '/title/2'); }); next.disabled = true;
-    a.row.getBoundingClientRect = () => ({ top: 1000, bottom: 1200 }); b.feature.check(); b.click(a.host, 'Hide suggestion');
-    await b.scheduler.advance(250); assert.equal(clicks, 0); assert.equal(b.scheduler.timers.size, 0);
-    a.row.getBoundingClientRect = () => ({ top: 100, bottom: 200 }); b.feature.check(); await b.scheduler.advance(250);
-    assert.equal(clicks, 0); next.disabled = false; b.feature.check(); await b.scheduler.advance(250); await settleRefill(b);
-    assert.equal(clicks, 1); assert.equal(a.host.style.getPropertyValue('display'), '');
+test('user navigation remains usable and newly mounted cards honor saved dismissals', async () => {
+    const b = setup(), a = mount(b); let moves = 0;
+    const next = nextControl(b, a.row, () => { moves++; a.card.setAttribute('href', '/title/2'); });
+    b.feature.check(); b.click(a.host, 'Hide suggestion'); await b.scheduler.advance(250); assert.equal(moves, 0);
+    next.click(); b.mutate(a.card, { type: 'attributes' }); await b.scheduler.flush();
+    assert.equal(a.host.style.getPropertyValue('display'), ''); assert.equal(a.host.querySelectorAll('button').length, 2);
+    a.card.setAttribute('href', '/title/1'); b.mutate(a.card, { type: 'attributes' }); await b.scheduler.flush();
+    assert.equal(a.host.style.getPropertyValue('display'), 'none'); assert.equal(moves, 1); assert.equal(b.requests.length, 0);
+    b.feature.dispose();
 });
 
-test('refill page budget bounds distinct but entirely dismissed native pages', async () => {
-    const b = setup(), a = mount(b); let clicks = 0;
-    b.saved.set('legacyMyListForNetflix.recommendationChoices.v1.A', { version: 1,
-        choices: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [i + 1, 'hide'])) });
-    nextControl(b, a.row, () => { clicks++; a.card.setAttribute('href', `/title/${clicks + 1}`); }); b.feature.check();
-    for (let i = 0; i < 25; i++) { await b.scheduler.advance(250); await settleRefill(b); }
-    assert.equal(clicks, 24); assert.equal(b.scheduler.timers.size, 0); assert.equal(b.feature.diagnostics().refill.stopped, 1);
+test('replacement of the row scroller rejects a pending stationary check', async () => {
+    const b = setup(), a = mount(b); b.feature.check(); b.click(a.host, 'Hide suggestion');
+    const scroller = a.row.appendChild(new Element('div')); scroller.setAttribute('data-uia', 'carousel-scroller');
+    scroller.appendChild(a.host); b.feature.check(); await b.scheduler.advance(250);
+    assert.equal(b.feature.diagnostics().refill.checks, 0); b.feature.dispose();
 });
 
-test('offscreen prefetch cards cannot prevent refill, and scrolling admits an empty row', async () => {
-    const b = setup(), a = mount(b), prefetch = mount(b, '9'); let clicks = 0;
-    a.row.appendChild(prefetch.host); prefetch.row.remove();
-    prefetch.host.getBoundingClientRect = () => ({ left: 2000, right: 2200, width: 200 });
-    a.row.getBoundingClientRect = () => ({ top: 1000, bottom: 1200 });
-    nextControl(b, a.row, () => { clicks++; a.card.setAttribute('href', '/title/2'); });
-    b.feature.check(); b.click(a.host, 'Mark watched'); assert.equal(b.scheduler.timers.size, 0);
-    a.row.getBoundingClientRect = () => ({ top: 100, bottom: 200 });
-    b.window.dispatchEvent({ type: 'scroll' }); b.window.dispatchEvent({ type: 'scroll' });
-    assert.equal(b.scheduler.timers.size, 1); await b.scheduler.advance(250); await b.scheduler.advance(250); await settleRefill(b);
-    assert.equal(clicks, 1); assert.equal(a.host.style.getPropertyValue('display'), '');
-    b.window.dispatchEvent({ type: 'scroll' }); b.feature.dispose();
-    assert.equal(b.scheduler.timers.size, 0); assert.equal(b.window.listenerCount('scroll'), 0);
+test('stationary loading diagnostics are bounded and never invoke callbacks or read cursor/credential values', async () => {
+    const events = [], b = setup({ log: (...args) => events.push(args) }), a = mount(b); let calls = 0;
+    const props = { loadMore() { calls++; }, endCursor: 'private-cursor', authURL: 'private-auth' };
+    Object.defineProperty(props, 'fetchMore', { enumerable: true, get() { calls++; throw new Error('must not read'); } });
+    let fiber = { type: 'Carousel', memoizedProps: props };
+    a.card.__reactFiber$test = fiber;
+    for (let i = 0; i < 40; i++) { fiber.return = { type: 'Parent', memoizedProps: props }; fiber = fiber.return; }
+    fiber.return = a.card.__reactFiber$test;
+    b.feature.check(); b.click(a.host, 'Hide suggestion'); await b.scheduler.advance(250);
+    const facts = events.find(([name]) => name === 'Stationary recommendation refill checked')[1];
+    assert.equal(facts.loading.length, 6); assert.equal(calls, 0);
+    assert.ok(facts.loading[0].properties.some(property => property.name === 'loadMore' && property.type === 'function'));
+    assert.ok(!JSON.stringify(facts).includes('private-cursor')); assert.ok(!JSON.stringify(facts).includes('private-auth'));
+    b.feature.dispose();
 });
 
-test('indicator-based carousels can advance cached pages without changing mounted title identities', async () => {
-    const b = setup(), a = mount(b), other = mount(b, '2'); let clicks = 0;
-    a.row.appendChild(other.host); other.row.remove();
-    let page = 0;
-    other.host.getBoundingClientRect = () => ({ left: page < 2 ? 2000 : 0, right: page < 2 ? 2200 : 200, width: 200 });
-    const indicators = [0, 1, 2].map(() => a.row.appendChild(new Element('span')));
-    const select = () => indicators.forEach((node, index) => node.setAttribute('data-indicator-selected', String(index === page)));
-    select(); nextControl(b, a.row, () => { clicks++; page++; select(); });
-    b.feature.check(); b.click(a.host, 'Mark watched');
-    await b.scheduler.advance(250); await settleRefill(b); await b.scheduler.advance(250); await settleRefill(b);
-    assert.equal(clicks, 2); assert.equal(b.feature.diagnostics().refill.filled, 1); assert.equal(b.scheduler.timers.size, 0);
-});
 test('live recommendation controls persist both reasons, hide duplicates and Undo without server requests', () => {
     const b = setup(), a = mount(b), duplicate = mount(b), other = mount(b, '2', { legacy: true });
     other.card.querySelector('a').setAttribute('href', '/watch/2');

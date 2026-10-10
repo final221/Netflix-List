@@ -45,7 +45,7 @@ test('generated browsing series captures real Falcor coverage and expires shared
     assert.equal(paths.length, 4); await b.navigate('/watch/123'); assert.equal(b.scheduler.timers.size, 0);
 });
 
-test('generated release loads a partial browsing row after dismissal through the native next control', async () => {
+test('generated release preserves the current browsing page after dismissal', async () => {
     const b = browser(), stored = new Map(); let moves = 0;
     b.window.netflix.reactContext = { models: { userInfo: { data: { userGuid: 'A' } } } };
     b.context.GM_getValue = (key, fallback) => stored.get(key) ?? fallback;
@@ -62,7 +62,7 @@ test('generated release loads a partial browsing row after dismissal through the
     b.document.dispatchEvent({ type: 'click', target: hide, preventDefault() {}, stopImmediatePropagation() {} });
     assert.equal(slot.style.getPropertyValue('display'), 'none'); await b.scheduler.advance(250);
     for (let i = 0; i < 3; i++) await b.scheduler.advance(150);
-    assert.equal(moves, 1); assert.equal(card.getAttribute('href'), '/title/456'); assert.equal(slot.style.getPropertyValue('display'), '');
+    assert.equal(moves, 0); assert.equal(card.getAttribute('href'), '/title/123'); assert.equal(slot.style.getPropertyValue('display'), 'none');
     assert.equal(remaining.style.getPropertyValue('display'), ''); assert.equal(remainingCard.getAttribute('href'), '/title/789');
     assert.equal([...stored.values()][0].choices['123'], 'hide'); assert.equal(b.requests.length, 0);
     await b.navigate('/watch/456'); assert.equal(b.scheduler.timers.size, 0); assert.equal(b.window.listenerCount('scroll'), 0);
@@ -145,60 +145,94 @@ test('generated runtime localizes live menu commands and releases stylesheet on 
     assert.equal(b.logs.filter(args => args.includes('Script started')).length, 1);
     await b.navigate('/browse/my-list');
     await b.scheduler.advance();
-    const first = b.document.head.querySelector('style');
+    const first = b.document.getElementById('tm-netflix-mylist-v15-style');
     assert.ok(first);
-    assert.equal(b.document.head.querySelectorAll('style').length, 1);
+    assert.equal(b.document.head.querySelectorAll('style').length, 2);
     assert.ok(first.textContent.includes('tm-netflix-mylist-v15-grid'));
     b.document.documentElement.setAttribute('lang', 'en-US');
     [...b.menus.values()][0].callback();
     assert.equal(b.menus.size, 1);
     assert.equal([...b.menus.values()][0].label, 'Show original My List');
     await b.navigate('/browse');
-    assert.equal(b.document.head.querySelectorAll('style').length, 0);
+    assert.equal(b.document.head.querySelectorAll('style').length, 1);
     await b.navigate('/browse/my-list');
     await b.scheduler.advance();
-    const replacement = b.document.head.querySelector('style');
+    const replacement = b.document.getElementById('tm-netflix-mylist-v15-style');
     assert.ok(replacement);
     assert.notEqual(replacement, first);
     assert.equal(replacement.textContent, first.textContent);
-    assert.equal(b.document.head.querySelectorAll('style').length, 1);
+    assert.equal(b.document.head.querySelectorAll('style').length, 2);
     await b.navigate('/browse');
 });
 
-test('generated CopyLogs uses report providers without requests and retains logs across route entries', async () => {
+test('generated CopyLogs saves reports through the receiver and retains logs across route entries', async () => {
     const b = browser();
+    const saved = [], local = [];
+    b.context.GM_xmlhttpRequest = options => {
+        local.push(options);
+        if (options.method === 'POST') saved.push(JSON.parse(options.data).text);
+        queueMicrotask(() => options.onload({ status: 200, responseText: JSON.stringify(options.method === 'GET'
+            ? { token: 'a'.repeat(64) } : { file: `${releaseVersion}-fixture.txt` }) }));
+        return { abort() {} };
+    };
     b.mountMyList();
     b.start();
     await b.navigate('/browse/my-list');
     await b.scheduler.advance();
     const requests = b.requests.length;
     async function copy(detailed = false) {
-        const link = b.document.getElementById('tm-netflix-mylist-v20-log');
+        const link = b.document.getElementById('tm-netflix-copylogs');
         assert.ok(link);
         link.dispatchEvent({ type: 'click', shiftKey: detailed, currentTarget: link, preventDefault() {} });
         await b.scheduler.flush();
     }
     await copy();
-    assert.equal(b.clipboard.length, 1);
+    assert.equal(b.clipboard.length, 0); assert.equal(saved.length, 1);
     assert.equal(b.requests.length, requests);
-    assert.match(b.clipboard[0], /^My List for Netflix Diagnostic Log\nversion: /);
-    assert.ok(b.clipboard[0].includes(`version: ${releaseVersion}\n`));
-    assert.match(b.clipboard[0], /nativePopupDiagnostics: /);
-    assert.match(b.clipboard[0], /Script started/);
+    assert.match(saved[0], /^My List for Netflix Diagnostic Log\nversion: /);
+    assert.ok(saved[0].includes(`version: ${releaseVersion}\n`));
+    assert.match(saved[0], /nativePopupDiagnostics: /);
+    assert.match(saved[0], /Script started/);
     await b.navigate('/browse');
     await b.navigate('/browse/my-list');
     await b.scheduler.advance();
     await copy();
-    assert.equal(b.clipboard.length, 2);
-    assert.ok(b.clipboard[1].includes('CopyLogs completed'));
-    assert.equal(b.clipboard[1].split('\n').filter(line => /^\[.*\] INFO\s+Script started(?: |$)/.test(line)).length, 1);
-    assert.match(b.clipboard[1], /omitted event groups: 0/);
+    assert.equal(b.clipboard.length, 0); assert.equal(saved.length, 2);
+    assert.ok(saved[1].includes('CopyLogs completed'));
+    assert.equal(saved[1].split('\n').filter(line => /^\[.*\] INFO\s+Script started(?: |$)/.test(line)).length, 1);
+    assert.match(saved[1], /omitted event groups: 0/);
     const beforeDetailed = b.requests.length;
     await copy(true);
-    assert.match(b.clipboard[2], /exportMode: detailed/);
-    assert.equal(b.clipboard[2].match(/Script started/g).length, 1);
+    assert.match(saved[2], /exportMode: detailed/);
+    assert.equal(saved[2].match(/Script started/g).length, 1);
     assert.equal(b.requests.length, beforeDetailed);
+    assert.equal(local.length, 6); assert.ok(local.every(options => options.url.startsWith('http://127.0.0.1:43127/')));
     await b.navigate('/browse');
+});
+
+test('one universal CopyLogs button survives Netflix routes and exports the retired My List snapshot', async () => {
+    const b = browser(), saved = [];
+    b.context.GM_xmlhttpRequest = options => {
+        if (options.method === 'POST') saved.push(JSON.parse(options.data).text);
+        queueMicrotask(() => options.onload({ status: 200, responseText: JSON.stringify(options.method === 'GET'
+            ? { token: 'a'.repeat(64) } : { file: 'capture.txt' }) }));
+        return { abort() {} };
+    };
+    b.mountMyList(); b.start(); const button = b.document.getElementById('tm-netflix-copylogs'); assert.ok(button);
+    for (const route of ['/browse/my-list', '/browse', '/watch/123', '/login']) {
+        await b.navigate(route); await b.scheduler.advance();
+        assert.equal(b.document.getElementById('tm-netflix-copylogs'), button);
+        assert.equal(b.document.querySelectorAll('#tm-netflix-copylogs').length, 1);
+        assert.equal(b.document.getElementById('tm-netflix-mylist-v20-log'), null);
+    }
+    button.dispatchEvent({ type: 'click', shiftKey: true, preventDefault() {} }); await b.scheduler.flush();
+    assert.equal(saved.length, 1); assert.equal(b.clipboard.length, 0);
+    const history = JSON.parse(saved[0].split('\n').find(line => line.startsWith('previousPages: ')).slice(15));
+    const myList = history.find(page => page.feature === 'My List'); assert.ok(myList);
+    assert.equal(myList.url, 'https://www.netflix.com/browse/my-list');
+    assert.ok(myList.facts.runtime); assert.ok(Array.isArray(myList.facts.seriesViewing));
+    assert.match(saved[0], /Script started/); assert.match(saved[0], /Route change detected/);
+    assert.match(b.document.querySelector('[role="status"]').textContent, /Saved/);
 });
 
 test('generated startup retains optional grants, storage and viewport fallbacks', async () => {
@@ -274,7 +308,7 @@ test('build is deterministic, self-contained and preserves metadata/version', as
     assert.match(header, /@run-at\s+document-idle/);
     assert.match(header, /@noframes\s*$/m);
     assert.deepEqual([...header.matchAll(/@grant\s+(\S+)/g)].map(match => match[1]),
-        ['GM_registerMenuCommand', 'GM_unregisterMenuCommand', 'GM_getValue', 'GM_setValue']);
+        ['GM_registerMenuCommand', 'GM_unregisterMenuCommand', 'GM_getValue', 'GM_setValue', 'GM_xmlhttpRequest']);
     assert.doesNotMatch(header, /@require|@resource/);
     assert.ok(Object.values(first.metafile.outputs).every(output => output.imports.length === 0));
     new vm.Script(first.code);

@@ -2,7 +2,7 @@ import {
     STYLE_ID, SECTION_ATTR, SOURCE_SCAN_CLASS, SOURCE_PARKED_CLASS,
     ORIGINAL_HIDDEN_CLASS, ORIGINAL_HEADER_CLASS, ORIGINAL_VISIBILITY_ATTR,
     STATUS_ID, FAST_MOVE_CLASS, STATUS_TEXT_CLASS, STATUS_LABEL_CLASS,
-    STATUS_META_CLASS, LOG_LINK_ID, ORDER_MISMATCH_DIALOG_ID, GRID_ID,
+    STATUS_META_CLASS, ORDER_MISMATCH_DIALOG_ID, GRID_ID,
     LEGACY_EMPTY_STATE_ID
 } from '../dom-names.js';
 import { CARD_ACTION_STYLES } from '../card-actions.js';
@@ -86,22 +86,10 @@ ${CARD_ACTION_STYLES}
                 white-space: nowrap;
             }
 
-            #${STATUS_ID} .${STATUS_META_CLASS},
-            #${LOG_LINK_ID} {
+            #${STATUS_ID} .${STATUS_META_CLASS} {
                 font-size: .80em;
                 font-weight: 400;
                 line-height: 1.2;
-            }
-
-            #${LOG_LINK_ID} {
-                margin-left: 0;
-                flex: 0 0 auto;
-                align-self: baseline;
-                color: rgba(255,255,255,.88);
-                text-decoration: underline;
-                text-underline-offset: 2px;
-                cursor: pointer;
-                white-space: nowrap;
             }
 
             #${ORDER_MISMATCH_DIALOG_ID} {

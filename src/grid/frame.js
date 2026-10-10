@@ -1,21 +1,17 @@
 import { GRID_ID, STATUS_ID, STATUS_TEXT_CLASS, STATUS_LABEL_CLASS, STATUS_META_CLASS,
-    LOG_LINK_ID, ORDER_MISMATCH_DIALOG_ID, OLD_IDS, OLD_STYLE_IDS, LEGACY_EMPTY_STATE_ID,
+    ORDER_MISMATCH_DIALOG_ID, OLD_IDS, OLD_STYLE_IDS, LEGACY_EMPTY_STATE_ID,
     SYNTHETIC_SECTION_ID, ORIGINAL_HEADER_CLASS, SECTION_ATTR } from '../dom-names.js';
 import { installStyles } from './styles.js';
 
 // Script-owned presentation resources. Native and membership policy are supplied by callers.
-export function createFrame({ document, tLog, tUi, copyLogs, setTimeout, clearTimeout, isActive, createError,
+export function createFrame({ document, tUi, isActive, createError,
     readEmptyContent, readEmptyShell, cloneEmptyContent }) {
     let root = null;
-    let status = null, style = null, dialog = null, logLink = null, logListener = null;
-    let feedbackTimer = null, generation = 0, frameRevision = 0, copySequence = 0, dialogRevision = 0, releaseFailures = 0;
+    let status = null, style = null, dialog = null;
+    let generation = 0, frameRevision = 0, dialogRevision = 0, releaseFailures = 0;
     let empty = null, emptyTemplate = null, emptyMessage = '', synthetic = null, emptyRevision = 0, syntheticRevision = 0;
     const retiredStatuses = new WeakSet();
     function attemptRelease(action) { try { action(); } catch (_) { releaseFailures++; } }
-    function clearFeedback() {
-        const timer = feedbackTimer; feedbackTimer = null;
-        if (timer !== null) attemptRelease(() => clearTimeout(timer));
-    }
     function assertStatus(node) {
         if (!node || node !== status) throw createError('GRID_FRAME_RETIRED', 'Status frame is no longer current');
     }
@@ -40,36 +36,6 @@ export function createFrame({ document, tLog, tUi, copyLogs, setTimeout, clearTi
         };
         writePart(STATUS_LABEL_CLASS, content && typeof content === 'object' ? content.label || '' : String(content ?? ''));
         writePart(STATUS_META_CLASS, content && typeof content === 'object' ? content.meta || '' : '');
-        if (!logLink) {
-            const link = document.createElement('a');
-            link.id = LOG_LINK_ID; link.href = '#'; link.textContent = 'CopyLogs'; link.title = tLog('copyLogsTooltip');
-            const owner = generation;
-            const current = sequence => owner === generation && status === node && logLink === link &&
-                link.isConnected && isActive() && sequence === copySequence;
-            const listener = async event => {
-                event.preventDefault();
-                if (owner !== generation || logLink !== link || !link.isConnected || !isActive()) return;
-                const sequence = ++copySequence;
-                clearFeedback();
-                link.textContent = 'CopyLogs';
-                try {
-                    await copyLogs({ detailed: Boolean(event.shiftKey) });
-                    if (!current(sequence)) return;
-                    link.textContent = tLog('copied'); link.title = tLog('copied');
-                    const timer = setTimeout(() => {
-                        if (feedbackTimer !== timer) return;
-                        feedbackTimer = null;
-                        if (!current(sequence)) return;
-                        link.textContent = 'CopyLogs'; link.title = tLog('copyLogsTooltip');
-                    }, 2500);
-                    feedbackTimer = timer;
-                } catch (error) {
-                    if (current(sequence)) link.title = tLog('copyFailed', { message: error?.message || error });
-                }
-            };
-            logLink = link; logListener = listener;
-            link.addEventListener('click', listener); node.appendChild(link);
-        }
         return node;
     }
     function layoutStatus(node, geometry, rowGap, assertCurrent = () => {}) {
@@ -375,16 +341,14 @@ export function createFrame({ document, tLog, tUi, copyLogs, setTimeout, clearTi
         }
     }
     function retire() {
-        const previous = { root, status, style, dialog, logLink, logListener, empty, synthetic };
+        const previous = { root, status, style, dialog, empty, synthetic };
         if (status) retiredStatuses.add(status);
-        root = status = style = dialog = logLink = logListener = null;
+        root = status = style = dialog = null;
         empty = emptyTemplate = synthetic = null; emptyMessage = ''; emptyRevision++; syntheticRevision++;
-        generation++; frameRevision++; copySequence++; dialogRevision++;
-        clearFeedback();
+        generation++; frameRevision++; dialogRevision++;
         return previous;
     }
     function release(previous) {
-        if (previous.logLink) attemptRelease(() => previous.logLink.removeEventListener('click', previous.logListener));
         releaseDialog(previous.dialog);
         for (const node of [previous.root, previous.status, previous.style, previous.empty, previous.synthetic]) {
             // A reentrant lifecycle can explicitly acquire an existing resource before old cleanup finishes.

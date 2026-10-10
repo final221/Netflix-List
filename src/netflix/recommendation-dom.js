@@ -1,7 +1,7 @@
 import { readVideoIdFromHref } from './page-dom.js';
 
 // Visible slot size/order remains Netflix-owned. No private mutation or playback API.
-export function createRecommendationDom({ document, location, getComputedStyle, window }) {
+export function createRecommendationDom({ document, location, getComputedStyle }) {
     const selector = 'a[data-uia="standard-card"][href], .title-card';
     const scrollerLeases = new WeakMap();
     function styleLease(node, name, value, priority = '') {
@@ -101,21 +101,35 @@ export function createRecommendationDom({ document, location, getComputedStyle, 
         const items = scan(row).filter(item => item.row === row);
         if (!items.length) return null;
         const scroller = items[0].scroller;
-        const next = scroller.querySelector('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"]') ||
-            row.querySelector('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext');
-        const rect = row.getBoundingClientRect();
         const bounds = scroller.getBoundingClientRect();
         const remaining = items.filter(item => {
             if (choices[item.id]) return false;
             const cardRect = item.host.getBoundingClientRect(), center = cardRect.left + cardRect.width / 2;
             return cardRect.width > 1 && center >= bounds.left && center <= bounds.right;
         });
-        const indicators = [...row.querySelectorAll('[data-indicator-selected]')];
-        const selected = indicators.findIndex(item => item.getAttribute('data-indicator-selected') === 'true');
-        return { scroller, next, signature: `${selected}:${items.map(item => item.id).join(',')}`, remaining: remaining.length,
-            inViewport: rect.bottom > 0 && rect.top < (window?.innerHeight || 1080),
-            canAdvance: Boolean(next?.isConnected && typeof next.click === 'function' && !next.disabled &&
-                next.getAttribute('aria-disabled') !== 'true' && next.getAttribute('tabindex') !== '-1') };
+        return { scroller, remaining: remaining.length, mounted: items.length,
+            offscreen: items.filter(item => !choices[item.id]).length - remaining.length };
     }
-    return Object.freeze({ scan, lease, describe, refillState });
+    function loadingFacts(row) {
+        const result = [], seen = new Set();
+        try {
+            const card = scan(row)[0]?.card;
+            for (const root of [card, row]) {
+                const key = root && Object.getOwnPropertyNames(root).find(name => name.startsWith('__reactFiber$') || name.startsWith('__reactInternalInstance$'));
+                let fiber = key && root[key];
+                for (let depth = 0; fiber && depth < 16 && result.length < 6 && !seen.has(fiber); depth++, fiber = fiber.return) {
+                    seen.add(fiber);
+                    const props = fiber.memoizedProps;
+                    if (!props || typeof props !== 'object') continue;
+                    const names = Object.keys(props).filter(name => /load|fetch|pagin|cursor|hasNext|itemCount|totalCount|rowId/i.test(name)).slice(0, 12);
+                    if (!names.length) continue;
+                    const type = fiber.elementType || fiber.type;
+                    result.push({ depth, component: String(typeof type === 'string' ? type : type?.displayName || type?.name || 'unknown').slice(0, 80),
+                        properties: names.map(name => ({ name: name.slice(0, 80), type: typeof Object.getOwnPropertyDescriptor(props, name)?.value })) });
+                }
+            }
+        } catch (_) { return [{ unavailable: true }]; }
+        return result;
+    }
+    return Object.freeze({ scan, lease, describe, refillState, loadingFacts });
 }

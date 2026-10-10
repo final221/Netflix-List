@@ -24,16 +24,15 @@ function fixture(options = {}) {
     return { grid, document, timers, section, anchor, mount, leave: () => { active = false; } };
 }
 
-const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
 function click(node) { node.dispatchEvent({ type: 'click', currentTarget: node, preventDefault() {} }); }
 
-test('grid owns one detached/current status and preserves separated label, meta, geometry and CopyLogs', () => {
+test('grid owns one detached/current status and preserves separated label, meta, geometry without an export control', () => {
     const e = fixture();
     const first = e.grid.updateStatus('Loading');
     assert.equal(e.grid.updateStatus({ label: 'My List', meta: '6 titles' }), first);
     assert.equal(first.querySelector('.' + STATUS_LABEL_CLASS).textContent, 'My List');
     assert.equal(first.querySelector('.' + STATUS_META_CLASS).textContent, '6 titles');
-    assert.equal(first.querySelector('#' + LOG_LINK_ID).listenerCount('click'), 1);
+    assert.equal(first.querySelector('#' + LOG_LINK_ID), null);
     assert.equal(e.mount(), first);
     assert.equal(e.document.getElementById(STATUS_ID), first);
     e.grid.layoutStatus(first, { left: 15, width: 500 }, 9);
@@ -44,51 +43,6 @@ test('grid owns one detached/current status and preserves separated label, meta,
     assert.equal(first.style.getPropertyValue('font-size'), '20px');
     assert.equal(e.anchor.nextElementSibling, first);
     assert.equal(first.nextElementSibling.id, GRID_ID);
-});
-
-test('CopyLogs owns its finite feedback timer and disposal cancels feedback and detached actions', async () => {
-    let copies = 0;
-    const options = [];
-    const e = fixture({ copyLogs: async value => { copies++; options.push(value); } });
-    const status = e.mount(), link = status.querySelector('#' + LOG_LINK_ID);
-    click(link); await flush();
-    assert.equal(copies, 1);
-    assert.deepEqual(options[0], { detailed: false });
-    assert.equal(link.textContent, 'log:copied');
-    assert.equal(e.timers.size, 1);
-    const restore = [...e.timers.values()][0]; e.timers.clear(); restore();
-    assert.equal(link.textContent, 'CopyLogs');
-    assert.equal(link.title, 'log:copyLogsTooltip');
-    link.dispatchEvent({ type: 'click', shiftKey: true, preventDefault() {} }); await flush();
-    assert.deepEqual(options[1], { detailed: true });
-    e.grid.dispose();
-    assert.equal(e.timers.size, 0);
-    assert.equal(link.listenerCount('click'), 0);
-    click(link); await flush();
-    assert.equal(copies, 2);
-    assert.equal(e.document.getElementById(STATUS_ID), null);
-});
-
-test('obsolete and out-of-order clipboard completions cannot paint a replacement or newer feedback', async () => {
-    const pending = [];
-    const e = fixture({ copyLogs: () => new Promise((resolve, reject) => pending.push({ resolve, reject })) });
-    const old = e.mount().querySelector('#' + LOG_LINK_ID);
-    click(old); click(old);
-    pending[1].reject(new Error('denied')); await flush();
-    assert.ok(old.title.includes('copyFailed'));
-    const title = old.title;
-    pending[0].resolve(); await flush();
-    assert.equal(old.title, title);
-    assert.equal(e.timers.size, 0);
-    click(old);
-    e.grid.dispose();
-    const fresh = e.mount().querySelector('#' + LOG_LINK_ID);
-    pending[2].resolve(); await flush();
-    assert.equal(fresh.textContent, 'CopyLogs');
-    assert.equal(old.title, title);
-    click(fresh); e.leave(); pending[3].resolve(); await flush();
-    assert.equal(fresh.textContent, 'CopyLogs');
-    assert.equal(e.timers.size, 0);
 });
 
 test('grid mismatch dialog admits exact current caller/actions and retires both listeners', () => {
@@ -167,14 +121,10 @@ test('status painting rechecks native caller admission between host writes', () 
     assert.equal(status.style.getPropertyValue('--tm-row-gap'), '12px');
 });
 
-test('an obsolete timer cannot relinquish newer feedback, and reentrant disposal preserves new resources', async () => {
-    const e = fixture({ copyLogs: async () => {} });
-    const status = e.mount(), link = status.querySelector('#' + LOG_LINK_ID);
+test('reentrant frame disposal preserves newly acquired resources', () => {
+    const e = fixture();
+    const status = e.mount();
     const acquiredStyle = e.grid.installResources();
-    click(link); await flush(); const oldTimer = [...e.timers.values()][0];
-    click(link); await flush(); oldTimer();
-    assert.equal(link.textContent, 'log:copied');
-    assert.equal(e.timers.size, 1);
     const remove = status.remove.bind(status); let replacement;
     status.remove = () => { remove(); replacement = e.mount(); e.grid.installResources(); };
     e.grid.dispose();

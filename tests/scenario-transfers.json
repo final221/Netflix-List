@@ -1995,7 +1995,7 @@
       "coverage": [
         {
           "file": "tests/grid-frame.test.js",
-          "title": "grid owns one detached/current status and preserves separated label, meta, geometry and CopyLogs"
+          "title": "grid owns one detached/current status and preserves separated label, meta, geometry without an export control"
         },
         {
           "file": "tests/grid-frame.test.js",
@@ -4458,7 +4458,7 @@
         },
         {
           "file": "tests/grid-frame.test.js",
-          "title": "grid owns one detached/current status and preserves separated label, meta, geometry and CopyLogs"
+          "title": "grid owns one detached/current status and preserves separated label, meta, geometry without an export control"
         }
       ]
     },
@@ -4584,8 +4584,8 @@
       "disposition": "owner-boundary replacement",
       "coverage": [
         {
-          "file": "tests/grid-frame.test.js",
-          "title": "obsolete and out-of-order clipboard completions cannot paint a replacement or newer feedback"
+          "file": "tests/log-control.test.js",
+          "title": "retired export completion cannot paint a replacement control"
         },
         {
           "file": "tests/hover.test.js",

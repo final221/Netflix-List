@@ -1,6 +1,6 @@
 // Providers return the existing serialized summaries; no feature state is retained here.
-export function createReport({ logger, version, document, navigator, tLog, readEnvironment,
-    readRuntime, readSeriesViewing, readThumbnails, readNativePopup }) {
+export function createReport({ logger, version, document, navigator, tLog, readEnvironment, writeText,
+    readRuntime, readSeriesViewing, readThumbnails, readNativePopup, readHistory = () => [] }) {
     // A target for optional examples, never a ceiling on diagnostic decisions.
     const COMPACT_TARGET_CHARACTERS = 20000;
     const DIAGNOSTIC_FIELD = /status|outcome|reason|code|mode|strategy|source|phase|stage|method|failure|error|manualChoice|graphqlKey|rowId|sectionId|entryKind|generation/i;
@@ -116,6 +116,7 @@ export function createReport({ logger, version, document, navigator, tLog, readE
             `exportMode: ${detailed ? 'detailed' : 'compact; sampled lists and grouped events'}`,
             `entries: ${logger.size()}`,
             `snapshot: ${format(snapshot)}`,
+            `previousPages: ${format(readHistory())}`,
             `seriesViewing: ${logger.formatValue(detailed ? readSeriesViewing() : seriesSummary(readSeriesViewing()))}`,
             `thumbnailDiagnostics: ${format(readThumbnails())}`,
             `nativePopupDiagnostics: ${format(readNativePopup())}`
@@ -167,5 +168,10 @@ export function createReport({ logger, version, document, navigator, tLog, readE
         } finally { textarea.remove(); }
     }
 
-    return Object.freeze({ copy: ({ detailed = false } = {}) => copyTextToClipboard(buildInvestigationLogText(detailed)) });
+    function snapshot(detailed = true) {
+        const facts = { runtime: readRuntime(), seriesViewing: detailed ? readSeriesViewing() : seriesSummary(readSeriesViewing()),
+            thumbnails: readThumbnails(), nativePopup: readNativePopup() };
+        return JSON.parse(logger.formatValue(detailed ? facts : compact(facts)));
+    }
+    return Object.freeze({ copy: ({ detailed = false } = {}) => (writeText || copyTextToClipboard)(buildInvestigationLogText(detailed)), snapshot });
 }

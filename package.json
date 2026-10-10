@@ -1,6 +1,6 @@
 {
   "name": "netflix-my-list-grid",
-  "version": "1.8.1",
+  "version": "1.9.0",
   "private": true,
   "description": "Tampermonkey grid for Netflix My List",
   "license": "MIT",
@@ -11,6 +11,7 @@
   "packageManager": "npm@11.6.2",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "logs": "node scripts/log-receiver.mjs",
     "check": "node scripts/check.mjs",
     "test": "node --test --test-reporter=spec tests/*.test.js"
   },

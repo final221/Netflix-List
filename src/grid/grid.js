@@ -7,12 +7,11 @@ import { createGroups } from './groups.js';
 export function createGrid({ document, location, runChunks, imageDiagnostics = {},
     createError = (code, message) => Object.assign(new Error(message), { code }),
     readPage = item => item.page, prepareCard = () => {}, onRetire = () => {}, onReplace = () => {}, installHover = () => {},
-    tLog = key => key, tUi = key => key, copyLogs = async () => {}, isActive = () => true,
+    tUi = key => key, isActive = () => true,
     formatUiNumber = String, formatItemCount = String,
-    readEmptyContent = () => null, readEmptyShell = () => null,
-    setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout }) {
+    readEmptyContent = () => null, readEmptyShell = () => null }) {
     const markup = createCardMarkup({ location, document });
-    const frame = createFrame({ document, tLog, tUi, copyLogs, isActive, setTimeout, clearTimeout, createError,
+    const frame = createFrame({ document, tUi, isActive, createError,
         readEmptyContent, readEmptyShell, cloneEmptyContent: markup.cloneEmptyContent });
     let buildGeneration = 0, materialReleaseFailures = 0;
     let cards;

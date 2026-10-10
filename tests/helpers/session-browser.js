@@ -10,7 +10,7 @@ export function sessionBrowser({ count = 6, columns = 6, viewing = false, logica
     const b = createBrowser({ pathname: '/browse/my-list' });
     let source = mountPopulatedMyList(b, { count });
     let ids = Array.from({ length: count }, (_, i) => String(i + 1)), page = 0, width = 600, pointerId = null;
-    const events = [], moves = [], requests = [], storage = new Map();
+    const events = [], moves = [], requests = [], savedReports = [], storage = new Map();
     const models = { userInfo: { userGuid: 'profile-a', authURL: 'test-auth' },
         services: viewing ? { memberapi: '/api/shakti/test' } : {} };
     let videos = Object.fromEntries(ids.map(id => [id, viewingVideo('movie', false, 20)]));
@@ -86,6 +86,12 @@ export function sessionBrowser({ count = 6, columns = 6, viewing = false, logica
         return getReply(url, options);
     };
     paint();
+    b.context.GM_xmlhttpRequest = options => {
+        if (options.method === 'POST') savedReports.push(JSON.parse(options.data).text);
+        queueMicrotask(() => options.onload({ status: 200, responseText: JSON.stringify(options.method === 'GET'
+            ? { token: 'a'.repeat(64) } : { file: 'test-fixture.txt' }) }));
+        return { abort() {} };
+    };
     const app = createApplication({ environment: b.context, version: 'test' });
     async function drain(until = () => !app.diagnostics().currentSession?.running, steps = 200, ms = 25) {
         for (let i = 0; i < steps; i++) { await b.scheduler.advance(ms); await b.scheduler.frame(); if (until()) return; }
@@ -113,9 +119,9 @@ export function sessionBrowser({ count = 6, columns = 6, viewing = false, logica
         setVideos(next) { videos = next; }, setReply(next) { reply = next; }, setGetReply(next) { getReply = next; }, setPostStatus(next) { postStatus = next; },
         leavePointer(node) { pointerId = null; grid()?.dispatchEvent({ type: 'pointerout', target: node, relatedTarget: b.document.body, clientX: 21, clientY: 20 }); },
         async snapshot() {
-            const link = b.document.getElementById('tm-netflix-mylist-v20-log');
+            const link = b.document.getElementById('tm-netflix-copylogs');
             link.dispatchEvent({ type: 'click', currentTarget: link, preventDefault() {} }); await b.scheduler.flush();
-            return JSON.parse(b.clipboard.at(-1).split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+            return JSON.parse(savedReports.at(-1).split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
         },
         dispose() { app.dispose(); assert.equal(b.scheduler.timers.size, 0); assert.equal(b.scheduler.frames.size, 0); }
     };

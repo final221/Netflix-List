@@ -3,12 +3,23 @@
   "description": "Displays your Netflix My List in an easy-to-browse grid.",
   "author": "final221",
   "license": "MIT",
-  "match": ["https://www.netflix.com/*"],
+  "match": [
+    "https://www.netflix.com/*"
+  ],
   "run-at": "document-idle",
   "sandbox": "raw",
-  "grant": ["GM_registerMenuCommand", "GM_unregisterMenuCommand", "GM_getValue", "GM_setValue"],
+  "grant": [
+    "GM_registerMenuCommand",
+    "GM_unregisterMenuCommand",
+    "GM_getValue",
+    "GM_setValue",
+    "GM_xmlhttpRequest"
+  ],
   "noframes": true,
   "namespace": "local.netflix.mylist.grid",
   "updateURL": "https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js",
-  "downloadURL": "https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js"
+  "downloadURL": "https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js",
+  "connect": [
+    "127.0.0.1"
+  ]
 }
