@@ -1,3 +1,4 @@
+import { createScheduler } from './helpers/scheduler.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLogControl } from '../src/diagnostics/control.js';
@@ -26,4 +27,21 @@ test('retired export completion cannot paint a replacement control', async () =>
     pending[0]('logs/old.txt'); await flush();
     const button = document.getElementById('tm-netflix-copylogs'); assert.notEqual(button, old);
     assert.equal(document.querySelector('[role="status"]').hidden, true); control.dispose();
+});
+
+test('success feedback is above the stationary button, expires after three seconds and cannot clear a later result', async () => {
+    const document = createDocument(), scheduler = createScheduler(), pending = [];
+    const control = createLogControl({ document, ...scheduler, tLog: key => key,
+        copyLogs: () => new Promise(resolve => pending.push(resolve)) }); control.start();
+    const button = document.getElementById('tm-netflix-copylogs'), message = document.querySelector('[role="status"]');
+    const style = document.head.querySelector('style').textContent;
+    assert.match(style, /p\{position:absolute;right:0;bottom:calc\(100% \+ 8px\)/);
+    click(button); pending[0]('first.txt'); await flush(); assert.equal(message.hidden, false);
+    await scheduler.advance(2999); assert.equal(message.hidden, false);
+    await scheduler.advance(1); assert.equal(message.hidden, true); assert.equal(message.textContent, '');
+    click(button); pending[1]('second.txt'); await flush(); await scheduler.advance(1000);
+    click(button); assert.equal(scheduler.timers.size, 0); pending[2]('third.txt'); await flush();
+    await scheduler.advance(2000); assert.equal(message.hidden, false); assert.match(message.textContent, /third.txt/);
+    assert.equal(document.getElementById('tm-netflix-copylogs'), button); assert.equal(button.textContent, 'CopyLogs');
+    control.dispose(); assert.equal(scheduler.timers.size, 0);
 });

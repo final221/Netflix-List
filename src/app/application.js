@@ -30,7 +30,7 @@ export function createApplication({ environment = globalThis, version = '', crea
         catch (error) { logger.warn(i18n.tLog('copyLogsFailed'), error); throw error; }
     }
     const recommendations = createRecommendations({ environment, context, userscript, tUi: i18n.tUi, log: logger.log, warn: logger.warn });
-    const logControl = createLogControl({ document, tLog: i18n.tLog,
+    const logControl = createLogControl({ document, tLog: i18n.tLog, setTimeout: environment.setTimeout, clearTimeout: environment.clearTimeout,
         copyLogs: options => session ? session.copyLogs(options) : copyBrowsingLogs(options) });
     function isTargetPage() { return location.origin === 'https://www.netflix.com' && location.pathname === '/browse/my-list'; }
     function rememberPage(feature, read, compactRead, url) {

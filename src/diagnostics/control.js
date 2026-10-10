@@ -1,6 +1,7 @@
 // One application-lifetime export control, independent of native page/profile UI.
-export function createLogControl({ document, tLog, copyLogs }) {
-    let root = null, button = null, feedback = null, listener = null, style = null, revision = 0;
+export function createLogControl({ document, tLog, copyLogs, setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout }) {
+    let root = null, button = null, feedback = null, listener = null, style = null, revision = 0, feedbackTimer = null;
+    function clearFeedbackTimer() { if (feedbackTimer !== null) clearTimeout(feedbackTimer); feedbackTimer = null; }
     function start() {
         if (root) return;
         const owner = ++revision;
@@ -12,22 +13,27 @@ export function createLogControl({ document, tLog, copyLogs }) {
         listener = async event => {
             event.preventDefault();
             if (owner !== revision || !button?.isConnected || button.disabled) return;
+            clearFeedbackTimer();
             const control = button, message = feedback; control.disabled = true; message.hidden = true;
             try {
                 const file = await copyLogs({ detailed: Boolean(event.shiftKey) });
                 if (owner !== revision || !control.isConnected) return;
                 message.textContent = tLog('copied') + ' ' + file; message.hidden = false;
+                feedbackTimer = setTimeout(() => {
+                    feedbackTimer = null;
+                    if (owner === revision && control.isConnected) { message.hidden = true; message.textContent = ''; }
+                }, 3000);
             } catch (error) {
                 if (owner !== revision || !control.isConnected) return;
                 message.textContent = tLog('copyFailed', { message: error?.message || String(error) }); message.hidden = false;
             } finally { if (owner === revision && control.isConnected) control.disabled = false; }
         };
         button.addEventListener('click', listener);
-        style = document.createElement('style'); style.textContent = '#tm-netflix-log-control{position:fixed;right:16px;bottom:16px;z-index:2147483646;font:13px system-ui;color:#fff;max-width:min(360px,calc(100vw - 32px))}#tm-netflix-log-control button{background:#242424;color:#fff;border:1px solid #777;border-radius:5px;padding:8px;cursor:pointer}#tm-netflix-log-control button:focus-visible{outline:2px solid #fff;outline-offset:2px}#tm-netflix-log-control p{background:#181818;border:1px solid #555;padding:8px;overflow-wrap:anywhere;margin:6px 0 0}#tm-netflix-log-control[hidden],#tm-netflix-log-control [hidden]{display:none!important}';
+        style = document.createElement('style'); style.textContent = '#tm-netflix-log-control{position:fixed;right:16px;bottom:16px;z-index:2147483646;font:13px system-ui;color:#fff;max-width:min(360px,calc(100vw - 32px))}#tm-netflix-log-control button{background:#242424;color:#fff;border:1px solid #777;border-radius:5px;padding:8px;cursor:pointer}#tm-netflix-log-control button:focus-visible{outline:2px solid #fff;outline-offset:2px}#tm-netflix-log-control p{position:absolute;right:0;bottom:calc(100% + 8px);width:max-content;max-width:min(360px,calc(100vw - 32px));box-sizing:border-box;background:#181818;border:1px solid #555;padding:8px;overflow-wrap:anywhere;margin:0}#tm-netflix-log-control[hidden],#tm-netflix-log-control [hidden]{display:none!important}';
         document.head.appendChild(style); document.body.appendChild(root);
     }
     function dispose() {
-        revision++; button?.removeEventListener('click', listener); root?.remove(); style?.remove();
+        revision++; clearFeedbackTimer(); button?.removeEventListener('click', listener); root?.remove(); style?.remove();
         root = button = feedback = listener = style = null;
     }
     return Object.freeze({ start, dispose, setVisible(visible) { if (root) root.hidden = !visible; } });
