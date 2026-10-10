@@ -1,6 +1,18 @@
 import { readVideoIdFromHref } from './page-dom.js';
 import { createRecommendationRequests } from './recommendation-requests.js';
 
+
+export const RECOMMENDATION_ARROW_STYLES = `
+:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev){
+    min-width:56px!important;min-height:64px!important;opacity:1!important;visibility:visible!important;
+    z-index:10001!important;background:rgba(20,20,20,.85)!important;color:#fff!important;
+    cursor:pointer;pointer-events:auto;
+}
+:is(section,.lolomoRow):has(.tm-rec-controls) :is(.handleNext,.handlePrev){width:56px!important}
+:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia*="carousel"][data-uia$="button"],.handleNext,.handlePrev):focus-visible{outline:3px solid #fff!important;outline-offset:-3px}
+:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia*="carousel"][data-uia$="button"],.handleNext,.handlePrev) :is(svg,.indicator-icon){width:32px!important;height:32px!important;font-size:32px!important;pointer-events:none}
+`;
+
 // Visible slot size/order remains Netflix-owned. No private mutation or playback API.
 export function createRecommendationDom(environment) {
     const { document, location, getComputedStyle, performance, PerformanceObserver } = environment;

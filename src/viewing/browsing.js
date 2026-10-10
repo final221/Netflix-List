@@ -112,5 +112,5 @@ export function createBrowsingViewing({ environment, context, userscript, isCurr
         unavailable: id => failed.has(id),
         complete: id => choices.status(id) === 'complete',
         choice: choices.choice, ids: () => choices.ids().filter(id => choices.status(id) === 'complete'),
-        presentation: choices.presentation, diagnostics: () => ({ requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, retrying: retryTimer !== null, windowRequests }) });
+        presentation: choices.presentation, diagnostics: () => ({ requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, failedTitles: [...failed].slice(0, 12).map(id => ({ id, type: type(id) || 'unknown', attempts: attempts.get(id) || 0, missing: type(id) === 'series' ? 'coverage' : 'type' })), failedTitlesTruncated: failed.size > 12, retrying: retryTimer !== null, windowRequests }) });
 }

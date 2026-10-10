@@ -2,7 +2,7 @@
 export function createRecommendationRequests(environment) {
     const { location, performance } = environment;
     const original = environment.fetch, records = [], readers = new Set();
-    let active = true, until = -1, dropped = 0, failures = 0;
+    let active = true, until = -1, dropped = 0, failures = 0, intercepted = 0, graphqlCalls = 0;
     const now = () => performance?.now() ?? Date.now();
     function responseFacts(root) {
         const collections = [], pagination = [], queue = [[root, 'data', 0]]; let visited = 0;
@@ -50,8 +50,11 @@ export function createRecommendationRequests(environment) {
         const result = original.apply(this, args);
         try {
             if (!active || now() > until) return result;
-            const url = new URL(typeof args[0] === 'string' ? args[0] : args[0]?.url || '', location.href);
+            intercepted++;
+            const input = args[0];
+            const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input?.url || '', location.href);
             if (url.origin !== location.origin || !/graphql/i.test(url.pathname)) return result;
+            graphqlCalls++;
             const record = { at: now(), operation: 'unknown', variables: [], persistedQuery: false };
             const body = args[1] && Object.getOwnPropertyDescriptor(args[1], 'body')?.value, variables = url.searchParams.get('variables');
             if (typeof body === 'string' && body.length <= 65536 || typeof body !== 'string' && (!variables || variables.length <= 65536)) {
@@ -72,7 +75,7 @@ export function createRecommendationRequests(environment) {
     let installed = false;
     try { if (typeof original === 'function') { environment.fetch = wrapped; installed = environment.fetch === wrapped; } } catch (_) {}
     return { begin() { try { until = now() + 5000; } catch (_) { until = -1; failures++; } }, read() {
-        return { installed, failures, dropped, pendingResponses: readers.size, records: JSON.parse(JSON.stringify(records)) };
+        return { installed, intercepted, graphqlCalls, failures, dropped, pendingResponses: readers.size, records: JSON.parse(JSON.stringify(records)) };
     }, dispose() {
         active = false;
         try { if (environment.fetch === wrapped) environment.fetch = original; } catch (_) {}

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.8
+// @version      1.9.9
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -9392,7 +9392,7 @@ ${CARD_ACTION_STYLES}
       choice: choices.choice,
       ids: () => choices.ids().filter((id) => choices.status(id) === "complete"),
       presentation: choices.presentation,
-      diagnostics: () => ({ requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, retrying: retryTimer !== null, windowRequests })
+      diagnostics: () => ({ requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, failedTitles: [...failed].slice(0, 12).map((id) => ({ id, type: type(id) || "unknown", attempts: attempts.get(id) || 0, missing: type(id) === "series" ? "coverage" : "type" })), failedTitlesTruncated: failed.size > 12, retrying: retryTimer !== null, windowRequests })
     });
   }
 
@@ -19441,7 +19441,7 @@ ${CARD_ACTION_STYLES}
   function createRecommendationRequests(environment) {
     const { location, performance } = environment;
     const original = environment.fetch, records = [], readers = /* @__PURE__ */ new Set();
-    let active = true, until = -1, dropped = 0, failures = 0;
+    let active = true, until = -1, dropped = 0, failures = 0, intercepted = 0, graphqlCalls = 0;
     const now = () => performance?.now() ?? Date.now();
     function responseFacts(root) {
       const collections = [], pagination = [], queue = [[root, "data", 0]];
@@ -19522,8 +19522,11 @@ ${CARD_ACTION_STYLES}
       const result = original.apply(this, args);
       try {
         if (!active || now() > until) return result;
-        const url = new URL(typeof args[0] === "string" ? args[0] : args[0]?.url || "", location.href);
+        intercepted++;
+        const input = args[0];
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input?.url || "", location.href);
         if (url.origin !== location.origin || !/graphql/i.test(url.pathname)) return result;
+        graphqlCalls++;
         const record = { at: now(), operation: "unknown", variables: [], persistedQuery: false };
         const body = args[1] && Object.getOwnPropertyDescriptor(args[1], "body")?.value, variables = url.searchParams.get("variables");
         if (typeof body === "string" && body.length <= 65536 || typeof body !== "string" && (!variables || variables.length <= 65536)) {
@@ -19572,7 +19575,7 @@ ${CARD_ACTION_STYLES}
         failures++;
       }
     }, read() {
-      return { installed, failures, dropped, pendingResponses: readers.size, records: JSON.parse(JSON.stringify(records)) };
+      return { installed, intercepted, graphqlCalls, failures, dropped, pendingResponses: readers.size, records: JSON.parse(JSON.stringify(records)) };
     }, dispose() {
       active = false;
       try {
@@ -19590,6 +19593,16 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/netflix/recommendation-dom.js
+  var RECOMMENDATION_ARROW_STYLES = `
+:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev){
+    min-width:56px!important;min-height:64px!important;opacity:1!important;visibility:visible!important;
+    z-index:10001!important;background:rgba(20,20,20,.85)!important;color:#fff!important;
+    cursor:pointer;pointer-events:auto;
+}
+:is(section,.lolomoRow):has(.tm-rec-controls) :is(.handleNext,.handlePrev){width:56px!important}
+:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia*="carousel"][data-uia$="button"],.handleNext,.handlePrev):focus-visible{outline:3px solid #fff!important;outline-offset:-3px}
+:is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia*="carousel"][data-uia$="button"],.handleNext,.handlePrev) :is(svg,.indicator-icon){width:32px!important;height:32px!important;font-size:32px!important;pointer-events:none}
+`;
   function createRecommendationDom(environment) {
     const { document, location, getComputedStyle, performance, PerformanceObserver } = environment;
     const selector = 'a[data-uia="standard-card"][href], .title-card';
@@ -20376,7 +20389,7 @@ ${CARD_ACTION_STYLES}
       for (const entry of entries.values()) paint(entry);
       if (!style) {
         style = document.createElement("style");
-        style.textContent = CARD_ACTION_STYLES + "\n.tm-rec-controls{opacity:1;pointer-events:auto}";
+        style.textContent = CARD_ACTION_STYLES + RECOMMENDATION_ARROW_STYLES + "\n.tm-rec-controls{opacity:1;pointer-events:auto}";
         style.textContent += "\n.tm-rec-manager{position:fixed;right:16px;top:100px;z-index:10000;font:14px system-ui;color:#fff}.tm-rec-manager[hidden],.tm-rec-manager [hidden]{display:none!important}.tm-rec-manager button{background:#242424;color:#fff;border:1px solid #777;border-radius:5px;padding:8px;cursor:pointer}.tm-rec-manager button:focus-visible,.tm-rec-manager a:focus-visible{outline:2px solid #fff;outline-offset:2px}.tm-rec-manager section{margin-top:8px;width:min(360px,calc(100vw - 32px));max-height:70vh;overflow:auto;background:#181818;border:1px solid #555;border-radius:8px;padding:12px;box-sizing:border-box;box-shadow:0 8px 24px #0008}.tm-rec-manager section>button{display:block;margin-left:auto}.tm-rec-saved-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #333}.tm-rec-saved-row a{flex:1;color:#eee;text-decoration:none;overflow-wrap:anywhere}.tm-rec-saved-row button{border:0;background:transparent;font-size:22px;padding:0 8px}.tm-rec-manager h3{font-size:14px}";
         document.head.appendChild(style);
       }
@@ -20809,7 +20822,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.8";
+  var SCRIPT_VERSION = "1.9.9";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

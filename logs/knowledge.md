@@ -2,30 +2,22 @@
 
 ## Historical sessions — 1.4.52–1.4.58
 
-Originals logs/<version>.txt at 8ca0de7ea22f3f5b7a0bdeadb6b091bfb9161d46; retired2026-10-08. Capture dates/timings/environment retained in this file at 8e22ab1. .52/.53 nine→498 fallback; .53 hover ReferenceError routeSessionToken/findMountedSourceSlot. .54 75→500 fallback; hover “Observed native page mapping changed”. .55–.58:500/no WARN/ERROR; .56/.57 hover succeeds; parked exceptions. .58 init3357ms/14replays/9transfers;viewing199complete/270unknown;move1920ms(ack1913). Lifecycle/Undo/popup untested.
+Historical originals logs/<version>.txt at8ca0de7ea22f3f5b7a0bdeadb6b091bfb9161d46; full retained dates/environment/measurements in this file at98e1266. Signatures:.53 routeSessionToken ReferenceError;.54 native mapping changed;.67/.69 fallback despite500cards;.70 stable cached/live IDs init2526ms versus cached9/live500 mismatch init8282ms. Lifecycle/Undo/popup unverified.
 
 ## Session — 1.4.64
 
 Uncommitted `Textdokument (neu).txt`/441events; SHA256 49d6878b560064696d58960aaabc19a8d33be992d2e4fd419a24105980b9812c. CopiedAt 2026-10-08T16:54:09.828+02:00, Windows/Firefox157/English/2560×1279/DPR1; runtime ref unknown.
-500/init2265ms/8cols/63pages/not stale/165filtered;10replays/6transfers/no WARN/ERROR;4unchanged checks/parked exception. Lifecycle/persistence/popup untested.
 
 ## Sessions — 1.4.67 and 1.4.69
 
-Windows/Firefox157/English/1920×919/DPR1;runtime unknown. Uncommitted:
 - 1.4.67 `logs/1.4.67.txt`, copiedAt 2026-10-09T21:03:29.768+02:00; SHA256 c8ee99038d4dff562649055aa2c342987861a19ce573ad419cb8723ab7d7189b. Compact659/48types;40groups/2sections omitted.
 - 1.4.69 `logs/1.4.69.txt`, 2026-10-09T22:28:47.012+02:00; SHA256 ad3bf51f611d47927db061468f0dc83e4f4e311f7f2d418189e28b90fe749da3. Compact650/67groups/49names;no groups omitted/28examples omitted.
 - 1.4.69 `logs/Textdokument (neu).txt`, 2026-10-09T22:34:04.461+02:00/694events; SHA256 eeafdbe078b7b497463dc28df25f1deb11d1a1f99ac4f1dc433575ae690699ec. Same startup/650events;page65=340ms.
 
-Browse→My List:500/two warnings/7cols/page0/not stale/136filtered. .67 init7.45s/native6961ms/hover succeeds;identity/pagination omitted. .69 init8016/native7509ms;72settles4326/max340ms;page75/hasNextPage=false;idx=-999/live selection reason omitted. Detailed timings at 8e22ab1. Recovered .52/.54/.58 originals above:idx=-999;count/edges/hasNextPage=9/9/false,75/75/false,500/75/true.
-
 ## Session — 1.4.70
 
 Uncommitted `logs/Textdokument (neu).txt`: SHA256 0fb1b1282449390cbf73f7f20342dc6c9449a6a09c83b63b40bdc67063ded4f9. copiedAt 2026-10-09T23:04:59.936+02:00, same environment as1.4.69; runtime unknown. Compact278/39names/no groups omitted/25examples omitted.
-
-Initial My List:init2526ms/500titles/seven GraphQL pages/no native scan/no WARN/ERROR. Cached-key matches live ID/card samples/count500;response75edges/500total/hasNextPage=true.
-
 - Later detailed `logs/Textdokument (neu).txt`, 2026-10-09T23:58:29.467+02:00/509 events/46 names, SHA256 aa4260fed0fe075e7d0e6262b10839377b79055dcc11a2913163e1f3232dd727; new initial-MyList session;init8282/native7521ms;500/72pages/not stale;two fallback warnings,no error.
-- Cached-key9; stable live ID differs from selected ID before/after, decoded page/card samples disagree; nativeRowCachedCount=null. Response9edges/count9/hasNextPage=false vs native500. Hover/viewing succeed; metadata partly unknown.
 
 For 1.9.x: `version/suffix` identifies uncommitted `logs/<version>-2026-10-10T<suffix>.txt`; capture times are 2026-10-10 UTC+02. Windows/Firefox157/English/2560×1279/DPR1/homepage; runtime refs unknown.
 
@@ -62,14 +54,23 @@ Same startup21:04:51.860;3→6events/20rows/untruncated/no warnings/refill/pendi
 
 - `1.9.7/19-19-45-038Z-d73704f4`, copiedAt 21:19:45.035; SHA256 227a11a20ec96e026ddc946850d4e688add2e5bbc4fc069e17ac8857655b7891.
 - `1.9.7/19-20-07-443Z-3492b223`, copiedAt 21:20:07.439; SHA256 f1a05bc0a2c905f27a0101835f5ef6322311d19b91736919a92257773bfbec2f.
-Detailed/start21:17:51.407;45rows/40sampled;modal open/close;watched/refill:visible8/mounted13/offscreen1. Row29 “Because you watched The First Purge” arrow21:19:50.154:13→26mounted/13added/0removed; IDs untruncated. Observer:5s/20inspected/9matches/no drops/failures;GraphQL+3ms(111ms/3727B),+224ms(155ms/11708B),4Falcor+471–1133ms; no row attribution. React10summaries/truncated, hook tuples crowd props. Viewing172→176requests/490→500checked/0pending/unavailable:false. One cancelled save, later completion/pending0. User:buffer exhausted/status stuck;loader unobserved.
+Startup21:17:51.407;45rows/40sampled;refill8visible/13mounted/1offscreen. Row29 arrow13→26/13added;GraphQL+3ms/+224ms,4Falcor/time correlation only. Hooks crowd props;500checked/0pending.
 
 Later same startup, still1.9.7 (not1.9.8), detailed captures:
 
 - 21:40:11.318, 1.9.7/19-40-11-323Z-38bfa55e; SHA256 65a30cd599e81f2eb9480311f24903fed1bb27ea10aae5b2c7b15076b8197d0d.
 - 21:40:49.915, 1.9.7/19-40-49-922Z-ef5f79a0; SHA256 21e1eccb5d6457f7f5fb3fc5f7fc3909a73c202330f6533b29d3d2800534182e.
 - 21:41:53.256, 1.9.7/19-41-53-268Z-a20d2298; SHA256 4c23b049482293cf84f4bde53eb51d9ef21981bbb09d882f0e1f48e87a338a7e.
-Viewing175→178→178requests/493→500→500checked/0pending/not running;decorated578→587→604. Row29 four arrows:17→26mounted/9added then unchanged;offscreen4→9. Row8 seven:13→25→26mounted;12added then8added/7removed then8/8 each;offscreen3→14→14→15→15→17→16→16. Consecutive same-row before snapshots bound intervals;afterAtExport may include later changes. IDs untruncated;sample cap16. Row8 five windows include two GraphQL calls each,time correlation only. No precise completion timing/automatic-prefetch proof;user reports smoother loading/stuck checking.
+Later:493→500checked/0pending;row29 17→26;row8 13→25→26 then8/8recycling/offscreen3→16. Consecutive before states bound intervals;export cumulative/sample16;no precise latency/prefetch proof.
+
+## Session — 1.9.8
+
+- 22:09:40.662, 1.9.8/20-09-40-664Z-6adffbfb; SHA256 04ee1687002ae65eb59e70e51a873c84e03e71457406d1608c7f05eae7365a08.
+- 22:09:52.703, 1.9.8/20-09-52-704Z-49f3e8bd; SHA256 159e326b16dcad8e13c914527deed8fcd2d61e75d3f7fcda75605601570a5d74.
+- 22:10:03.012, 1.9.8/20-10-03-014Z-542dafc6; SHA256 050292138b9b8589d52775d889c14fa0304b5362f0b9e809fbdb625e3b57c39e.
+- 22:12:00.246, 1.9.8/20-12-00-255Z-636f66d6; SHA256 af1235a2e8b1efb37779efe0b33182f00fe9b64cdad8ec0172d8ef7f1168de3d.
+- 22:12:33.956, 1.9.8/20-12-33-966Z-63f8d4f0; SHA256 b4b556fe656ae8f4243b680f42f194a85ce32afce99941cdb5ef0883a61e8a93.
+Same startup/five exports. Viewing163→299requests/375→572checked/3→4failed/0pending/not running;windowRequests163→12. Decorated461→608. Row34:13→26mounted/offscreen1→9. Row42:13→25→26 then8/8recycling/offscreen4→18. Five dismissals/checks. Multiple windows/two GraphQL fetches;installed lease/no failures/zero records. Observer drops0→119;early windows become empty later. Props40-element stateArray;no independent loader observed. Missing title/coverage reasons and exact latency unrecorded.
 
 ## Evidence limits
 

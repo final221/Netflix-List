@@ -45,3 +45,15 @@ test('a diagnostic clock failure cannot replace the native fetch promise with a 
     const probe = createRecommendationRequests(env); assert.doesNotThrow(() => probe.begin());
     assert.equal(env.fetch('/graphql'), promise); assert.equal(probe.read().failures, 2); probe.dispose();
 });
+
+test('URL fetch inputs retain native identity and expose interception versus GraphQL counts', () => {
+    const promise = Promise.resolve({ clone() { throw Error('no clone'); } }); let received;
+    const env = { location: { href: 'https://www.netflix.com/browse', origin: 'https://www.netflix.com' }, performance: { now: () => 100 },
+        fetch(input) { received = input; return promise; } };
+    const probe = createRecommendationRequests(env); probe.begin();
+    const input = new URL('https://www.netflix.com/graphql?operationName=Recommendations');
+    assert.equal(env.fetch(input), promise); assert.equal(received, input);
+    env.fetch('/other');
+    assert.equal(probe.read().intercepted, 2); assert.equal(probe.read().graphqlCalls, 1);
+    assert.equal(probe.read().records[0].operation, 'Recommendations'); probe.dispose();
+});
