@@ -17,7 +17,7 @@ Release **1.9.23**, 2026-10-11: **55 authored runtime modules, 17,448 readable p
 | `recommendations/saved-choices-panel.js` | — | 74 | Private saved-choice DOM/styles, grouping, open/close/focus, button identity and explicit Escape listener lifetime. |
 | `app/responsive.js` | 594 | 593 | Complete responsive transaction; one local page-hint publication loop with caller-owned mapping/observation admission and clone policy. |
 
-These counts trigger whole-module assessment, not automatic splitting or blanket retention. The [refactor reassessment](findings.md#refactor-reassessment--2026-10-12) proposes carousel discovery/resolution/native-reading, session hover-preparation/mismatch/snapshot and navigation motion owners, with estimates and preservation requirements. It resolves the earlier remainder questions through supported transfers and explicit retention comparisons; smaller modules received triage rather than exhaustive renewed review. No proposal is implemented by that assessment. The generated userscript changes separately from 21,261 (1.9.15) to 21,311 (1.9.16) to 21,305 (1.9.17) to 21,298 (1.9.18) to 21,304 (1.9.19) to 21,341 (1.9.20) to 21,352 (1.9.21) to 21,402 (1.9.22) to 21,411 (1.9.23) lines. The full inventory below remains a historical snapshot and does not describe current module totals.
+These counts trigger whole-module assessment, not automatic splitting or blanket retention. The generated userscript changes separately from 21,261 (1.9.15) to 21,311 (1.9.16) to 21,305 (1.9.17) to 21,298 (1.9.18) to 21,304 (1.9.19) to 21,341 (1.9.20) to 21,352 (1.9.21) to 21,402 (1.9.22) to 21,411 (1.9.23) lines. The full inventory below remains a historical snapshot and does not describe current module totals.
 
 ## Historical full inventory
 
