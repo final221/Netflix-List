@@ -30,6 +30,8 @@ what it should not contain
 
 ## User working preferences
 
+- In assessments, distinguish investigated areas from unresolved or unassessed areas. Completing selected changes must not imply that the overall review is complete; returning no supported changes is acceptable.
+
 - Once a goal is clear, continue its necessary investigation, diagnostic improvements and implementation without asking for repeated approval of each next step. Ask for live user-side evidence only when the local environment cannot supply it.
 
 - The user uses this personal script on Windows and wants work limited to Windows. Linux and other operating-system support are out of scope unless explicitly requested.
