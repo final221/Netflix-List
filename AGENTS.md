@@ -15,7 +15,7 @@ Instructions for assistants changing this repository. [README.md](README.md) pro
 
 - `AGENTS.md` defines repository workflow and document boundaries. Keep it and README.md at the root for discovery; put project documentation under docs/, with live evidence under logs/.
 - README.md owns the repository layout map; docs/architecture.md owns the source composition map. When moving files, update these maps where affected, read instructions, relative links and path references together.
-- `docs/context.md` contains compact durable knowledge and user preferences. Follow its protected maintenance instructions; keep current findings and project status out of it.
+- `docs/context.md` contains compact durable knowledge and user preferences. 
 - `docs/findings.md` is the working record for current review findings, decisions, and the ordered follow-up plan, including completed and deferred points. Keep current work, deferred items and remaining validation first, followed by clearly marked historical checkpoints. Update it as a selected step is completed or its status changes; do not duplicate its current status in `docs/context.md`.
 - `docs/architecture.md` owns the implemented architecture and continuing ownership, dependency and lifecycle contracts. Explain changes to these boundaries there before applying them; selected work and progress belong in `docs/findings.md`.
 - `logs/knowledge.md` owns distilled user-side live evidence: tested version, capture date/environment, distinguishing observations/measurements, evidence limits and source provenance. It does not own diagnoses, fix status, plans, architecture, preferences or automated test/CI results. `docs/findings.md` owns actionable interpretation and follow-up, citing the tested version and knowledge record rather than duplicating the capture summary.
@@ -32,7 +32,7 @@ Instructions for assistants changing this repository. [README.md](README.md) pro
 
 ## Change workflow
 
-- Review `docs/context.md` during each repository task; edit its durable sections only when a lasting preference or cross-cutting fact changes, while preserving its protected instructions.
+- Review docs/context.md during each task. Add or change only durable knowledge. Ending without any changes requires a clear explanation why no context was added.
 - Keep optional implementation within the step the user selected. A request to explain or assess possible follow-up work is discussion, not approval to implement it.
 - Review the diff before finishing and run `git diff --check` for whitespace problems.
 - After a repository-changing run, commit and push the changes to `origin`. The user has standing authorization for this in `docs/context.md`; do not ask for per-commit confirmation. Follow any separate sandbox or automated-review gate presented by the app.
