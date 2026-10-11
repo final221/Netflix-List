@@ -404,6 +404,47 @@ test('source discovery rejects an obsolete poll before accepting a late source o
     assert.equal(e.section.isConnected, true);
 });
 
+test('readiness retirement settles every poll despite cancellation failures and ignores late callbacks', async () => {
+    const e = environment({ clearTimeout() { throw new Error('host cleanup failure'); } });
+    e.carousel.bind(e.section);
+    const pending = [e.carousel.waitForSource(e.section), e.carousel.waitForSource(e.section)];
+    const stale = [...e.scheduler.timers.values()].map(timer => timer.callback);
+    assert.equal(e.carousel.diagnostics().readinessWaits, 2);
+    const replacement = e.host.appendChild(new Element('section'));
+    e.carousel.bind(replacement);
+    assert.equal(e.carousel.diagnostics().readinessWaits, 0);
+    assert.equal(e.carousel.diagnostics().readinessCleanupFailures, 2);
+    assert.deepEqual((await Promise.all(pending)).map(result => result.reason), ['detached', 'detached']);
+    const current = e.carousel.waitForSource(replacement);
+    stale.forEach(callback => callback());
+    await e.scheduler.flush();
+    assert.equal(e.carousel.diagnostics().readinessWaits, 1);
+    e.carousel.clearBinding();
+    assert.equal((await current).reason, 'detached');
+    assert.equal(e.carousel.diagnostics().readinessCleanupFailures, 3);
+});
+
+test('readiness scheduling failures leave no owned wait behind', async () => {
+    const e = environment({ setTimeout() { throw new Error('host scheduling failure'); } });
+    e.carousel.bind(e.section);
+    await assert.rejects(e.carousel.waitForSource(e.section), /host scheduling failure/);
+    assert.equal(e.carousel.diagnostics().readinessWaits, 0);
+    e.carousel.clearBinding();
+    assert.equal(e.carousel.diagnostics().readinessCleanupFailures, 0);
+});
+
+test('binding retirement cancels readiness confirmation frames before obsolete preparation publishes', async () => {
+    const e = mountedEnvironment();
+    const pending = e.carousel.prepareSource({ ...e.options, fastSinglePageTotalCount: 3 });
+    const rejected = assert.rejects(pending, { code: 'NATIVE_SOURCE_REPLACED' });
+    assert.equal(e.scheduler.frames.size, 1);
+    assert.equal(e.carousel.diagnostics().readinessWaits, 1);
+    e.carousel.clearBinding();
+    await rejected;
+    assert.equal(e.scheduler.frames.size, 0);
+    assert.equal(e.carousel.diagnostics().readinessWaits, 0);
+});
+
 test('a missing positive-count source times out while a connected empty carousel must stabilize', async () => {
     const missing = environment();
     missing.carousel.bind(missing.section);
