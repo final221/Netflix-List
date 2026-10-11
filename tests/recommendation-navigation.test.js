@@ -11,7 +11,7 @@ function setup() {
         observeRequests: () => ({ begin() {}, read: () => ({ number: ++reads }), dispose() {} }),
         navigationRequests: (start, end, facts) => ({ start, end, number: facts?.number }), describe: () => ({ id: '1', row }) };
     const probe = createNavigationDiagnostics({ environment: scheduler, dom, readChoices: () => ({}), admitted: () => active, log: (...args) => movements.push(args) });
-    return { probe, scheduler, row, control, set: values => { ids = values; }, admit: value => { active = value; } };
+    return { probe, scheduler, row, control, dom, set: values => { ids = values; }, admit: value => { active = value; } };
 }
 test('timed arrow samples freeze history and distinguish first-observed IDs from returning mounted cards', async () => {
     const b = setup(); b.probe.click(b.control); b.set(['1', '2']); await b.scheduler.advance(200);
@@ -51,4 +51,51 @@ test('saved actions copy before collapse and retain immediate and timed outcomes
     b.set(['2', '3']); await b.scheduler.advance(1200);
     action = b.probe.snapshot().actions[0]; assert.equal(action.samples.at(-1).firstObservedCount, 2);
     b.probe.dispose(); assert.equal(b.scheduler.timers.size, 0); assert.deepEqual(b.probe.snapshot().actions, []);
+});
+
+test('interleaved arrows and saved actions close and bound their own histories independently', async () => {
+    const b = setup();
+    for (let i = 0; i < 26; i++) {
+        b.probe.movement('action', null, { id: String(i), action: 'hide' });
+        b.probe.click(b.control);
+        if (i === 1) {
+            const facts = b.probe.snapshot();
+            assert.equal(facts.recent[0].samples.at(-1).reason, 'before-next-arrow');
+            assert.deepEqual(facts.actions[0].samples.map(sample => sample.reason), ['saved']);
+        }
+        b.probe.savedAction(b.row, b.probe.beforeAction(b.row), 'hide', String(i));
+        if (i === 1) {
+            const facts = b.probe.snapshot();
+            assert.equal(facts.actions[0].samples.at(-1).reason, 'before-next-action');
+            assert.deepEqual(facts.recent[1].samples, []);
+        }
+    }
+    let facts = b.probe.snapshot();
+    assert.equal(facts.interactions, 26);
+    assert.equal(facts.recent.length, 20); assert.equal(facts.actions.length, 20);
+    assert.equal(facts.recent[0].sequence, 7); assert.equal(facts.actions[0].sequence, 7);
+    assert.equal(facts.actions[0].id, '6'); assert.equal(facts.actions[0].action, 'hide');
+    assert.equal(facts.pendingSamples, 6);
+    await b.scheduler.advance(5000); facts = b.probe.snapshot();
+    assert.deepEqual(facts.recent.at(-1).samples.map(sample => sample.reason), ['200ms', '1200ms', '5000ms']);
+    assert.deepEqual(facts.actions.at(-1).samples.map(sample => sample.reason), ['saved', '200ms', '1200ms', '5000ms']);
+    assert.equal(facts.pendingSamples, 0);
+    b.probe.dispose(); assert.equal(b.scheduler.timers.size, 0);
+});
+
+test('arrow details are captured after request observation begins and failure does not consume its sequence', () => {
+    const b = setup(); let begins = 0;
+    const observe = b.dom.observeRequests;
+    b.dom.observeRequests = () => {
+        const requests = observe();
+        return { ...requests, begin() { begins++; requests.begin(); } };
+    };
+    b.dom.navigationStart = () => { assert.equal(begins, 1); throw new Error('control unavailable'); };
+    b.probe.click(b.control);
+    let facts = b.probe.snapshot();
+    assert.equal(facts.failures, 1); assert.equal(facts.interactions, 0); assert.equal(facts.pendingSamples, 0);
+    b.dom.navigationStart = () => { assert.equal(begins, 2); return { at: b.scheduler.performance.now(), source: 'native-control' }; };
+    b.probe.click(b.control); facts = b.probe.snapshot();
+    assert.equal(facts.recent[0].sequence, 1); assert.equal(facts.recent[0].loading.source, 'native-control');
+    b.probe.dispose(); assert.equal(b.scheduler.timers.size, 0);
 });

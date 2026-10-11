@@ -4,6 +4,14 @@ Updated: 2026-10-11
 
 This file records the code-review findings and the agreed follow-up plan for My List for Netflix. It is a working record; the user authorizes necessary investigation and implementation steps toward stationary recommendation refill without repeated per-step approval; unrelated work remains outside that goal. Current release and remaining work come first. Historical checkpoints follow; later completion records supersede earlier pending-work statements.
 
+## Selected diagnostic-record consolidation — completed
+
+Release **1.9.18** completes the selected third candidate in `recommendations/navigation.js`. One private operation closes the previous record in the selected history, starts request observation, captures interaction details plus generation/seen-ID facts, bounds retention and schedules samples. Arrow/action histories remain independent, with distinct sequence counters and fields, arrow logging and an immediate saved-action sample. Detail capture still follows request-window start; failed arrow detail capture does not consume its sequence. Retirement, bounded timers and export schemas are unchanged.
+
+Direction check: local consolidation gives both callers one owner for shared lifecycle/schema decisions without creating a module or merging their policies. Authored diagnostic source grows from 102 to 105 lines; total runtime grows from 17,395 to 17,398. Generated output changes separately from 21,305 to 21,298 lines. This improves maintenance locality, not net source size. All three selected refactor candidates are complete.
+
+Verification: two added characterization tests pass before and after the refactor, covering interleaved independent histories/limits/samples and request-start/detail-capture failure ordering. Focused real recommendation callers and all **656 tests pass**, plus generated-release/dependency, userscript syntax and whitespace checks. Package/lock and metadata/internal versions agree at 1.9.18. No live Netflix test was performed; the metadata-recovery and recommendation-loader evidence below remains outstanding.
+
 ## Selected initialization-exit simplification — completed
 
 Release **1.9.17** implements the selected second candidate inside `app/my-list-session.js`. One local exit helper captures the exact initialization owner, releases its reconciliation ticket, and applies an optional scheduled or immediate retry. Mutation resumption stays independent of retry mode; native blocked recovery, empty completion, phase diagnostics and grid-replacement cleanup remain at their existing checkpoints. One nullable retry mode replaces the two mutually exclusive retry flags, and the one-use fast-collection retry wrapper is removed. No new module, listener, timer owner or public interface is introduced.

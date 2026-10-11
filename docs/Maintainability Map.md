@@ -2,15 +2,16 @@
 
 ## Current refactor measurements
 
-Release **1.9.17**, 2026-10-11: **53 authored runtime modules, 17,395 readable physical lines**. Counts include comments and blank lines, excluding a final empty line. Restoration extraction in 1.9.16 added 20 lines (17,381 → 17,401); initialization-exit consolidation in 1.9.17 removes six (17,401 → 17,395). These are focused locality/coordination improvements rather than a substantial source reduction. Before/after counts below refer to each module's selected refactor.
+Release **1.9.18**, 2026-10-11: **53 authored runtime modules, 17,398 readable physical lines**. Counts include comments and blank lines, excluding a final empty line. Restoration extraction in 1.9.16 added 20 lines (17,381 → 17,401); initialization-exit consolidation in 1.9.17 removed six (17,401 → 17,395); diagnostic-record consolidation in 1.9.18 adds three (17,395 → 17,398). These are focused locality/coordination improvements rather than a substantial source reduction. Before/after counts below refer to each module's selected refactor.
 
 | Affected module under src/ | Before | After | Responsibility |
 | --- | ---: | ---: | --- |
 | `netflix/carousel/navigation.js` | 1,253 | 829 | Movement queue, acknowledgement, stable-content waits, cancellation and motion leases; composes restoration. |
 | `netflix/carousel/restoration.js` | — | 444 | Private strict/fast restoration, content verification, adjacent phase repair and strict fallback; owns no timers or queue. |
 | `app/my-list-session.js` | 2,681 | 2,675 | Composes page-session transactions; one local initialization exit helper captures exact ticket ownership and applies explicit retry modes. |
+| `recommendations/navigation.js` | 102 | 105 | Passive interaction evidence; shared record creation with independent arrow/action histories and their existing timer/retirement owner. |
 
-Navigation remains over 800 lines because its queue, wait registry, acknowledgement and motion restoration share one resource lifetime. Further partitioning must preserve that ownership rather than distribute cancellation. The selected session change keeps initialization coordination local rather than moving it behind a large callback interface; its other transactions remain outside this step. The generated userscript changes separately from 21,261 (1.9.15) to 21,311 (1.9.16) to 21,305 (1.9.17) lines. The full inventory below remains a historical snapshot and does not describe current module totals.
+Navigation remains over 800 lines because its queue, wait registry, acknowledgement and motion restoration share one resource lifetime. Further partitioning must preserve that ownership rather than distribute cancellation. The selected session change keeps initialization coordination local rather than moving it behind a large callback interface; its other transactions remain outside this step. The generated userscript changes separately from 21,261 (1.9.15) to 21,311 (1.9.16) to 21,305 (1.9.17) to 21,298 (1.9.18) lines. The full inventory below remains a historical snapshot and does not describe current module totals.
 
 ## Historical full inventory
 

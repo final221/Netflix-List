@@ -32,6 +32,16 @@ export function createNavigationDiagnostics({ environment, dom, readChoices, adm
             }, delay); timers.set(timer, record);
         }
     }
+    function recordInteraction(records, closeReason, row, before, captureDetails, initialSample = null) {
+        const previous = records.at(-1); if (previous) close(previous, closeReason);
+        requests ||= dom.observeRequests(); requests.begin();
+        const record = { ...captureDetails(), row, before,
+            owner: generation, seenBefore: new Set(remember(row, before)), samples: [], closed: false };
+        records.push(record); if (records.length > 20) cancel(records.shift());
+        if (initialSample) sample(record, initialSample);
+        schedule(record);
+        return record;
+    }
     function beforeAction(row) {
         try { return admitted() && row ? dom.rowDiagnostics(row, readChoices()) : null; }
         catch (_) { failures++; return null; }
@@ -39,12 +49,8 @@ export function createNavigationDiagnostics({ environment, dom, readChoices, adm
     function savedAction(row, before, action, id) {
         if (!before || !admitted()) return;
         try {
-            const previous = actions.at(-1); if (previous) close(previous, 'before-next-action');
-            requests ||= dom.observeRequests(); requests.begin();
-            const record = { sequence: movementCount, action, id, row, before, loading: { at: now() },
-                owner: generation, seenBefore: new Set(remember(row, before)), samples: [], closed: false };
-            actions.push(record); if (actions.length > 20) cancel(actions.shift());
-            sample(record, 'saved'); schedule(record);
+            recordInteraction(actions, 'before-next-action', row, before,
+                () => ({ sequence: movementCount, action, id, loading: { at: now() } }), 'saved');
         } catch (_) { failures++; }
     }
     function movement(kind, target, detail = {}) {
@@ -68,13 +74,10 @@ export function createNavigationDiagnostics({ environment, dom, readChoices, adm
         try {
             const navigation = dom.navigationTarget(target); if (!navigation) return;
             const before = dom.rowDiagnostics(navigation.row, readChoices()); if (!before) return;
-            const previous = recent.at(-1); if (previous) close(previous, 'before-next-arrow');
-            requests ||= dom.observeRequests(); requests.begin();
-            const loading = dom.navigationStart(navigation.control);
-            const record = { sequence: ++sequence, direction: navigation.direction, row: navigation.row, before, loading,
-                owner: generation, seenBefore: new Set(remember(navigation.row, before)), samples: [], closed: false };
-            recent.push(record); if (recent.length > 20) cancel(recent.shift());
-            schedule(record);
+            const record = recordInteraction(recent, 'before-next-arrow', navigation.row, before, () => {
+                const loading = dom.navigationStart(navigation.control);
+                return { sequence: ++sequence, direction: navigation.direction, loading };
+            });
             log('Native recommendation arrow clicked', { sequence: record.sequence, direction: record.direction, before });
         } catch (_) { failures++; }
     }
