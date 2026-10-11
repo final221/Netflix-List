@@ -6,7 +6,7 @@ import { createList } from '../src/list/list.js';
 import { createHover } from '../src/hover/hover.js';
 import { createDocument, Element, EventTarget } from './helpers/dom.js';
 
-function transactionFixture() {
+function transactionFixture({ mode = 'indicator', ...overrides } = {}) {
     const scheduler = createScheduler(), observers = [];
     const node = () => ({ isConnected: true });
     let state = { section: node(), scroller: node(), track: node(), grid: node(), items: [],
@@ -21,7 +21,7 @@ function transactionFixture() {
         visualViewport:Object.assign(new EventTarget(),{width:100,height:100,scale:1,offsetLeft:0,offsetTop:0}) });
     const carousel = { sample: fn => fn(), assertObservation() {}, isObservationCurrent: () => true };
     let hidden=false,parked=false,needsRemapping=false,geometryLeft=0;
-    const observed = () => ({ layout, mode: 'indicator', position: { pages: pages }, presentation: { hidden, parked },needsRemapping });
+    const observed = () => ({ layout, mode, position: { pages: pages }, presentation: { hidden, parked },needsRemapping });
     const owner = createResponsive({
         acceptLayoutChange: (state, layout) => { state.layout = layout; },
         acceptInitialPage: (state, page) => { state.initialPage = page; },
@@ -38,7 +38,7 @@ function transactionFixture() {
         realignActiveSource() {}, sleep: ms => new Promise(resolve => scheduler.setTimeout(resolve, ms)),
         pageForItem: () => 0, setPageForItem() {}, itemKey: item => item.videoId, copyItemAttributes() {},
         readOriginalVisibility: () => false,
-        log() {}, warn: (_message, detail) => assert.fail(detail.error), trace() {}, tLog: value => value, tUi: value => value });
+        log() {}, warn: (_message, detail) => assert.fail(detail.error), trace() {}, tLog: value => value, tUi: value => value, ...overrides });
     // Native refresh work calls the carousel directly; it has no responsive wait collaborator.
     carousel.refreshMapping = () => { remaps++; return {}; };
     owner.acceptLayout(state.layout);
@@ -48,6 +48,76 @@ function transactionFixture() {
         get remaps() { return remaps; }, change: () => { layout = { ...layout, gridWidth: 110 }; },
         replace: () => { state = { ...state, grid: node(), section: node(), scroller: node(), track: node() }; } };
 }
+
+async function completeRefresh(f) {
+    f.value('columns', 2); f.owner.requestCheck(0, 'publication-test'); await f.scheduler.advance();
+    const stable = f.owner.whenStable(); assert.ok(stable);
+    for (let index = 0; index < 3; index++) await f.scheduler.advance(80);
+    await stable;
+}
+
+test('responsive page publication preserves mode-specific page bounds, clone eligibility and changed counts', async () => {
+    for (const mode of ['indicator', 'logical']) {
+        const hints = new Map(), writes = [], copies = [], logs = [];
+        const f = transactionFixture({ mode,
+            pageForItem: item => hints.get(item),
+            setPageForItem(item, page, parent, { assertCurrent }) {
+                assertCurrent(); assert.equal(parent, f.state); hints.set(item, page); writes.push(item.videoId); assertCurrent();
+            },
+            copyItemAttributes: (clone, item) => { clone.page = hints.get(item); copies.push(item.videoId); },
+            log: (message, detail) => logs.push({ message, detail }) });
+        const items = Array.from({ length: 7 }, (_, index) => Object.freeze({ videoId: String(index + 1) }));
+        f.state.items = items; f.state.itemMap = new Map(items.map(item => [item.videoId, item]));
+        f.state.cloneMap = new Map(items.filter(item => item.videoId !== '3').map(item => [item.videoId, { isConnected: item.videoId !== '2' }]));
+        items.forEach((item, index) => hints.set(item, index === 0 ? 0 : 9));
+        const result = { status: 'committed', knownPageCount: 2, currentPage: 1, countConverged: true };
+        f.carousel.refreshMapping = async ({ assertCurrent }) => { assertCurrent(); return result; };
+        f.carousel.assertMapping = value => assert.equal(value, result);
+        await completeRefresh(f);
+        assert.deepEqual(items.map(item => hints.get(item)), mode === 'logical' ? [0, 0, 1, 1, 1, 1, 1] : [0, 0, 1, 1, 2, 2, 3]);
+        assert.deepEqual(writes, items.map(item => item.videoId)); // Unchanged hints still synchronize attributes.
+        assert.deepEqual(copies, mode === 'logical' ? ['1', '4', '5', '6', '7'] : ['1', '2', '4', '5', '6', '7']);
+        assert.equal(f.state.cloneMap.get('2').page, mode === 'logical' ? undefined : 0);
+        const publication = logs.find(entry => entry.message === 'responsiveItemPageMappingRecalculatedWithoutNativeCarouselScan');
+        assert.equal(publication.detail.changed, 6);
+        assert.equal(f.state.initialPage, mode === 'logical' ? 1 : undefined);
+        assert.equal(f.list.deferralDiagnostics().active.length, 0); assert.equal(f.state.grid.refreshing, false);
+        f.owner.dispose();
+    }
+});
+
+test('publication revalidates its distinct receipt after copying and stops before the next item', async () => {
+    for (const mode of ['indicator', 'logical']) {
+        let retired = false;
+        const writes = [], copies = [], guard = () => { if (retired) throw Object.assign(new Error('retired'), { code: 'CANCELLED' }); };
+        const f = transactionFixture({ mode,
+            setPageForItem(item, _page, _state, { assertCurrent }) { assertCurrent(); writes.push(item.videoId); },
+            copyItemAttributes: (_clone, item) => { copies.push(item.videoId); retired = true; } });
+        f.state.items = [Object.freeze({ videoId: '1' }), Object.freeze({ videoId: '2' })];
+        f.state.cloneMap = new Map(f.state.items.map(item => [item.videoId, { isConnected: true }]));
+        f.carousel.assertMapping = guard;
+        if (mode === 'indicator') f.carousel.assertObservation = guard;
+        f.carousel.refreshMapping = async () => ({ status: 'committed', knownPageCount: 2, currentPage: 1 });
+        await completeRefresh(f);
+        assert.deepEqual(writes, ['1']); assert.deepEqual(copies, ['1']);
+        assert.equal(f.state.initialPage, undefined);
+        assert.equal(f.list.deferralDiagnostics().active.length, 0); assert.equal(f.state.grid.refreshing, false);
+        f.owner.dispose();
+    }
+});
+
+test('deferred logical mapping publishes no page hints, clone attributes or initial page', async () => {
+    const writes = [], copies = [];
+    const f = transactionFixture({ mode: 'logical', setPageForItem: item => writes.push(item), copyItemAttributes: clone => copies.push(clone) });
+    f.state.items = [Object.freeze({ videoId: '1' })];
+    f.state.cloneMap = new Map([['1', { isConnected: true }]]);
+    f.carousel.refreshMapping = async () => ({ status: 'deferred', countConverged: false });
+    f.carousel.assertMapping = () => {};
+    await completeRefresh(f);
+    assert.deepEqual(writes, []); assert.deepEqual(copies, []); assert.equal(f.state.initialPage, undefined);
+    assert.equal(f.list.deferralDiagnostics().active.length, 0);
+    f.owner.dispose();
+});
 
 test('public checks coalesce, preserve unchanged hover and expose stability only during a real transaction', async () => {
     const f = transactionFixture();

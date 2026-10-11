@@ -2,7 +2,7 @@
 
 ## Current refactor measurements
 
-Release **1.9.20**, 2026-10-11: **54 authored runtime modules, 17,425 readable physical lines**. Counts include comments and blank lines, excluding a final empty line. Restoration extraction in 1.9.16 added 20 lines (17,381 → 17,401); initialization-exit consolidation in 1.9.17 removed six (17,401 → 17,395); diagnostic-record consolidation in 1.9.18 added three (17,395 → 17,398); recommendation-row sampling in 1.9.19 left the total unchanged; saved-panel ownership in 1.9.20 adds 27 (17,398 → 17,425). These are focused locality/coordination improvements rather than a substantial source reduction. Before/after counts below refer to each module's selected refactor.
+Release **1.9.21**, 2026-10-11: **54 authored runtime modules, 17,424 readable physical lines**. Counts include comments and blank lines, excluding a final empty line. Restoration extraction in 1.9.16 added 20 lines (17,381 → 17,401); initialization-exit consolidation in 1.9.17 removed six (17,401 → 17,395); diagnostic-record consolidation in 1.9.18 added three (17,395 → 17,398); recommendation-row sampling in 1.9.19 left the total unchanged; saved-panel ownership in 1.9.20 added 27 (17,398 → 17,425); responsive page-hint publication in 1.9.21 removes one (17,425 → 17,424). These are focused locality/coordination improvements rather than a substantial source reduction. Before/after counts below refer to each module's selected refactor.
 
 | Affected module under src/ | Before | After | Responsibility |
 | --- | ---: | ---: | --- |
@@ -13,8 +13,9 @@ Release **1.9.20**, 2026-10-11: **54 authored runtime modules, 17,425 readable p
 | `netflix/recommendation-dom.js` | 389 | 389 | Native recommendation DOM/leases and passive evidence; one private row sample shares visibility and geometry facts between refill and diagnostics. |
 | `recommendations/recommendations.js` | 288 | 241 | Browsing composition, storage, metadata, native card leases and delegated input admission; supplies semantic panel facts and consumes captured commands. |
 | `recommendations/saved-choices-panel.js` | — | 74 | Private saved-choice DOM/styles, grouping, open/close/focus, button identity and explicit Escape listener lifetime. |
+| `app/responsive.js` | 594 | 593 | Complete responsive transaction; one local page-hint publication loop with caller-owned mapping/observation admission and clone policy. |
 
-Navigation remains over 800 lines because its queue, wait registry, acknowledgement and motion restoration share one resource lifetime. Further partitioning must preserve that ownership rather than distribute cancellation. The selected session change keeps initialization coordination local rather than moving it behind a large callback interface; its other transactions remain outside this step. The generated userscript changes separately from 21,261 (1.9.15) to 21,311 (1.9.16) to 21,305 (1.9.17) to 21,298 (1.9.18) to 21,304 (1.9.19) to 21,341 (1.9.20) lines. The full inventory below remains a historical snapshot and does not describe current module totals.
+Navigation remains over 800 lines because its queue, wait registry, acknowledgement and motion restoration share one resource lifetime. Further partitioning must preserve that ownership rather than distribute cancellation. The selected session change keeps initialization coordination local rather than moving it behind a large callback interface; its other transactions remain outside this step. The generated userscript changes separately from 21,261 (1.9.15) to 21,311 (1.9.16) to 21,305 (1.9.17) to 21,298 (1.9.18) to 21,304 (1.9.19) to 21,341 (1.9.20) to 21,352 (1.9.21) lines. The full inventory below remains a historical snapshot and does not describe current module totals.
 
 ## Historical full inventory
 

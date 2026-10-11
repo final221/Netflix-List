@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.20
+// @version      1.9.21
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -127,6 +127,19 @@
       assertRouteSession(sessionToken);
       return latest;
     }
+    function publishPageHints({ state, items, cloneMap, columns, pages, assertCurrent, connectedClonesOnly = false }) {
+      let changed = 0;
+      items.forEach((item, index) => {
+        assertCurrent();
+        const page = Math.min(pages - 1, Math.floor(index / columns));
+        if (pageForItem(item) !== page) changed++;
+        setPageForItem(item, page, state, { assertCurrent });
+        const clone = cloneMap?.get(itemKey(item));
+        if (clone && (!connectedClonesOnly || clone.isConnected)) copyItemAttributes(clone, item);
+        assertCurrent();
+      });
+      return changed;
+    }
     async function rebuildLogicalPageModelFromNativePosition(layout, reason = "responsive-remap", sessionToken = readSessionToken()) {
       assertRouteSession(sessionToken);
       const live = ensureLiveNativeBinding("logical-page-model-rebuild-start") || readState();
@@ -168,15 +181,14 @@
       if (result.countConverged) myListCountConvergencePending = false;
       if (result.status !== "committed") return null;
       return nativeCarousel.sample(() => {
-        let changed = 0;
-        items.forEach((item, index) => {
-          assertPublication();
-          const page = Math.min(result.knownPageCount - 1, Math.floor(index / columns));
-          if (pageForItem(item) !== page) changed++;
-          setPageForItem(item, page, state, { assertCurrent: assertPublication });
-          const clone = cloneMap?.get(itemKey(item));
-          if (clone?.isConnected) copyItemAttributes(clone, item);
-          assertPublication();
+        const changed = publishPageHints({
+          state,
+          items,
+          cloneMap,
+          columns,
+          pages: result.knownPageCount,
+          assertCurrent: assertPublication,
+          connectedClonesOnly: true
         });
         assertPublication();
         acceptInitialPage(state, result.currentPage);
@@ -209,14 +221,13 @@
       if (logicalMode) {
         changed = await rebuildLogicalPageModelFromNativePosition(layout, "responsive-remap", sessionToken);
       } else {
-        nativeCarousel.sample(() => items.forEach((item, index) => {
-          nativeCarousel.assertObservation(runtime);
-          const page = Math.min(pages - 1, Math.floor(index / columns));
-          if (pageForItem(item) !== page) changed++;
-          setPageForItem(item, page, state, { assertCurrent: () => nativeCarousel.assertObservation(runtime) });
-          const clone = cloneMap?.get(itemKey(item));
-          if (clone) copyItemAttributes(clone, item);
-          nativeCarousel.assertObservation(runtime);
+        changed = nativeCarousel.sample(() => publishPageHints({
+          state,
+          items,
+          cloneMap,
+          columns,
+          pages,
+          assertCurrent: () => nativeCarousel.assertObservation(runtime)
         }));
       }
       const updatedRuntime = nativeSourceObservation(state);
@@ -21329,7 +21340,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.20";
+  var SCRIPT_VERSION = "1.9.21";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
