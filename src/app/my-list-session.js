@@ -2190,6 +2190,12 @@ export function createMyListSession({ environment = globalThis, version, context
         let fastCollection = null;
         let fastCollectionSource = 'graphql';
         const entryParent = sourceState;
+        function finishInitialization({ resume = true, retry = null } = {}) {
+            clearRunningSession(sessionToken, resume, initializationOwner);
+            if (!isRouteSessionActive(sessionToken)) return;
+            if (retry === 'scheduled') scheduleRun(0, sessionToken);
+            else if (retry === 'immediate') runScript(sessionToken);
+        }
         function blockFailure(error, stage, timeoutMs, totalCount) {
             blockedInitialization = { sessionToken };
             reportInitializationFailure(error, { stage: error?.stage || stage,
@@ -2208,11 +2214,10 @@ export function createMyListSession({ environment = globalThis, version, context
                 });
             } catch (error) {
                 if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
-                clearRunningSession(sessionToken, false, initializationOwner);
-                if (isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
+                finishInitialization({ resume: false, retry: 'scheduled' });
                 return;
             }
-            clearRunningSession(sessionToken, true, initializationOwner);
+            finishInitialization();
         }
         try {
             entryCollection = await listView.prepareEntry({ entryKind: targetSessionEntryKind, sessionToken,
@@ -2235,14 +2240,13 @@ export function createMyListSession({ environment = globalThis, version, context
         } catch (error) {
             if (error?.code === 'NATIVE_SOURCE_REPLACED') {
                 log('Initial native card observation discarded after source replacement', { sessionToken });
-                clearRunningSession(sessionToken, false, initializationOwner);
-                scheduleRun(0, sessionToken);
+                finishInitialization({ resume: false, retry: 'scheduled' });
                 return;
             }
             if (!isRouteSessionCancelledError(error)) {
                 blockFailure(error, 'total-count-detection', TOTAL_COUNT_TIMEOUT_MS, null);
             }
-            clearRunningSession(sessionToken, true, initializationOwner);
+            finishInitialization();
             return;
         }
         if (earlyTotalCount === 0) return finishEmpty('totalCount-0');
@@ -2258,7 +2262,7 @@ export function createMyListSession({ environment = globalThis, version, context
                 if (!isRouteSessionCancelledError(error)) {
                     warn(tLog('nativeSourceWaitFailed'), error);
                 }
-                clearRunningSession(sessionToken, true, initializationOwner);
+                finishInitialization();
                 return;
             }
             assertRouteSession(sessionToken);
@@ -2268,8 +2272,7 @@ export function createMyListSession({ environment = globalThis, version, context
                 nativeCarousel.clearBinding();
                 publishSourceState(null);
                 completedSection = null;
-                clearRunningSession(sessionToken, true, initializationOwner);
-                scheduleRun(0, sessionToken);
+                finishInitialization({ retry: 'scheduled' });
                 return;
             }
             if (!sourceWait.found) {
@@ -2284,7 +2287,7 @@ export function createMyListSession({ environment = globalThis, version, context
                     details: error.details || null,
                 });
                 updateStatus(formatInitializationErrorMeta(error, earlyTotalCount));
-                clearRunningSession(sessionToken, false, initializationOwner);
+                finishInitialization({ resume: false });
                 recoverNativeInitialization(sessionToken, 'native-source-wait');
                 return;
             }
@@ -2302,19 +2305,19 @@ export function createMyListSession({ environment = globalThis, version, context
                 waitForNativeCarouselReady(section, scroller, track, sessionToken, options));
         } catch (error) {
             if (error?.code === 'NATIVE_SOURCE_REPLACED') {
-                clearRunningSession(sessionToken, false, initializationOwner);
+                finishInitialization({ resume: false });
                 recoverNativeInitialization(sessionToken, 'readiness-source-replaced');
                 return;
             }
             if (!isRouteSessionCancelledError(error)) {
                 warn(tLog('nativeCarouselReadinessCheckFailed'), error);
             }
-            clearRunningSession(sessionToken, true, initializationOwner);
+            finishInitialization();
             return;
         }
         if (!readiness.ready) {
             blockedInitialization = { sessionToken, native: { section, scroller, track, sessionToken } };
-            clearRunningSession(sessionToken, false, initializationOwner);
+            finishInitialization({ resume: false });
             if (recoverNativeInitialization(sessionToken, 'readiness-' + readiness.reason)) return;
             const readinessError = readiness.reason === 'timeout'
                 ? initializationTimeoutError(readiness.stage || 'native-carousel-readiness', readiness.timeoutMs || NATIVE_READY_TIMEOUT_MS, {
@@ -2346,7 +2349,7 @@ export function createMyListSession({ environment = globalThis, version, context
                 if (!isRouteSessionCancelledError(error)) {
                     blockFailure(error, 'normalize-native-page-zero', null, earlyTotalCount);
                 }
-                clearRunningSession(sessionToken, true, initializationOwner);
+                finishInitialization();
                 return;
             }
         }
@@ -2378,24 +2381,19 @@ export function createMyListSession({ environment = globalThis, version, context
                 }
             } catch (error) {
                 if (error?.code === 'NATIVE_SOURCE_REPLACED' || sourceState !== countOwner) {
-                    clearRunningSession(sessionToken, false, initializationOwner);
+                    finishInitialization({ resume: false });
                     if (!recoverNativeInitialization(sessionToken, 'native-count-source-replaced')) scheduleRun(0, sessionToken);
                     return;
                 }
                 if (!isRouteSessionCancelledError(error)) {
                     blockFailure(error, 'native-react-total-count', null, earlyTotalCount);
                 }
-                clearRunningSession(sessionToken, true, initializationOwner);
+                finishInitialization();
                 return;
             }
         }
 
         {
-            const retryReplacedSource = () => {
-                log('Fast My List collection discarded after native source replacement', { sessionToken });
-                clearRunningSession(sessionToken, false, initializationOwner);
-                scheduleRun(0, sessionToken);
-            };
             let graphqlGeometry, graphqlLayout, templateView;
             try {
                 const preferred = await listView.preparePreferred({ mode: mountedMode, bootstrap: freshMyListBootstrap,
@@ -2440,11 +2438,12 @@ export function createMyListSession({ environment = globalThis, version, context
                 fastCollectionSource = preferred.collectionSource || 'graphql';
             } catch (error) {
                 if (isRouteSessionCancelledError(error)) {
-                    clearRunningSession(sessionToken, true, initializationOwner);
+                    finishInitialization();
                     return;
                 }
                 if (error?.code === 'NATIVE_SOURCE_REPLACED' || !nativeCarousel.isPreparationCurrent(readiness)) {
-                    retryReplacedSource();
+                    log('Fast My List collection discarded after native source replacement', { sessionToken });
+                    finishInitialization({ resume: false, retry: 'scheduled' });
                     return;
                 }
                 fastCollection = null;
@@ -2471,8 +2470,7 @@ export function createMyListSession({ environment = globalThis, version, context
             carouselDom: initializationNative?.carouselDom ?? null
         });
 
-        let retryGridBuild = false;
-        let retryNativeCollection = false;
+        let initializationRetry = null;
         try {
             const layoutObservation = nativeLayoutObservation(section, scroller, track);
             const layout = { ...layoutObservation.layout, rowGap: measureNativeCarouselGap(section) };
@@ -2615,25 +2613,21 @@ export function createMyListSession({ environment = globalThis, version, context
                 });
             } else if (error?.code === 'NATIVE_SOURCE_REPLACED') {
                 log('Native collection discarded after source replacement', { sessionToken });
-                retryNativeCollection = true;
+                initializationRetry = 'scheduled';
             } else if (error?.code === 'GRID_BUILD_SOURCE_REPLACED') {
                 log('Grid construction discarded after native source replacement', { sessionToken });
                 cleanupTargetSessionDom();
                 nativeCarousel.clearBinding();
                 publishSourceState(null);
                 completedSection = null;
-                retryGridBuild = true;
+                initializationRetry = 'immediate';
             } else {
                 blockFailure(error, null, null, earlyTotalCount);
             }
         } finally {
             // Keep queued deltas deferred until the replacement source has a
             // complete grid, rather than applying them to an incomplete frame.
-            clearRunningSession(sessionToken, !retryGridBuild && !retryNativeCollection, initializationOwner);
-            if (isRouteSessionActive(sessionToken)) {
-                if (retryNativeCollection) scheduleRun(0, sessionToken);
-                else if (retryGridBuild) runScript(sessionToken);
-            }
+            finishInitialization({ resume: !initializationRetry, retry: initializationRetry });
         }
     }
 

@@ -124,6 +124,52 @@ test('real session initialization defers a native click until accepted membershi
     assert.deepEqual(e.cardIds(), ['1','2','4','5','6','7','8','9','10','11','12']); e.dispose();
 });
 
+test('real session collection replacement retries without publishing partial membership or applying an obsolete click', async () => {
+    const e = sessionBrowser({ count: 12 });
+    const log = e.context.console.log; let replaced = false;
+    e.context.console.log = (...args) => {
+        log(...args);
+        if (!replaced && args[1] === 'Full collection result finalized') {
+            replaced = true; e.click('3'); e.replaceTrack();
+            assert.deepEqual(e.cardIds(), [], 'replacement has no accepted grid yet');
+        }
+    };
+    await e.start();
+    await e.drain(() => !e.app.diagnostics().currentSession.running && e.cardIds().length === 12);
+    assert.equal(replaced, true);
+    assert.ok(e.logs.some(row => row[1] === 'Native collection discarded after source replacement'));
+    assert.equal(e.app.diagnostics().currentSession.running, false);
+    assert.deepEqual(e.cardIds(), ['1','2','3','4','5','6','7','8','9','10','11','12']);
+    e.click('3'); await e.drain(() => !e.cardIds().includes('3'));
+    assert.deepEqual(e.cardIds(), ['1','2','4','5','6','7','8','9','10','11','12']);
+    e.dispose();
+    assert.equal(e.scheduler.timers.size, 0); assert.equal(e.scheduler.frames.size, 0);
+});
+
+test('real session source replacement during grid staging restarts with a complete grid and usable membership controls', async () => {
+    const e = sessionBrowser({ count: 12 });
+    const create = e.document.createElement; let replaced = false;
+    e.document.createElement = tag => {
+        const node = create(tag), append = node.appendChild.bind(node);
+        node.appendChild = child => {
+            const result = append(child);
+            if (!replaced && node.id === 'tm-netflix-mylist-v15-grid' && !node.isConnected && child.getAttribute('data-tm-item-video-id') !== null) {
+                replaced = true; e.replaceTrack();
+                assert.deepEqual(e.cardIds(), [], 'staged cards cannot publish against the retired source');
+            }
+            return result;
+        };
+        return node;
+    };
+    e.app.start(); await e.drain(() => e.app.diagnostics().currentSession.completed && !e.app.diagnostics().currentSession.running && e.cardIds().length === 12);
+    assert.equal(replaced, true);
+    assert.ok(e.logs.some(row => row[1] === 'Grid construction discarded after native source replacement'));
+    assert.deepEqual(e.cardIds(), ['1','2','3','4','5','6','7','8','9','10','11','12']);
+    e.click('3'); await e.drain(() => !e.cardIds().includes('3'));
+    assert.deepEqual(e.cardIds(), ['1','2','4','5','6','7','8','9','10','11','12']);
+    e.dispose(); assert.equal(e.scheduler.timers.size, 0); assert.equal(e.scheduler.frames.size, 0);
+});
+
 test('real session responsive transaction defers membership then releases its exact pending action',async()=>{
     const e=sessionBrowser({count:12});await e.start();
     e.resize(3,300);await e.scheduler.advance(140);
