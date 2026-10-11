@@ -95,3 +95,18 @@ test('timing-only GraphQL facts distinguish another origin while omitting query 
     assert.deepEqual(facts.entries[0].queryKeys, ['operationName', 'variables']);
     assert.doesNotMatch(JSON.stringify(facts), /secret|api\.netflix|auth/);
 });
+
+
+test('loader survey reads late hooks and nested pagination contexts without getters or private string values', () => {
+    let calls = 0;
+    const params = { name: 'CarouselPaginationQuery', operationKind: 'query', authToken: 'secret' };
+    const relay = { environment: { fragment: { params, variables: { cursor: 'secret', first: 14 } } }, pagination: { loadNext() { calls++; }, hasNext: true } };
+    Object.defineProperty(relay.environment, 'fetchData', { enumerable: true, get() { calls++; throw Error('getter'); } });
+    let state = { memoizedState: [() => {}, [relay]], next: null };
+    for (let i = 0; i < 20; i++) state = { memoizedState: 0, next: state };
+    const control = { __reactFiber$test: { memoizedProps: {}, memoizedState: state,
+        dependencies: { firstContext: { memoizedValue: relay, next: null } }, return: null } };
+    const facts = createRecommendationDom({ location }).navigationStart(control), text = JSON.stringify(facts);
+    assert.equal(calls, 0); assert.match(text, /hookState:20/); assert.match(text, /loadNext/);
+    assert.match(text, /CarouselPaginationQuery/); assert.doesNotMatch(text, /secret|authToken/);
+});

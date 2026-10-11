@@ -4,20 +4,19 @@
 
 Historical originals at8ca0de7ea22f3f5b7a0bdeadb6b091bfb9161d46, logs/<version>.txt;dates/environment/measurements at98e1266. .53 routeSessionToken ReferenceError;.54 mapping changed;.67/.69 fallback500;.70 cached9/live500 mismatch. Lifecycle/Undo/popup unverified.
 
+Historical1.4.64–1.4.70 source filenames, copiedAt/environment and SHA256: logs/knowledge.md at98d3c46 (summary revision, not runtime).
+
 ## Session — 1.4.64
 
-Uncommitted `Textdokument (neu).txt`/441events; SHA256 49d6878b560064696d58960aaabc19a8d33be992d2e4fd419a24105980b9812c. CopiedAt 2026-10-08T16:54:09.828+02:00, Windows/Firefox157/English/2560×1279/DPR1; runtime ref unknown.
+441events;Windows/Firefox157/English/2560×1279/DPR1;runtime unknown.
 
 ## Sessions — 1.4.67 and 1.4.69
 
-- 1.4.67 `logs/1.4.67.txt`, copiedAt 2026-10-09T21:03:29.768+02:00; SHA256 c8ee99038d4dff562649055aa2c342987861a19ce573ad419cb8723ab7d7189b. Compact659/48types;40groups/2sections omitted.
-- 1.4.69 `logs/1.4.69.txt`, 2026-10-09T22:28:47.012+02:00; SHA256 ad3bf51f611d47927db061468f0dc83e4f4e311f7f2d418189e28b90fe749da3. Compact650/67groups/49names;no groups omitted/28examples omitted.
-- 1.4.69 `logs/Textdokument (neu).txt`, 2026-10-09T22:34:04.461+02:00/694events; SHA256 eeafdbe078b7b497463dc28df25f1deb11d1a1f99ac4f1dc433575ae690699ec. Same startup/650events;page65=340ms.
+.67 compact659/48types;40groups/2sections omitted. .69 compact650/67groups/49names;no groups omitted/28examples omitted;later694events,same startup650/page65=340ms.
 
 ## Session — 1.4.70
 
-Uncommitted `logs/Textdokument (neu).txt`: SHA256 0fb1b1282449390cbf73f7f20342dc6c9449a6a09c83b63b40bdc67063ded4f9. copiedAt 2026-10-09T23:04:59.936+02:00, same environment as1.4.69; runtime unknown. Compact278/39names/no groups omitted/25examples omitted.
-- Later detailed `logs/Textdokument (neu).txt`, 2026-10-09T23:58:29.467+02:00/509 events/46 names, SHA256 aa4260fed0fe075e7d0e6262b10839377b79055dcc11a2913163e1f3232dd727; new initial-MyList session;init8282/native7521ms;500/72pages/not stale;two fallback warnings,no error.
+Compact278/39names/no groups omitted/25examples omitted. Later detailed509events/46names;new initial MyList;init8282/native7521ms;500/72pages/not stale;two fallback warnings/no error.
 
 For 1.9.x: `version/suffix` identifies uncommitted `logs/<version>-2026-10-10T<suffix>.txt`; capture times are 2026-10-10 UTC+02. Windows/Firefox157/English/2560×1279/DPR1/homepage; runtime refs unknown.
 
@@ -77,11 +76,18 @@ Same visit:0→7arrows/6watched actions/89→162movements/no drops or diagnostic
 
 ## Session — 1.9.13
 
-Three detailed captures, 2026-10-11 UTC+02;Windows/Firefox157/2560×1279/DPR1;runtime ref unknown. Uncommitted logs/ sources:
-- 1.9.13-2026-10-10T23-49-07-974Z-fcaa07eb.txt; 2026-10-11T01:49:07.973+02:00; SHA256 1146840aa1c104ec087035bf0ab4717cd06b0cdf20851f9ebea65cd407e1a3c0.
-- 1.9.13-2026-10-10T23-49-17-922Z-6a949035.txt; 2026-10-11T01:49:17.919+02:00; SHA256 980012f7548d689c1a190c4c896a31ad309469da4cbc0da7c01877bbe7852870.
-- 1.9.13-2026-10-10T23-49-25-948Z-847ac05f.txt; 2026-10-11T01:49:25.944+02:00; SHA256 e31065fdd2ee77a7aeeb327350039813297b940ac78dadf6b3c879573cc20f0c.
+Three detailed captures, 2026-10-11 UTC+02;Windows/Firefox157/2560×1279/DPR1;runtime ref unknown. Sources/copiedAt/SHA256 retained at98d3c46:logs/knowledge.md (summary revision, not runtime; originals uncommitted).
 Same visit/baseline+2next arrows;no saved actions. Row6:13→25→26mounted;first arrow4/12/12first-observed at200/1200/5000ms;second0/8(final timer pending). Arrow[2460,284,100,199]/right2560/rgba37,.32;edge2559hit inside. Two GraphQL timings+3/+116ms;wrapper4intercepted/0GraphQL. Hook dependencies only shallow shapes. Viewing170→177checked/87→93requests;three series(81663323,81969861,81171925) lack coverage after3attempts/0pending;field rejection unspecified. No warnings/dropped movements;compact mode, saved-action outcomes and independent preload untested.
+
+## Session — 1.9.14
+
+Five detailed exports, Windows/Firefox157/2560×1279/DPR1;2026-10-11 UTC+02;runtime ref unknown. Uncommitted logs/ sources:
+- 1.9.14-2026-10-11T00-02-41-771Z-935bebb5.txt; 2026-10-11T02:02:41.769+02:00; SHA256 64344e92e51cea8d383a1e387799c1c87ead855dc181d48c75913a573fdb83e3.
+- 1.9.14-2026-10-11T00-02-59-769Z-83123b9e.txt; 2026-10-11T02:02:59.766+02:00; SHA256 e0bb51048fd468543f6d2097e9b5e8ac45f165589db87b67ca2c25f38a4090e1.
+- 1.9.14-2026-10-11T00-03-12-129Z-560fc701.txt; 2026-10-11T02:03:12.126+02:00; SHA256 bf6bfe71fe564bc20177f7c2fa4e2e50bda2b655e71377523ece06ea422ffc27.
+- 1.9.14-2026-10-11T00-03-39-403Z-598583a1.txt; 2026-10-11T02:03:39.393+02:00; SHA256 ee04689537e6cd1291942b108bd9273494348aaec35a18de19550ca734beafda.
+- 1.9.14-2026-10-11T00-03-45-634Z-0f8dbb30.txt; 2026-10-11T02:03:45.621+02:00; SHA256 86895f8d0c8ed51f4d76700d0ce49722b4f8f361dfb9c1f717494bb76a6e7621.
+Baseline+10arrows/no saved actions/warnings;174→200checked/76→93requests/0pending. Three failures after3attempts:episode-count-mismatch/headline26/partial season sum27;declared seasons2,2,3;full sums and independent list lengths unrecorded. Probe2response hooks/8text reads/0fetch GraphQL;4paired connections+entity responses. Movie row reports150/14items/hasNext:true twice;period row36/14/true then36/9/false, followed by6arrows/no responses and novel counts2,0,0,0,0,0. Returned entity IDs intersect clicked row12/14,6/14,12/14,6/9;time-window association, not causal proof. Compact, caught-up correction and independent preloading untested.
 
 ## Evidence limits
 

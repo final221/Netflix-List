@@ -11,7 +11,7 @@ export function createRecommendationRequests(environment) {
             const [value, path, depth] = queue.shift();
             if (!value || typeof value !== 'object' || depth > 8) continue;
             if (Array.isArray(value)) {
-                const ids = value.slice(0, 16).map(item => item?.videoId || item?.id || item?.node?.videoId || item?.node?.id || item?.video?.id)
+                const ids = value.slice(0, 16).map(item => item?.videoId || item?.id || item?.node?.videoId || item?.node?.unifiedEntity?.videoId || item?.node?.id || item?.video?.id)
                     .map(String).filter(id => /^\d+$/.test(id));
                 if (collections.length < 12) collections.push({ path, length: value.length, ids, idsTruncated: value.length > 16,
                     itemKeys: value[0] && typeof value[0] === 'object' ? Object.keys(value[0]).slice(0, 12) : [] });
@@ -25,7 +25,14 @@ export function createRecommendationRequests(environment) {
                 if (child && typeof child === 'object') queue.push([child, next, depth + 1]);
             }
         }
-        return { collections, pagination, traversalTruncated: queue.length > 0 };
+        const connection = root?.data?.node?.entities;
+        const pageInfo = connection?.pageInfo;
+        return { collections, pagination, traversalTruncated: queue.length > 0,
+            ...(connection && typeof pageInfo?.hasNextPage === 'boolean' ? { serverPage: {
+                hasNextPage: pageInfo.hasNextPage, exhausted: !pageInfo.hasNextPage,
+                totalCount: Number.isSafeInteger(connection.totalCount) && connection.totalCount >= 0 ? connection.totalCount : null,
+                returnedItems: Array.isArray(connection.edges) ? connection.edges.length : null,
+                attribution: 'response-connection; row match not established' } } : {}) };
     }
     async function inspect(response, record) {
         let reader;

@@ -843,7 +843,7 @@ test('viewing coverage distinguishes absent counts from contradictory, incomplet
     graph.videos[1].seasonList[0] = ['seasons', '10'];
     assert.equal((await read())[0].expected, 2, 'array season references retain their namespace interpretation');
     graph.videos[1].seasonList[0] = reference('seasons', 10);
-    for (const record of [{ ...base, episodeCount: 3 }, { ...base, seasonCount: NaN },
+    for (const record of [{ ...base, seasonCount: NaN },
         { ...base, episodeCount: NaN }, { ...base, seasonCount: 2 }, { ...base, episodeCount: 501 }]) {
         assert.deepEqual(await read(record), []);
     }
@@ -894,7 +894,7 @@ test('missing season and episode totals require an explicit complete season-list
     assert.equal(plan.expected, 2);
     assert.equal(plan.seasons.length, 1);
     assert.equal(plan.seasons[0].count, 2);
-    for (const [seasonCount, episodeCount] of [[NaN, null], [1, NaN], [0, null], [41, null], [1, 501], [1, 3]]) {
+    for (const [seasonCount, episodeCount] of [[NaN, null], [1, NaN], [0, null], [41, null], [1, 501]]) {
         assert.deepEqual(await read({ ...missingCounts, seasonCount, episodeCount }), []);
     }
     graph.videos[4].seasonList[1] = reference('seasons', '50');
@@ -963,4 +963,22 @@ test('series coverage failures identify the exact rejected metadata and clear on
     assert.equal((await e.data.readSeasons([record], access, e.owner)).length, 1); assert.equal(e.data.coverageDiagnostic('1'), null);
     e.responses.push({ graph: {} }); await e.data.readSeasons(Array.from({ length: 40 }, (_, i) => ({ ...record, videoId: String(i) })), access, e.owner);
     assert.equal(e.data.coverageDiagnostic('0'), null); assert.equal(e.data.coverageDiagnostic('39').reason, 'season-list-missing');
+});
+
+
+test('independently complete seasons normalize stale aggregate episode counts without accepting incomplete coverage', async () => {
+    const e = viewingDataEnvironment(), access = e.data.beginRead(), record = { videoId: '1', seasonCount: 2, episodeCount: 26 };
+    const graph = { videos: { 1: { seasonList: { length: atom(2), 0: reference('seasons', 10), 1: reference('seasons', 11) } } },
+        seasons: { 10: { length: atom(13) }, 11: { length: atom(14) } } };
+    const read = async () => { e.responses.push({ graph }); return e.data.readSeasons([record], access, e.owner); };
+    const [plan] = await read(); assert.equal(plan.expected, 27); assert.equal(plan.seasons.length, 2);
+    assert.deepEqual(e.data.coverageDiagnostic('1'), { reason: 'episode-count-adjusted', seasonCount: 2, episodeCount: 26, total: 27, verifiedSeasonCount: 2 });
+    assert.deepEqual(e.data.coverageDiagnostics()[0], { id: '1', ...e.data.coverageDiagnostic('1') });
+    assert.ok(e.requests[0].paths.some(path => JSON.stringify(path) === JSON.stringify(['videos', '1', 'seasonList', 'length'])));
+    delete graph.videos[1].seasonList.length; assert.deepEqual(await read(), []);
+    assert.equal(e.data.coverageDiagnostic('1').reason, 'episode-count-mismatch');
+    graph.videos[1].seasonList.length = atom(3); assert.deepEqual(await read(), []);
+    assert.equal(e.data.coverageDiagnostic('1').reason, 'season-list-count-mismatch');
+    graph.videos[1].seasonList.length = atom(2); delete graph.seasons[11].length; assert.deepEqual(await read(), []);
+    assert.equal(e.data.coverageDiagnostic('1').reason, 'season-length-missing');
 });

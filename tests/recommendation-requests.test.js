@@ -103,3 +103,15 @@ test('text response evidence copies pagination and respects its size bound witho
     assert.equal(probe.read().dropped, 1); assert.equal(probe.read().records.length, 1);
     probe.dispose(); assert.equal(PageResponse.prototype.text, original);
 });
+
+
+test('native connection summaries distinguish exhaustion and copy edge video IDs', async () => {
+    const payload = { data: { node: { entities: { totalCount: 36, edges: [{ node: { unifiedEntity: { videoId: 123 } }, cursor: 'secret' }], pageInfo: { hasNextPage: false } } } } };
+    class PageResponse { constructor() { this.url = 'https://www.netflix.com/graphql'; } text() { return Promise.resolve(JSON.stringify(payload)); } }
+    const env = { Response: PageResponse, location: { href: 'https://www.netflix.com/browse', origin: 'https://www.netflix.com' }, performance: { now: () => 10 } };
+    const probe = createRecommendationRequests(env); probe.begin(); await new PageResponse().text(); await Promise.resolve();
+    const facts = probe.read().records[0].response; assert.equal(facts.serverPage.exhausted, true);
+    assert.equal(facts.serverPage.totalCount, 36); assert.equal(facts.serverPage.returnedItems, 1);
+    assert.deepEqual(facts.collections.find(x => x.path.endsWith('edges')).ids, ['123']);
+    assert.doesNotMatch(JSON.stringify(facts), /secret/); probe.dispose();
+});

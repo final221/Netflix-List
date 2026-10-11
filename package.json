@@ -1,6 +1,6 @@
 {
   "name": "netflix-my-list-grid",
-  "version": "1.9.14",
+  "version": "1.9.15",
   "private": true,
   "description": "Tampermonkey grid for Netflix My List",
   "license": "MIT",

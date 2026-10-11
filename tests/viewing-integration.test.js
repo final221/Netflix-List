@@ -1988,7 +1988,9 @@ test('500 long series use 500 finale records and 30 bounded requests instead of 
     const episodePaths = e.requests.filter(request => request.paths[0][0] === 'seasons').flatMap(request => request.paths);
     assert.equal(episodePaths.length, 500);
     assert.ok(episodePaths.every(path => path[3].from === 499 && path[3].to === 499));
-    assert.ok(e.requests.filter(request => request.paths[0][2] === 'seasonList').every(request => request.paths.length <= 50));
+    // Each title now requests its independent list length alongside season metadata, in the same HTTP batch.
+    assert.ok(e.requests.filter(request => request.paths[0][2] === 'seasonList').every(request =>
+        request.paths.length <= 100 && new Set(request.paths.map(path => path[1])).size <= 50));
     const details = e.logs.find(entry => entry.details?.series)?.details;
     assert.equal(details.series.episodesChecked, 500);
     assert.equal(details.series.pending, 0);

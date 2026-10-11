@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.14
+// @version      1.9.15
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -8027,7 +8027,7 @@ ${CARD_ACTION_STYLES}
   function createViewingData({ context, fetch, createCancelledError }) {
     const limits = Object.freeze({ titleBatch: 50, episodeBatch: 200, seasons: 40, episodes: 500 });
     const VIEWING_MAX_SEASONS = limits.seasons, VIEWING_MAX_EPISODES = limits.episodes;
-    const credentials = /* @__PURE__ */ new WeakMap(), seasonFailures = /* @__PURE__ */ new Map();
+    const credentials = /* @__PURE__ */ new WeakMap(), coverageFacts = /* @__PURE__ */ new Map();
     function beginRead() {
       const request = context.viewingRequestContext();
       if (!request) return null;
@@ -8177,6 +8177,9 @@ ${CARD_ACTION_STYLES}
       if (count === null) return fail("season-count-missing");
       if (!Number.isSafeInteger(count) || count < 1 || count > VIEWING_MAX_SEASONS) return fail("season-count-invalid");
       if (expected !== null && (!Number.isSafeInteger(expected) || expected < 1 || expected > VIEWING_MAX_EPISODES)) return fail("episode-count-invalid");
+      const verifiedCount = viewingCount(readViewingGraph(graph, ["videos", record.videoId, "seasonList", "length"]));
+      if (verifiedCount !== null && (!Number.isSafeInteger(verifiedCount) || verifiedCount !== count)) return fail("season-list-count-mismatch", { verifiedSeasonCount: Number.isFinite(verifiedCount) ? verifiedCount : null });
+      const verified = verifiedCount === count;
       const list = readViewingGraph(graph, ["videos", record.videoId, "seasonList"]);
       if (!list || typeof list !== "object") return fail("season-list-missing");
       if (Object.keys(list).some((key) => /^\d+$/.test(key) && Number(key) >= count)) return fail("season-list-exceeds-count");
@@ -8193,11 +8196,14 @@ ${CARD_ACTION_STYLES}
         seen.add(id);
         total += length;
         if (total > VIEWING_MAX_EPISODES) return fail("episode-total-limit", { total });
-        if (expected !== null && total > expected) return fail("episode-count-mismatch", { total });
+        if (expected !== null && total > expected && !verified) return fail("episode-count-mismatch", { total });
         seasons.push({ id, count: length });
       }
       if (!total) return fail("season-list-empty");
-      if (expected !== null && total !== expected) return fail("episode-count-mismatch", { total });
+      if (expected !== null && total !== expected) {
+        if (!verified) return fail("episode-count-mismatch", { total });
+        reject({ reason: "episode-count-adjusted", ...facts, total, verifiedSeasonCount: verifiedCount });
+      }
       return { videoId: record.videoId, expected: total, seasons };
     }
     function requireBatch(values, max) {
@@ -8214,7 +8220,7 @@ ${CARD_ACTION_STYLES}
     }
     async function readSeasons(records, access, owner) {
       requireBatch(records, limits.titleBatch);
-      for (const record of records) seasonFailures.delete(record.videoId);
+      for (const record of records) coverageFacts.delete(record.videoId);
       let requested = 0;
       const paths = records.flatMap((record) => {
         const count = Number.isSafeInteger(record.seasonCount) && record.seasonCount > 0 ? Math.min(record.seasonCount, limits.seasons) : limits.seasons;
@@ -8226,15 +8232,15 @@ ${CARD_ACTION_STYLES}
           { from: 0, to: count - 1 },
           ["summary", "length"]
         ]];
-        if (record.seasonCount === null) paths2.push(["videos", record.videoId, "seasonList", "length"]);
+        paths2.push(["videos", record.videoId, "seasonList", "length"]);
         return paths2;
       });
       if (requested > limits.episodeBatch) throw new Error("VIEWING_STATUS_BATCH");
       const graph = await requestGraph(paths, access, owner);
       return records.map((record) => {
-        seasonFailures.delete(record.videoId);
-        const plan = viewingSeasonPlan(graph, record, (facts) => seasonFailures.set(record.videoId, facts));
-        while (seasonFailures.size > 24) seasonFailures.delete(seasonFailures.keys().next().value);
+        coverageFacts.delete(record.videoId);
+        const plan = viewingSeasonPlan(graph, record, (facts) => coverageFacts.set(record.videoId, facts));
+        while (coverageFacts.size > 24) coverageFacts.delete(coverageFacts.keys().next().value);
         return plan;
       }).filter(Boolean);
     }
@@ -8287,7 +8293,8 @@ ${CARD_ACTION_STYLES}
       readSeasons,
       readEpisodes,
       readDirectEpisodes,
-      coverageDiagnostic: (id) => seasonFailures.has(id) ? { ...seasonFailures.get(id) } : null
+      coverageDiagnostic: (id) => coverageFacts.has(id) ? { ...coverageFacts.get(id) } : null,
+      coverageDiagnostics: () => [...coverageFacts].map(([id, facts]) => ({ id, ...facts }))
     });
   }
 
@@ -9422,7 +9429,7 @@ ${CARD_ACTION_STYLES}
       choice: choices.choice,
       ids: () => choices.ids().filter((id) => choices.status(id) === "complete"),
       presentation: choices.presentation,
-      diagnostics: () => ({ requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, failedTitles: [...failed].slice(0, 12).map((id) => ({ id, type: type(id) || "unknown", attempts: attempts.get(id) || 0, missing: type(id) === "series" ? "coverage" : "type", coverageFailure: data.coverageDiagnostic?.(id) || null })), failedTitlesTruncated: failed.size > 12, retrying: retryTimer !== null, windowRequests })
+      diagnostics: () => ({ coverageAdjustments: data.coverageDiagnostics?.().filter((facts) => facts.reason === "episode-count-adjusted") || [], requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, failedTitles: [...failed].slice(0, 12).map((id) => ({ id, type: type(id) || "unknown", attempts: attempts.get(id) || 0, missing: type(id) === "series" ? "coverage" : "type", coverageFailure: data.coverageDiagnostic?.(id) || null })), failedTitlesTruncated: failed.size > 12, retrying: retryTimer !== null, windowRequests })
     });
   }
 
@@ -19481,7 +19488,7 @@ ${CARD_ACTION_STYLES}
         const [value, path, depth] = queue.shift();
         if (!value || typeof value !== "object" || depth > 8) continue;
         if (Array.isArray(value)) {
-          const ids = value.slice(0, 16).map((item) => item?.videoId || item?.id || item?.node?.videoId || item?.node?.id || item?.video?.id).map(String).filter((id) => /^\d+$/.test(id));
+          const ids = value.slice(0, 16).map((item) => item?.videoId || item?.id || item?.node?.videoId || item?.node?.unifiedEntity?.videoId || item?.node?.id || item?.video?.id).map(String).filter((id) => /^\d+$/.test(id));
           if (collections.length < 12) collections.push({
             path,
             length: value.length,
@@ -19498,7 +19505,20 @@ ${CARD_ACTION_STYLES}
           if (child && typeof child === "object") queue.push([child, next, depth + 1]);
         }
       }
-      return { collections, pagination, traversalTruncated: queue.length > 0 };
+      const connection = root?.data?.node?.entities;
+      const pageInfo = connection?.pageInfo;
+      return {
+        collections,
+        pagination,
+        traversalTruncated: queue.length > 0,
+        ...connection && typeof pageInfo?.hasNextPage === "boolean" ? { serverPage: {
+          hasNextPage: pageInfo.hasNextPage,
+          exhausted: !pageInfo.hasNextPage,
+          totalCount: Number.isSafeInteger(connection.totalCount) && connection.totalCount >= 0 ? connection.totalCount : null,
+          returnedItems: Array.isArray(connection.edges) ? connection.edges.length : null,
+          attribution: "response-connection; row match not established"
+        } } : {}
+      };
     }
     async function inspect(response, record) {
       let reader;
@@ -19949,8 +19969,29 @@ ${CARD_ACTION_STYLES}
     }
     function navigationStart(control) {
       const components = [];
-      let truncated = false;
+      let truncated = false, shapeBudget = 360;
       const quotas = { props: 0, state: 0 };
+      function shape(value, depth = 0) {
+        if (!value || typeof value !== "object" || depth >= 3 || shapeBudget <= 0) return {};
+        const keys = Object.keys(value).filter((key) => !/auth|token|cookie|credential|profile|account|session/i.test(key));
+        const fields = [];
+        for (const name of keys.slice(0, 12)) {
+          if (--shapeBudget < 0) {
+            truncated = true;
+            break;
+          }
+          const descriptor = Object.getOwnPropertyDescriptor(value, name), child = descriptor?.value;
+          fields.push({
+            name: name.slice(0, 80),
+            type: descriptor?.get ? "accessor" : typeof child,
+            ...Array.isArray(child) ? { length: child.length } : {},
+            ...shape(child, depth + 1),
+            .../count|index|offset|limit|pageSize/i.test(name) && Number.isSafeInteger(child) && child >= 0 ? { value: child } : {},
+            ...name === "name" && typeof child === "string" && ["query", "mutation", "subscription"].includes(Object.getOwnPropertyDescriptor(value, "operationKind")?.value) && /^[A-Za-z_][A-Za-z_0-9]{0,99}$/.test(child || "") ? { operationName: child } : {}
+          });
+        }
+        return { fields, fieldsTruncated: fields.length < keys.length };
+      }
       try {
         const key = Object.getOwnPropertyNames(control).find((name) => name.startsWith("__reactFiber$") || name.startsWith("__reactInternalInstance$"));
         let fiber = key && Object.getOwnPropertyDescriptor(control, key)?.value;
@@ -19961,13 +20002,21 @@ ${CARD_ACTION_STYLES}
           let state = Object.getOwnPropertyDescriptor(fiber, "memoizedState")?.value;
           const hooks = /* @__PURE__ */ new Set();
           if (state && Object.hasOwn(state, "memoizedState") && Object.hasOwn(state, "next")) {
-            for (let i = 0; state && i < 16 && !hooks.has(state); i++) {
+            for (let i = 0; state && i < 48 && !hooks.has(state); i++) {
               hooks.add(state);
               sources.push([`hookState:${i}`, Object.getOwnPropertyDescriptor(state, "memoizedState")?.value]);
               state = Object.getOwnPropertyDescriptor(state, "next")?.value;
             }
             truncated ||= Boolean(state);
           } else sources.push(["memoizedState", state]);
+          const dependencies = Object.getOwnPropertyDescriptor(fiber, "dependencies")?.value;
+          let dependency = dependencies && Object.getOwnPropertyDescriptor(dependencies, "firstContext")?.value;
+          const contexts = /* @__PURE__ */ new Set();
+          for (let i = 0; dependency && i < 4 && !contexts.has(dependency); i++) {
+            contexts.add(dependency);
+            sources.push(["context:" + i, Object.getOwnPropertyDescriptor(dependency, "memoizedValue")?.value]);
+            dependency = Object.getOwnPropertyDescriptor(dependency, "next")?.value;
+          }
           for (const [source, value] of sources) {
             if (!value || typeof value !== "object") continue;
             const keys = Object.keys(value), fields = Array.isArray(value) ? [{
@@ -19979,43 +20028,26 @@ ${CARD_ACTION_STYLES}
                 return {
                   type: descriptor?.get ? "accessor" : typeof child,
                   ...Array.isArray(child) ? { length: child.length } : {},
-                  ...child && typeof child === "object" ? { fields: Object.keys(child).filter((key2) => !/auth|token|cookie|credential|profile|account|session/i.test(key2)).slice(0, 12).map((key2) => {
-                    const descriptor2 = Object.getOwnPropertyDescriptor(child, key2), value2 = descriptor2?.value;
-                    return {
-                      name: key2.slice(0, 80),
-                      type: descriptor2?.get ? "accessor" : typeof value2,
-                      ...Array.isArray(value2) ? { length: value2.length } : {},
-                      .../count|index|offset|limit|pageSize/i.test(key2) && Number.isSafeInteger(value2) && value2 >= 0 ? { value: value2 } : {}
-                    };
-                  }) } : {}
+                  ...shape(child)
                 };
               }),
               elementsTruncated: value.length > 4
             }] : [];
             for (const name of keys.slice(0, 40)) {
               if (/^data-|^tabIndex$|^next$|^baseState$|^baseQueue$|^queue$/i.test(name)) continue;
-              if (!/click|load|fetch|pagin|cursor|item|video|title|row|list|count|next|prev|index|data|cache/i.test(name)) continue;
+              if (!/click|load|fetch|pagin|cursor|item|video|title|row|list|count|next|prev|index|data|cache|fragment|relay|environment|connection|pageInfo|params/i.test(name)) continue;
               const descriptor = Object.getOwnPropertyDescriptor(value, name), child = descriptor?.value;
               const fact = { name: name.slice(0, 80), type: descriptor?.get ? "accessor" : typeof child };
               if (Array.isArray(child)) fact.length = child.length;
               else if (child && typeof child === "object") {
-                const nested = Object.keys(child);
-                fact.fields = nested.slice(0, 12).map((key2) => {
-                  const descriptor2 = Object.getOwnPropertyDescriptor(child, key2), value2 = descriptor2?.value;
-                  return {
-                    name: key2.slice(0, 80),
-                    type: descriptor2?.get ? "accessor" : typeof value2,
-                    ...Array.isArray(value2) ? { length: value2.length } : {}
-                  };
-                });
-                fact.fieldsTruncated = nested.length > 12;
+                Object.assign(fact, shape(child));
               } else if (/count|index/i.test(name) && Number.isSafeInteger(child) && child >= 0) fact.value = child;
               fields.push(fact);
             }
             truncated ||= keys.length > 40;
             if (fields.length) {
               const bucket = source === "memoizedProps" ? "props" : "state";
-              if (quotas[bucket] >= 10) {
+              if (quotas[bucket] >= (bucket === "props" ? 10 : 20)) {
                 truncated = true;
                 continue;
               }
@@ -21217,7 +21249,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.14";
+  var SCRIPT_VERSION = "1.9.15";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

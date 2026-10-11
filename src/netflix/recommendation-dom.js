@@ -208,7 +208,21 @@ export function createRecommendationDom(environment) {
         return control?.isConnected && row && scan(row).length ? { row, control, direction: next ? 'next' : 'previous' } : null;
     }
     function navigationStart(control) {
-        const components = []; let truncated = false; const quotas = { props: 0, state: 0 };
+        const components = []; let truncated = false, shapeBudget = 360; const quotas = { props: 0, state: 0 };
+        function shape(value, depth = 0) {
+            if (!value || typeof value !== 'object' || depth >= 3 || shapeBudget <= 0) return {};
+            const keys = Object.keys(value).filter(key => !/auth|token|cookie|credential|profile|account|session/i.test(key));
+            const fields = [];
+            for (const name of keys.slice(0, 12)) {
+                if (--shapeBudget < 0) { truncated = true; break; }
+                const descriptor = Object.getOwnPropertyDescriptor(value, name), child = descriptor?.value;
+                fields.push({ name: name.slice(0, 80), type: descriptor?.get ? 'accessor' : typeof child,
+                    ...(Array.isArray(child) ? { length: child.length } : {}), ...shape(child, depth + 1),
+                    ...(/count|index|offset|limit|pageSize/i.test(name) && Number.isSafeInteger(child) && child >= 0 ? { value: child } : {}),
+                    ...(name === 'name' && typeof child === 'string' && ['query', 'mutation', 'subscription'].includes(Object.getOwnPropertyDescriptor(value, 'operationKind')?.value) && /^[A-Za-z_][A-Za-z_0-9]{0,99}$/.test(child || '') ? { operationName: child } : {}) });
+            }
+            return { fields, fieldsTruncated: fields.length < keys.length };
+        }
         try {
             const key = Object.getOwnPropertyNames(control).find(name => name.startsWith('__reactFiber$') || name.startsWith('__reactInternalInstance$'));
             let fiber = key && Object.getOwnPropertyDescriptor(control, key)?.value;
@@ -219,46 +233,42 @@ export function createRecommendationDom(environment) {
                 let state = Object.getOwnPropertyDescriptor(fiber, 'memoizedState')?.value;
                 const hooks = new Set();
                 if (state && Object.hasOwn(state, 'memoizedState') && Object.hasOwn(state, 'next')) {
-                    for (let i = 0; state && i < 16 && !hooks.has(state); i++) {
+                    for (let i = 0; state && i < 48 && !hooks.has(state); i++) {
                         hooks.add(state); sources.push([`hookState:${i}`, Object.getOwnPropertyDescriptor(state, 'memoizedState')?.value]);
                         state = Object.getOwnPropertyDescriptor(state, 'next')?.value;
                     }
                     truncated ||= Boolean(state);
                 } else sources.push(['memoizedState', state]);
+                const dependencies = Object.getOwnPropertyDescriptor(fiber, 'dependencies')?.value;
+                let dependency = dependencies && Object.getOwnPropertyDescriptor(dependencies, 'firstContext')?.value;
+                const contexts = new Set();
+                for (let i = 0; dependency && i < 4 && !contexts.has(dependency); i++) {
+                    contexts.add(dependency); sources.push(['context:' + i, Object.getOwnPropertyDescriptor(dependency, 'memoizedValue')?.value]);
+                    dependency = Object.getOwnPropertyDescriptor(dependency, 'next')?.value;
+                }
                 for (const [source, value] of sources) {
                     if (!value || typeof value !== 'object') continue;
                     const keys = Object.keys(value), fields = Array.isArray(value) ? [{ name: 'stateArray', type: 'array', length: value.length,
                         elements: Array.from({ length: Math.min(value.length, 4) }, (_, index) => {
                             const descriptor = Object.getOwnPropertyDescriptor(value, String(index)), child = descriptor?.value;
                             return { type: descriptor?.get ? 'accessor' : typeof child, ...(Array.isArray(child) ? { length: child.length } : {}),
-                                ...(child && typeof child === 'object' ? { fields: Object.keys(child).filter(key => !/auth|token|cookie|credential|profile|account|session/i.test(key)).slice(0, 12).map(key => {
-                                    const descriptor = Object.getOwnPropertyDescriptor(child, key), value = descriptor?.value;
-                                    return { name: key.slice(0, 80), type: descriptor?.get ? 'accessor' : typeof value,
-                                        ...(Array.isArray(value) ? { length: value.length } : {}),
-                                        ...(/count|index|offset|limit|pageSize/i.test(key) && Number.isSafeInteger(value) && value >= 0 ? { value } : {}) };
-                                }) } : {}) };
+                                ...shape(child) };
                         }), elementsTruncated: value.length > 4 }] : [];
                     for (const name of keys.slice(0, 40)) {
                         if (/^data-|^tabIndex$|^next$|^baseState$|^baseQueue$|^queue$/i.test(name)) continue;
-                        if (!/click|load|fetch|pagin|cursor|item|video|title|row|list|count|next|prev|index|data|cache/i.test(name)) continue;
+                        if (!/click|load|fetch|pagin|cursor|item|video|title|row|list|count|next|prev|index|data|cache|fragment|relay|environment|connection|pageInfo|params/i.test(name)) continue;
                         const descriptor = Object.getOwnPropertyDescriptor(value, name), child = descriptor?.value;
                         const fact = { name: name.slice(0, 80), type: descriptor?.get ? 'accessor' : typeof child };
                         if (Array.isArray(child)) fact.length = child.length;
                         else if (child && typeof child === 'object') {
-                            const nested = Object.keys(child);
-                            fact.fields = nested.slice(0, 12).map(key => {
-                                const descriptor = Object.getOwnPropertyDescriptor(child, key), value = descriptor?.value;
-                                return { name: key.slice(0, 80), type: descriptor?.get ? 'accessor' : typeof value,
-                                    ...(Array.isArray(value) ? { length: value.length } : {}) };
-                            });
-                            fact.fieldsTruncated = nested.length > 12;
+                            Object.assign(fact, shape(child));
                         } else if (/count|index/i.test(name) && Number.isSafeInteger(child) && child >= 0) fact.value = child;
                         fields.push(fact);
                     }
                     truncated ||= keys.length > 40;
                     if (fields.length) {
                         const bucket = source === 'memoizedProps' ? 'props' : 'state';
-                        if (quotas[bucket] >= 10) { truncated = true; continue; }
+                        if (quotas[bucket] >= (bucket === 'props' ? 10 : 20)) { truncated = true; continue; }
                         quotas[bucket]++;
                         const type = fiber.elementType || fiber.type;
                         components.push({ depth, source, component: String(typeof type === 'string' ? type : type?.displayName || type?.name || 'unknown').slice(0, 80), fields });
