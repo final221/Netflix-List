@@ -1,5 +1,18 @@
 # Maintainability Map
 
+## Current restoration extraction measurement
+
+Release **1.9.16**, 2026-10-11: **53 authored runtime modules, 17,401 readable physical lines**, compared with 52 modules / 17,381 lines in 1.9.15. Counts include comments and blank lines, excluding a final empty line. This is an ownership/locality improvement, not a net source reduction: the composition adds 20 lines.
+
+| Affected module under src/ | Before | After | Responsibility |
+| --- | ---: | ---: | --- |
+| `netflix/carousel/navigation.js` | 1,253 | 829 | Movement queue, acknowledgement, stable-content waits, cancellation and motion leases; composes restoration. |
+| `netflix/carousel/restoration.js` | — | 444 | Private strict/fast restoration, content verification, adjacent phase repair and strict fallback; owns no timers or queue. |
+
+Navigation remains over 800 lines because its queue, wait registry, acknowledgement and motion restoration share one resource lifetime. Further partitioning must preserve that ownership rather than distribute cancellation. The generated userscript changes separately from 21,261 to 21,311 lines. The full inventory below remains a historical snapshot and does not describe current module totals.
+
+## Historical full inventory
+
 Snapshot: **1.4.68**, 2026-10-09, private carousel geometry extraction.
 
 The **43 authored runtime modules total 15,725 lines**. Counts include comments and blank lines, excluding a final empty line; CRLF and LF produce identical counts. Build tooling, tests and the generated userscript are excluded from this total.
