@@ -2276,8 +2276,8 @@ test('copy-only series diagnostics explain the named cases without exporting vid
     for (const row of report) assert.ok(!Object.hasOwn(row, 'videoId'));
     let thumbnailReads = 0;
     let reportText = '';
-    const diagnosticReport = createReport({ logger: createLogger({name:"test",version:"test",Element,console:{log(){},warn(){},error(){}}}), version: '1.2.2', document: e.c.document,
-        navigator: { clipboard: { writeText: async value => { reportText = value; } } }, tLog: value => value,
+    const diagnosticReport = createReport({ logger: createLogger({name:"test",version:"test",Element,console:{log(){},warn(){},error(){}}}), version: '1.2.2',
+        writeText: async value => { reportText = value; },
         readEnvironment: () => ({ url: 'https://www.netflix.com/browse/my-list', userAgent: 'test', browserLanguage: 'en',
             htmlLanguage: 'en', netflixLanguage: 'en', displayLanguage: 'en', logLanguage: 'en', viewport: '1920x1080', devicePixelRatio: 1 }),
         readRuntime: () => ({}), readSeriesViewing: () => e.c.collectViewingSeriesDiagnostics(e.state),

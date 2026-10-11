@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createDocument, Element } from './helpers/dom.js';
+import { Element } from './helpers/dom.js';
 import { createLogger } from '../src/diagnostics/logger.js';
 import { createReport } from '../src/diagnostics/report.js';
 import { createPopupInspection } from '../src/netflix/popup-inspection.js';
@@ -104,38 +104,24 @@ test('popup reset and current-owner checks reject stale observations without exp
     assert.equal(e.inspection.diagnostics().responsePages, 1);
 });
 
-function reportFixture({ primary, fallback = true, throws = false, providers = {} } = {}) {
+function reportFixture({ providers = {} } = {}) {
     const { logger } = loggerFixture();
-    const document = createDocument();
-    let copied = '', selected = 0, reads = 0;
-    const createElement = document.createElement;
-    document.createElement = tag => {
-        const node = createElement(tag);
-        node.select = () => { selected++; };
-        return node;
-    };
-    document.execCommand = command => {
-        assert.equal(command, 'copy');
-        copied = document.body.querySelector('textarea').value;
-        if (throws) throw new Error('clipboard failed');
-        return fallback;
-    };
-    const navigator = primary ? { clipboard: { writeText: async text => { copied = text; await primary(text); } } } : {};
-    const report = createReport({ logger, version: 'test', document, navigator, tLog: key => key,
+    let copied = '', reads = 0;
+    const report = createReport({ logger, version: 'test', writeText: async text => { copied = text; return 'saved-report.txt'; },
         readEnvironment: () => ({ url: 'https://www.netflix.com/browse/my-list', userAgent: 'offline', browserLanguage: 'en',
             htmlLanguage: 'ja', netflixLanguage: 'ja', displayLanguage: 'ja', logLanguage: 'ja', viewport: '1280x800', devicePixelRatio: 1 }),
         readRuntime: () => { reads++; return { performanceWork: { nativeCollection: { metadataReads: 2 } } }; },
         readSeriesViewing: () => [{ title: 'Weeds', reason: 'unavailable-episode-progress' }],
         readThumbnails: () => ({ available: true }), readNativePopup: () => ({ status: 'inactive-route' }), ...providers });
-    return { logger, report, document, copied: () => copied, selected: () => selected, reads: () => reads };
+    return { logger, report, copied: () => copied, reads: () => reads };
 }
 
 test('report copies current explicit summaries and chronological logs only on request', async () => {
-    const e = reportFixture({ primary: async () => {} });
+    const e = reportFixture();
     assert.equal(e.reads(), 0);
     e.logger.log('first', { videoId: '123' });
     e.logger.warn('second', { href: '/watch/123' });
-    assert.equal(await e.report.copy(), 'navigator.clipboard');
+    assert.equal(await e.report.copy(), 'saved-report.txt');
     const text = e.copied();
     assert.equal(e.reads(), 1);
     assert.match(text, /version: test\ncopiedAt:/);
@@ -145,14 +131,12 @@ test('report copies current explicit summaries and chronological logs only on re
     assert.match(text, /nativePopupDiagnostics: \{"status":"inactive-route"\}/);
     assert.ok(text.indexOf('INFO  first') < text.indexOf('WARN  second'));
     assert.ok(text.endsWith('\n'));
-    assert.equal(e.selected(), 0);
-    assert.equal(e.document.body.children.length, 0);
 });
 
 test('compact reports summarize large collections and repeated events while detailed exports retain every entry', async () => {
     const series = Array.from({ length: 500 }, (_, index) => ({ title: 'Series ' + index,
         status: index < 300 ? 'complete' : 'unknown', reason: index < 300 ? 'latest-episode-complete' : 'unavailable-episode-progress' }));
-    const e = reportFixture({ primary: async () => {}, providers: { readSeriesViewing: () => series } });
+    const e = reportFixture({ providers: { readSeriesViewing: () => series } });
     const items = Array.from({ length: 500 }, (_, index) => ({ videoId: String(index), href: '/watch/' + index }));
     for (let index = 0; index < 1000; index++) e.logger.log('Move', { seq: index, elapsedMs: index === 400 ? 900 : 10, items });
     e.logger.warn('Source replaced', { code: 'NATIVE_SOURCE_REPLACED', videoId: '123' });
@@ -177,7 +161,7 @@ test('compact reports summarize large collections and repeated events while deta
 
 test('compact export retains late decisions and warnings even when essential summaries exceed the target', async () => {
     const snapshot = Object.fromEntries(Array.from({ length: 60 }, (_, index) => ['counter' + index, 'x'.repeat(350)]));
-    const e = reportFixture({ primary: async () => {}, providers: { readRuntime: () => snapshot } });
+    const e = reportFixture({ providers: { readRuntime: () => snapshot } });
     for (let index = 0; index < 80; index++) e.logger.log('Routine ' + index, { detail: '日'.repeat(1000) });
     e.logger.log('Fresh Netflix My List carousel bootstrap fetched', { graphqlKey: 'actual-requested-row',
         totalCount: 10, graphqlEdgeCount: 10, hasNextPage: true });
@@ -199,7 +183,7 @@ test('compact export retains late decisions and warnings even when essential sum
 test('compact aggregation retains intermediate outcomes, nested timing totals and distinguishing array samples', async () => {
     const rows = [0, 1, 2].map(index => ({ title: 'same outcome ' + index, status: 'complete', reason: 'ready' }));
     rows.push({ title: 'distinct failure', status: 'unknown', reason: 'missing-reference' });
-    const e = reportFixture({ primary: async () => {}, providers: { readRuntime: () => ({ readings: [500, 500, 500, 10], rows }) } });
+    const e = reportFixture({ providers: { readRuntime: () => ({ readings: [500, 500, 500, 10], rows }) } });
     e.logger.log('Preparation', { outcome: 'complete', phase: 'initial', elapsedMs: 10, nested: { settleMs: 2 } });
     e.logger.log('Preparation', { outcome: 'mismatch', phase: 'initial', elapsedMs: 3, nested: { settleMs: 1 } });
     e.logger.log('Preparation', { outcome: 'complete', phase: 'initial', elapsedMs: 20, nested: { settleMs: 4 } });
@@ -220,7 +204,7 @@ test('compact reports distinguish manual and automatic results and retain long d
     const reason = 'distinct-reason-'.repeat(40);
     const series = [{ status: 'complete', reason: 'unavailable', automaticStatus: 'unknown', manualChoice: 'complete' },
         { status: 'complete', reason: 'unavailable', automaticStatus: 'complete', manualChoice: null }];
-    const e = reportFixture({ primary: async () => {}, providers: { readSeriesViewing: () => series } });
+    const e = reportFixture({ providers: { readSeriesViewing: () => series } });
     e.logger.log('Decision', { reason });
     await e.report.copy();
     assert.ok(e.copied().includes(reason));
@@ -233,16 +217,28 @@ test('compact reports distinguish manual and automatic results and retain long d
     assert.deepEqual(JSON.parse(e.copied().split('\n').find(line => line.startsWith('seriesViewing: ')).slice(15)), series);
 });
 
-test('clipboard rejection falls back once and releases its owned textarea on success or failure', async () => {
-    const rejected = reportFixture({ primary: async () => { throw new Error('denied'); } });
-    assert.equal(await rejected.report.copy(), 'execCommand');
-    assert.equal(rejected.selected(), 1);
-    assert.equal(rejected.document.body.children.length, 0);
-    assert.match(rejected.logger.entries()[0], /WARN.*clipboardFallback.*denied/);
-    for (const options of [{ fallback: false }, { throws: true }]) {
-        const failed = reportFixture(options);
-        await assert.rejects(failed.report.copy(), /execCommandCopyFailed|clipboard failed/);
-        assert.equal(failed.document.body.children.length, 0);
+test('report delegates exact content and results to its writer without touching clipboard or DOM', async () => {
+    const filename = 'saved-report.txt', failure = new Error('download denied');
+    for (const mode of ['success', 'rejected', 'thrown']) {
+        let calls = 0, text;
+        const e = reportFixture({ providers: {
+            document: { createElement() { assert.fail('report must not create DOM'); } },
+            navigator: { get clipboard() { assert.fail('report must not inspect clipboard'); } },
+            writeText(value) {
+                calls++; text = value;
+                if (mode === 'thrown') throw failure;
+                return mode === 'rejected' ? Promise.reject(failure) : Promise.resolve(filename);
+            }
+        } });
+        if (mode === 'success') assert.equal(await e.report.copy({ detailed: true }), filename);
+        else if (mode === 'rejected') await assert.rejects(e.report.copy({ detailed: true }), error => error === failure);
+        else assert.throws(() => e.report.copy({ detailed: true }), error => error === failure);
+        assert.equal(calls, 1);
+        assert.equal(e.reads(), 1);
+        assert.match(text, /exportMode: detailed/);
+        assert.match(text, /seriesViewing: .*Weeds/);
+        assert.ok(text.endsWith('\n'));
+        assert.equal(e.logger.size(), 0, 'report leaves transport failure reporting to its caller');
     }
 });
 
@@ -372,7 +368,7 @@ test('compact logs preserve bounded navigation order, four-coordinate rectangles
     const navigation = { recent: [{ loading: { control: { parents: [{ rect: [0, 565, 2560, 279] }] } } }],
         movements: Array.from({ length: 12 }, (_, at) => ({ at, kind: 'hover', id: String(at) })),
         actions: [{ before: { ids: ['1','2','3','4'] }, samples: [{ state: { cardPositions: [{ id: '2', rect: [10,20,30,40] }] } }] }] };
-    const report = createReport({ logger, version: 'test', document: createDocument(), navigator: {}, tLog: key => key,
+    const report = createReport({ logger, version: 'test',
         readEnvironment: () => ({}), writeText: value => { text = value; }, readRuntime: () => ({ recommendations: { navigation } }),
         readSeriesViewing: () => [], readThumbnails: () => ({}), readNativePopup: () => ({}) });
     await report.copy();

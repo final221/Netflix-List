@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.23
+// @version      1.9.24
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -6795,9 +6795,6 @@ ${CARD_ACTION_STYLES}
   function createReport({
     logger,
     version,
-    document,
-    navigator,
-    tLog,
     readEnvironment,
     writeText,
     readRuntime,
@@ -6985,31 +6982,6 @@ ${CARD_ACTION_STYLES}
         ...eventLines
       ].join("\n") + "\n";
     }
-    async function copyTextToClipboard(text) {
-      if (navigator.clipboard?.writeText) {
-        try {
-          await navigator.clipboard.writeText(text);
-          return "navigator.clipboard";
-        } catch (error) {
-          logger.warn(tLog("clipboardFallback"), error);
-        }
-      }
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "");
-      textarea.style.position = "fixed";
-      textarea.style.left = "-100000px";
-      textarea.style.top = "0";
-      document.body.appendChild(textarea);
-      try {
-        textarea.select();
-        const ok = document.execCommand("copy");
-        if (!ok) throw new Error(tLog("execCommandCopyFailed"));
-        return "execCommand";
-      } finally {
-        textarea.remove();
-      }
-    }
     function snapshot(detailed = true) {
       const facts = {
         runtime: readRuntime(),
@@ -7019,7 +6991,7 @@ ${CARD_ACTION_STYLES}
       };
       return JSON.parse(logger.formatValue(detailed ? facts : compact(facts)));
     }
-    return Object.freeze({ copy: ({ detailed = false } = {}) => (writeText || copyTextToClipboard)(buildInvestigationLogText(detailed)), snapshot });
+    return Object.freeze({ copy: ({ detailed = false } = {}) => writeText(buildInvestigationLogText(detailed)), snapshot });
   }
 
   // src/netflix/popup-inspection.js
@@ -15211,9 +15183,6 @@ ${CARD_ACTION_STYLES}
     const diagnosticReport = createReport({
       logger,
       version: SCRIPT_VERSION2,
-      document,
-      navigator,
-      tLog,
       writeText: saveLogs,
       readHistory: readLogHistory,
       readEnvironment: () => ({
@@ -19171,8 +19140,6 @@ ${CARD_ACTION_STYLES}
     targetSessionSuspended: { en: "Target session suspended", ja: "\u5BFE\u8C61\u30BB\u30C3\u30B7\u30E7\u30F3\u4E2D\u65AD" },
     targetSessionStarted: { en: "Target session started", ja: "\u5BFE\u8C61\u30BB\u30C3\u30B7\u30E7\u30F3\u958B\u59CB" },
     routeChangeDetected: { en: "Route change detected", ja: "\u30DA\u30FC\u30B8\u9077\u79FB\u691C\u51FA" },
-    clipboardFallback: { en: "Clipboard API failed; using fallback", ja: "\u30AF\u30EA\u30C3\u30D7\u30DC\u30FC\u30C9API\u306B\u5931\u6557\u3002fallback\u3078\u79FB\u884C" },
-    execCommandCopyFailed: { en: "execCommand(copy) failed.", ja: "execCommand(copy) \u304C\u5931\u6557\u3057\u307E\u3057\u305F\u3002" },
     copyLogsTooltip: { en: "Save As a compact report; choose the repository logs folder. Shift-click for full detail", ja: "\u7C21\u6F54\u306A\u8A3A\u65AD\u30EC\u30DD\u30FC\u30C8\u3092\u4FDD\u5B58\u3057\u307E\u3059\u3002Shift\u30AF\u30EA\u30C3\u30AF\u3067\u8A73\u7D30\u3092\u4FDD\u5B58\u3057\u307E\u3059" },
     copied: { en: "Saved.", ja: "\u4FDD\u5B58\u3057\u307E\u3057\u305F\u3002" },
     copyLogsRequested: { en: "CopyLogs requested", ja: "CopyLogs\u8981\u6C42" },
@@ -21179,9 +21146,6 @@ ${CARD_ACTION_STYLES}
     const browsingReport = createReport({
       logger,
       version,
-      document,
-      navigator,
-      tLog: i18n.tLog,
       writeText: saver.save,
       readEnvironment: () => ({
         url: location.href,
@@ -21399,7 +21363,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.23";
+  var SCRIPT_VERSION = "1.9.24";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

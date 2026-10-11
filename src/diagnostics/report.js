@@ -1,5 +1,5 @@
 // Providers return the existing serialized summaries; no feature state is retained here.
-export function createReport({ logger, version, document, navigator, tLog, readEnvironment, writeText,
+export function createReport({ logger, version, readEnvironment, writeText,
     readRuntime, readSeriesViewing, readThumbnails, readNativePopup, readHistory = () => [] }) {
     // A target for optional examples, never a ceiling on diagnostic decisions.
     const COMPACT_TARGET_CHARACTERS = 20000;
@@ -145,35 +145,10 @@ export function createReport({ logger, version, document, navigator, tLog, readE
             '---', ...eventLines].join('\n') + '\n';
     }
 
-    async function copyTextToClipboard(text) {
-        if (navigator.clipboard?.writeText) {
-            try {
-                await navigator.clipboard.writeText(text);
-                return 'navigator.clipboard';
-            } catch (error) {
-                logger.warn(tLog('clipboardFallback'), error);
-            }
-        }
-
-        const textarea = document.createElement('textarea');
-        textarea.value = text;
-        textarea.setAttribute('readonly', '');
-        textarea.style.position = 'fixed';
-        textarea.style.left = '-100000px';
-        textarea.style.top = '0';
-        document.body.appendChild(textarea);
-        try {
-            textarea.select();
-            const ok = document.execCommand('copy');
-            if (!ok) throw new Error(tLog('execCommandCopyFailed'));
-            return 'execCommand';
-        } finally { textarea.remove(); }
-    }
-
     function snapshot(detailed = true) {
         const facts = { runtime: readRuntime(), seriesViewing: detailed ? readSeriesViewing() : seriesSummary(readSeriesViewing()),
             thumbnails: readThumbnails(), nativePopup: readNativePopup() };
         return JSON.parse(logger.formatValue(detailed ? facts : compact(facts)));
     }
-    return Object.freeze({ copy: ({ detailed = false } = {}) => (writeText || copyTextToClipboard)(buildInvestigationLogText(detailed)), snapshot });
+    return Object.freeze({ copy: ({ detailed = false } = {}) => writeText(buildInvestigationLogText(detailed)), snapshot });
 }

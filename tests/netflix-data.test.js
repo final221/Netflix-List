@@ -339,7 +339,7 @@ test('live row identity overrides stale listener and cached rows while compact d
         let copied;
         const report = createReport({ logger, version: 'test', readEnvironment: () => ({}), readRuntime: () => ({}),
             readSeriesViewing: () => [], readThumbnails: () => ({}), readNativePopup: () => ({}),
-            navigator: { clipboard: { writeText: text => { copied = text; } } } });
+            writeText: text => { copied = text; } });
         await report.copy();
         const exported = copied.split('\n').find(line => line.includes('INFO  Fresh Netflix My List carousel bootstrap fetched'));
         assert.deepEqual(JSON.parse(exported.slice(exported.indexOf(' {') + 1)).rowSelection, details.rowSelection);

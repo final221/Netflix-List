@@ -19,7 +19,7 @@ export function createApplication({ environment = globalThis, version = '', crea
     let active = false, session = null, settings = null, lastObservedUrl = '', routeChangeSequence = 0, revision = 0, sessionEpoch = 0;
     const hooks = [], logHistory = [];
     const saver = createLogSaver({ download: userscript.download, readMode: userscript.downloadMode, version, Blob: environment.Blob, URL: environment.URL });
-    const browsingReport = createReport({ logger, version, document, navigator, tLog: i18n.tLog, writeText: saver.save,
+    const browsingReport = createReport({ logger, version, writeText: saver.save,
         readEnvironment: () => ({ url: location.href, userAgent: navigator.userAgent, browserLanguage: navigator.language,
             htmlLanguage: context.getHtmlLanguage(), netflixLanguage: context.getNetflixLanguage(), displayLanguage: i18n.getUiLocale(),
             logLanguage: i18n.getLogLocale(), viewport: `${window.innerWidth}x${window.innerHeight}`, devicePixelRatio: window.devicePixelRatio }),

@@ -124,7 +124,7 @@ export function createMyListSession({ environment = globalThis, version, context
         isCurrentSession: token => targetSessionActive && isRouteSessionActive(token),
         readSessionToken: () => sessionScope.token, isSourceMounted: () => Boolean(sourceState?.grid?.isConnected),
         readSourceCard: () => sourceState.track?.querySelector(NETFLIX_DOM_SELECTORS.standardCard) });
-    const diagnosticReport = createReport({ logger, version: SCRIPT_VERSION, document, navigator, tLog, writeText: saveLogs, readHistory: readLogHistory,
+    const diagnosticReport = createReport({ logger, version: SCRIPT_VERSION, writeText: saveLogs, readHistory: readLogHistory,
         readEnvironment: () => ({ url: location.href, userAgent: navigator.userAgent, browserLanguage: navigator.language || '',
             htmlLanguage: getHtmlLanguage(), netflixLanguage: getNetflixLanguage(), displayLanguage: getUiLocale(),
             logLanguage: getLogLocale(), viewport: `${window.innerWidth}x${window.innerHeight}`, devicePixelRatio: window.devicePixelRatio }),
