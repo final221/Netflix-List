@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.18
+// @version      1.9.19
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -19961,28 +19961,38 @@ ${CARD_ACTION_STYLES}
         }
       };
     }
-    function refillState(row, choices) {
+    function sampleRow(row, choices) {
       if (!row?.isConnected) return null;
-      const items = scan(row).filter((item) => item.row === row);
+      const scanned = scan(row), items = scanned.filter((item) => item.row === row);
       if (!items.length) return null;
       const scroller = items[0].scroller;
       const bounds = scroller.getBoundingClientRect();
-      const remaining = items.filter((item) => {
-        if (choices[item.id]) return false;
-        const cardRect = item.host.getBoundingClientRect(), center = cardRect.left + cardRect.width / 2;
-        return cardRect.width > 1 && center >= bounds.left && center <= bounds.right;
-      });
+      const visibleIds = [], cardPositions = [];
+      let unhidden = 0;
+      for (const item of items) {
+        if (choices[item.id]) continue;
+        unhidden++;
+        const rect = item.host.getBoundingClientRect(), center = rect.left + rect.width / 2;
+        if (!(rect.width > 1)) continue;
+        cardPositions.push({ id: item.id, rect });
+        if (center >= bounds.left && center <= bounds.right) visibleIds.push(item.id);
+      }
       return {
-        scroller,
-        remaining: remaining.length,
-        mounted: items.length,
-        offscreen: items.filter((item) => !choices[item.id]).length - remaining.length
+        items,
+        firstCard: scanned[0].card,
+        visibleIds,
+        cardPositions,
+        unhidden,
+        state: { scroller, remaining: visibleIds.length, mounted: items.length, offscreen: unhidden - visibleIds.length }
       };
     }
-    function loadingFacts(row) {
+    function refillState(row, choices) {
+      return sampleRow(row, choices)?.state || null;
+    }
+    function loadingFacts(row, sampledCard = null) {
       const result = [], seen = /* @__PURE__ */ new Set();
       try {
-        const card = scan(row)[0]?.card;
+        const card = sampledCard || scan(row)[0]?.card;
         for (const root of [card, row]) {
           const key = root && Object.getOwnPropertyNames(root).find((name) => name.startsWith("__reactFiber$") || name.startsWith("__reactInternalInstance$"));
           let fiber = key && root[key];
@@ -20251,8 +20261,9 @@ ${CARD_ACTION_STYLES}
     }
     function rowDiagnostics(row, choices) {
       try {
-        const items = scan(row).filter((item) => item.row === row), state = refillState(row, choices);
-        if (!state) return null;
+        const sample = sampleRow(row, choices);
+        if (!sample) return null;
+        const { items, state, visibleIds, cardPositions, unhidden } = sample;
         const indicators = [...row.querySelectorAll("[data-indicator-selected]")];
         const track = state.scroller.querySelector(".sliderContent, .slider-content") || state.scroller;
         return {
@@ -20261,26 +20272,21 @@ ${CARD_ACTION_STYLES}
           mounted: state.mounted,
           visible: state.remaining,
           offscreen: state.offscreen,
-          hidden: items.filter((item) => choices[item.id]).length,
+          hidden: items.length - unhidden,
           ids: items.slice(0, 120).map((item) => item.id),
           idsTruncated: items.length > 120,
-          cardPositions: items.filter((item) => !choices[item.id] && item.host.getBoundingClientRect().width > 1).slice(0, 24).map((item) => {
-            const rect = item.host.getBoundingClientRect();
-            return { id: item.id, rect: [rect.left, rect.top, rect.width, rect.height].map(Math.round) };
-          }),
-          positionsTruncated: items.filter((item) => !choices[item.id]).length > 24,
-          visibleIds: items.filter((item) => {
-            if (choices[item.id]) return false;
-            const rect = item.host.getBoundingClientRect(), bounds = state.scroller.getBoundingClientRect();
-            const center = rect.left + rect.width / 2;
-            return rect.width > 1 && center >= bounds.left && center <= bounds.right;
-          }).slice(0, 120).map((item) => item.id),
+          cardPositions: cardPositions.slice(0, 24).map(({ id, rect }) => ({
+            id,
+            rect: [rect.left, rect.top, rect.width, rect.height].map(Math.round)
+          })),
+          positionsTruncated: unhidden > 24,
+          visibleIds: visibleIds.slice(0, 120),
           pageIndex: indicators.findIndex((item) => item.getAttribute("data-indicator-selected") === "true"),
           scrollLeft: Number(state.scroller.scrollLeft) || 0,
           transform: String(getComputedStyle?.(track).transform || track.style.getPropertyValue("transform") || "").slice(0, 160),
           next: Boolean(row.querySelector('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext')),
           previous: Boolean(row.querySelector('[data-uia="carousel-hawkins-left-button"], [data-uia="carousel-left-button"], .handlePrev')),
-          loading: loadingFacts(row)
+          loading: loadingFacts(row, sample.firstCard)
         };
       } catch (_) {
         return null;
@@ -21286,7 +21292,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.18";
+  var SCRIPT_VERSION = "1.9.19";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
