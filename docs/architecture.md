@@ -207,6 +207,8 @@ CopyLogs defaults to a compact report. Environment, copied feature summaries, wa
 
 `diagnostics/logger.js` retains bounded application logs with safe formatting/trace gating. `report.js` assembles declared copied feature providers and clipboard/fallback export, isolating unavailable providers. Netflix popup inspection privately owns the existing finite response/component survey and serialized preview shape; it starts no extra requests/probes. Source inspection can explicitly request passive discovery. Normal interaction/report counters do not add geometry or DOM discovery.
 
+My List runtime snapshots capture one local observation from each repeated provider: carousel diagnostics, native-popup diagnostics, hover diagnostics/intent, responsive diagnostics and viewing presentation. Nested performance facts reuse those copied summaries; standalone viewing work reports sample their providers afresh. These values last only for the synchronous report call, with no shared cache, new owner or mutation authority. Export fields, unavailable-source defaults and report failure isolation stay unchanged.
+
 ## Verification
 
 The separate recommendation-refill experiment under scripts/ is not production architecture and is not reachable from src/main.js. Its injected page/storage adapter and synthetic tests exercise finite ordered refill, profile ownership, cancellation and Undo; `docs/recommendation-demo.html` bundles that controller into a standalone fictional browser demonstration. It neither owns Netflix DOM nor supplies a Netflix network adapter. Integrating it into production requires establishing the native recommendation-row contracts and documenting those boundaries here first.

@@ -358,13 +358,14 @@ export function createMyListSession({ environment = globalThis, version, context
         };
     }
 
-    function collectPerformanceDiagnostics() {
+    function collectPerformanceDiagnostics({ hoverSummary = hover.diagnostics(), nativeInteraction = nativePopup.diagnostics(),
+        responsiveSummary = responsive.diagnostics(), carouselSummary = nativeCarousel.diagnostics() } = {}) {
         const snapshots = Object.fromEntries(Object.entries(performanceDiagnostics).map(([key, counters]) => [key, { ...counters }]));
-        return { viewingGroups: gridView.groupDiagnostics(), hoverPreparation: hover.diagnostics().hoverPreparation,
+        return { viewingGroups: gridView.groupDiagnostics(), hoverPreparation: hoverSummary.hoverPreparation,
             popupInvestigation: popupInspection.diagnostics(), ...snapshots,
-            nativeRecovery: { ...snapshots.nativeRecovery, alignmentRestores: nativePopup.diagnostics().alignmentRestores,
-                alignmentRestoreFailures: nativePopup.diagnostics().alignmentRestoreFailures },
-            undoRetention: listMutations.workDiagnostics(), resize: responsive.diagnostics().resize, imageResources: gridView.images.diagnostics(), ...hover.diagnostics(), ...listView.diagnostics(), nativeCollection: nativeCarousel.diagnostics().collection, grid: gridView.diagnostics() };
+            nativeRecovery: { ...snapshots.nativeRecovery, alignmentRestores: nativeInteraction.alignmentRestores,
+                alignmentRestoreFailures: nativeInteraction.alignmentRestoreFailures },
+            undoRetention: listMutations.workDiagnostics(), resize: responsiveSummary.resize, imageResources: gridView.images.diagnostics(), ...hoverSummary, ...listView.diagnostics(), nativeCollection: carouselSummary.collection, grid: gridView.diagnostics() };
     }
 
     function createNavigationDiagnosticSink(token) { return hover.navigationSink(token); }
@@ -598,8 +599,13 @@ export function createMyListSession({ environment = globalThis, version, context
         const statusLabel = statusNode?.querySelector?.(`.${STATUS_LABEL_CLASS}`)?.textContent || '';
         const statusMeta = statusNode?.querySelector?.(`.${STATUS_META_CLASS}`)?.textContent || '';
         const statusText = [statusLabel, statusMeta].filter(Boolean).join('  ') || statusNode?.textContent || '';
-        const native = nativeSourceDiagnostics(section, scroller, track, true);
+        const carouselSummary = nativeCarousel.diagnostics({ source: { section, scroller, track, discover: true } });
+        const native = carouselSummary.source;
+        const nativeInteraction = nativePopup.diagnostics(), hoverSummary = hover.diagnostics();
+        const responsiveSummary = responsive.diagnostics(), intent = hover.intent();
         const viewingSummary = sourceState?.watchStatus ? viewing.diagnostics(sourceState.watchStatus) : null;
+
+        const viewingPresentation = sourceState?.watchStatus ? gridView.presentation() : null;
 
         return {
             url: location.href,
@@ -625,41 +631,41 @@ export function createMyListSession({ environment = globalThis, version, context
             sourceCards: native?.sourceCards ?? 0,
             currentPageCards: native?.currentPageCards ?? 0,
             gridCards: sourceState?.cloneMap?.size ?? 0,
-            performanceWork: collectPerformanceDiagnostics(),
+            performanceWork: collectPerformanceDiagnostics({ hoverSummary, nativeInteraction, responsiveSummary, carouselSummary }),
             undoRetention: listMutations.undoDiagnostics(),
             reconciliation: listMutations.deferralDiagnostics(),
             viewingStatus: sourceState?.watchStatus ? {
-                completed: gridView.presentation().completedCount,
-                unknown: gridView.presentation().unknownCount,
+                completed: viewingPresentation.completedCount,
+                unknown: viewingPresentation.unknownCount,
                 ...viewingSummary
             } : null,
             sourceScan: native?.sourceScan ?? false,
             sourceParked: native?.sourceParked ?? false,
-            sourceGeometryProxy: nativePopup.diagnostics().geometryOwned,
+            sourceGeometryProxy: nativeInteraction.geometryOwned,
             hoverPresentation: 'netflix-native',
-            nativeHoverOwned: nativePopup.diagnostics().replayOwned,
-            nativePreviewOwned: nativePopup.diagnostics().previewOwned,
-            nativeInteraction: nativePopup.diagnostics(),
+            nativeHoverOwned: nativeInteraction.replayOwned,
+            nativePreviewOwned: nativeInteraction.previewOwned,
+            nativeInteraction,
             viewOriginalMyList: settings.preferences().viewOriginalMyList,
             myListSyncMode: 'event-driven',
             pendingMyListMutations: listMutations.pendingDiagnostics(),
             layout: layoutSummary(sourceState?.layout),
-            activeVideoId: hover.intent().videoId,
-            activePage: hover.intent().page,
-            activeClone: hover.intent().clone ? {
-                videoId: hover.intent().clone.getAttribute('data-tm-item-video-id') || '',
-                page: hover.intent().clone.getAttribute('data-tm-item-page') || '',
-                backedPage: hover.intent().clone.getAttribute('data-tm-backed-page') || '',
-                hoverReady: hover.intent().clone.getAttribute('data-tm-hover-ready') === 'true',
-                connected: Boolean(hover.intent().clone.isConnected),
-                rect: rectSummary(hover.intent().clone.getBoundingClientRect?.())
+            activeVideoId: intent.videoId,
+            activePage: intent.page,
+            activeClone: intent.clone ? {
+                videoId: intent.clone.getAttribute('data-tm-item-video-id') || '',
+                page: intent.clone.getAttribute('data-tm-item-page') || '',
+                backedPage: intent.clone.getAttribute('data-tm-backed-page') || '',
+                hoverReady: intent.clone.getAttribute('data-tm-hover-ready') === 'true',
+                connected: Boolean(intent.clone.isConnected),
+                rect: rectSummary(intent.clone.getBoundingClientRect?.())
             } : null,
             activeSourceSlot: nativePopup.describeActiveSource(),
-            hoverToken: hover.intent().token,
-            ...responsive.diagnostics(),
+            hoverToken: intent.token,
+            ...responsiveSummary,
             resizeViewportSignature: sourceState?.resizeViewportSignature || '',
-            hoverScrollState: hover.diagnostics().hoverScrollState,
-            pointer: { x: hover.intent().pointerX, y: hover.intent().pointerY }
+            hoverScrollState: hoverSummary.hoverScrollState,
+            pointer: { x: intent.pointerX, y: intent.pointerY }
         };
     }
 

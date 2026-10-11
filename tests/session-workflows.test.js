@@ -7,6 +7,37 @@ import { viewingVideo, atom, reference, carouselPayload } from './helpers/fixtur
 const ids = parent => parent.children.filter(node => node.getAttribute('data-tm-item-video-id') !== null).map(node => node.getAttribute('data-tm-item-video-id'));
 const groupIds = e => ({ main: ids(e.grid()), watched: ids(e.grid().querySelector('[data-tm-watch-grid]')) });
 
+test('real CopyLogs snapshots retain coherent hover projections and sample fresh state after departure', async () => {
+    const e = sessionBrowser(); await e.start();
+    const initial = await e.snapshot();
+    assert.equal(initial.activeClone, null);
+    assert.equal(initial.activeVideoId, null);
+    e.grid().querySelector('[data-tm-filter-value="all"]').dispatchEvent({ type: 'click' });
+    e.over('2');
+    await e.drain(() => e.events.some(event => event.id === '2' && event.type === 'mouseover'));
+    const active = await e.snapshot();
+    assert.equal(active.activeVideoId, '2');
+    assert.equal(active.activeClone.videoId, active.activeVideoId);
+    assert.equal(Number(active.activeClone.page), active.activePage);
+    assert.equal(active.activeClone.connected, true);
+    assert.deepEqual(active.pointer, { x: -1, y: -1 });
+    assert.equal(active.sourceGeometryProxy, active.nativeInteraction.geometryOwned);
+    assert.equal(active.nativeHoverOwned, active.nativeInteraction.replayOwned);
+    assert.equal(active.nativePreviewOwned, active.nativeInteraction.previewOwned);
+    assert.equal(active.performanceWork.nativeRecovery.alignmentRestores, active.nativeInteraction.alignmentRestores);
+    assert.equal(active.performanceWork.nativeRecovery.alignmentRestoreFailures, active.nativeInteraction.alignmentRestoreFailures);
+    assert.deepEqual(active.performanceWork.hoverScrollState, active.hoverScrollState);
+    assert.deepEqual(active.performanceWork.resize, active.resize);
+    const clone = e.grid().querySelector('[data-tm-item-video-id="2"]');
+    e.leavePointer(clone); await e.scheduler.flush();
+    const departed = await e.snapshot();
+    assert.equal(departed.activeClone, null);
+    assert.equal(departed.activeVideoId, null);
+    assert.equal(departed.nativeHoverOwned, false);
+    assert.equal(active.activeClone.connected, true, 'exported observations remain independent of later departure');
+    e.dispose();
+});
+
 test('real session remove and native Undo preserve title order, counts and exact card ownership', async () => {
     const e = sessionBrowser(); await e.start();
     const old = e.grid().querySelector('[data-tm-item-video-id="3"]');
