@@ -95,6 +95,7 @@ src/main.js
         -> viewing/viewing.js -> viewing/browsing.js: shared choices/completion and bounded metadata checks
         -> recommendations/refill.js: stationary refill observation and bounded loading-capability diagnostics
         -> recommendations/navigation.js: bounded passive before/export-time native-arrow evidence
+        -> recommendations/saved-choices-panel.js: private saved-choice presentation, commands, focus and Escape lifetime
         -> netflix/recommendation-dom.js: native browsing-card identity, collapse leases and stationary loading facts
             -> recommendation-requests.js: bounded native GraphQL request/response evidence
      -> app/my-list-session.js: one My List visit's composition and transactions
@@ -218,6 +219,8 @@ The native arrow CSS fills its existing positioned carousel container from top t
 Recommendation navigation owns bounded chronological evidence: twenty arrow interactions, three timed row samples per interaction, 240 meaningful pointer/click/action/scroll transitions and per-row observed-ID history capped1200. Samples distinguish mounted additions from first-observed IDs and freeze request/row facts before a later arrow can overwrite the outcome. Owned timers and histories retire on route/profile/disposal. The adapter supplies visible ID order and copied arrow/container rectangles/styles; these are passive facts, not authority to operate Netflix. Existing native arrow wrappers carry the translucent surface; their inner buttons fill that area transparently.
 
 Recommendation-dom privately samples each row once per synchronous refill/diagnostic read, measuring the scroller once and each unhidden card once. Both summaries use the same width-greater-than-one and inclusive center-in-scroller visibility rule. Samples are not cached across calls or native reflow callbacks; mounted order, hidden counts, offscreen counts and diagnostic truncation rules remain distinct. Only existing public summaries leave the adapter, with no shared DOM sample exposed to refill or navigation.
+
+The private saved-choices panel owns its DOM, styles, grouping/rendering, open/close state, focus restoration, input identity map and explicit Escape listener lifetime. Recommendations supplies semantic choice snapshots and current title labels; the panel returns captured commands rather than writing storage or changing viewing choices. Recommendations retains delegated click dispatch, route/profile/epoch admission and persistence, including rejection of disconnected saved-row buttons. Profile changes reset panel expansion without moving focus; route disposal removes its root and listener, and later activation creates a fresh root. Panel styles are composed into the existing recommendation style resource rather than introducing a second stylesheet lifetime.
 
 Native arrow dimensions are leased by recommendation-dom per decorated row. The adapter measures visible artwork and its actual action-button bounds, converts its top into each existing control’s offset-parent coordinates, and leases explicit height/top/bottom and horizontal edge values. Rescans and window resize refresh the lease; last-card retirement restores only still-owned values, including replaced controls. Control evidence includes bounded parent/icon boxes and top/middle/bottom hit-test facts; diagnostics do not operate the arrow.
 

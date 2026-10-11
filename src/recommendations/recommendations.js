@@ -1,6 +1,7 @@
 import { createRecommendationDom, RECOMMENDATION_ARROW_STYLES } from '../netflix/recommendation-dom.js';
 import { createCardActions, CARD_ACTION_STYLES } from '../card-actions.js';
 import { createRefill } from './refill.js';
+import { createSavedChoicesPanel, SAVED_CHOICES_PANEL_STYLES } from './saved-choices-panel.js';
 import { createNavigationDiagnostics } from './navigation.js';
 import { createBrowsingViewing } from '../viewing/viewing.js';
 
@@ -9,13 +10,18 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     const dom = createRecommendationDom(environment), entries = new Map(), buttons = new WeakMap();
     const key = 'legacyMyListForNetflix.recommendationChoices.v1.';
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
-    let titles = {}, manager = null, scrollTimer = null;
+    let titles = {}, scrollTimer = null;
     const pending = new Set();
     const allowed = () => location.origin === 'https://www.netflix.com' &&
         (location.pathname === '/browse' || (location.pathname.startsWith('/browse/') && location.pathname !== '/browse/my-list') || location.pathname === '/search');
     const readProfile = () => { const value = context.activeProfile(); return typeof value === 'string' && value ? value : null; };
     const viewing = createBrowsingViewing({ environment, context, userscript, data: viewingData,
         isCurrent: () => active && allowed() && Boolean(profile) && readProfile() === profile, onChange: viewingChanged, log, warn });
+    const savedPanel = createSavedChoicesPanel({ document, tUi,
+        readPresentation: () => ({ profile, epoch, failed,
+            records: [...viewing.ids().map(id => ({ id, reason: 'viewing', type: viewing.type(id) })),
+                ...Object.keys(choices).map(id => ({ id, reason: choices[id], type: 'unknown' }))] }),
+        readTitle: id => titles[id] || [...entries.values()].find(entry => entry.id === id && entry.title)?.title });
     function visibleChoices() { return { ...Object.fromEntries(viewing.ids().map(id => [id, 'watched'])), ...choices }; }
     function viewingChanged() {
         if (!active || !profile || readProfile() !== profile || !allowed()) return;
@@ -34,7 +40,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             for (const entry of entries.values()) paint(entry);
             // Refill the bounded metadata queue from mounted cards as slots become available.
             viewing.observe([...entries.values()]);
-            paintManager(); updateRefill();
+            savedPanel.paint(); updateRefill();
             if (migrated) log('Legacy browsing viewing choices migrated', { count: migrated });
         } catch (error) { warn('Browsing viewing migration unavailable', { reason: error.message }); }
     }
@@ -73,64 +79,13 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         refill.dispose(); navigation.dispose(); viewing.dispose();
         for (const entry of [...entries.values()]) release(entry);
         profile = next; choices = {}; titles = {}; failed = false; epoch++; pending.clear(); queued = false;
-        if (manager) { manager.panel.hidden = true; manager.toggle.setAttribute('aria-expanded', 'false'); }
+        savedPanel.reset();
         if (next) try { const loaded = read(next); if (readProfile() === next) ({ choices, titles } = loaded); else profile = null; }
         catch (error) { failed = true; warn('Recommendation choices unavailable', { reason: error.message }); }
         if (profile && !failed) {
             viewing.reset(); viewing.observe(Object.keys(choices).filter(id => choices[id] === 'watched').map(id => ({ id })));
         }
-        paintManager();
-    }
-    function paintManager() {
-        if (!manager) return;
-        const focusedIndex = [...manager.list.querySelectorAll('button')].indexOf(document.activeElement);
-        manager.root.hidden = !profile;
-        const records = [...viewing.ids().map(id => ({ id, reason: 'viewing', type: viewing.type(id) })),
-            ...Object.keys(choices).map(id => ({ id, reason: choices[id], type: 'unknown' }))];
-        manager.toggle.textContent = `${tUi('watchedCaughtUp')} / ${tUi('recommendationHidden')} (${records.length})`;
-        if (manager.panel.hidden) { manager.list.replaceChildren(); return; }
-        const nodes = [];
-        if (failed || !records.length) {
-            const message = document.createElement('p');
-            message.textContent = tUi(failed ? 'viewingChoiceStorageFailed' : 'noRecommendationChoices'); nodes.push(message);
-        } else for (const [type, key] of [['movie', 'filterFilms'], ['series', 'filterSeries'], ['watched', 'watchedCaughtUp'], ['hide', 'recommendationHidden']]) {
-            const selected = records.filter(record => type === 'movie' || type === 'series'
-                ? record.reason === 'viewing' && record.type === type : record.reason === type || type === 'watched' && record.reason === 'viewing' && !['movie', 'series'].includes(record.type));
-            if (!selected.length) continue;
-            const heading = document.createElement('h3');
-            heading.textContent = tUi(key); nodes.push(heading);
-            for (const { id, reason } of selected) {
-                const row = document.createElement('div'); row.className = 'tm-rec-saved-row';
-                const name = document.createElement('a');
-                name.textContent = titles[id] || [...entries.values()].find(entry => entry.id === id && entry.title)?.title || `#${id}`;
-                name.setAttribute('href', `/title/${id}`);
-                const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '\u00d7';
-                remove.setAttribute('aria-label', `${tUi('undoRecommendation')}: ${name.textContent}`); remove.title = tUi('undoRecommendation');
-                buttons.set(remove, { action: 'undo', id, reason, profile, epoch }); row.appendChild(name); row.appendChild(remove); nodes.push(row);
-            }
-        }
-        manager.list.replaceChildren(...nodes);
-        if (focusedIndex >= 0) {
-            const remaining = manager.list.querySelectorAll('button');
-            (remaining[Math.min(focusedIndex, remaining.length - 1)] || manager.close).focus?.();
-        }
-    }
-    function mountManager() {
-        if (manager) return;
-        const root = document.createElement('aside'); root.className = 'tm-rec-manager';
-        const toggle = document.createElement('button'); toggle.type = 'button'; toggle.setAttribute('aria-expanded', 'false');
-        toggle.setAttribute('aria-controls', 'tm-rec-saved-panel'); buttons.set(toggle, { action: 'manager' });
-        const panel = document.createElement('section'); panel.id = 'tm-rec-saved-panel'; panel.hidden = true;
-        panel.setAttribute('aria-label', `${tUi('watchedCaughtUp')} / ${tUi('recommendationHidden')}`);
-        const close = document.createElement('button'); close.type = 'button'; close.textContent = '\u00d7';
-        close.setAttribute('aria-label', tUi('closeRecommendationPanel')); buttons.set(close, { action: 'close' });
-        const list = document.createElement('div'); panel.appendChild(close); panel.appendChild(list); root.appendChild(toggle); root.appendChild(panel);
-        manager = { root, toggle, panel, close, list }; document.body.appendChild(root); paintManager();
-    }
-    function keydown(event) {
-        if (event.key === 'Escape' && manager && !manager.panel.hidden) {
-            manager.panel.hidden = true; manager.toggle.setAttribute('aria-expanded', 'false'); manager.list.replaceChildren(); manager.toggle.focus?.();
-        }
+        savedPanel.paint();
     }
     function paint(entry) {
         const reason = choices[entry.id] || (viewing.complete(entry.id) ? 'watched' : null);
@@ -167,7 +122,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     function scan(root = document) {
         if (!active || !allowed()) return;
         const previous = profile; syncProfile();
-        mountManager();
+        savedPanel.mount();
         if (!profile) return;
         if (previous !== profile) root = document;
         for (const entry of [...entries.values()]) if (!entry.lease.current()) release(entry);
@@ -177,7 +132,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         if (!style) {
             style = document.createElement('style');
             style.textContent = CARD_ACTION_STYLES + RECOMMENDATION_ARROW_STYLES + '\n.tm-rec-controls{opacity:1;pointer-events:auto}';
-            style.textContent += '\n.tm-rec-manager{position:fixed;right:16px;top:100px;z-index:10000;font:14px system-ui;color:#fff}.tm-rec-manager[hidden],.tm-rec-manager [hidden]{display:none!important}.tm-rec-manager button{background:#242424;color:#fff;border:1px solid #777;border-radius:5px;padding:8px;cursor:pointer}.tm-rec-manager button:focus-visible,.tm-rec-manager a:focus-visible{outline:2px solid #fff;outline-offset:2px}.tm-rec-manager section{margin-top:8px;width:min(360px,calc(100vw - 32px));max-height:70vh;overflow:auto;background:#181818;border:1px solid #555;border-radius:8px;padding:12px;box-sizing:border-box;box-shadow:0 8px 24px #0008}.tm-rec-manager section>button{display:block;margin-left:auto}.tm-rec-saved-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #333}.tm-rec-saved-row a{flex:1;color:#eee;text-decoration:none;overflow-wrap:anywhere}.tm-rec-saved-row button{border:0;background:transparent;font-size:22px;padding:0 8px}.tm-rec-manager h3{font-size:14px}';
+            style.textContent += SAVED_CHOICES_PANEL_STYLES;
             document.head.appendChild(style);
             environment.window?.addEventListener('resize', resize);
         }
@@ -193,15 +148,13 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     }
     function click(event) {
         navigation.click(event.target); navigation.movement('click', event.target, { x: event.clientX, y: event.clientY });
-        const button = event.target?.closest?.('button'), input = buttons.get(button);
+        const button = event.target?.closest?.('button'), input = buttons.get(button) || savedPanel.inputFor(button);
         if (!input || (input.entry && entries.get(input.entry.host) !== input.entry)) return;
         event.preventDefault(); event.stopImmediatePropagation();
         if (!active || !allowed()) { check(); return; }
         if (input.action === 'manager' || input.action === 'close') {
-            syncProfile(); if (!profile || !manager) return;
-            manager.panel.hidden = input.action === 'close' || !manager.panel.hidden;
-            manager.toggle.setAttribute('aria-expanded', String(!manager.panel.hidden)); paintManager();
-            (manager.panel.hidden ? manager.toggle : manager.close).focus?.(); return;
+            syncProfile(); if (!profile) return;
+            savedPanel.activate(input.action); return;
         }
         const before = profile; syncProfile();
         if (!profile || failed || profile !== before || (input.entry ? !input.entry.lease.current() :
@@ -217,7 +170,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
                 if (!viewing.mark(id).saved) { paint(input.entry); return; }
                 delete latest.choices[id];
             } else if (input.action === 'undo') {
-                if (input.reason === 'viewing' && !viewing.restore(id).saved) { paintManager(); return; }
+                if (input.reason === 'viewing' && !viewing.restore(id).saved) { savedPanel.paint(); return; }
                 if (input.reason !== 'viewing') delete latest.choices[id];
                 if (!viewing.ids().includes(id) && !latest.choices[id]) delete latest.titles[id];
             } else latest.choices[id] = input.action;
@@ -228,12 +181,12 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             if (readProfile() !== p || epoch !== owner || !active || !allowed()) { check(); return; }
             ({ choices, titles } = latest);
             for (const entry of entries.values()) paint(entry);
-            paintManager();
+            savedPanel.paint();
             updateRefill(input.action !== 'undo' ? input.entry : null);
             navigation.movement('action', input.entry?.card, { action: diagnosticAction, id });
             navigation.savedAction(input.entry?.row, actionBefore, diagnosticAction, id);
             log('Recommendation visibility choice saved', { action: input.action, hiddenCount: Object.keys(choices).length });
-        } catch (error) { failed = true; for (const entry of entries.values()) paint(entry); paintManager();
+        } catch (error) { failed = true; for (const entry of entries.values()) paint(entry); savedPanel.paint();
             warn('Recommendation choice could not be saved', { reason: error.message }); }
     }
     function pointer(event) {
@@ -268,7 +221,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         if (!allowed()) { dispose(); return; }
         if (!active) { active = true; epoch++;
             environment.window?.addEventListener('scroll', scroll, { passive: true });
-            document.addEventListener('click', click, true); document.addEventListener('pointerover', pointer, true); document.addEventListener('keydown', keydown, true); }
+            document.addEventListener('click', click, true); document.addEventListener('pointerover', pointer, true); savedPanel.start(); }
         scan(); observe();
     }
     function dispose() {
@@ -278,7 +231,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         if (scrollTimer !== null) environment.clearTimeout(scrollTimer); scrollTimer = null;
         active = false; epoch++; queued = false; pending.clear(); observer?.disconnect(); observer = null;
         document.removeEventListener('click', click, true); document.removeEventListener('pointerover', pointer, true);
-        document.removeEventListener('keydown', keydown, true); manager?.root.remove(); manager = null;
+        savedPanel.dispose();
         for (const entry of [...entries.values()]) release(entry);
         style?.remove(); style = null; profile = null; choices = {}; titles = {}; failed = false;
     }

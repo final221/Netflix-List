@@ -350,6 +350,34 @@ test('saved-choices panel restores both reasons without mounted cards and rememb
     b.feature.dispose(); assert.equal(root.isConnected, false); assert.equal(b.document.listenerCount('keydown'), 0);
 });
 
+test('saved panel preserves focus across row removal, Escape, toggle and close', () => {
+    const b = setup(), createElement = b.document.createElement.bind(b.document);
+    b.document.createElement = tag => {
+        const node = createElement(tag); node.focus = () => { b.document.activeElement = node; }; return node;
+    };
+    const a = mount(b, '1'), second = mount(b, '2');
+    b.feature.check(); b.click(a.host, 'Hide suggestion'); b.click(second.host, 'Hide suggestion');
+    const root = b.document.querySelector('.tm-rec-manager'), toggle = root.querySelector('button');
+    const panel = root.querySelector('section'), close = panel.querySelector('button');
+    b.click(root, toggle.textContent); assert.equal(b.document.activeElement, close);
+    const last = root.querySelectorAll('.tm-rec-saved-row')[1].querySelector('button');
+    last.focus(); b.document.dispatchEvent({ type: 'click', target: last, preventDefault() {}, stopImmediatePropagation() {} });
+    const remaining = root.querySelector('.tm-rec-saved-row').querySelector('button');
+    assert.equal(b.document.activeElement, remaining);
+    b.document.dispatchEvent({ type: 'click', target: remaining, preventDefault() {}, stopImmediatePropagation() {} });
+    assert.equal(b.document.activeElement, close);
+    b.document.dispatchEvent({ type: 'keydown', key: 'Escape' });
+    assert.equal(b.document.activeElement, toggle); assert.equal(panel.hidden, true);
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+    b.click(root, toggle.textContent); assert.equal(b.document.activeElement, close);
+    b.click(root, toggle.textContent); assert.equal(b.document.activeElement, toggle);
+    b.click(root, toggle.textContent); b.click(root, '\u00d7');
+    assert.equal(b.document.activeElement, toggle); assert.equal(panel.hidden, true);
+    b.feature.dispose(); b.feature.dispose(); b.feature.check();
+    assert.equal(b.document.listenerCount('keydown'), 1); assert.equal(root.isConnected, false);
+    b.feature.dispose(); assert.equal(b.document.listenerCount('keydown'), 0);
+});
+
 test('old choices can be restored from the panel and visible duplicate cards return immediately', () => {
     const b = setup(); b.saved.set('legacyMyListForNetflix.recommendationChoices.v1.A', { version: 1, choices: { 1: 'watched', 2: 'hide' } });
     const a = mount(b), duplicate = mount(b); b.feature.check();
