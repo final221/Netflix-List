@@ -2,7 +2,7 @@
 
 ## Current refactor measurements
 
-Release **1.9.24**, 2026-10-12: **55 authored runtime modules, 17,421 readable physical lines**. Counts include comments and blank lines, excluding a final empty line. Restoration extraction in 1.9.16 added 20 lines (17,381 → 17,401); initialization-exit consolidation in 1.9.17 removed six (17,401 → 17,395); diagnostic-record consolidation in 1.9.18 added three (17,395 → 17,398); recommendation-row sampling in 1.9.19 left the total unchanged; saved-panel ownership in 1.9.20 added 27 (17,398 → 17,425); responsive page-hint publication in 1.9.21 removes one (17,425 → 17,424). Readiness ownership in 1.9.22 adds 18 (17,424 → 17,442). Diagnostic snapshot sampling in 1.9.23 adds six (17,442 → 17,448). Diagnostic export simplification in 1.9.24 removes 27 lines (17,448 → 17,421) and the unreachable clipboard transport. Earlier changes are focused locality/coordination improvements rather than a substantial source reduction. Before/after counts below refer to each module's selected refactor.
+Release **1.9.25**, 2026-10-12: **56 authored runtime modules, 17,431 readable physical lines**. Counts include comments and blank lines, excluding a final empty line. Restoration extraction in 1.9.16 added 20 lines (17,381 → 17,401); initialization-exit consolidation in 1.9.17 removed six (17,401 → 17,395); diagnostic-record consolidation in 1.9.18 added three (17,395 → 17,398); recommendation-row sampling in 1.9.19 left the total unchanged; saved-panel ownership in 1.9.20 added 27 (17,398 → 17,425); responsive page-hint publication in 1.9.21 removes one (17,425 → 17,424). Readiness ownership in 1.9.22 adds 18 (17,424 → 17,442). Diagnostic snapshot sampling in 1.9.23 adds six (17,442 → 17,448). Diagnostic export simplification in 1.9.24 removes 27 lines (17,448 → 17,421) and the unreachable clipboard transport. Mismatch-dialog ownership in 1.9.25 adds ten lines (17,421 → 17,431). Earlier changes are focused locality/coordination improvements rather than a substantial source reduction. Before/after counts below refer to each module's selected refactor.
 
 | Affected module under src/ | Before | After | Responsibility |
 | --- | ---: | ---: | --- |
@@ -13,13 +13,15 @@ Release **1.9.24**, 2026-10-12: **55 authored runtime modules, 17,421 readable p
 | `app/my-list-session.js` | 2,675 | 2,681 | Composes page-session transactions; runtime snapshots reuse call-local provider summaries and retain the consolidated initialization exit helper. |
 | `diagnostics/report.js` | 179 | 154 | Compact/detailed report construction and copied snapshots; delegates export to the required application-owned Save As writer. |
 | `i18n/log-messages.js` | 138 | 136 | Diagnostic translations; obsolete clipboard fallback messages removed. |
+| `grid/frame.js` | 373 | 330 | Owns status/root/empty/synthetic publication, geometry and frame cleanup; composes private dialog retirement/release. |
+| `grid/mismatch-dialog.js` | — | 53 | Private mismatch DOM, listener/action admission, replacement and exact retirement/release. |
 | `recommendations/navigation.js` | 102 | 105 | Passive interaction evidence; shared record creation with independent arrow/action histories and their existing timer/retirement owner. |
 | `netflix/recommendation-dom.js` | 389 | 389 | Native recommendation DOM/leases and passive evidence; one private row sample shares visibility and geometry facts between refill and diagnostics. |
 | `recommendations/recommendations.js` | 288 | 241 | Browsing composition, storage, metadata, native card leases and delegated input admission; supplies semantic panel facts and consumes captured commands. |
 | `recommendations/saved-choices-panel.js` | — | 74 | Private saved-choice DOM/styles, grouping, open/close/focus, button identity and explicit Escape listener lifetime. |
 | `app/responsive.js` | 594 | 593 | Complete responsive transaction; one local page-hint publication loop with caller-owned mapping/observation admission and clone policy. |
 
-These counts trigger whole-module assessment, not automatic splitting or blanket retention. The generated userscript changes separately from 21,261 (1.9.15) to 21,311 (1.9.16) to 21,305 (1.9.17) to 21,298 (1.9.18) to 21,304 (1.9.19) to 21,341 (1.9.20) to 21,352 (1.9.21) to 21,402 (1.9.22) to 21,411 (1.9.23) to 21,375 (1.9.24) lines. The full inventory below remains a historical snapshot and does not describe current module totals.
+These counts trigger whole-module assessment, not automatic splitting or blanket retention. The generated userscript changes separately from 21,261 (1.9.15) to 21,311 (1.9.16) to 21,305 (1.9.17) to 21,298 (1.9.18) to 21,304 (1.9.19) to 21,341 (1.9.20) to 21,352 (1.9.21) to 21,402 (1.9.22) to 21,411 (1.9.23) to 21,375 (1.9.24) to 21,384 (1.9.25) lines. The full inventory below remains a historical snapshot and does not describe current module totals.
 
 ## Historical full inventory
 

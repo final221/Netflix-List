@@ -1,16 +1,18 @@
 import { GRID_ID, STATUS_ID, STATUS_TEXT_CLASS, STATUS_LABEL_CLASS, STATUS_META_CLASS,
-    ORDER_MISMATCH_DIALOG_ID, OLD_IDS, OLD_STYLE_IDS, LEGACY_EMPTY_STATE_ID,
+    OLD_IDS, OLD_STYLE_IDS, LEGACY_EMPTY_STATE_ID,
     SYNTHETIC_SECTION_ID, ORIGINAL_HEADER_CLASS, SECTION_ATTR } from '../dom-names.js';
 import { installStyles } from './styles.js';
+import { createMismatchDialog } from './mismatch-dialog.js';
 
 // Script-owned presentation resources. Native and membership policy are supplied by callers.
 export function createFrame({ document, tUi, isActive, createError,
     readEmptyContent, readEmptyShell, cloneEmptyContent }) {
     let root = null;
-    let status = null, style = null, dialog = null;
-    let generation = 0, frameRevision = 0, dialogRevision = 0, releaseFailures = 0;
+    let status = null, style = null;
+    let generation = 0, frameRevision = 0, releaseFailures = 0;
     let empty = null, emptyTemplate = null, emptyMessage = '', synthetic = null, emptyRevision = 0, syntheticRevision = 0;
     const retiredStatuses = new WeakSet();
+    const mismatch = createMismatchDialog({ document, isActive, createError, attemptRelease });
     function attemptRelease(action) { try { action(); } catch (_) { releaseFailures++; } }
     function assertStatus(node) {
         if (!node || node !== status) throw createError('GRID_FRAME_RETIRED', 'Status frame is no longer current');
@@ -63,51 +65,6 @@ export function createFrame({ document, tUi, isActive, createError,
         if (anchor?.isConnected) anchor.insertAdjacentElement('afterend', node);
         else section.prepend(node);
         guard();
-    }
-    function releaseDialog(resource) {
-        if (!resource) return;
-        for (const [node, listener] of resource.listeners) attemptRelease(() => node.removeEventListener('click', listener));
-        attemptRelease(() => resource.node.remove());
-    }
-    function hideMismatch() {
-        const previous = dialog; dialog = null; dialogRevision++;
-        releaseDialog(previous);
-    }
-    function showMismatch({ message, acceptLabel, cancelLabel, onAccept, onCancel, assertCurrent }) {
-        const owner = generation, revision = ++dialogRevision;
-        const guard = () => {
-            assertCurrent();
-            if (generation !== owner || revision !== dialogRevision || !isActive()) {
-                throw createError('GRID_FRAME_RETIRED', 'Dialog frame is no longer current');
-            }
-        };
-        guard();
-        const previous = dialog; dialog = null; releaseDialog(previous); guard();
-        const node = document.createElement('div'); node.id = ORDER_MISMATCH_DIALOG_ID;
-        node.setAttribute('role', 'alertdialog'); node.setAttribute('aria-modal', 'false'); node.setAttribute('aria-label', message);
-        const text = document.createElement('div'); text.setAttribute('data-tm-order-message', 'true'); text.textContent = message;
-        const actions = document.createElement('div'); actions.setAttribute('data-tm-order-actions', 'true');
-        const resource = { node, listeners: [], used: false };
-        const button = (label, marker, action) => {
-            const control = document.createElement('button'); control.type = 'button'; control.textContent = label;
-            control.setAttribute(marker, 'true');
-            const listener = () => {
-                if (dialog !== resource || resource.used || !node.isConnected) return;
-                try { guard(); } catch (_) { return; }
-                if (dialog !== resource) return;
-                resource.used = true;
-                for (const [element, callback] of resource.listeners) attemptRelease(() => element.removeEventListener('click', callback));
-                try { guard(); } catch (_) { return; }
-                if (dialog !== resource) return;
-                action();
-            };
-            resource.listeners.push([control, listener]); control.addEventListener('click', listener); actions.appendChild(control);
-        };
-        button(acceptLabel, 'data-tm-order-ok', onAccept); button(cancelLabel, 'data-tm-order-cancel', onCancel);
-        node.append(text, actions); guard(); dialog = resource;
-        (document.body || document.documentElement).appendChild(node);
-        try { guard(); } catch (error) { if (dialog === resource) hideMismatch(); throw error; }
-        return node;
     }
     function installResources(assertCurrent = () => {}) {
         const owner = generation;
@@ -341,15 +298,15 @@ export function createFrame({ document, tUi, isActive, createError,
         }
     }
     function retire() {
-        const previous = { root, status, style, dialog, empty, synthetic };
+        const previous = { root, status, style, dialog: mismatch.retire(), empty, synthetic };
         if (status) retiredStatuses.add(status);
-        root = status = style = dialog = null;
+        root = status = style = null;
         empty = emptyTemplate = synthetic = null; emptyMessage = ''; emptyRevision++; syntheticRevision++;
-        generation++; frameRevision++; dialogRevision++;
+        generation++; frameRevision++;
         return previous;
     }
     function release(previous) {
-        releaseDialog(previous.dialog);
+        mismatch.release(previous.dialog);
         for (const node of [previous.root, previous.status, previous.style, previous.empty, previous.synthetic]) {
             // A reentrant lifecycle can explicitly acquire an existing resource before old cleanup finishes.
             if (node && node !== root && node !== status && node !== style && node !== empty && node !== synthetic) attemptRelease(() => node.remove());
@@ -360,7 +317,7 @@ export function createFrame({ document, tUi, isActive, createError,
     }
     return { get root() { return root; }, get status() { return status; }, createRoot, updateGeometry, publish, mount, releaseReplacedRoot,
         clearCards, setEmpty, moveCard, orderChildren, retire, release, assertParent,
-        updateStatus, layoutStatus, applyStatusTypography, placeStatus, showMismatch, hideMismatch, installResources, cleanupArtifacts,
+        updateStatus, layoutStatus, applyStatusTypography, placeStatus, showMismatch: mismatch.show, hideMismatch: mismatch.hide, installResources, cleanupArtifacts,
         geometry, clearEmpty, resetEmpty, presentEmpty, layoutEmpty, ensureSynthetic, removeSynthetic,
         emptyPresentation: () => ({ connected: Boolean(empty?.isConnected), source: empty?.getAttribute('data-tm-empty-source') || null }),
         setRefreshing(node, refreshing) {

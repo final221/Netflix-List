@@ -154,3 +154,42 @@ test('reentrant dialog publication preserves its newer owner and cannot execute 
     click(replacement.querySelector('[data-tm-order-ok]'));
     assert.equal(accepted, 1);
 });
+
+test('dialog action cleanup cannot execute an obsolete action after publishing a replacement', () => {
+    const e = fixture(); let accepted = 0, replacement;
+    const options = { message: 'Order', acceptLabel: 'OK', cancelLabel: 'Cancel',
+        assertCurrent() {}, onAccept: () => accepted++, onCancel() {} };
+    const old = e.grid.showMismatch(options), ok = old.querySelector('[data-tm-order-ok]');
+    const remove = ok.removeEventListener.bind(ok);
+    ok.removeEventListener = (...args) => {
+        remove(...args);
+        if (!replacement) { replacement = true; replacement = e.grid.showMismatch(options); }
+    };
+    click(ok);
+    assert.equal(accepted, 0);
+    assert.equal(old.isConnected, false);
+    assert.equal(replacement.isConnected, true);
+    click(replacement.querySelector('[data-tm-order-ok]'));
+    assert.equal(accepted, 1);
+});
+
+test('dialog retirement attempts each release and preserves a dialog acquired during old cleanup', () => {
+    const e = fixture(); let accepted = 0, replacement;
+    const options = { message: 'Order', acceptLabel: 'OK', cancelLabel: 'Cancel',
+        assertCurrent() {}, onAccept: () => accepted++, onCancel() {} };
+    const old = e.grid.showMismatch(options), ok = old.querySelector('[data-tm-order-ok]');
+    const cancel = old.querySelector('[data-tm-order-cancel]');
+    ok.removeEventListener = () => { throw new Error('listener release failure'); };
+    const remove = old.remove.bind(old);
+    old.remove = () => { remove(); replacement = e.grid.showMismatch(options); };
+    e.grid.dispose();
+    assert.equal(cancel.listenerCount('click'), 0);
+    assert.equal(e.grid.diagnostics().frameReleaseFailures, 1);
+    assert.equal(old.isConnected, false);
+    assert.equal(replacement.isConnected, true);
+    assert.equal(e.document.getElementById(ORDER_MISMATCH_DIALOG_ID), replacement);
+    click(ok); assert.equal(accepted, 0);
+    click(replacement.querySelector('[data-tm-order-ok]')); assert.equal(accepted, 1);
+    e.grid.dispose();
+    assert.equal(replacement.isConnected, false);
+});

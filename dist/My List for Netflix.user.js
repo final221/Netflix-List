@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.24
+// @version      1.9.25
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -4135,6 +4135,91 @@ ${CARD_ACTION_STYLES}
     return style;
   }
 
+  // src/grid/mismatch-dialog.js
+  function createMismatchDialog({ document, isActive, createError, attemptRelease }) {
+    let dialog = null, revision = 0;
+    function release(resource) {
+      if (!resource) return;
+      for (const [node, listener] of resource.listeners) attemptRelease(() => node.removeEventListener("click", listener));
+      attemptRelease(() => resource.node.remove());
+    }
+    function retire() {
+      const previous = dialog;
+      dialog = null;
+      revision++;
+      return previous;
+    }
+    function hide() {
+      release(retire());
+    }
+    function show({ message, acceptLabel, cancelLabel, onAccept, onCancel, assertCurrent }) {
+      const owner = ++revision;
+      const guard = () => {
+        assertCurrent();
+        if (owner !== revision || !isActive()) {
+          throw createError("GRID_FRAME_RETIRED", "Dialog frame is no longer current");
+        }
+      };
+      guard();
+      const previous = dialog;
+      dialog = null;
+      release(previous);
+      guard();
+      const node = document.createElement("div");
+      node.id = ORDER_MISMATCH_DIALOG_ID;
+      node.setAttribute("role", "alertdialog");
+      node.setAttribute("aria-modal", "false");
+      node.setAttribute("aria-label", message);
+      const text = document.createElement("div");
+      text.setAttribute("data-tm-order-message", "true");
+      text.textContent = message;
+      const actions = document.createElement("div");
+      actions.setAttribute("data-tm-order-actions", "true");
+      const resource = { node, listeners: [], used: false };
+      const button = (label, marker, action) => {
+        const control = document.createElement("button");
+        control.type = "button";
+        control.textContent = label;
+        control.setAttribute(marker, "true");
+        const listener = () => {
+          if (dialog !== resource || resource.used || !node.isConnected) return;
+          try {
+            guard();
+          } catch (_) {
+            return;
+          }
+          if (dialog !== resource) return;
+          resource.used = true;
+          for (const [element, callback] of resource.listeners) attemptRelease(() => element.removeEventListener("click", callback));
+          try {
+            guard();
+          } catch (_) {
+            return;
+          }
+          if (dialog !== resource) return;
+          action();
+        };
+        resource.listeners.push([control, listener]);
+        control.addEventListener("click", listener);
+        actions.appendChild(control);
+      };
+      button(acceptLabel, "data-tm-order-ok", onAccept);
+      button(cancelLabel, "data-tm-order-cancel", onCancel);
+      node.append(text, actions);
+      guard();
+      dialog = resource;
+      (document.body || document.documentElement).appendChild(node);
+      try {
+        guard();
+      } catch (error) {
+        if (dialog === resource) hide();
+        throw error;
+      }
+      return node;
+    }
+    return Object.freeze({ show, hide, retire, release });
+  }
+
   // src/grid/frame.js
   function createFrame({
     document,
@@ -4146,10 +4231,11 @@ ${CARD_ACTION_STYLES}
     cloneEmptyContent
   }) {
     let root = null;
-    let status = null, style = null, dialog = null;
-    let generation = 0, frameRevision = 0, dialogRevision = 0, releaseFailures = 0;
+    let status = null, style = null;
+    let generation = 0, frameRevision = 0, releaseFailures = 0;
     let empty = null, emptyTemplate = null, emptyMessage = "", synthetic = null, emptyRevision = 0, syntheticRevision = 0;
     const retiredStatuses = /* @__PURE__ */ new WeakSet();
+    const mismatch = createMismatchDialog({ document, isActive, createError, attemptRelease });
     function attemptRelease(action) {
       try {
         action();
@@ -4228,82 +4314,6 @@ ${CARD_ACTION_STYLES}
       if (anchor?.isConnected) anchor.insertAdjacentElement("afterend", node);
       else section.prepend(node);
       guard();
-    }
-    function releaseDialog(resource) {
-      if (!resource) return;
-      for (const [node, listener] of resource.listeners) attemptRelease(() => node.removeEventListener("click", listener));
-      attemptRelease(() => resource.node.remove());
-    }
-    function hideMismatch() {
-      const previous = dialog;
-      dialog = null;
-      dialogRevision++;
-      releaseDialog(previous);
-    }
-    function showMismatch({ message, acceptLabel, cancelLabel, onAccept, onCancel, assertCurrent }) {
-      const owner = generation, revision = ++dialogRevision;
-      const guard = () => {
-        assertCurrent();
-        if (generation !== owner || revision !== dialogRevision || !isActive()) {
-          throw createError("GRID_FRAME_RETIRED", "Dialog frame is no longer current");
-        }
-      };
-      guard();
-      const previous = dialog;
-      dialog = null;
-      releaseDialog(previous);
-      guard();
-      const node = document.createElement("div");
-      node.id = ORDER_MISMATCH_DIALOG_ID;
-      node.setAttribute("role", "alertdialog");
-      node.setAttribute("aria-modal", "false");
-      node.setAttribute("aria-label", message);
-      const text = document.createElement("div");
-      text.setAttribute("data-tm-order-message", "true");
-      text.textContent = message;
-      const actions = document.createElement("div");
-      actions.setAttribute("data-tm-order-actions", "true");
-      const resource = { node, listeners: [], used: false };
-      const button = (label, marker, action) => {
-        const control = document.createElement("button");
-        control.type = "button";
-        control.textContent = label;
-        control.setAttribute(marker, "true");
-        const listener = () => {
-          if (dialog !== resource || resource.used || !node.isConnected) return;
-          try {
-            guard();
-          } catch (_) {
-            return;
-          }
-          if (dialog !== resource) return;
-          resource.used = true;
-          for (const [element, callback] of resource.listeners) attemptRelease(() => element.removeEventListener("click", callback));
-          try {
-            guard();
-          } catch (_) {
-            return;
-          }
-          if (dialog !== resource) return;
-          action();
-        };
-        resource.listeners.push([control, listener]);
-        control.addEventListener("click", listener);
-        actions.appendChild(control);
-      };
-      button(acceptLabel, "data-tm-order-ok", onAccept);
-      button(cancelLabel, "data-tm-order-cancel", onCancel);
-      node.append(text, actions);
-      guard();
-      dialog = resource;
-      (document.body || document.documentElement).appendChild(node);
-      try {
-        guard();
-      } catch (error) {
-        if (dialog === resource) hideMismatch();
-        throw error;
-      }
-      return node;
     }
     function installResources(assertCurrent = () => {
     }) {
@@ -4599,20 +4609,19 @@ ${CARD_ACTION_STYLES}
       }
     }
     function retire() {
-      const previous = { root, status, style, dialog, empty, synthetic };
+      const previous = { root, status, style, dialog: mismatch.retire(), empty, synthetic };
       if (status) retiredStatuses.add(status);
-      root = status = style = dialog = null;
+      root = status = style = null;
       empty = emptyTemplate = synthetic = null;
       emptyMessage = "";
       emptyRevision++;
       syntheticRevision++;
       generation++;
       frameRevision++;
-      dialogRevision++;
       return previous;
     }
     function release(previous) {
-      releaseDialog(previous.dialog);
+      mismatch.release(previous.dialog);
       for (const node of [previous.root, previous.status, previous.style, previous.empty, previous.synthetic]) {
         if (node && node !== root && node !== status && node !== style && node !== empty && node !== synthetic) attemptRelease(() => node.remove());
       }
@@ -4643,8 +4652,8 @@ ${CARD_ACTION_STYLES}
       layoutStatus,
       applyStatusTypography,
       placeStatus,
-      showMismatch,
-      hideMismatch,
+      showMismatch: mismatch.show,
+      hideMismatch: mismatch.hide,
       installResources,
       cleanupArtifacts,
       geometry,
@@ -21363,7 +21372,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.24";
+  var SCRIPT_VERSION = "1.9.25";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
