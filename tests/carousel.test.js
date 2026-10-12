@@ -494,6 +494,131 @@ test('discovery disposal rejects queued old observer deliveries without clearing
     assert.equal(e.carousel.diagnostics().discoveryActive, false);
 });
 
+test('discovery narrows document watching to the browse host and mounted My List section', () => {
+    const relevant = [];
+    const e = environment({ onRelevantMutation: token => relevant.push(token) });
+    let currentSection = e.section;
+    e.pageDom.findMyListSection = () => currentSection;
+    assert.equal(e.carousel.diagnostics().discoveryActive, false, 'construction is inert');
+    assert.equal(e.carousel.startDiscovery(), true);
+    assert.equal(e.carousel.startDiscovery(), false);
+    const observer = e.observers[0];
+    e.host.remove();
+    currentSection = null;
+    const documentStart = observer.observations.length;
+    assert.equal(e.carousel.refreshDiscovery(), true);
+    assert.deepEqual(observer.observations.slice(documentStart), [[e.document.documentElement, { childList: true, subtree: true }]]);
+    assert.equal(e.carousel.refreshDiscovery(), false, 'unchanged document discovery does not rebind');
+    e.document.body.appendChild(e.host);
+    const hostStart = observer.observations.length;
+    observer.callback([{ target: e.document.body, addedNodes: [e.host], removedNodes: [] }]);
+    assert.deepEqual(observer.observations[hostStart], [e.host, { childList: true, subtree: true }]);
+    const start = observer.observations.length;
+    currentSection = e.section;
+    observer.callback([{ target: e.scroller, addedNodes: [new Element('div')], removedNodes: [] }]);
+    assert.deepEqual(observer.observations.slice(start), [
+        [e.host, { childList: true, subtree: false }],
+        [e.section, { childList: true, subtree: true }],
+        [e.document.body, { childList: true }],
+        [e.document.documentElement, { childList: true }]
+    ]);
+    assert.deepEqual(relevant, [e.scope.token, e.scope.token]);
+    assert.equal(e.carousel.refreshDiscovery(), false);
+    assert.equal(e.carousel.currentBinding(), null, 'watching never adopts a source');
+    e.carousel.stopDiscovery();
+});
+
+test('discovery ignores other rows and unrelated ancestors but follows host and ancestor replacement', () => {
+    const relevant = [];
+    const e = environment({ onRelevantMutation: token => relevant.push(token) });
+    let currentSection = e.section;
+    e.pageDom.findMyListSection = () => currentSection;
+    e.carousel.startDiscovery();
+    const observer = e.observers[0];
+    const otherRow = e.host.appendChild(new Element('section'));
+    observer.callback([{ target: otherRow, addedNodes: [new Element('a')], removedNodes: [] }]);
+    observer.callback([{ target: e.document.body, addedNodes: [new Element('aside')], removedNodes: [] }]);
+    assert.deepEqual(relevant, []);
+    const replacementHost = new Element('div');
+    replacementHost.classList.add('browse');
+    currentSection = replacementHost.appendChild(new Element('section'));
+    e.host.replaceWith(replacementHost);
+    observer.callback([{ target: e.document.body, addedNodes: [replacementHost], removedNodes: [e.host] }]);
+    assert.deepEqual(relevant, [e.scope.token]);
+    assert.ok(observer.observations.some(([node, options]) => node === currentSection && options.subtree));
+    const wrapper = new Element('main');
+    e.document.body.appendChild(wrapper);
+    wrapper.appendChild(replacementHost);
+    e.carousel.refreshDiscovery();
+    wrapper.remove();
+    observer.callback([{ target: e.document.body, addedNodes: [], removedNodes: [wrapper] }]);
+    assert.deepEqual(observer.observations.at(-1), [e.document.documentElement, { childList: true, subtree: true }]);
+    assert.equal(relevant.length, 2);
+    e.carousel.stopDiscovery();
+});
+
+test('discovery preserves script UI filtering, blocked recovery and detached-grid recovery', () => {
+    let blocked = false, detached = false;
+    const deliveries = [], recoveries = [], relevant = [];
+    const e = environment({ ownedUi: { grid: 'test-grid' },
+        onMutationDelivery: () => deliveries.push('delivery'),
+        isInitializationBlocked: () => blocked, onBlockedMutation: token => recoveries.push(token),
+        isGridDetached: () => detached, onRelevantMutation: token => relevant.push(token) });
+    const grid = e.section.appendChild(new Element('div'));
+    grid.id = 'test-grid';
+    const button = grid.appendChild(new Element('button'));
+    e.carousel.startDiscovery();
+    const observer = e.observers[0];
+    const insideUi = { target: button, addedNodes: [new Element('span')], removedNodes: [] };
+    const uiOnly = { target: e.section, addedNodes: [grid], removedNodes: [] };
+    const native = { target: e.section, addedNodes: [new Element('a')], removedNodes: [] };
+    observer.callback([insideUi, uiOnly]);
+    assert.deepEqual(relevant, []);
+    blocked = true;
+    observer.callback([insideUi, uiOnly]);
+    observer.callback([insideUi, native]);
+    assert.deepEqual(recoveries, [e.scope.token]);
+    assert.deepEqual(relevant, []);
+    blocked = false;
+    observer.callback([native]);
+    detached = true;
+    grid.remove();
+    observer.callback([{ target: e.section, addedNodes: [], removedNodes: [grid] }]);
+    assert.deepEqual(relevant, [e.scope.token, e.scope.token]);
+    assert.equal(deliveries.length, 5);
+    e.carousel.stopDiscovery();
+});
+
+test('discovery coalesces current deliveries and rejects route retirement before delivery or frame publication', async () => {
+    const relevant = [], deliveries = [];
+    let retireOnCheck = false, e;
+    e = environment({ shouldCoalesce: () => true,
+        checkRoute() { if (retireOnCheck) e.carousel.stopDiscovery(); },
+        onMutationDelivery: () => deliveries.push('delivery'),
+        onRelevantMutation: token => relevant.push(token) });
+    e.carousel.startDiscovery();
+    const mutation = [{ target: e.section, addedNodes: [new Element('div')], removedNodes: [] }];
+    const observer = e.observers[0];
+    observer.callback(mutation);
+    observer.callback(mutation);
+    assert.equal(e.scheduler.frames.size, 1);
+    await e.scheduler.frame();
+    assert.deepEqual(relevant, [e.scope.token]);
+    observer.callback(mutation);
+    e.scope.begin();
+    await e.scheduler.frame();
+    observer.callback(mutation);
+    assert.equal(deliveries.length, 3);
+    assert.equal(relevant.length, 1);
+    e.carousel.stopDiscovery();
+    e.carousel.startDiscovery();
+    retireOnCheck = true;
+    e.observers[1].callback(mutation);
+    assert.equal(deliveries.length, 3);
+    assert.equal(e.carousel.diagnostics().discoveryActive, false);
+    assert.equal(e.scheduler.frames.size, 0);
+});
+
 function nativeReadEnvironment(mode = 'logical') {
     const shape = { totalCount: 600, columns: 6 };
     const counts = { profile: 0, indicators: 0, filled: 0, rects: 0, indices: 0 };

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.27
+// @version      1.9.28
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -10328,6 +10328,183 @@ ${CARD_ACTION_STYLES}
     };
   }
 
+  // src/netflix/carousel/discovery.js
+  function createDiscovery({
+    document,
+    scope,
+    MutationObserver,
+    requestAnimationFrame,
+    cancelAnimationFrame,
+    findSection: findMyListSection,
+    browseSectionsSelector,
+    uiIds,
+    checkRoute,
+    onMutationDelivery,
+    isInitializationBlocked,
+    onBlockedMutation,
+    isGridDetached,
+    shouldCoalesce,
+    onRelevantMutation
+  }) {
+    const { grid: GRID_ID2, status: STATUS_ID2, empty: LEGACY_EMPTY_STATE_ID2, dialog: ORDER_MISMATCH_DIALOG_ID2 } = uiIds;
+    let discoveryOwner = null, targetDocumentObserver = null, targetMutationFrame = null;
+    let targetObservedBrowseHost = null, targetObservedMyListSection = null, targetObservedAncestors = [];
+    let targetDocumentDiscoveryActive = false;
+    function targetDocumentObserverAncestors(host) {
+      const ancestors = [];
+      for (let node = host?.parentElement; node; node = node.parentElement) {
+        ancestors.push(node);
+      }
+      return ancestors;
+    }
+    function bindTargetDocumentObserver(host, section) {
+      if (!targetDocumentObserver) return false;
+      const ancestors = host ? targetDocumentObserverAncestors(host) : [];
+      const sameAncestors = ancestors.length === targetObservedAncestors.length && ancestors.every((ancestor, index) => ancestor === targetObservedAncestors[index]);
+      const isAlreadyWatchingDiscovery = !host && targetDocumentDiscoveryActive && !targetObservedBrowseHost;
+      if (isAlreadyWatchingDiscovery) return false;
+      if (host === targetObservedBrowseHost && section === targetObservedMyListSection && sameAncestors && !targetDocumentDiscoveryActive) {
+        return false;
+      }
+      targetDocumentObserver.disconnect();
+      targetObservedBrowseHost = null;
+      targetObservedMyListSection = null;
+      targetObservedAncestors = [];
+      targetDocumentDiscoveryActive = false;
+      if (!host) {
+        if (document.documentElement) {
+          targetDocumentObserver.observe(document.documentElement, { childList: true, subtree: true });
+          targetDocumentDiscoveryActive = true;
+        }
+        return true;
+      }
+      targetDocumentObserver.observe(host, { childList: true, subtree: !section });
+      if (section?.isConnected) {
+        targetDocumentObserver.observe(section, { childList: true, subtree: true });
+      }
+      for (const ancestor of ancestors) {
+        targetDocumentObserver.observe(ancestor, { childList: true });
+      }
+      targetObservedBrowseHost = host;
+      targetObservedMyListSection = section?.isConnected ? section : null;
+      targetObservedAncestors = ancestors;
+      return true;
+    }
+    function isScriptOwnedMyListNode(node) {
+      const element = node?.nodeType === 1 ? node : node?.parentElement;
+      return Boolean(element?.closest?.(`#${GRID_ID2}, #${STATUS_ID2}, #${LEGACY_EMPTY_STATE_ID2}, #${ORDER_MISMATCH_DIALOG_ID2}`));
+    }
+    function mutationOnlyChangesScriptUi(mutation) {
+      if (isScriptOwnedMyListNode(mutation.target)) return true;
+      const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+      return changedNodes.length > 0 && changedNodes.every(isScriptOwnedMyListNode);
+    }
+    function mutationChangesObservedAncestorPath(mutation) {
+      const ancestorIndex = targetObservedAncestors.indexOf(mutation.target);
+      if (ancestorIndex < 0) return false;
+      const branch = ancestorIndex === 0 ? targetObservedBrowseHost : targetObservedAncestors[ancestorIndex - 1];
+      if (!branch) return false;
+      return [...mutation.addedNodes, ...mutation.removedNodes].some(
+        (node) => node === branch || node.nodeType === 1 && node.contains(branch)
+      );
+    }
+    function handleTargetDocumentMutation(mutations = []) {
+      const owner = discoveryOwner;
+      checkRoute();
+      if (!owner || owner !== discoveryOwner || !scope.isCurrent(owner.sessionToken) || !targetDocumentObserver) return;
+      onMutationDelivery();
+      if (isInitializationBlocked()) {
+        if (mutations.some((mutation) => !mutationOnlyChangesScriptUi(mutation))) {
+          onBlockedMutation(owner.sessionToken);
+        }
+        return;
+      }
+      if (isGridDetached()) {
+        handleRelevantTargetDocumentMutation();
+      }
+      mutations = mutations.filter((mutation) => !mutationOnlyChangesScriptUi(mutation));
+      if (!mutations.length) return;
+      let relevantMutation = false;
+      if (targetDocumentDiscoveryActive) {
+        const host = document.querySelector?.(browseSectionsSelector);
+        if (!host) return;
+        const section = findMyListSection();
+        relevantMutation = bindTargetDocumentObserver(host, section);
+      } else {
+        const ancestorChanged = mutations.some(mutationChangesObservedAncestorPath);
+        const hostChanged = mutations.some((mutation) => mutation.target === targetObservedBrowseHost);
+        const hostDiscoveryChanged = Boolean(targetObservedBrowseHost && !targetObservedMyListSection) && mutations.some((mutation) => targetObservedBrowseHost.contains(mutation.target));
+        const sectionChanged = mutations.some(
+          (mutation) => targetObservedMyListSection && targetObservedMyListSection.contains(mutation.target)
+        );
+        if (ancestorChanged || hostChanged) {
+          const host = document.querySelector?.(browseSectionsSelector);
+          const section = host ? findMyListSection() : null;
+          const bindingChanged = bindTargetDocumentObserver(host, section);
+          relevantMutation = bindingChanged || hostChanged || sectionChanged;
+        } else if (hostDiscoveryChanged) {
+          const host = document.querySelector?.(browseSectionsSelector);
+          const section = host ? findMyListSection() : null;
+          relevantMutation = bindTargetDocumentObserver(host, section) || hostDiscoveryChanged;
+        } else {
+          relevantMutation = sectionChanged;
+        }
+      }
+      if (relevantMutation) handleRelevantTargetDocumentMutation();
+    }
+    function handleRelevantTargetDocumentMutation() {
+      const owner = discoveryOwner;
+      if (!owner || !scope.isCurrent(owner.sessionToken)) return;
+      if (!shouldCoalesce()) {
+        onRelevantMutation(owner.sessionToken);
+        return;
+      }
+      if (targetMutationFrame !== null) return;
+      const frame = { id: null, owner };
+      targetMutationFrame = frame;
+      frame.id = requestAnimationFrame(() => {
+        if (targetMutationFrame !== frame) return;
+        targetMutationFrame = null;
+        if (discoveryOwner !== owner || !scope.isCurrent(owner.sessionToken)) return;
+        onRelevantMutation(owner.sessionToken);
+      });
+    }
+    function stopDiscovery() {
+      if (targetMutationFrame !== null) cancelAnimationFrame(targetMutationFrame.id);
+      targetMutationFrame = null;
+      discoveryOwner = null;
+      targetDocumentObserver?.disconnect();
+      targetDocumentObserver = null;
+      targetObservedBrowseHost = null;
+      targetObservedMyListSection = null;
+      targetObservedAncestors = [];
+      targetDocumentDiscoveryActive = false;
+    }
+    function startDiscovery() {
+      if (targetDocumentObserver) return false;
+      const owner = { sessionToken: scope.token };
+      discoveryOwner = owner;
+      targetDocumentObserver = new MutationObserver((mutations) => {
+        if (discoveryOwner === owner) handleTargetDocumentMutation(mutations);
+      });
+      refreshDiscovery();
+      return true;
+    }
+    function refreshDiscovery() {
+      const host = document.querySelector?.(browseSectionsSelector);
+      return bindTargetDocumentObserver(host, host ? findMyListSection() : null);
+    }
+    return Object.freeze({
+      start: startDiscovery,
+      stop: stopDiscovery,
+      refresh: refreshDiscovery,
+      diagnostics: () => ({
+        discoveryActive: Boolean(targetDocumentObserver),
+        pendingMutationFrame: targetMutationFrame !== null
+      })
+    });
+  }
+
   // src/netflix/carousel/restoration.js
   function createRestoration({
     native,
@@ -13068,9 +13245,23 @@ ${CARD_ACTION_STYLES}
       createError: initializationError,
       warn
     });
-    let discoveryOwner = null, targetDocumentObserver = null, targetMutationFrame = null;
-    let targetObservedBrowseHost = null, targetObservedMyListSection = null, targetObservedAncestors = [];
-    let targetDocumentDiscoveryActive = false;
+    const discovery = createDiscovery({
+      document,
+      scope,
+      MutationObserver,
+      requestAnimationFrame,
+      cancelAnimationFrame,
+      findSection: findMyListSection,
+      browseSectionsSelector: NETFLIX_DOM_SELECTORS2.browseSections,
+      uiIds: { grid: GRID_ID2, status: STATUS_ID2, empty: LEGACY_EMPTY_STATE_ID2, dialog: ORDER_MISMATCH_DIALOG_ID2 },
+      checkRoute,
+      onMutationDelivery,
+      isInitializationBlocked,
+      onBlockedMutation,
+      isGridDetached,
+      shouldCoalesce,
+      onRelevantMutation
+    });
     const readinessPolling = createReadiness({
       scope,
       performance,
@@ -14101,30 +14292,30 @@ ${CARD_ACTION_STYLES}
         });
       });
     }
-    function captureMountedItem({ discovery, videoId }) {
+    function captureMountedItem({ discovery: discovery2, videoId }) {
       return withNativeReadScope(() => {
-        assertObservation(discovery);
-        if (!discovery.track) return null;
+        assertObservation(discovery2);
+        if (!discovery2.track) return null;
         let item = null;
         try {
-          for (const slot of netflixDom.directSlots(discovery.track)) {
-            item = cardMarkup.capture(slot, discovery.selectedPage || 0, false);
-            assertObservation(discovery);
+          for (const slot of netflixDom.directSlots(discovery2.track)) {
+            item = cardMarkup.capture(slot, discovery2.selectedPage || 0, false);
+            assertObservation(discovery2);
             if (item?.videoId !== String(videoId)) continue;
             const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
             const assertCapturedSlot = () => {
-              const current = cardMarkup.capture(slot, discovery.selectedPage || 0, false);
-              if (slot.isConnected === false || slot.parentElement !== discovery.track || slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard) !== card || !current || ["href", "videoId", "ariaLabel"].some((key) => current[key] !== item[key])) {
+              const current = cardMarkup.capture(slot, discovery2.selectedPage || 0, false);
+              if (slot.isConnected === false || slot.parentElement !== discovery2.track || slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard) !== card || !current || ["href", "videoId", "ariaLabel"].some((key) => current[key] !== item[key])) {
                 throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Captured native card changed");
               }
-              assertObservation(discovery);
+              assertObservation(discovery2);
             };
             assertCapturedSlot();
             item.snapshot = slot.cloneNode(true);
             assertCapturedSlot();
             return item;
           }
-          assertObservation(discovery);
+          assertObservation(discovery2);
           return null;
         } catch (error) {
           if (item) item.snapshot = null;
@@ -14315,8 +14506,7 @@ ${CARD_ACTION_STYLES}
         collectionOperations: collection.pending(),
         mountedSourceWaits: mountedWaits.size,
         ...readinessPolling.diagnostics(),
-        discoveryActive: Boolean(targetDocumentObserver),
-        pendingMutationFrame: targetMutationFrame !== null,
+        ...discovery.diagnostics(),
         presentation: sourcePresentation.diagnostics()
       };
       if (Object.hasOwn(options, "card")) {
@@ -14913,150 +15103,6 @@ ${CARD_ACTION_STYLES}
         entries
       });
     }
-    function targetDocumentObserverAncestors(host) {
-      const ancestors = [];
-      for (let node = host?.parentElement; node; node = node.parentElement) {
-        ancestors.push(node);
-      }
-      return ancestors;
-    }
-    function bindTargetDocumentObserver(host, section) {
-      if (!targetDocumentObserver) return false;
-      const ancestors = host ? targetDocumentObserverAncestors(host) : [];
-      const sameAncestors = ancestors.length === targetObservedAncestors.length && ancestors.every((ancestor, index) => ancestor === targetObservedAncestors[index]);
-      const isAlreadyWatchingDiscovery = !host && targetDocumentDiscoveryActive && !targetObservedBrowseHost;
-      if (isAlreadyWatchingDiscovery) return false;
-      if (host === targetObservedBrowseHost && section === targetObservedMyListSection && sameAncestors && !targetDocumentDiscoveryActive) {
-        return false;
-      }
-      targetDocumentObserver.disconnect();
-      targetObservedBrowseHost = null;
-      targetObservedMyListSection = null;
-      targetObservedAncestors = [];
-      targetDocumentDiscoveryActive = false;
-      if (!host) {
-        if (document.documentElement) {
-          targetDocumentObserver.observe(document.documentElement, { childList: true, subtree: true });
-          targetDocumentDiscoveryActive = true;
-        }
-        return true;
-      }
-      targetDocumentObserver.observe(host, { childList: true, subtree: !section });
-      if (section?.isConnected) {
-        targetDocumentObserver.observe(section, { childList: true, subtree: true });
-      }
-      for (const ancestor of ancestors) {
-        targetDocumentObserver.observe(ancestor, { childList: true });
-      }
-      targetObservedBrowseHost = host;
-      targetObservedMyListSection = section?.isConnected ? section : null;
-      targetObservedAncestors = ancestors;
-      return true;
-    }
-    function isScriptOwnedMyListNode(node) {
-      const element = node?.nodeType === 1 ? node : node?.parentElement;
-      return Boolean(element?.closest?.(`#${GRID_ID2}, #${STATUS_ID2}, #${LEGACY_EMPTY_STATE_ID2}, #${ORDER_MISMATCH_DIALOG_ID2}`));
-    }
-    function mutationOnlyChangesScriptUi(mutation) {
-      if (isScriptOwnedMyListNode(mutation.target)) return true;
-      const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
-      return changedNodes.length > 0 && changedNodes.every(isScriptOwnedMyListNode);
-    }
-    function mutationChangesObservedAncestorPath(mutation) {
-      const ancestorIndex = targetObservedAncestors.indexOf(mutation.target);
-      if (ancestorIndex < 0) return false;
-      const branch = ancestorIndex === 0 ? targetObservedBrowseHost : targetObservedAncestors[ancestorIndex - 1];
-      if (!branch) return false;
-      return [...mutation.addedNodes, ...mutation.removedNodes].some(
-        (node) => node === branch || node.nodeType === 1 && node.contains(branch)
-      );
-    }
-    function handleTargetDocumentMutation(mutations = []) {
-      const owner = discoveryOwner;
-      checkRoute();
-      if (!owner || owner !== discoveryOwner || !scope.isCurrent(owner.sessionToken) || !targetDocumentObserver) return;
-      onMutationDelivery();
-      if (isInitializationBlocked()) {
-        if (mutations.some((mutation) => !mutationOnlyChangesScriptUi(mutation))) {
-          onBlockedMutation(owner.sessionToken);
-        }
-        return;
-      }
-      if (isGridDetached()) {
-        handleRelevantTargetDocumentMutation();
-      }
-      mutations = mutations.filter((mutation) => !mutationOnlyChangesScriptUi(mutation));
-      if (!mutations.length) return;
-      let relevantMutation = false;
-      if (targetDocumentDiscoveryActive) {
-        const host = document.querySelector?.(NETFLIX_DOM_SELECTORS2.browseSections);
-        if (!host) return;
-        const section = findMyListSection();
-        relevantMutation = bindTargetDocumentObserver(host, section);
-      } else {
-        const ancestorChanged = mutations.some(mutationChangesObservedAncestorPath);
-        const hostChanged = mutations.some((mutation) => mutation.target === targetObservedBrowseHost);
-        const hostDiscoveryChanged = Boolean(targetObservedBrowseHost && !targetObservedMyListSection) && mutations.some((mutation) => targetObservedBrowseHost.contains(mutation.target));
-        const sectionChanged = mutations.some(
-          (mutation) => targetObservedMyListSection && targetObservedMyListSection.contains(mutation.target)
-        );
-        if (ancestorChanged || hostChanged) {
-          const host = document.querySelector?.(NETFLIX_DOM_SELECTORS2.browseSections);
-          const section = host ? findMyListSection() : null;
-          const bindingChanged = bindTargetDocumentObserver(host, section);
-          relevantMutation = bindingChanged || hostChanged || sectionChanged;
-        } else if (hostDiscoveryChanged) {
-          const host = document.querySelector?.(NETFLIX_DOM_SELECTORS2.browseSections);
-          const section = host ? findMyListSection() : null;
-          relevantMutation = bindTargetDocumentObserver(host, section) || hostDiscoveryChanged;
-        } else {
-          relevantMutation = sectionChanged;
-        }
-      }
-      if (relevantMutation) handleRelevantTargetDocumentMutation();
-    }
-    function handleRelevantTargetDocumentMutation() {
-      const owner = discoveryOwner;
-      if (!owner || !scope.isCurrent(owner.sessionToken)) return;
-      if (!shouldCoalesce()) {
-        onRelevantMutation(owner.sessionToken);
-        return;
-      }
-      if (targetMutationFrame !== null) return;
-      const frame = { id: null, owner };
-      targetMutationFrame = frame;
-      frame.id = requestAnimationFrame(() => {
-        if (targetMutationFrame !== frame) return;
-        targetMutationFrame = null;
-        if (discoveryOwner !== owner || !scope.isCurrent(owner.sessionToken)) return;
-        onRelevantMutation(owner.sessionToken);
-      });
-    }
-    function stopDiscovery() {
-      if (targetMutationFrame !== null) cancelAnimationFrame(targetMutationFrame.id);
-      targetMutationFrame = null;
-      discoveryOwner = null;
-      targetDocumentObserver?.disconnect();
-      targetDocumentObserver = null;
-      targetObservedBrowseHost = null;
-      targetObservedMyListSection = null;
-      targetObservedAncestors = [];
-      targetDocumentDiscoveryActive = false;
-    }
-    function startDiscovery() {
-      if (targetDocumentObserver) return false;
-      const owner = { sessionToken: scope.token };
-      discoveryOwner = owner;
-      targetDocumentObserver = new MutationObserver((mutations) => {
-        if (discoveryOwner === owner) handleTargetDocumentMutation(mutations);
-      });
-      refreshDiscovery();
-      return true;
-    }
-    function refreshDiscovery() {
-      const host = document.querySelector?.(NETFLIX_DOM_SELECTORS2.browseSections);
-      return bindTargetDocumentObserver(host, host ? findMyListSection() : null);
-    }
     function captureFallbackItem(videoId) {
       const wanted = String(videoId);
       for (const card of document.querySelectorAll(NETFLIX_DOM_SELECTORS2.standardCardWithHref)) {
@@ -15077,9 +15123,9 @@ ${CARD_ACTION_STYLES}
       return Object.freeze({ href, videoId: netflixDom.videoIdFromHref(href) });
     }
     return Object.freeze({
-      startDiscovery,
-      stopDiscovery,
-      refreshDiscovery,
+      startDiscovery: discovery.start,
+      stopDiscovery: discovery.stop,
+      refreshDiscovery: discovery.refresh,
       bind,
       clearBinding,
       borrowBinding,
@@ -22069,7 +22115,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.27";
+  var SCRIPT_VERSION = "1.9.28";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

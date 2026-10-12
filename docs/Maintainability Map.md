@@ -2,6 +2,17 @@
 
 ## Current refactor measurements
 
+Release **1.9.28**, 2026-10-12: **64 authored runtime modules, 17,720 readable physical lines**, compared with 63 modules / 17,702 lines in 1.9.27. Counts include comments and blanks, excluding a final empty line. Discovery owns a complete independent observer/frame lifecycle; the public carousel operations and session policies remain unchanged.
+
+| Affected module under src/ | Before | After | Responsibility |
+| --- | ---: | ---: | --- |
+| `netflix/carousel/carousel.js` | 1,844 | 1,678 | Native source authority, interpretation, receipts, resolution, mapping/preparation and composition. |
+| `netflix/carousel/discovery.js` | — | 184 | Filtered mutation targeting, discovery/coalescing policy and exact observer/frame retirement. |
+
+The assessment estimated 1,680–1,710 lines for carousel and 190–220 for discovery. Actual counts are slightly smaller because the private constructor needs only the existing policy callbacks, lookup and scalar DOM names. Authored runtime grows by **18 lines**; this is an ownership/locality improvement rather than a code-reduction claim. The four added characterization cases add **125 test lines**, counted separately. Generated output changes separately from **22,081 → 22,127 lines**. Architecture owns the retained parent's responsibility and interface rationale.
+
+## Previous display refactor measurements (1.9.27)
+
 Release **1.9.27**, 2026-10-12: **63 authored runtime modules, 17,702 readable physical lines**, compared with 61 modules / 17,584 lines in 1.9.26. Source/presentation are consolidated behind display; the two previous entry points are removed. Counts include comments and blanks, excluding a final empty line. Net source change is **+118 lines**; ownership and reduced caller coordination are the improvement criteria.
 
 | Affected module under src/ | Before | After | Responsibility |
