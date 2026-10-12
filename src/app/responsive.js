@@ -1,5 +1,14 @@
 export function createResponsive(options) {
-    const { acceptLayoutChange, acceptInitialPage, acceptViewportSignature, window, ResizeObserver, performance, setTimeout, clearTimeout, nativeCarousel, gridView, hover, listMutations, readState, readSessionToken, isRouteSessionActive, assertRouteSession, createRouteSessionCancelledError, isRouteSessionCancelledError, nativeSourceObservation, nativeLayoutObservation, nativeSourceDiagnostics, ensureLiveNativeBinding, applyGridGeometry, layoutFrameStatus, updateStatus, formatHeaderParts, measureNativeCarouselGap, pageForItem, setPageForItem, itemKey, copyItemAttributes, currentGridGeometry, realignActiveSource, layoutSummary, collectRuntimeSnapshot, sleep, log, warn, trace, tLog, tUi, readOriginalVisibility, applyLegacyEmptyStateGeometry } = options;
+    const { source, presentation, window, ResizeObserver, performance, setTimeout, clearTimeout, nativeCarousel,
+        gridView, hover, listMutations, readSessionToken, isRouteSessionActive, assertRouteSession,
+        createRouteSessionCancelledError, isRouteSessionCancelledError, realignActiveSource, layoutSummary,
+        collectRuntimeSnapshot, sleep, log, warn, trace, tLog, tUi, readOriginalVisibility } = options;
+    const { acceptLayout: acceptLayoutChange, acceptInitialPage, acceptViewportSignature, nativeSourceObservation,
+        nativeLayoutObservation, nativeSourceDiagnostics, ensureLiveNativeBinding, applyGridGeometry,
+        layoutFrameStatus, measureNativeCarouselGap, pageForItem, setPageForItem, itemKey, copyItemAttributes,
+        currentGridGeometry, applyLegacyEmptyStateGeometry } = source;
+    const { updateStatus, formatHeaderParts } = presentation;
+    const readState = () => source.current;
     let resizeObserver = null, responsiveRefreshTimer = null, responsiveRefreshPromise = null, responsiveRefreshing = false;
     let responsiveDeferral = null, activeResponsiveReason = "", lastResponsiveReason = "", lastResponsiveSignature = "";
     let myListCountConvergencePending = false, responsiveSequence = 0, lifecycleRevision = 0, listeners = null;

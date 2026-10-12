@@ -7,6 +7,32 @@ import { viewingVideo, atom, reference, carouselPayload } from './helpers/fixtur
 const ids = parent => parent.children.filter(node => node.getAttribute('data-tm-item-video-id') !== null).map(node => node.getAttribute('data-tm-item-video-id'));
 const groupIds = e => ({ main: ids(e.grid()), watched: ids(e.grid().querySelector('[data-tm-watch-grid]')) });
 
+for (const phase of ['totalCount detected', 'Legacy grid built']) {
+    test(`real session retirement at ${phase} cannot continue publication or viewing work`, async () => {
+        const e = sessionBrowser({ count: 12, viewing: true });
+        const log = e.context.console.log;
+        let retired = false;
+        e.context.console.log = (...args) => {
+            log(...args);
+            if (!retired && args[1] === phase) {
+                retired = true;
+                e.history.pushState({}, '', '/watch/123');
+                assert.equal(e.app.diagnostics().currentSession, null);
+            }
+        };
+        e.app.start();
+        await e.drain(() => retired);
+        await e.scheduler.advance(12000);
+        await e.scheduler.flush();
+        assert.equal(retired, true);
+        assert.equal(e.app.diagnostics().currentSession, null);
+        assert.equal(e.grid(), null);
+        assert.equal(e.requests.filter(request => request.options?.method === 'POST').length, 0);
+        assert.equal(e.logs.some(row => row[1] === 'Initialization completed'), false);
+        e.dispose();
+    });
+}
+
 test('real CopyLogs snapshots retain coherent hover projections and sample fresh state after departure', async () => {
     const e = sessionBrowser(); await e.start();
     const initial = await e.snapshot();
@@ -64,6 +90,21 @@ test('real session hover prepares and replays the exact mounted title then relea
     e.leavePointer(fresh); await e.scheduler.flush();
     assert.ok(e.events.some(event => event.type === 'mouseout'));
     assert.deepEqual(e.cardIds(), ['1','2','3','4','5','6']); e.dispose();
+});
+
+test('real session ready hover reuses the prepared grid card and reports readiness on repeated entry', async () => {
+    const e = sessionBrowser(); await e.start();
+    e.grid().querySelector('[data-tm-filter-value="all"]').dispatchEvent({ type: 'click' });
+    e.over('2');
+    await e.drain(() => e.events.some(event => event.id === '2' && event.type === 'mouseover'));
+    const prepared = e.grid().querySelector('[data-tm-item-video-id="2"]');
+    assert.equal((await e.snapshot()).activeClone.hoverReady, true);
+    e.leavePointer(prepared); await e.scheduler.flush();
+    const before = e.events.filter(event => event.type === 'mouseover').length;
+    e.over('2');
+    await e.drain(() => e.events.filter(event => event.type === 'mouseover').length > before);
+    assert.equal(e.grid().querySelector('[data-tm-item-video-id="2"]'), prepared);
+    e.dispose();
 });
 
 test('real session last removal adopts delayed native empty content and repopulates on first addition', async () => {

@@ -22,22 +22,26 @@ function transactionFixture({ mode = 'indicator', ...overrides } = {}) {
     const carousel = { sample: fn => fn(), assertObservation() {}, isObservationCurrent: () => true };
     let hidden=false,parked=false,needsRemapping=false,geometryLeft=0;
     const observed = () => ({ layout, mode, position: { pages: pages }, presentation: { hidden, parked },needsRemapping });
-    const owner = createResponsive({
-        acceptLayoutChange: (state, layout) => { state.layout = layout; },
+    const source = {
+        get current() { return state; },
+        acceptLayout: (state, layout) => { state.layout = layout; },
         acceptInitialPage: (state, page) => { state.initialPage = page; },
-        acceptViewportSignature: (state, signature) => { state.resizeViewportSignature = signature; }, ...scheduler, window, ResizeObserver: class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
-        nativeCarousel: carousel, readState: () => state, readSessionToken: () => 1, isRouteSessionActive: () => true,
-        assertRouteSession() {}, createRouteSessionCancelledError: () => Object.assign(new Error('retired'), { code: 'CANCELLED' }),
-        isRouteSessionCancelledError: error => error.code === 'CANCELLED',
+        acceptViewportSignature: (state, signature) => { state.resizeViewportSignature = signature; },
         nativeSourceObservation: observed, nativeLayoutObservation: observed, nativeSourceDiagnostics: () => ({}),
-        listMutations: list, ensureLiveNativeBinding: () => state, hover: { cancel: () => { hoverCancels++; }, hasInteraction: () => true, count() {} },
-        gridView: { setRefreshing(grid, value) { grid.refreshing = value; } },
+        ensureLiveNativeBinding: () => state,
         currentGridGeometry: () => ({ width: layout.gridWidth, left: geometryLeft, columns: layout.columns }),
-        applyGridGeometry: () => ({}), layoutFrameStatus() {}, updateStatus() {}, formatHeaderParts: () => '',
-        measureNativeCarouselGap: () => 0, layoutSummary: value => value, collectRuntimeSnapshot: () => ({}),
-        realignActiveSource() {}, sleep: ms => new Promise(resolve => scheduler.setTimeout(resolve, ms)),
+        applyGridGeometry: () => ({}), layoutFrameStatus() {}, measureNativeCarouselGap: () => 0,
         pageForItem: () => 0, setPageForItem() {}, itemKey: item => item.videoId, copyItemAttributes() {},
-        readOriginalVisibility: () => false,
+        ...overrides };
+    const owner = createResponsive({ source, presentation: { updateStatus() {}, formatHeaderParts: () => '', ...overrides },
+        ...scheduler, window, ResizeObserver: class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
+        nativeCarousel: carousel, readSessionToken: () => 1, isRouteSessionActive: () => true,
+        assertRouteSession() {}, createRouteSessionCancelledError: () => Object.assign(new Error('retired'), { code: 'CANCELLED' }),
+        isRouteSessionCancelledError: error => error.code === 'CANCELLED', listMutations: list,
+        hover: { cancel: () => { hoverCancels++; }, hasInteraction: () => true, count() {} },
+        gridView: { setRefreshing(grid, value) { grid.refreshing = value; } },
+        layoutSummary: value => value, collectRuntimeSnapshot: () => ({}), realignActiveSource() {},
+        sleep: ms => new Promise(resolve => scheduler.setTimeout(resolve, ms)), readOriginalVisibility: () => false,
         log() {}, warn: (_message, detail) => assert.fail(detail.error), trace() {}, tLog: value => value, tUi: value => value, ...overrides });
     // Native refresh work calls the carousel directly; it has no responsive wait collaborator.
     carousel.refreshMapping = () => { remaps++; return {}; };
@@ -191,10 +195,12 @@ function fixture() {
         removeEventListener: key => listeners.delete(key) };
     let current = { grid: { isConnected: true }, section: {}, resizeViewportSignature: 'old' };
     const owner = createResponsive({
-        acceptLayoutChange: (state, layout) => { state.layout = layout; },
-        acceptInitialPage: (state, page) => { state.initialPage = page; },
-        acceptViewportSignature: (state, signature) => { state.resizeViewportSignature = signature; }, window, ResizeObserver: class { constructor(fn) { callbacks.push(fn); } observe() {} disconnect() {} },
-        readState: () => current, readSessionToken: () => 1, isRouteSessionActive: () => true,
+        source: { get current() { return current; },
+            acceptLayout: (state, layout) => { state.layout = layout; },
+            acceptInitialPage: (state, page) => { state.initialPage = page; },
+            acceptViewportSignature: (state, signature) => { state.resizeViewportSignature = signature; } },
+        presentation: {}, window, ResizeObserver: class { constructor(fn) { callbacks.push(fn); } observe() {} disconnect() {} },
+        readSessionToken: () => 1, isRouteSessionActive: () => true,
         setTimeout: fn => { callbacks.push(fn); return callbacks.length; }, clearTimeout: () => {},
         hover: { cancel() {} }, log() {}, tLog: value => value });
     return { owner, callbacks, listeners, replace: () => { current = { ...current }; } };
