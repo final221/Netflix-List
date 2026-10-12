@@ -13,8 +13,7 @@ import { createViewingData } from '../netflix/viewing-data.js';
 import { createViewing } from '../viewing/viewing.js';
 import { createCarousel } from '../netflix/carousel/carousel.js';
 
-import { createMyListSource } from './my-list-source.js';
-import { createMyListPresentation } from './my-list-presentation.js';
+import { createMyListDisplay } from './my-list-display.js';
 import { createMyListInitialization } from './my-list-initialization.js';
 import { createMyListInteraction } from './my-list-interaction.js';
 
@@ -38,35 +37,15 @@ export function createMyListSession({ environment = globalThis, version, context
     });
     // Constructors are inert. Getters resolve collaborator edges after composition,
     // without sharing writable session state or activating feature resources.
-    const myListSource = createMyListSource({ environment, i18n, logger, settings, session,
-        get initialization() { return initialization; },
-        get interaction() { return interaction; },
-        get gridView() { return gridView; },
-        get listView() { return listView; },
-        get nativeCarousel() { return nativeCarousel; },
-        get nativePopup() { return nativePopup; },
-        get responsive() { return responsive; },
-        get netflixDom() { return netflixDom; },
-        get diagnostics() { return diagnostics; },
-        get presentation() { return presentation; },
+    const display = createMyListDisplay({ environment, i18n, logger, settings, session,
+        get gridView() { return gridView; }, get listView() { return listView; },
+        get nativeCarousel() { return nativeCarousel; }, get nativePopup() { return nativePopup; },
+        get netflixDom() { return netflixDom; }, get hover() { return hover; },
+        get viewing() { return viewing; }, netflixContext,
+        viewportSignature: () => responsive.viewportSignature(),
+        onTransition: handleDisplayTransition,
+        readWork: (...args) => diagnostics.collectPerformanceDiagnostics(...args)
     });
-    const { publishSourceState, pageForItem, setPageForItem, ensureListMembership,
-        applyOriginalMyListVisibility, nativeDiscoveryObservation, syncLogicalPageModelAfterDelta,
-        readMutationLayout, readMutationVisibleFacts, findNativeMyListItemByVideoId, ensureLiveNativeBinding,
-        refreshNativeSectionAfterDelta } = myListSource;
-    const presentation = createMyListPresentation({ environment, i18n, logger, settings, session,
-        get gridView() { return gridView; },
-        get nativePopup() { return nativePopup; },
-        get hover() { return hover; },
-        get responsive() { return responsive; },
-        get viewing() { return viewing; },
-        get netflixContext() { return netflixContext; },
-        get diagnostics() { return diagnostics; },
-        get source() { return myListSource; },
-    });
-    const { retireMutationCard, prepareMutationInsertion, insertMutationCard, updateMutationCard,
-        presentListOrder, presentListChange } = presentation;
-
     const initialization = createMyListInitialization({ environment, i18n, logger, session,
         get gridView() { return gridView; },
         get listView() { return listView; },
@@ -74,13 +53,11 @@ export function createMyListSession({ environment = globalThis, version, context
         get nativeCarousel() { return nativeCarousel; },
         get nativePopup() { return nativePopup; },
         get hover() { return hover; },
-        get responsive() { return responsive; },
+        stopResponsive: () => responsive.dispose(),
         get listData() { return listData; },
         get netflixContext() { return netflixContext; },
         get diagnostics() { return diagnostics; },
-        get presentation() { return presentation; },
-        get interaction() { return interaction; },
-        source: myListSource,
+        display, onAccepted: () => interaction.resetOrderMismatchStateAfterInitialization(),
     });
     const { waitForMyListTotalCount, collectMountedSinglePageItems, recoverNativeInitialization, scheduleRun } = initialization;
     const interaction = createMyListInteraction({ environment, i18n, logger, session,
@@ -90,9 +67,7 @@ export function createMyListSession({ environment = globalThis, version, context
         get hover() { return hover; },
         get responsive() { return responsive; },
         get diagnostics() { return diagnostics; },
-        get presentation() { return presentation; },
-        get initialization() { return initialization; },
-        source: myListSource,
+        display, isInitializing: () => Boolean(initialization.running),
     });
     const { resolveReadyHover, prepareHoverCard, clearSourceAlignment, findActiveSourceSlot,
         findItemForSourceSlot, reportListChange } = interaction;
@@ -108,7 +83,7 @@ export function createMyListSession({ environment = globalThis, version, context
         get listMutations() { return listMutations; },
         get listView() { return listView; },
         get viewing() { return viewing; },
-        get source() { return myListSource; },
+        display,
         get initialization() { return initialization; },
     });
     const viewingData = createViewingData({ context: netflixContext,
@@ -132,12 +107,12 @@ export function createMyListSession({ environment = globalThis, version, context
         requestTimeoutMs: FRESH_MY_LIST_FETCH_TIMEOUT_MS, nextToken: nextSessionToken });
     const gridView = createGrid({ document, location,
         imageDiagnostics: { window, location, performance, PerformanceObserver: environment.PerformanceObserver,
-            getComputedStyle, readInitializationStartedAt: () => myListSource.current?.initializationStartedAt, readSessionToken: () => sessionScope.token,
+            getComputedStyle, readInitializationStartedAt: () => display.captureSource()?.initializationStartedAt, readSessionToken: () => sessionScope.token,
             isRouteSessionActive,
-            readScanFinishedAt: () => myListSource.current?.watchStatus ? viewing.diagnostics(myListSource.current.watchStatus).network?.finishedAt : null },
+            readScanFinishedAt: () => display.viewingDiagnostics()?.network?.finishedAt ?? null },
         runChunks: runConstructionChunks,
         createError: (code, message) => initializationError(code, 'grid-cards', message),
-        installHover: grid => hover.install(grid), readPage: pageForItem,
+        installHover: grid => hover.install(grid), readPage: display.preferredPage,
         onRetire: (handle, detail) => { nativePopup.retire(handle); hover.retire(handle, detail); },
         tUi, formatUiNumber, formatItemCount,
         readEmptyContent: section => netflixDom.readEmptyContent(section), readEmptyShell: () => netflixDom.readEmptyShell(),
@@ -151,24 +126,11 @@ export function createMyListSession({ environment = globalThis, version, context
         readInitialFirstId: () => listData.firstMyListVideoId(), fetchBootstrap: token => listData.fetchBootstrap(token),
         onReuseRejected: detail => log('Mounted single-page membership reuse rejected; using fresh collection', detail) });
 
-    const listMutations = listView.createMutations({ now: () => performance.now(),
+    const listMutations = display.createMutations({ now: () => performance.now(),
         readSession: () => sessionScope.token, isSessionActive: isRouteSessionActive, setTimeout, clearTimeout,
         ttl: UNDO_ENTRY_TTL_MS, hasRetained: (id, item) => gridView.hasRetained(id, item),
         releaseRetained: id => gridView.releaseRetained(id), mutationTimeout: DELTA_MUTATION_TIMEOUT_MS,
         isBlocked: () => initialization.isNativeBlocked(sessionScope.token),
-        readParent: () => myListSource.current, canApply: () => Boolean(myListSource.current && isTargetPage()),
-        assertSession: assertRouteSession, isCancelled: isRouteSessionCancelledError,
-        createError: (code, message) => initializationError(code, 'native-discovery', message),
-        hasMember: id => myListSource.current.grid ? myListSource.current.itemMap.has('v:' + id) : null,
-        refreshNative: refreshNativeSectionAfterDelta, observeNative: nativeDiscoveryObservation,
-        captureNative: findNativeMyListItemByVideoId, hasMaterial: (item, correlationId) => gridView.materialFor(item, correlationId),
-        assertNative: observation => nativeCarousel.assertObservation(observation),
-        readMembership: ensureListMembership, readLayout: readMutationLayout, readVisible: readMutationVisibleFacts,
-        hasCard: record => Boolean(gridView.getCard(record)), retireCard: retireMutationCard,
-        canInsertCard: prepareMutationInsertion, insertCard: insertMutationCard,
-        readPage: pageForItem, writePage: (record, page, { parent, assertCurrent }) => setPageForItem(record, page, parent, { assertCurrent }),
-        updateCard: updateMutationCard, sample: operation => nativeCarousel.sample(operation),
-        refreshMapping: syncLogicalPageModelAfterDelta, onReindexed: presentListChange, onOrder: presentListOrder,
         onChanged: reportListChange, createCancelledError: createRouteSessionCancelledError,
         findFallback: videoId => nativeCarousel.captureFallbackItem(videoId),
         queueMicrotask, observeChanges(callback) {
@@ -193,8 +155,8 @@ export function createMyListSession({ environment = globalThis, version, context
     const { log, warn, trace } = logger;
     const popupInspection = createPopupInspection({ Element, now: () => performance.now(),
         isCurrentSession: token => targetSessionActive && isRouteSessionActive(token),
-        readSessionToken: () => sessionScope.token, isSourceMounted: () => Boolean(myListSource.current?.grid?.isConnected),
-        readSourceCard: () => myListSource.current.track?.querySelector(NETFLIX_DOM_SELECTORS.standardCard) });
+        readSessionToken: () => sessionScope.token, isSourceMounted: () => Boolean(display.captureSource()?.grid?.isConnected),
+        readSourceCard: () => display.captureSource().track?.querySelector(NETFLIX_DOM_SELECTORS.standardCard) });
 
     const listData = createListData({ context: netflixContext, pageDom: netflixDom, location,
         fetch: (...args) => fetch(...args), performance, assertCurrent: assertRouteSession,
@@ -204,8 +166,8 @@ export function createMyListSession({ environment = globalThis, version, context
 
     const nativeCarousel = createCarousel({ pageDom: netflixDom, scope: sessionScope, document, window, Element,
         getComputedStyle, performance, setTimeout, clearTimeout, requestAnimationFrame, cancelAnimationFrame,
-        readListShape: section => myListSource.current?.section === section ? { totalCount: myListSource.current.totalCount,
-            columns: Math.max(1, myListSource.current.layout?.columns || 1) } : null,
+        readListShape: section => display.captureSource()?.section === section ? { totalCount: display.captureSource().totalCount,
+            columns: Math.max(1, display.captureSource().layout?.columns || 1) } : null,
         readGraphqlCount: () => listData.readMyListTotalCount(),
         cardMarkup: { capture: gridView.captureCard, captureTemplate: gridView.captureTemplate }, createError: initializationError,
         log, warn, trace, tLog, logTimeout: diagnostics.logOperationTimeout, MutationObserver,
@@ -215,14 +177,14 @@ export function createMyListSession({ environment = globalThis, version, context
         onMutationDelivery: () => nativePopup.checkDetached(),
         isInitializationBlocked: () => initialization.isBlocked(sessionScope.token),
         onBlockedMutation: token => recoverNativeInitialization(token, 'document-mutation'),
-        isGridDetached: () => Boolean(myListSource.completed && myListSource.current?.grid && !myListSource.current.grid.isConnected),
-        shouldCoalesce: () => Boolean(myListSource.completed || (myListSource.waitingForEmpty && myListSource.current?.empty)),
+        isGridDetached: () => Boolean(display.completed && display.captureSource()?.grid && !display.captureSource().grid.isConnected),
+        shouldCoalesce: () => Boolean(display.completed || (display.waitingForEmpty && display.captureSource()?.empty)),
         onRelevantMutation: handleRelevantTargetDocumentMutation });
 
     let nativePopup;
     const hover = createHover({ Element, document, performance, setTimeout, clearTimeout, requestAnimationFrame, cancelAnimationFrame,
         sample: callback => nativeCarousel.sample(callback), grid: gridView, readSessionToken: () => sessionScope.token, isSessionCurrent: isRouteSessionActive,
-        readEnvironment: () => ({ grid: myListSource.current?.grid, blockedReason: interaction.blockedReason }),
+        readEnvironment: () => ({ grid: display.captureSource()?.grid, blockedReason: interaction.blockedReason }),
         whenStable: () => responsive.whenStable(),
         resolveReady: resolveReadyHover, prepare: prepareHoverCard, sleep, assertSession: assertRouteSession,
         isCancelledError: isRouteSessionCancelledError, describeItem: diagnostics.itemSummary, log, warn, tLog,
@@ -230,7 +192,7 @@ export function createMyListSession({ environment = globalThis, version, context
         requestAnimationFrame, cancelAnimationFrame, setTimeout, clearTimeout, carousel: nativeCarousel, grid: gridView,
         pageDom: netflixDom, selectors: NETFLIX_DOM_SELECTORS,
         ...policy,
-        readEnvironment: () => ({ grid: myListSource.current?.grid, scroller: myListSource.current?.scroller }),
+        readEnvironment: () => ({ grid: display.captureSource()?.grid, scroller: display.captureSource()?.scroller }),
         isSessionCurrent: isRouteSessionActive, itemForSource: findItemForSourceSlot, activeSource: findActiveSourceSlot,
         createError: initializationError, describeSource: diagnostics.slotDescriptor, describeItem: diagnostics.itemSummary, log, warn, trace, tLog,
         capturePreview: (...args) => popupInspection.capturePreview(...args) })); }
@@ -238,7 +200,7 @@ export function createMyListSession({ environment = globalThis, version, context
 
     const responsive = createResponsive({ window, ResizeObserver: environment.ResizeObserver,
         performance, setTimeout, clearTimeout, nativeCarousel, gridView, hover, listMutations,
-        source: myListSource, presentation, readSessionToken: () => sessionScope.token,
+        display, readSessionToken: () => sessionScope.token,
         isRouteSessionActive, assertRouteSession, createRouteSessionCancelledError, isRouteSessionCancelledError,
         realignActiveSource: () => nativePopup.checkDetached(), layoutSummary: diagnostics.layoutSummary, collectRuntimeSnapshot: diagnostics.collectRuntimeSnapshot,
         sleep, log, warn, trace, tLog, tUi, readOriginalVisibility: () => settings.preferences().viewOriginalMyList });
@@ -247,6 +209,20 @@ export function createMyListSession({ environment = globalThis, version, context
     let targetSessionEntryKind = 'initial';
     let targetSessionReason = 'route:initial';
     let targetListenersActive = false;
+
+    // Fixed display lifecycle outcomes; this is not a generic event dispatcher.
+    function handleDisplayTransition(transition) {
+        switch (transition.kind) {
+        case 'initialization-accepted': initialization.acceptPublication(); break;
+        case 'source-adopted': responsive.observe(transition.mode); break;
+        case 'layout-published': responsive.acceptLayout(transition.layout); break;
+        case 'membership-mapped': responsive.expectCountConvergence(); break;
+        case 'membership-layout-changed': responsive.requestCheck(140, 'my-list-delta'); break;
+        case 'source-reinitializing': cleanupTargetSessionDom(); responsive.dispose(); break;
+        case 'initialization-required': initialization.resetMissingSourceWait(); initialization.scheduleRun(0, transition.sessionToken); break;
+        default: throw new Error('Unknown My List display transition: ' + transition.kind);
+        }
+    }
 
     function createNavigationDiagnosticSink(token) { return hover.navigationSink(token); }
 
@@ -281,18 +257,17 @@ export function createMyListSession({ environment = globalThis, version, context
     }
 
     function resetDetachedTargetState() {
-        if (myListSource.completed?.isConnected && document.getElementById(GRID_ID)) return;
-        if (myListSource.current?.section && !myListSource.current.section.isConnected) {
-            presentation.retireViewing(myListSource.current); myListSource.retireMembership(); myListSource.retirePageHints();
+        if (display.completed?.isConnected && document.getElementById(GRID_ID)) return;
+        if (display.captureSource()?.section && !display.captureSource().section.isConnected) {
+            display.retireAcceptedResources();
         }
 
         listMutations.dispose(); initialization.dropDeferral();
         hover.cancel('source');
         nativeCarousel.restoreMotion();
-        myListSource.complete(null);
-        if (myListSource.current?.section && !myListSource.current.section.isConnected) {
-            nativeCarousel.clearBinding();
-            publishSourceState(null);
+        display.invalidateCompletion();
+        if (display.captureSource()?.section && !display.captureSource().section.isConnected) {
+            display.discardSource();
         }
         responsive.dispose();
         interaction.clearMutationRecovery();
@@ -300,26 +275,25 @@ export function createMyListSession({ environment = globalThis, version, context
         gridView.cancelBuild();
         gridView.resetEmpty();
         listData.reset();
-        myListSource.waitForEmpty(false);
+        display.clearEmptyWait();
     }
 
     function cleanupTargetSessionDom() {
         const release = operation => { try { operation(); } catch (_) { sessionCleanupFailures++; } };
-        release(() => presentation.retireViewing(myListSource.current));
-        release(myListSource.retireMembership); release(myListSource.retirePageHints);
+        display.retireAcceptedResources(release);
         release(nativeCarousel.restoreMotion); release(clearSourceAlignment); release(() => nativePopup.invalidate());
         release(() => gridView.dispose());
         interaction.closeState();
 
-        release(myListSource.releasePresentation);
+        release(display.releasePresentation);
     }
 
     function suspendTargetSession(reason = 'route-leave') {
         const release = operation => { try { operation(); } catch (_) { sessionCleanupFailures++; } };
-        const hadSession = targetSessionActive || initialization.hasWork || myListSource.current || myListSource.completed;
+        const hadSession = targetSessionActive || initialization.hasWork || display.captureSource() || display.completed;
         const previousToken = sessionScope.token;
         listMutations.dispose(); initialization.dropDeferral();
-        presentation.retireViewing(myListSource.current); myListSource.retireMembership(); myListSource.retirePageHints();
+        display.retireAcceptedResources();
         sessionScope.dispose();
         targetSessionActive = false;
         const pauses = [...sessionPauses]; sessionPauses.clear();
@@ -335,12 +309,11 @@ export function createMyListSession({ environment = globalThis, version, context
         release(() => nativeCarousel.resetSource());
 
         initialization.retire();
-        myListSource.complete(null);
-        nativeCarousel.clearBinding();
-        publishSourceState(null);
+        display.invalidateCompletion();
+        display.discardSource();
         initialization.resetMissingSourceWait();
         listData.reset();
-        myListSource.waitForEmpty(false);
+        display.clearEmptyWait();
 
         interaction.retire();
 
@@ -419,7 +392,7 @@ export function createMyListSession({ environment = globalThis, version, context
     }
 
     function handleObservedMyListToggleClick(event) {
-        if (!isTargetPage() || !myListSource.current) return;
+        if (!isTargetPage() || !display.captureSource()) return;
         listMutations.observeClick(() => {
             const membership = netflixDom.describeMembershipClick(event, { activeVideoId: hover.intent().videoId });
             return { membership, toastAction: !membership && netflixDom.describeToastActionClick(event) };
@@ -428,8 +401,8 @@ export function createMyListSession({ environment = globalThis, version, context
 
     function handleRelevantTargetDocumentMutation(sessionToken) {
         if (!isRouteSessionActive(sessionToken)) return;
-        if ((myListSource.completed || (myListSource.waitingForEmpty && myListSource.current?.empty)) && myListSource.current?.grid?.isConnected) {
-            ensureLiveNativeBinding('document-mutation', true);
+        if ((display.completed || (display.waitingForEmpty && display.captureSource()?.empty)) && display.captureSource()?.grid?.isConnected) {
+            display.refreshSource('document-mutation', true);
         } else {
             scheduleRun(40, sessionToken);
         }
@@ -468,7 +441,7 @@ export function createMyListSession({ environment = globalThis, version, context
         check() { if (!started || disposed) return; resetDetachedTargetState(); scheduleRun(0, sessionScope.token); },
         preferencesChanged() {
             if (!started || disposed) return;
-            try { applyOriginalMyListVisibility(); }
+            try { display.applyPreferences(); }
             catch (error) {
                 if (error?.code !== 'NATIVE_SOURCE_REPLACED') throw error;
                 // The saved preference is applied by the next admitted source.
@@ -477,5 +450,5 @@ export function createMyListSession({ environment = globalThis, version, context
             }
         },
         diagnostics: () => Object.freeze({ active: targetSessionActive, token: sessionScope.token,
-            running: Boolean(initialization.running), completed: Boolean(myListSource.completed), blocked: initialization.isBlocked(sessionScope.token), cleanupFailures: sessionCleanupFailures }) });
+            running: Boolean(initialization.running), completed: Boolean(display.completed), blocked: initialization.isBlocked(sessionScope.token), cleanupFailures: sessionCleanupFailures }) });
 }

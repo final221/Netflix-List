@@ -1,14 +1,12 @@
 export function createResponsive(options) {
-    const { source, presentation, window, ResizeObserver, performance, setTimeout, clearTimeout, nativeCarousel,
+    const { display, window, ResizeObserver, performance, setTimeout, clearTimeout, nativeCarousel,
         gridView, hover, listMutations, readSessionToken, isRouteSessionActive, assertRouteSession,
         createRouteSessionCancelledError, isRouteSessionCancelledError, realignActiveSource, layoutSummary,
         collectRuntimeSnapshot, sleep, log, warn, trace, tLog, tUi, readOriginalVisibility } = options;
-    const { acceptLayout: acceptLayoutChange, acceptInitialPage, acceptViewportSignature, nativeSourceObservation,
-        nativeLayoutObservation, nativeSourceDiagnostics, ensureLiveNativeBinding, applyGridGeometry,
-        layoutFrameStatus, measureNativeCarouselGap, pageForItem, setPageForItem, itemKey, copyItemAttributes,
-        currentGridGeometry, applyLegacyEmptyStateGeometry } = source;
-    const { updateStatus, formatHeaderParts } = presentation;
-    const readState = () => source.current;
+    const { observeSource: nativeSourceObservation, measureSource: nativeLayoutObservation,
+        inspectSource: nativeSourceDiagnostics, refreshSource: ensureLiveNativeBinding, measureGap: measureNativeCarouselGap,
+        measureGrid: currentGridGeometry, recordViewportChange: acceptViewportSignature } = display;
+    const readState = () => display.captureSource();
     let resizeObserver = null, responsiveRefreshTimer = null, responsiveRefreshPromise = null, responsiveRefreshing = false;
     let responsiveDeferral = null, activeResponsiveReason = "", lastResponsiveReason = "", lastResponsiveSignature = "";
     let myListCountConvergencePending = false, responsiveSequence = 0, lifecycleRevision = 0, listeners = null;
@@ -56,22 +54,7 @@ export function createResponsive(options) {
 
     function responsivePageShape(signature) { return signature.split('|').slice(0, 2).join('|'); }
 
-    function updateResponsiveStatus(layout, note = '') {
-        if (!readState()?.status || !readState()?.items) return;
-        const geometry = applyGridGeometry(readState().section, readState().grid, layout);
-        layoutFrameStatus(readState().status, geometry, readOriginalVisibility() ? (layout.rowGap || readState().layout?.rowGap || 0) : 0);
-        updateStatus(formatHeaderParts(
-            readState().items.length,
-            readState().totalCount,
-            readState().initializationElapsedMs,
-            true
-        ));
-
-        if (note) {
-            log(tLog('responsiveStatusNote'), { note });
-        }
-    }
-
+    const updateResponsiveStatus = (layout, note = '') => display.showLayoutStatus(readState(), layout, note);
 
     async function waitResponsiveLayoutSettled(timeout = 1200, sessionToken = null) {
         assertRouteSession(sessionToken);
@@ -108,20 +91,6 @@ export function createResponsive(options) {
     }
 
 
-    function publishPageHints({ state, items, cloneMap, columns, pages, assertCurrent, connectedClonesOnly = false }) {
-        let changed = 0;
-        items.forEach((item, index) => {
-            assertCurrent();
-            const page = Math.min(pages - 1, Math.floor(index / columns));
-            if (pageForItem(item) !== page) changed++;
-            setPageForItem(item, page, state, { assertCurrent });
-            const clone = cloneMap?.get(itemKey(item));
-            if (clone && (!connectedClonesOnly || clone.isConnected)) copyItemAttributes(clone, item);
-            assertCurrent();
-        });
-        return changed;
-    }
-
     async function rebuildLogicalPageModelFromNativePosition(layout, reason = 'responsive-remap', sessionToken = readSessionToken()) {
         assertRouteSession(sessionToken);
         const live = ensureLiveNativeBinding('logical-page-model-rebuild-start') || readState();
@@ -133,15 +102,16 @@ export function createResponsive(options) {
             throw new Error('Native carousel binding is unavailable during logical page model rebuild');
         }
         if (!state) throw createRouteSessionCancelledError();
-        const { itemMap, cloneMap, grid } = state;
+        const { grid } = state;
+        const collection = display.collectionReceipt(state);
         const recordOwner = state.items, items = recordOwner || [];
         const totalCount = items.length;
         const columns = Math.max(1, layout?.columns || state.layout?.columns || 1);
         const previousColumns = state.layout?.columns;
         const assertOwner = () => {
             assertRouteSession(sessionToken);
-            if (readState() !== state || state.items !== recordOwner || items.length !== totalCount || state.itemMap !== itemMap ||
-                state.cloneMap !== cloneMap || state.grid !== grid || (grid && !grid.isConnected) ||
+            collection.assertCurrent();
+            if (readState() !== state || state.items !== recordOwner || items.length !== totalCount || state.grid !== grid || (grid && !grid.isConnected) ||
                 state.layout?.columns !== previousColumns || state.section !== section || state.scroller !== scroller || state.track !== track) {
                 throw createRouteSessionCancelledError();
             }
@@ -153,10 +123,9 @@ export function createResponsive(options) {
         if (result.countConverged) myListCountConvergencePending = false;
         if (result.status !== 'committed') return null;
         return nativeCarousel.sample(() => {
-            const changed = publishPageHints({ state, items, cloneMap, columns, pages: result.knownPageCount,
-                assertCurrent: assertPublication, connectedClonesOnly: true });
+            const changed = display.applyResponsiveMapping(state, { columns, pages: result.knownPageCount,
+                assertCurrent: assertPublication, connectedOnly: true, initialPage: result.currentPage });
             assertPublication();
-            acceptInitialPage(state, result.currentPage);
             log(tLog('logicalPageModelSynchronizedAfterDelta'), {
                 reason, currentPage: result.currentPage, knownPageCount: result.knownPageCount,
                 pageCountFinalized: result.pageCountFinalized, pageMappingStale: result.pageMappingStale,
@@ -171,7 +140,7 @@ export function createResponsive(options) {
 
     async function remapItemsByOrder(layout, sessionToken = readSessionToken()) {
         const state = readState();
-        const { section, items, cloneMap } = state;
+        const { section, items } = state;
         const columns = Math.max(1, layout.columns);
         const runtime = nativeSourceObservation(state, { position: true });
         const logicalMode = runtime?.mode === 'logical';
@@ -183,7 +152,7 @@ export function createResponsive(options) {
         if (logicalMode) {
             changed = await rebuildLogicalPageModelFromNativePosition(layout, 'responsive-remap', sessionToken);
         } else {
-            changed = nativeCarousel.sample(() => publishPageHints({ state, items, cloneMap, columns, pages,
+            changed = nativeCarousel.sample(() => display.applyResponsiveMapping(state, { columns, pages,
                 assertCurrent: () => nativeCarousel.assertObservation(runtime) }));
         }
 
@@ -241,8 +210,7 @@ export function createResponsive(options) {
             const signature = responsiveSignature(liveLayout);
             const pageShape = responsivePageShape(signature);
 
-            acceptLayoutChange(state, liveLayout);
-            updateResponsiveStatus(liveLayout, tUi('relayoutInProgress'));
+            display.applyLayout(state, liveLayout, { mode: 'status', note: tUi('relayoutInProgress'), assertCurrent: assertOwner });
 
             const pageShapeChanged = pageShape !== responsivePageShape(lastResponsiveSignature);
             const sourceObservation = nativeSourceObservation(state);
@@ -364,9 +332,7 @@ export function createResponsive(options) {
                         counters.unchanged++;
                         return;
                     }
-                    acceptLayoutChange(state, layout);
-                    const geometry = applyGridGeometry(state.section, state.grid, layout);
-                    layoutFrameStatus(state.status, geometry);
+                    display.applyLayout(state, layout, { mode: 'empty-frame' });
                     return;
                 }
                 ensureLiveNativeBinding('responsive-check');
@@ -404,7 +370,7 @@ export function createResponsive(options) {
                 if (!nativeCarousel.isObservationCurrent(sample.observed)) return;
                 if (sig === lastResponsiveSignature && geometryUnchanged && !logicalMappingStale) {
                     const previousScrollerHeight = state.layout.scrollerHeight;
-                    acceptLayoutChange(state, measured);
+                    display.applyLayout(state, measured);
                     realignActiveSource();
                     counters.unchanged++;
                     const hoverPreserved = Boolean(hover.hasInteraction());
@@ -442,7 +408,7 @@ export function createResponsive(options) {
 
                     if (pageCountOnlyChanged && geometryUnchanged && !logicalMappingStale) {
                         const previousSignature = lastResponsiveSignature;
-                        acceptLayoutChange(state, measured);
+                        display.applyLayout(state, measured);
                         lastResponsiveSignature = sig;
                         realignActiveSource();
                         counters.unchanged++;
@@ -554,11 +520,9 @@ export function createResponsive(options) {
                 const layout = { ...observed.layout, rowGap: measureNativeCarouselGap(state.section) };
                 nativeCarousel.assertObservation(observed);
                 if (readState() !== state || !nativeCarousel.isBindingCurrent(binding)) return;
-                acceptLayoutChange(state, layout);
-                const geometry = applyGridGeometry(state.section, state.grid, layout);
-                if (readState() !== state || !nativeCarousel.isBindingCurrent(binding)) return;
-                layoutFrameStatus(state.status, geometry, mode === 'empty' && readOriginalVisibility() ? layout.rowGap || 0 : 0);
-                applyLegacyEmptyStateGeometry(state.section, layout);
+                display.applyLayout(state, layout, { mode: 'empty-source',
+                    rowGap: mode === 'empty' && readOriginalVisibility() ? layout.rowGap || 0 : 0,
+                    assertCurrent() { if (readState() !== state || !nativeCarousel.isBindingCurrent(binding)) throw createRouteSessionCancelledError(); } });
             }); } catch (error) {
                 if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !isRouteSessionCancelledError(error)) throw error;
             }

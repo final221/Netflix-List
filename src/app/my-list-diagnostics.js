@@ -12,7 +12,7 @@ export function createMyListDiagnostics(providers) {
         readEnvironment: () => ({ url: location.href, userAgent: navigator.userAgent, browserLanguage: navigator.language || '',
             htmlLanguage: getHtmlLanguage(), netflixLanguage: getNetflixLanguage(), displayLanguage: getUiLocale(),
             logLanguage: getLogLocale(), viewport: `${window.innerWidth}x${window.innerHeight}`, devicePixelRatio: window.devicePixelRatio }),
-        readRuntime: () => collectRuntimeSnapshot(), readSeriesViewing: () => collectViewingSeriesDiagnostics(providers.source.current),
+        readRuntime: () => collectRuntimeSnapshot(), readSeriesViewing: () => collectViewingSeriesDiagnostics(providers.display.captureSource()),
         readThumbnails: () => providers.gridView.images.collect(), readNativePopup: () => providers.popupInspection.collect() });
 
     function collectPerformanceDiagnostics({ hoverSummary = providers.hover.diagnostics(), nativeInteraction = providers.nativePopup.diagnostics(),
@@ -38,42 +38,17 @@ export function createMyListDiagnostics(providers) {
     }
 
     function slotDescriptor(slot) {
-        return providers.nativeCarousel.diagnostics({ card: slot, totalCount: providers.source.current?.totalCount }).card;
+        return providers.nativeCarousel.diagnostics({ card: slot, totalCount: providers.display.captureSource()?.totalCount }).card;
     }
 
     function itemSummary(item) {
-        if (!item) return null;
-        return {
-            videoId: item.videoId || '',
-            page: providers.source.pageForItem(item),
-            href: item.href || '',
-            ariaLabel: item.ariaLabel || ''
-        };
+        return providers.display.itemSummary(item);
     }
 
-    function layoutSummary(layout) {
-        if (!layout) return null;
-        return {
-            columns: layout.columns,
-            cardWidth: Math.round((layout.cardWidth || 0) * 10) / 10,
-            gap: Math.round((layout.gap || 0) * 10) / 10,
-            rowGap: Math.round((layout.rowGap || 0) * 10) / 10,
-            gridLeft: Math.round((layout.gridLeft || 0) * 10) / 10,
-            gridWidth: Math.round((layout.gridWidth || 0) * 10) / 10,
-            sidePadding: Math.round((layout.sidePadding || 0) * 10) / 10,
-            sidePaddingLeft: Math.round((layout.sidePaddingLeft ?? layout.sidePadding ?? 0) * 10) / 10,
-            sidePaddingRight: Math.round((layout.sidePaddingRight ?? layout.sidePadding ?? 0) * 10) / 10,
-            scrollerWidth: Math.round((layout.scrollerWidth || 0) * 10) / 10,
-            scrollerHeight: Math.round((layout.scrollerHeight || 0) * 10) / 10,
-            widthRatio: Number.isFinite(layout.widthRatio)
-                ? Math.round(layout.widthRatio * 100000) / 100000
-                : null,
-            formulaBased: Boolean(layout.formulaBased)
-        };
-    }
+    const layoutSummary = layout => providers.display.layoutSummary(layout);
 
     function collectRuntimeSnapshot() {
-        const section = providers.source.current?.section, scroller = providers.source.current?.scroller, track = providers.source.current?.track;
+        const section = providers.display.captureSource()?.section, scroller = providers.display.captureSource()?.scroller, track = providers.display.captureSource()?.track;
         const grid = document.getElementById(GRID_ID);
         const statusNode = document.getElementById(STATUS_ID);
         const statusLabel = statusNode?.querySelector?.(`.${STATUS_LABEL_CLASS}`)?.textContent || '';
@@ -83,9 +58,9 @@ export function createMyListDiagnostics(providers) {
         const native = carouselSummary.source;
         const nativeInteraction = providers.nativePopup.diagnostics(), hoverSummary = providers.hover.diagnostics();
         const responsiveSummary = providers.responsive.diagnostics(), intent = providers.hover.intent();
-        const viewingSummary = providers.source.current?.watchStatus ? providers.viewing.diagnostics(providers.source.current.watchStatus) : null;
+        const viewingSummary = providers.display.viewingDiagnostics();
 
-        const viewingPresentation = providers.source.current?.watchStatus ? providers.gridView.presentation() : null;
+        const viewingPresentation = providers.display.captureSource()?.viewingActive ? providers.gridView.presentation() : null;
 
         return {
             url: location.href,
@@ -101,20 +76,20 @@ export function createMyListDiagnostics(providers) {
             runningSessionToken: providers.initialization.running?.sessionToken ?? null,
             targetSessionActive: providers.session.active,
             routeSessionToken: providers.session.scope.token,
-            completed: Boolean(providers.source.completed && providers.source.completed.isConnected),
+            completed: Boolean(providers.display.completed && providers.display.completed.isConnected),
             selectedPage: native?.selectedPage ?? null,
             pageCount: native?.pageCount ?? null,
             carouselDom: native?.carouselDom ?? null,
-            totalCount: providers.source.current?.totalCount ?? null,
-            collectedItems: providers.source.current?.items?.length ?? 0,
+            totalCount: providers.display.captureSource()?.totalCount ?? null,
+            collectedItems: providers.display.captureSource()?.items?.length ?? 0,
             sourceSlots: native?.sourceSlots ?? 0,
             sourceCards: native?.sourceCards ?? 0,
             currentPageCards: native?.currentPageCards ?? 0,
-            gridCards: providers.source.current?.cloneMap?.size ?? 0,
+            gridCards: providers.display.captureSource()?.cardCount ?? 0,
             performanceWork: collectPerformanceDiagnostics({ hoverSummary, nativeInteraction, responsiveSummary, carouselSummary }),
             undoRetention: providers.listMutations.undoDiagnostics(),
             reconciliation: providers.listMutations.deferralDiagnostics(),
-            viewingStatus: providers.source.current?.watchStatus ? {
+            viewingStatus: providers.display.captureSource()?.viewingActive ? {
                 completed: viewingPresentation.completedCount,
                 unknown: viewingPresentation.unknownCount,
                 ...viewingSummary
@@ -129,7 +104,7 @@ export function createMyListDiagnostics(providers) {
             viewOriginalMyList: settings.preferences().viewOriginalMyList,
             myListSyncMode: 'event-driven',
             pendingMyListMutations: providers.listMutations.pendingDiagnostics(),
-            layout: layoutSummary(providers.source.current?.layout),
+            layout: layoutSummary(providers.display.captureSource()?.layout),
             activeVideoId: intent.videoId,
             activePage: intent.page,
             activeClone: intent.clone ? {
@@ -143,7 +118,7 @@ export function createMyListDiagnostics(providers) {
             activeSourceSlot: providers.nativePopup.describeActiveSource(),
             hoverToken: intent.token,
             ...responsiveSummary,
-            resizeViewportSignature: providers.source.current?.resizeViewportSignature || '',
+            resizeViewportSignature: providers.display.captureSource()?.resizeViewportSignature || '',
             hoverScrollState: hoverSummary.hoverScrollState,
             pointer: { x: intent.pointerX, y: intent.pointerY }
         };
@@ -162,7 +137,7 @@ export function createMyListDiagnostics(providers) {
     }
 
     function collectViewingSeriesDiagnostics(state) {
-        return state?.watchStatus ? providers.viewing.seriesDiagnostics(state.watchStatus) : [];
+        return providers.display.seriesDiagnostics();
     }
 
     function reportInitializationFailure(error, detail) {

@@ -48,7 +48,7 @@ export function createMyListInitialization(dependencies) {
             read: () => ({ available: dependencies.listData.isAvailable(), count: dependencies.listData.detectMyListTotalCount() }),
             onTimeout({ available }) {
                 const details = { graphqlAvailable: available, graphqlKey: dependencies.listData.diagnostics().graphqlKey,
-                    domGeneration: dependencies.source.nativeSourceDiagnostics()?.carouselDom?.generation ?? null };
+                    domGeneration: dependencies.display.inspectSource()?.carouselDom?.generation ?? null };
                 dependencies.diagnostics.logOperationTimeout('total-count-detection', timeout, details);
                 return initializationTimeoutError('total-count-detection', timeout, details);
             } });
@@ -60,7 +60,7 @@ export function createMyListInitialization(dependencies) {
             return { items: null, reason: 'proof-or-entry-no-longer-valid' };
         }
         return dependencies.nativeCarousel.collect({ mode: 'mounted-single-page', bootstrap, totalCount, columns, sessionToken,
-            section: dependencies.source.current?.section, scroller: dependencies.source.current?.scroller, track: dependencies.source.current?.track });
+            section: dependencies.display.captureSource()?.section, scroller: dependencies.display.captureSource()?.scroller, track: dependencies.display.captureSource()?.track });
     }
 
     async function tryMountedSinglePageFastBootstrap(section, scroller, track, sessionToken = null) {
@@ -71,25 +71,24 @@ export function createMyListInitialization(dependencies) {
     }
 
     function waitForNativeCarouselReady(section, scroller, track, sessionToken = null, options = {}) {
-        const owner = dependencies.source.current;
+        const owner = dependencies.display.captureSource();
         return dependencies.nativeCarousel.prepareSource({ section, scroller, track, sessionToken,
             fastSinglePageTotalCount: options.fastSinglePageTotalCount,
             assertCurrent() {
                 session.assertRouteSession(sessionToken);
-                if (dependencies.source.current !== owner) throw session.initializationError('NATIVE_SOURCE_REPLACED', 'native-preparation',
+                if (dependencies.display.captureSource() !== owner) throw session.initializationError('NATIVE_SOURCE_REPLACED', 'native-preparation',
                     'Page session source changed during native preparation');
             } });
     }
 
     async function collectAllItems(section, scroller, track, totalCount, sessionToken = null) {
-        const state = dependencies.source.current;
+        const state = dependencies.display.captureSource();
         const result = await dependencies.nativeCarousel.collect({ section, scroller, track, totalCount,
             columns: state?.layout?.columns, sessionToken, onProgress(facts) {
-                if (dependencies.source.current !== state) return;
-                if (facts.initialPage !== undefined && state) dependencies.source.acceptInitialPage(state, facts.initialPage);
+                if (dependencies.display.captureSource() !== state) return;
+                if (facts.initialPage !== undefined && state) dependencies.display.recordCollectionPage(state, facts.initialPage);
                 if (facts.collectedCount !== undefined) {
-                    if (state) dependencies.source.ensureListMembership(state).observeCount({ collectedCount: facts.collectedCount });
-                    dependencies.presentation.updateStatus(dependencies.presentation.formatHeaderParts(facts.collectedCount, totalCount, null));
+                    if (state) dependencies.display.showCollectionProgress(state, { collectedCount: facts.collectedCount, totalCount });
                 }
             } });
         return result.items;
@@ -107,7 +106,7 @@ export function createMyListInitialization(dependencies) {
             return false;
         }
         try {
-            const discovered = dependencies.source.nativeDiscoveryObservation({ bindingOnly: true });
+            const discovered = dependencies.display.discoverSource({ bindingOnly: true });
             const { section, scroller, track } = discovered;
             if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected ||
                 !section.contains(scroller) || !scroller.contains(track) ||
@@ -124,10 +123,8 @@ export function createMyListInitialization(dependencies) {
         performanceDiagnostics.nativeRecovery.attempts++;
         dependencies.listMutations.deferPending();
         session.cleanupTargetSessionDom();
-        dependencies.responsive.dispose();
-        dependencies.nativeCarousel.clearBinding();
-        dependencies.source.publishSourceState(null);
-        dependencies.source.complete(null);
+        dependencies.stopResponsive();
+        dependencies.display.discardSource();
         blockedInitialization = null;
         clearRunningSession(sessionToken, false);
         dependencies.nativeCarousel.refreshDiscovery();
@@ -151,7 +148,7 @@ export function createMyListInitialization(dependencies) {
         if (runningInitialization?.sessionToken === sessionToken) return;
         let discovered;
         try {
-            discovered = dependencies.source.nativeDiscoveryObservation({ bindingOnly: true });
+            discovered = dependencies.display.discoverSource({ bindingOnly: true });
         } catch (error) {
             if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !session.isRouteSessionCancelledError(error)) throw error;
             if (session.isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
@@ -159,7 +156,7 @@ export function createMyListInitialization(dependencies) {
         }
         let section = discovered.section;
         if (!section) {
-            if (dependencies.source.waitingForEmpty && dependencies.source.current?.empty) {
+            if (dependencies.display.waitingForEmpty && dependencies.display.captureSource()?.empty) {
                 return;
             }
             const now = performance.now();
@@ -169,7 +166,7 @@ export function createMyListInitialization(dependencies) {
                 scheduleRun(Math.max(40, NATIVE_EMPTY_STABLE_MS - elapsed), sessionToken);
                 return;
             }
-            section = dependencies.source.ensureSyntheticMyListSection(discovered);
+            section = dependencies.display.ensureSynthetic(discovered);
             if (!section) {
                 scheduleRun(120, sessionToken);
                 return;
@@ -178,14 +175,14 @@ export function createMyListInitialization(dependencies) {
             missingSectionSince = 0;
             dependencies.gridView.removeSynthetic(section);
         }
-        if (dependencies.source.completed === section && document.getElementById(GRID_ID) && !dependencies.source.current?.empty) return;
+        if (dependencies.display.completed === section && document.getElementById(GRID_ID) && !dependencies.display.captureSource()?.empty) return;
 
         try {
             dependencies.nativeCarousel.assertObservation(discovered);
-            dependencies.source.cleanupOldArtifacts();
+            dependencies.display.prepareArtifacts();
             dependencies.nativeCarousel.assertObservation(discovered);
             dependencies.gridView.installResources(() => { session.assertRouteSession(sessionToken); dependencies.nativeCarousel.assertObservation(discovered); });
-            dependencies.source.markOriginalHeader(section);
+            dependencies.display.presentSource(section);
             dependencies.nativeCarousel.assertObservation(discovered);
         } catch (error) {
             if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !session.isRouteSessionCancelledError(error)) throw error;
@@ -195,48 +192,37 @@ export function createMyListInitialization(dependencies) {
 
         const initializationStarted = performance.now();
         let mountedSource, scroller, track;
-        let provisionalLayout, provisionalFrame;
+        let provisionalLayout;
         try {
-            mountedSource = dependencies.source.nativeDiscoveryObservation({ bindingOnly: true });
+            mountedSource = dependencies.display.discoverSource({ bindingOnly: true });
             if (mountedSource.section && mountedSource.section !== section) {
                 throw session.initializationError('NATIVE_SOURCE_REPLACED', 'native-discovery', 'Initialization source was replaced');
             }
             scroller = mountedSource.section === section ? mountedSource.scroller : null;
             track = mountedSource.section === section ? mountedSource.track : null;
             dependencies.nativeCarousel.sample(() => {
-                const observed = dependencies.source.nativeLayoutObservation(section, scroller, track);
+                const observed = dependencies.display.measureSource(section, scroller, track);
                 provisionalLayout = { ...observed.layout };
-                provisionalLayout.rowGap = dependencies.source.measureNativeCarouselGap(section);
+                provisionalLayout.rowGap = dependencies.display.measureGap(section);
                 dependencies.nativeCarousel.assertObservation(observed);
-                provisionalFrame = dependencies.presentation.placeLegacyFrame(section, scroller, provisionalLayout, { elapsedMs: null, finalized: false, totalCount: null });
-                dependencies.nativeCarousel.assertObservation(observed);
-                dependencies.nativeCarousel.assertObservation(mountedSource);
+                dependencies.display.showProvisional({ section, scroller, track, layout: provisionalLayout,
+                    initializationStarted, assertCurrent() {
+                        dependencies.nativeCarousel.assertObservation(observed);
+                        dependencies.nativeCarousel.assertObservation(mountedSource);
+                    } });
             });
         } catch (error) {
             if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !session.isRouteSessionCancelledError(error)) throw error;
             if (session.isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
             return;
         }
-        dependencies.source.publishNativeParent({ section, scroller, track,
-            layout: provisionalLayout,
-            items: [],
-            collectedCount: 0,
-            totalCount: null,
-            grid: provisionalFrame.grid,
-            status: provisionalFrame.status,
-            empty: false,
-            resizeViewportSignature: dependencies.responsive.viewportSignature(),
-            initializationStartedAt: initializationStarted
-        });
-        dependencies.source.applyOriginalMyListVisibility();
-
         const initializationOwner = beginRunningSession(sessionToken);
         session.assertRouteSession(sessionToken);
         let earlyTotalCount;
         let freshMyListBootstrap = null, entryCollection;
         let fastCollection = null;
         let fastCollectionSource = 'graphql';
-        const entryParent = dependencies.source.current;
+        const entryParent = dependencies.display.captureSource();
         function finishInitialization({ resume = true, retry = null } = {}) {
             clearRunningSession(sessionToken, resume, initializationOwner);
             if (!session.isRouteSessionActive(sessionToken)) return;
@@ -247,16 +233,16 @@ export function createMyListInitialization(dependencies) {
             blockedInitialization = { sessionToken };
             dependencies.diagnostics.reportInitializationFailure(error, { stage: error?.stage || stage,
                 timeoutMs: error?.details?.timeoutMs ?? timeoutMs, details: error?.details || null });
-            dependencies.presentation.updateStatus(dependencies.presentation.formatInitializationErrorMeta(error, totalCount));
+            dependencies.display.showInitializationFailure(error, totalCount);
         }
         function finishEmpty(reason, preparation = null) {
             try {
                 if (preparation) dependencies.nativeCarousel.assertPreparation(preparation);
                 dependencies.nativeCarousel.sample(() => {
-                    const observed = dependencies.source.nativeLayoutObservation(section, scroller, track);
-                    const layout = { ...observed.layout, rowGap: dependencies.source.measureNativeCarouselGap(section) };
+                    const observed = dependencies.display.measureSource(section, scroller, track);
+                    const layout = { ...observed.layout, rowGap: dependencies.display.measureGap(section) };
                     dependencies.nativeCarousel.assertObservation(observed);
-                    dependencies.source.finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted,
+                    dependencies.display.publishEmpty(section, scroller, track, layout, initializationStarted,
                         preparation ? preparation.reason : reason, observed);
                 });
             } catch (error) {
@@ -271,14 +257,14 @@ export function createMyListInitialization(dependencies) {
                 hasNativeSource: Boolean(scroller && track),
                 readMountedBootstrap: () => tryMountedSinglePageFastBootstrap(section, scroller, track, sessionToken),
                 readMountedCards() {
-                    const mounted = dependencies.source.nativePageObservation();
+                    const mounted = dependencies.display.observePage();
                     dependencies.nativeCarousel.assertObservation(mounted);
                     return mounted.cards.length;
                 },
                 startReadiness: () => waitForNativeCarouselReady(section, scroller, track, sessionToken),
                 onCount: detail => log(tLog('totalCountDetected'), detail),
                 assertCurrent() {
-                    if (dependencies.source.current !== entryParent) throw session.initializationError('NATIVE_SOURCE_REPLACED',
+                    if (dependencies.display.captureSource() !== entryParent) throw session.initializationError('NATIVE_SOURCE_REPLACED',
                         'list-entry', 'List entry parent changed during source selection');
                 } });
             freshMyListBootstrap = entryCollection.bootstrap;
@@ -316,9 +302,7 @@ export function createMyListInitialization(dependencies) {
             if (sourceWait.nativeSection) {
                 dependencies.nativePopup.invalidate();
                 dependencies.gridView.dispose();
-                dependencies.nativeCarousel.clearBinding();
-                dependencies.source.publishSourceState(null);
-                dependencies.source.complete(null);
+                dependencies.display.discardSource();
                 finishInitialization({ retry: 'scheduled' });
                 return;
             }
@@ -333,14 +317,14 @@ export function createMyListInitialization(dependencies) {
                     timeoutMs: error.details?.timeoutMs ?? null,
                     details: error.details || null,
                 });
-                dependencies.presentation.updateStatus(dependencies.presentation.formatInitializationErrorMeta(error, earlyTotalCount));
+                dependencies.display.showInitializationFailure(error, earlyTotalCount);
                 finishInitialization({ resume: false });
                 recoverNativeInitialization(sessionToken, 'native-source-wait');
                 return;
             }
             scroller = sourceWait.scroller;
             track = sourceWait.track;
-            dependencies.source.attachNativeBinding(dependencies.source.current, section, scroller, track);
+            dependencies.display.bindSource(dependencies.display.captureSource(), section, scroller, track);
         }
 
         // Netflix can expose the My List section before its virtual carousel has finished
@@ -376,11 +360,11 @@ export function createMyListInitialization(dependencies) {
                 stage: readinessError.stage,
                 timeoutMs: readinessError.details?.timeoutMs ?? null,
             });
-            dependencies.presentation.updateStatus(dependencies.presentation.formatInitializationErrorMeta(readinessError, earlyTotalCount));
+            dependencies.display.showInitializationFailure(readinessError, earlyTotalCount);
             return;
         }
         if (readiness.empty) return finishEmpty(null, readiness);
-        const mountedMode = dependencies.source.nativeSourceObservation()?.mode || 'unknown';
+        const mountedMode = dependencies.display.observeSource()?.mode || 'unknown';
 
         // A manual/order-mismatch reinitialization can start while Netflix still has
         // page 0 selected with a one-card-shifted mounted window after a My List delta.
@@ -391,7 +375,7 @@ export function createMyListInitialization(dependencies) {
             try {
                 await entryCollection.prepareAnchor({ mode: mountedMode, normalize: firstVideoId =>
                     dependencies.nativeCarousel.anchorPageZero({ section, scroller, track, firstVideoId, sessionToken,
-                        columns: dependencies.source.current?.layout?.columns }) });
+                        columns: dependencies.display.captureSource()?.layout?.columns }) });
             } catch (error) {
                 if (!session.isRouteSessionCancelledError(error)) {
                     blockFailure(error, 'normalize-native-page-zero', null, earlyTotalCount);
@@ -402,11 +386,11 @@ export function createMyListInitialization(dependencies) {
         }
 
         {
-            const countOwner = dependencies.source.current;
+            const countOwner = dependencies.display.captureSource();
             try {
                 let countObservation;
                 const mountedCount = entryCollection.confirmCount({ mode: mountedMode, readNativeCount() {
-                    countObservation = dependencies.source.nativeSourceObservation(countOwner, { count: 'required', provisionalTotalCount: earlyTotalCount });
+                    countObservation = dependencies.display.observeSource(countOwner, { count: 'required', provisionalTotalCount: earlyTotalCount });
                     return countObservation.count;
                 }, assertNativeCurrent: () => dependencies.nativeCarousel.assertObservation(countObservation) });
                 if (mountedCount) {
@@ -424,10 +408,10 @@ export function createMyListInitialization(dependencies) {
                     }
                     mountedCount.assertCurrent();
                     earlyTotalCount = mountedTotalCount;
-                    dependencies.source.ensureListMembership(countOwner).observeCount({ totalCount: mountedTotalCount }, { assertCurrent: mountedCount.assertCurrent });
+                    dependencies.display.showCollectionProgress(countOwner, { totalCount: mountedTotalCount }, { assertCurrent: mountedCount.assertCurrent, header: false });
                 }
             } catch (error) {
-                if (error?.code === 'NATIVE_SOURCE_REPLACED' || dependencies.source.current !== countOwner) {
+                if (error?.code === 'NATIVE_SOURCE_REPLACED' || dependencies.display.captureSource() !== countOwner) {
                     finishInitialization({ resume: false });
                     if (!recoverNativeInitialization(sessionToken, 'native-count-source-replaced')) scheduleRun(0, sessionToken);
                     return;
@@ -446,9 +430,9 @@ export function createMyListInitialization(dependencies) {
                 const preferred = await dependencies.listView.preparePreferred({ mode: mountedMode, bootstrap: freshMyListBootstrap,
                     sessionToken, assertCurrent: () => dependencies.nativeCarousel.assertPreparation(readiness),
                     readInput() {
-                        graphqlGeometry = dependencies.source.nativeLayoutObservation(section, scroller, track);
+                        graphqlGeometry = dependencies.display.measureSource(section, scroller, track);
                         graphqlLayout = graphqlGeometry.layout;
-                        templateView = dependencies.source.nativePageObservation(dependencies.source.current, { template: true });
+                        templateView = dependencies.display.observePage(dependencies.display.captureSource(), { template: true });
                         dependencies.nativeCarousel.assertObservation(templateView);
                         dependencies.nativeCarousel.assertObservation(graphqlGeometry);
                         return { totalCount: earlyTotalCount, columns: graphqlLayout.columns,
@@ -500,7 +484,7 @@ export function createMyListInitialization(dependencies) {
             }
         }
 
-        const initializationNative = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
+        const initializationNative = dependencies.display.inspectSource(section, scroller, track);
         log(tLog('initializationStarted'), {
             version: session.version,
             browserLanguage: navigator.language || '',
@@ -519,10 +503,10 @@ export function createMyListInitialization(dependencies) {
 
         let initializationRetry = null;
         try {
-            const layoutObservation = dependencies.source.nativeLayoutObservation(section, scroller, track);
-            const layout = { ...layoutObservation.layout, rowGap: dependencies.source.measureNativeCarouselGap(section) };
+            const layoutObservation = dependencies.display.measureSource(section, scroller, track);
+            const layout = { ...layoutObservation.layout, rowGap: dependencies.display.measureGap(section) };
             const totalCount = earlyTotalCount;
-            const measuredNative = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
+            const measuredNative = dependencies.display.inspectSource(section, scroller, track);
             const initialPages = measuredNative?.pageCount ?? null;
             log(tLog('initialLayoutMeasured'), {
                 layout: dependencies.diagnostics.layoutSummary(layout),
@@ -533,33 +517,20 @@ export function createMyListInitialization(dependencies) {
             });
             dependencies.nativeCarousel.assertObservation(layoutObservation);
 
-            const status = dependencies.presentation.updateStatus(dependencies.presentation.formatHeaderParts(0, totalCount, null));
-            dependencies.gridView.placeStatus(status, { section, anchor: scroller,
-                assertCurrent: () => dependencies.nativeCarousel.assertObservation(layoutObservation) });
-            dependencies.source.syncStatusTypography(section, status);
-            const initialStatusGeometry = dependencies.source.currentGridGeometry(section, layout);
-            dependencies.source.layoutFrameStatus(status, initialStatusGeometry, layout.rowGap);
-            dependencies.nativeCarousel.assertObservation(layoutObservation);
-
-            // Fast collection skips source-scan presentation, but hover-driven native
-            // moves still need the track marker used by the animation suppression CSS.
-            dependencies.source.nativeSourcePresentation(section, scroller, track, { phase: 'mounted' });
-            dependencies.source.waitForEmpty(false);
-            dependencies.source.publishNativeParent({ section, scroller, track, layout,
-                initializationStartedAt: initializationStarted, empty: false, collectedCount: 0, totalCount });
-            const collectionState = dependencies.source.current;
+            dependencies.display.showCollectionFrame(section, scroller, track, layout, totalCount, initializationStarted, layoutObservation);
+            const collectionState = dependencies.display.captureSource();
             const collectionBinding = dependencies.nativeCarousel.borrowBinding(section, scroller, track);
             const assertCollectionCurrent = () => {
                 session.assertRouteSession(sessionToken);
                 dependencies.nativeCarousel.assertBinding(collectionBinding);
-                if (dependencies.source.current !== collectionState) throw session.initializationError('NATIVE_SOURCE_REPLACED',
+                if (dependencies.display.captureSource() !== collectionState) throw session.initializationError('NATIVE_SOURCE_REPLACED',
                     'native-collection', 'Collection parent was replaced');
             };
             let emptyObservation;
             const collected = await dependencies.listView.collectForPublication({ preferred: fastCollection, totalCount, sessionToken,
                 assertCurrent: assertCollectionCurrent,
                 onPreferred(items) {
-                    const fastNative = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
+                    const fastNative = dependencies.display.inspectSource(section, scroller, track);
                     log(fastCollectionSource === 'mounted-single-page'
                         ? 'Mounted single-page My List fast collection used' : 'GraphQL My List fast collection used', {
                         collectionSource: fastCollectionSource, collected: items.length, totalCount,
@@ -569,8 +540,8 @@ export function createMyListInitialization(dependencies) {
                 },
                 beforeNative() {
                     // Keep native layout and slot detection intact while scanning.
-                    dependencies.source.nativeSourcePresentation(section, scroller, track, { phase: 'scan' });
-                    const scanNative = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
+                    dependencies.display.presentSource(section, scroller, track, { phase: 'scan' });
+                    const scanNative = dependencies.display.inspectSource(section, scroller, track);
                     log(tLog('nativeCarouselScanModeStarted'), {
                         selectedPage: scanNative?.selectedPage ?? null, pages: scanNative?.pageCount ?? null,
                         sourceSlots: scanNative?.sourceSlots ?? 0, sourceCards: scanNative?.sourceCards ?? 0,
@@ -591,7 +562,7 @@ export function createMyListInitialization(dependencies) {
                     const error = session.initializationError(facts.code, 'validate-count',
                         `Collected ${facts.collected} of ${facts.totalCount} My List items`,
                         { collected: facts.collected, totalCount: facts.totalCount,
-                            endingPage: dependencies.source.nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null });
+                            endingPage: dependencies.display.inspectSource(section, scroller, track)?.selectedPage ?? null });
                     warn(tLog('collectedCountDoesNotMatchTotalCount'), {
                         collected: facts.collected, totalCount: facts.totalCount, stage: error.stage, code: error.code
                     });
@@ -600,7 +571,7 @@ export function createMyListInitialization(dependencies) {
             assertCollectionCurrent();
             if (collected.status === 'empty') {
                 dependencies.nativeCarousel.assertObservation(emptyObservation);
-                dependencies.source.finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, 'collection-confirmed-empty', emptyObservation);
+                dependencies.display.publishEmpty(section, scroller, track, layout, initializationStarted, 'collection-confirmed-empty', emptyObservation);
                 return;
             }
             const items = collected.transfer.records;
@@ -608,41 +579,20 @@ export function createMyListInitialization(dependencies) {
             log(tLog('fullCollectionResultFinalized'), {
                 collected: items.length,
                 totalCount,
-                endingPage: dependencies.source.nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null,
+                endingPage: dependencies.display.inspectSource(section, scroller, track)?.selectedPage ?? null,
                 items: items.map(dependencies.diagnostics.itemSummary)
             });
             assertCollectionCurrent();
 
             // Keep the native carousel at its normal position and size for React resynchronization.
-            dependencies.source.nativeSourcePresentation(section, scroller, track, { phase: 'parked' });
-            const standbyNative = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
+            dependencies.display.presentSource(section, scroller, track, { phase: 'parked' });
+            const standbyNative = dependencies.display.inspectSource(section, scroller, track);
             log(tLog('nativeCarouselStandbyMode'), {
                 selectedPage: standbyNative?.selectedPage ?? null,
                 parked: standbyNative?.sourceParked ?? false
             });
             assertCollectionCurrent();
-            await dependencies.presentation.buildGrid(section, scroller, collected.transfer, layout, totalCount, sessionToken);
-            session.assertRouteSession(sessionToken);
-            dependencies.source.acceptEmpty(dependencies.source.current, false);
-            dependencies.source.applyOriginalMyListVisibility();
-
-            // Defer React-backed hover preparation until the first actual hover.
-            // The live native card is resolved on demand, keeping initialization off the hover path.
-            const deferredNative = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
-            log(tLog('initialHoverPreparationDeferred'), {
-                selectedPage: deferredNative?.selectedPage ?? null,
-                currentPageCards: deferredNative?.currentPageCards ?? 0
-            });
-            if (dependencies.source.current) dependencies.source.ensureListMembership(dependencies.source.current).observeCount({ collectedCount: items.length, totalCount });
-            dependencies.source.complete(section);
-            if (performanceDiagnostics.nativeRecovery.attempts > performanceDiagnostics.nativeRecovery.completed) {
-                performanceDiagnostics.nativeRecovery.completed++;
-            }
-            dependencies.interaction.resetOrderMismatchStateAfterInitialization();
-            dependencies.source.acceptElapsed(dependencies.source.current, performance.now() - initializationStarted);
-            dependencies.presentation.updateStatus(dependencies.presentation.formatHeaderParts(items.length, totalCount, dependencies.source.current.initializationElapsedMs, true));
-
-            dependencies.presentation.initializeWatchGroups(dependencies.source.current, sessionToken);
+            await dependencies.display.publishCollection(section, scroller, collected.transfer, layout, totalCount, initializationStarted, sessionToken);
 
             log(tLog('initializationCompleted'), {
                 collected: items.length,
@@ -650,7 +600,7 @@ export function createMyListInitialization(dependencies) {
                     initialPages,
                 initialColumns: layout.columns,
                 initialCardWidth: layout.cardWidth,
-                initializationElapsedMs: Math.round(dependencies.source.current.initializationElapsedMs),
+                initializationElapsedMs: Math.round(dependencies.display.captureSource().initializationElapsedMs),
                 snapshot: dependencies.diagnostics.collectRuntimeSnapshot()
             });
         } catch (error) {
@@ -665,9 +615,7 @@ export function createMyListInitialization(dependencies) {
             } else if (error?.code === 'GRID_BUILD_SOURCE_REPLACED') {
                 log('Grid construction discarded after native source replacement', { sessionToken });
                 session.cleanupTargetSessionDom();
-                dependencies.nativeCarousel.clearBinding();
-                dependencies.source.publishSourceState(null);
-                dependencies.source.complete(null);
+                dependencies.display.discardSource();
                 initializationRetry = 'immediate';
             } else {
                 blockFailure(error, null, null, earlyTotalCount);
@@ -703,7 +651,10 @@ export function createMyListInitialization(dependencies) {
         isNativeBlocked: token => blockedInitialization?.native?.sessionToken === token,
         workCounters: () => ({ nativeRecovery: { ...performanceDiagnostics.nativeRecovery } }),
         resetMissingSourceWait() { missingSectionSince = 0; },
-        markRecoveryCompleted() { if (performanceDiagnostics.nativeRecovery.attempts > performanceDiagnostics.nativeRecovery.completed) performanceDiagnostics.nativeRecovery.completed++; },
+        acceptPublication() {
+            if (performanceDiagnostics.nativeRecovery.attempts > performanceDiagnostics.nativeRecovery.completed) performanceDiagnostics.nativeRecovery.completed++;
+            dependencies.onAccepted();
+        },
         begin() { blockedInitialization = null; performanceDiagnostics = createPerformanceDiagnostics(); },
         dropDeferral() { initializationDeferral = null; },
         cancelScheduled() { if (scheduledRun) clearTimeout(scheduledRun.timer); scheduledRun = null; },

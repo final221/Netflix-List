@@ -21,6 +21,11 @@ function area(file) {
 
 function allowedImport(from, to) {
     if (from === 'src/legacy.js' || to === 'src/legacy.js') return false;
+    const displayPrivate = 'src/app/my-list-display/';
+    if (to.startsWith(displayPrivate)) {
+        return from === 'src/app/my-list-display.js' || from.startsWith(displayPrivate);
+    }
+    if (from.startsWith(displayPrivate) && area(to) === 'app') return false;
     const owner = area(from);
     if (owner === 'app' || from === 'src/main.js') {
         return area(to) === 'app' || publicFeatures.has(to) || netflixEntries.has(to) || supportEntries.has(to);

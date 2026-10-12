@@ -7,6 +7,29 @@ import { viewingVideo, atom, reference, carouselPayload } from './helpers/fixtur
 const ids = parent => parent.children.filter(node => node.getAttribute('data-tm-item-video-id') !== null).map(node => node.getAttribute('data-tm-item-video-id'));
 const groupIds = e => ({ main: ids(e.grid()), watched: ids(e.grid().querySelector('[data-tm-watch-grid]')) });
 
+test('real session cleanup failure cannot retain active hover or prevent a replacement visit', async () => {
+    const e = sessionBrowser(); await e.start();
+    const root = e.grid();
+    root.querySelector('[data-tm-filter-value="all"]').dispatchEvent({ type: 'click' });
+    const card = e.over('2');
+    await e.drain(() => e.events.some(event => event.type === 'mouseover'));
+    const remove = root.remove.bind(root);
+    root.remove = () => { throw new Error('retired grid removal failed'); };
+    e.history.pushState({}, '', '/watch/123');
+    await e.scheduler.flush();
+    assert.equal(e.app.diagnostics().currentSession, null);
+    const replayCount = e.events.filter(event => event.type === 'mouseover').length;
+    card.dispatchEvent({ type: 'pointerover', bubbles: true });
+    await e.scheduler.advance(2000);
+    assert.equal(e.events.filter(event => event.type === 'mouseover').length, replayCount);
+    root.remove = remove; remove();
+    e.history.pushState({}, '', '/browse/my-list');
+    await e.drain(() => e.app.diagnostics().currentSession?.completed);
+    assert.notEqual(e.grid(), root);
+    assert.deepEqual(e.cardIds(), ['1', '2', '3', '4', '5', '6']);
+    e.dispose();
+});
+
 for (const phase of ['totalCount detected', 'Legacy grid built']) {
     test(`real session retirement at ${phase} cannot continue publication or viewing work`, async () => {
         const e = sessionBrowser({ count: 12, viewing: true });

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createResponsive } from '../src/app/responsive.js';
+import { applyPageAssignments } from '../src/app/my-list-display/page-mapping.js';
 import { createScheduler } from './helpers/scheduler.js';
 import { createList } from '../src/list/list.js';
 import { createHover } from '../src/hover/hover.js';
@@ -23,17 +24,29 @@ function transactionFixture({ mode = 'indicator', ...overrides } = {}) {
     let hidden=false,parked=false,needsRemapping=false,geometryLeft=0;
     const observed = () => ({ layout, mode, position: { pages: pages }, presentation: { hidden, parked },needsRemapping });
     const source = {
-        get current() { return state; },
-        acceptLayout: (state, layout) => { state.layout = layout; },
-        acceptInitialPage: (state, page) => { state.initialPage = page; },
-        acceptViewportSignature: (state, signature) => { state.resizeViewportSignature = signature; },
-        nativeSourceObservation: observed, nativeLayoutObservation: observed, nativeSourceDiagnostics: () => ({}),
-        ensureLiveNativeBinding: () => state,
-        currentGridGeometry: () => ({ width: layout.gridWidth, left: geometryLeft, columns: layout.columns }),
-        applyGridGeometry: () => ({}), layoutFrameStatus() {}, measureNativeCarouselGap: () => 0,
-        pageForItem: () => 0, setPageForItem() {}, itemKey: item => item.videoId, copyItemAttributes() {},
+        captureSource: () => state,
+        collectionReceipt: parent => ({ records: parent.items, assertCurrent() {} }),
+        applyResponsiveMapping(parent, { columns, pages, assertCurrent, connectedOnly, initialPage }) {
+            const changed = applyPageAssignments(parent.items.map((item, index) => ({ item, page: Math.min(pages - 1, Math.floor(index / columns)) })), {
+                hints: { read: item => source.preferredPage(item), write: (item, page) => source.setPageForItem(item, page, parent, { assertCurrent }) },
+                cards: { get: item => { const node = parent.cloneMap?.get(source.itemKey(item)); return node ? { node } : null; },
+                    update: (card, item) => source.copyItemAttributes(card.node, item) },
+                assertCurrent, connectedOnly });
+            assertCurrent();
+            if (initialPage !== undefined) parent.initialPage = initialPage;
+            return changed;
+        },
+        applyLayout: (state, layout) => { state.layout = layout; },
+        showLayoutStatus() {},
+        recordCollectionPage: (state, page) => { state.initialPage = page; },
+        recordViewportChange: (state, signature) => { state.resizeViewportSignature = signature; },
+        observeSource: observed, measureSource: observed, inspectSource: () => ({}),
+        refreshSource: () => state,
+        measureGrid: () => ({ width: layout.gridWidth, left: geometryLeft, columns: layout.columns }),
+        applyGridGeometry: () => ({}), layoutFrameStatus() {}, measureGap: () => 0,
+        preferredPage: () => 0, setPageForItem() {}, itemKey: item => item.videoId, copyItemAttributes() {},
         ...overrides };
-    const owner = createResponsive({ source, presentation: { updateStatus() {}, formatHeaderParts: () => '', ...overrides },
+    const owner = createResponsive({ display: source,
         ...scheduler, window, ResizeObserver: class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
         nativeCarousel: carousel, readSessionToken: () => 1, isRouteSessionActive: () => true,
         assertRouteSession() {}, createRouteSessionCancelledError: () => Object.assign(new Error('retired'), { code: 'CANCELLED' }),
@@ -64,7 +77,7 @@ test('responsive page publication preserves mode-specific page bounds, clone eli
     for (const mode of ['indicator', 'logical']) {
         const hints = new Map(), writes = [], copies = [], logs = [];
         const f = transactionFixture({ mode,
-            pageForItem: item => hints.get(item),
+            preferredPage: item => hints.get(item),
             setPageForItem(item, page, parent, { assertCurrent }) {
                 assertCurrent(); assert.equal(parent, f.state); hints.set(item, page); writes.push(item.videoId); assertCurrent();
             },
@@ -195,11 +208,12 @@ function fixture() {
         removeEventListener: key => listeners.delete(key) };
     let current = { grid: { isConnected: true }, section: {}, resizeViewportSignature: 'old' };
     const owner = createResponsive({
-        source: { get current() { return current; },
-            acceptLayout: (state, layout) => { state.layout = layout; },
-            acceptInitialPage: (state, page) => { state.initialPage = page; },
-            acceptViewportSignature: (state, signature) => { state.resizeViewportSignature = signature; } },
-        presentation: {}, window, ResizeObserver: class { constructor(fn) { callbacks.push(fn); } observe() {} disconnect() {} },
+        display: { captureSource: () => current,
+            applyLayout: (state, layout) => { state.layout = layout; },
+        showLayoutStatus() {},
+            recordCollectionPage: (state, page) => { state.initialPage = page; },
+            recordViewportChange: (state, signature) => { state.resizeViewportSignature = signature; } },
+        window, ResizeObserver: class { constructor(fn) { callbacks.push(fn); } observe() {} disconnect() {} },
         readSessionToken: () => 1, isRouteSessionActive: () => true,
         setTimeout: fn => { callbacks.push(fn); return callbacks.length; }, clearTimeout: () => {},
         hover: { cancel() {} }, log() {}, tLog: value => value });

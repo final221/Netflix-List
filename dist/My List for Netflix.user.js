@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.26
+// @version      1.9.27
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -23,8 +23,7 @@
   // src/app/responsive.js
   function createResponsive(options) {
     const {
-      source,
-      presentation,
+      display,
       window,
       ResizeObserver,
       performance,
@@ -51,25 +50,15 @@
       readOriginalVisibility
     } = options;
     const {
-      acceptLayout: acceptLayoutChange,
-      acceptInitialPage,
-      acceptViewportSignature,
-      nativeSourceObservation,
-      nativeLayoutObservation,
-      nativeSourceDiagnostics,
-      ensureLiveNativeBinding,
-      applyGridGeometry,
-      layoutFrameStatus,
-      measureNativeCarouselGap,
-      pageForItem,
-      setPageForItem,
-      itemKey,
-      copyItemAttributes,
-      currentGridGeometry,
-      applyLegacyEmptyStateGeometry
-    } = source;
-    const { updateStatus, formatHeaderParts } = presentation;
-    const readState = () => source.current;
+      observeSource: nativeSourceObservation,
+      measureSource: nativeLayoutObservation,
+      inspectSource: nativeSourceDiagnostics,
+      refreshSource: ensureLiveNativeBinding,
+      measureGap: measureNativeCarouselGap,
+      measureGrid: currentGridGeometry,
+      recordViewportChange: acceptViewportSignature
+    } = display;
+    const readState = () => display.captureSource();
     let resizeObserver = null, responsiveRefreshTimer = null, responsiveRefreshPromise = null, responsiveRefreshing = false;
     let responsiveDeferral = null, activeResponsiveReason = "", lastResponsiveReason = "", lastResponsiveSignature = "";
     let myListCountConvergencePending = false, responsiveSequence = 0, lifecycleRevision = 0, listeners = null;
@@ -129,20 +118,7 @@
     function responsivePageShape(signature) {
       return signature.split("|").slice(0, 2).join("|");
     }
-    function updateResponsiveStatus(layout, note = "") {
-      if (!readState()?.status || !readState()?.items) return;
-      const geometry = applyGridGeometry(readState().section, readState().grid, layout);
-      layoutFrameStatus(readState().status, geometry, readOriginalVisibility() ? layout.rowGap || readState().layout?.rowGap || 0 : 0);
-      updateStatus(formatHeaderParts(
-        readState().items.length,
-        readState().totalCount,
-        readState().initializationElapsedMs,
-        true
-      ));
-      if (note) {
-        log(tLog("responsiveStatusNote"), { note });
-      }
-    }
+    const updateResponsiveStatus = (layout, note = "") => display.showLayoutStatus(readState(), layout, note);
     async function waitResponsiveLayoutSettled(timeout = 1200, sessionToken = null) {
       assertRouteSession(sessionToken);
       const revision = lifecycleRevision;
@@ -174,19 +150,6 @@
       assertRouteSession(sessionToken);
       return latest;
     }
-    function publishPageHints({ state, items, cloneMap, columns, pages, assertCurrent, connectedClonesOnly = false }) {
-      let changed = 0;
-      items.forEach((item, index) => {
-        assertCurrent();
-        const page = Math.min(pages - 1, Math.floor(index / columns));
-        if (pageForItem(item) !== page) changed++;
-        setPageForItem(item, page, state, { assertCurrent });
-        const clone = cloneMap?.get(itemKey(item));
-        if (clone && (!connectedClonesOnly || clone.isConnected)) copyItemAttributes(clone, item);
-        assertCurrent();
-      });
-      return changed;
-    }
     async function rebuildLogicalPageModelFromNativePosition(layout, reason = "responsive-remap", sessionToken = readSessionToken()) {
       assertRouteSession(sessionToken);
       const live = ensureLiveNativeBinding("logical-page-model-rebuild-start") || readState();
@@ -198,14 +161,16 @@
         throw new Error("Native carousel binding is unavailable during logical page model rebuild");
       }
       if (!state) throw createRouteSessionCancelledError();
-      const { itemMap, cloneMap, grid } = state;
+      const { grid } = state;
+      const collection = display.collectionReceipt(state);
       const recordOwner = state.items, items = recordOwner || [];
       const totalCount = items.length;
       const columns = Math.max(1, layout?.columns || state.layout?.columns || 1);
       const previousColumns = state.layout?.columns;
       const assertOwner = () => {
         assertRouteSession(sessionToken);
-        if (readState() !== state || state.items !== recordOwner || items.length !== totalCount || state.itemMap !== itemMap || state.cloneMap !== cloneMap || state.grid !== grid || grid && !grid.isConnected || state.layout?.columns !== previousColumns || state.section !== section || state.scroller !== scroller || state.track !== track) {
+        collection.assertCurrent();
+        if (readState() !== state || state.items !== recordOwner || items.length !== totalCount || state.grid !== grid || grid && !grid.isConnected || state.layout?.columns !== previousColumns || state.section !== section || state.scroller !== scroller || state.track !== track) {
           throw createRouteSessionCancelledError();
         }
       };
@@ -228,17 +193,14 @@
       if (result.countConverged) myListCountConvergencePending = false;
       if (result.status !== "committed") return null;
       return nativeCarousel.sample(() => {
-        const changed = publishPageHints({
-          state,
-          items,
-          cloneMap,
+        const changed = display.applyResponsiveMapping(state, {
           columns,
           pages: result.knownPageCount,
           assertCurrent: assertPublication,
-          connectedClonesOnly: true
+          connectedOnly: true,
+          initialPage: result.currentPage
         });
         assertPublication();
-        acceptInitialPage(state, result.currentPage);
         log(tLog("logicalPageModelSynchronizedAfterDelta"), {
           reason,
           currentPage: result.currentPage,
@@ -259,7 +221,7 @@
     }
     async function remapItemsByOrder(layout, sessionToken = readSessionToken()) {
       const state = readState();
-      const { section, items, cloneMap } = state;
+      const { section, items } = state;
       const columns = Math.max(1, layout.columns);
       const runtime = nativeSourceObservation(state, { position: true });
       const logicalMode = runtime?.mode === "logical";
@@ -268,10 +230,7 @@
       if (logicalMode) {
         changed = await rebuildLogicalPageModelFromNativePosition(layout, "responsive-remap", sessionToken);
       } else {
-        changed = nativeCarousel.sample(() => publishPageHints({
-          state,
-          items,
-          cloneMap,
+        changed = nativeCarousel.sample(() => display.applyResponsiveMapping(state, {
           columns,
           pages,
           assertCurrent: () => nativeCarousel.assertObservation(runtime)
@@ -326,8 +285,7 @@
         assertOwner();
         const signature = responsiveSignature(liveLayout);
         const pageShape = responsivePageShape(signature);
-        acceptLayoutChange(state, liveLayout);
-        updateResponsiveStatus(liveLayout, tUi("relayoutInProgress"));
+        display.applyLayout(state, liveLayout, { mode: "status", note: tUi("relayoutInProgress"), assertCurrent: assertOwner });
         const pageShapeChanged = pageShape !== responsivePageShape(lastResponsiveSignature);
         const sourceObservation = nativeSourceObservation(state);
         const logicalMappingStale = Boolean(sourceObservation?.needsRemapping);
@@ -443,9 +401,7 @@
               counters.unchanged++;
               return;
             }
-            acceptLayoutChange(state, layout);
-            const geometry = applyGridGeometry(state.section, state.grid, layout);
-            layoutFrameStatus(state.status, geometry);
+            display.applyLayout(state, layout, { mode: "empty-frame" });
             return;
           }
           ensureLiveNativeBinding("responsive-check");
@@ -471,7 +427,7 @@
           if (!nativeCarousel.isObservationCurrent(sample.observed)) return;
           if (sig === lastResponsiveSignature && geometryUnchanged && !logicalMappingStale) {
             const previousScrollerHeight = state.layout.scrollerHeight;
-            acceptLayoutChange(state, measured);
+            display.applyLayout(state, measured);
             realignActiveSource();
             counters.unchanged++;
             const hoverPreserved = Boolean(hover.hasInteraction());
@@ -506,7 +462,7 @@
             const pageCountOnlyChanged = previousParts.length === 7 && currentParts.length === 7 && previousParts[1] !== currentParts[1] && previousParts.every((part, index) => index === 1 || part === currentParts[index]);
             if (pageCountOnlyChanged && geometryUnchanged && !logicalMappingStale) {
               const previousSignature = lastResponsiveSignature;
-              acceptLayoutChange(state, measured);
+              display.applyLayout(state, measured);
               lastResponsiveSignature = sig;
               realignActiveSource();
               counters.unchanged++;
@@ -610,11 +566,13 @@
             const layout = { ...observed.layout, rowGap: measureNativeCarouselGap(state.section) };
             nativeCarousel.assertObservation(observed);
             if (readState() !== state || !nativeCarousel.isBindingCurrent(binding)) return;
-            acceptLayoutChange(state, layout);
-            const geometry = applyGridGeometry(state.section, state.grid, layout);
-            if (readState() !== state || !nativeCarousel.isBindingCurrent(binding)) return;
-            layoutFrameStatus(state.status, geometry, mode === "empty" && readOriginalVisibility() ? layout.rowGap || 0 : 0);
-            applyLegacyEmptyStateGeometry(state.section, layout);
+            display.applyLayout(state, layout, {
+              mode: "empty-source",
+              rowGap: mode === "empty" && readOriginalVisibility() ? layout.rowGap || 0 : 0,
+              assertCurrent() {
+                if (readState() !== state || !nativeCarousel.isBindingCurrent(binding)) throw createRouteSessionCancelledError();
+              }
+            });
           });
         } catch (error) {
           if (error?.code !== "NATIVE_SOURCE_REPLACED" && !isRouteSessionCancelledError(error)) throw error;
@@ -7074,7 +7032,7 @@ ${CARD_ACTION_STYLES}
         devicePixelRatio: window.devicePixelRatio
       }),
       readRuntime: () => collectRuntimeSnapshot(),
-      readSeriesViewing: () => collectViewingSeriesDiagnostics(providers.source.current),
+      readSeriesViewing: () => collectViewingSeriesDiagnostics(providers.display.captureSource()),
       readThumbnails: () => providers.gridView.images.collect(),
       readNativePopup: () => providers.popupInspection.collect()
     });
@@ -7116,37 +7074,14 @@ ${CARD_ACTION_STYLES}
       };
     }
     function slotDescriptor(slot) {
-      return providers.nativeCarousel.diagnostics({ card: slot, totalCount: providers.source.current?.totalCount }).card;
+      return providers.nativeCarousel.diagnostics({ card: slot, totalCount: providers.display.captureSource()?.totalCount }).card;
     }
     function itemSummary(item) {
-      if (!item) return null;
-      return {
-        videoId: item.videoId || "",
-        page: providers.source.pageForItem(item),
-        href: item.href || "",
-        ariaLabel: item.ariaLabel || ""
-      };
+      return providers.display.itemSummary(item);
     }
-    function layoutSummary(layout) {
-      if (!layout) return null;
-      return {
-        columns: layout.columns,
-        cardWidth: Math.round((layout.cardWidth || 0) * 10) / 10,
-        gap: Math.round((layout.gap || 0) * 10) / 10,
-        rowGap: Math.round((layout.rowGap || 0) * 10) / 10,
-        gridLeft: Math.round((layout.gridLeft || 0) * 10) / 10,
-        gridWidth: Math.round((layout.gridWidth || 0) * 10) / 10,
-        sidePadding: Math.round((layout.sidePadding || 0) * 10) / 10,
-        sidePaddingLeft: Math.round((layout.sidePaddingLeft ?? layout.sidePadding ?? 0) * 10) / 10,
-        sidePaddingRight: Math.round((layout.sidePaddingRight ?? layout.sidePadding ?? 0) * 10) / 10,
-        scrollerWidth: Math.round((layout.scrollerWidth || 0) * 10) / 10,
-        scrollerHeight: Math.round((layout.scrollerHeight || 0) * 10) / 10,
-        widthRatio: Number.isFinite(layout.widthRatio) ? Math.round(layout.widthRatio * 1e5) / 1e5 : null,
-        formulaBased: Boolean(layout.formulaBased)
-      };
-    }
+    const layoutSummary = (layout) => providers.display.layoutSummary(layout);
     function collectRuntimeSnapshot() {
-      const section = providers.source.current?.section, scroller = providers.source.current?.scroller, track = providers.source.current?.track;
+      const section = providers.display.captureSource()?.section, scroller = providers.display.captureSource()?.scroller, track = providers.display.captureSource()?.track;
       const grid = document.getElementById(GRID_ID);
       const statusNode = document.getElementById(STATUS_ID);
       const statusLabel = statusNode?.querySelector?.(`.${STATUS_LABEL_CLASS}`)?.textContent || "";
@@ -7156,8 +7091,8 @@ ${CARD_ACTION_STYLES}
       const native = carouselSummary.source;
       const nativeInteraction = providers.nativePopup.diagnostics(), hoverSummary = providers.hover.diagnostics();
       const responsiveSummary = providers.responsive.diagnostics(), intent = providers.hover.intent();
-      const viewingSummary = providers.source.current?.watchStatus ? providers.viewing.diagnostics(providers.source.current.watchStatus) : null;
-      const viewingPresentation = providers.source.current?.watchStatus ? providers.gridView.presentation() : null;
+      const viewingSummary = providers.display.viewingDiagnostics();
+      const viewingPresentation = providers.display.captureSource()?.viewingActive ? providers.gridView.presentation() : null;
       return {
         url: location.href,
         browserLanguage: navigator2.language || "",
@@ -7172,20 +7107,20 @@ ${CARD_ACTION_STYLES}
         runningSessionToken: providers.initialization.running?.sessionToken ?? null,
         targetSessionActive: providers.session.active,
         routeSessionToken: providers.session.scope.token,
-        completed: Boolean(providers.source.completed && providers.source.completed.isConnected),
+        completed: Boolean(providers.display.completed && providers.display.completed.isConnected),
         selectedPage: native?.selectedPage ?? null,
         pageCount: native?.pageCount ?? null,
         carouselDom: native?.carouselDom ?? null,
-        totalCount: providers.source.current?.totalCount ?? null,
-        collectedItems: providers.source.current?.items?.length ?? 0,
+        totalCount: providers.display.captureSource()?.totalCount ?? null,
+        collectedItems: providers.display.captureSource()?.items?.length ?? 0,
         sourceSlots: native?.sourceSlots ?? 0,
         sourceCards: native?.sourceCards ?? 0,
         currentPageCards: native?.currentPageCards ?? 0,
-        gridCards: providers.source.current?.cloneMap?.size ?? 0,
+        gridCards: providers.display.captureSource()?.cardCount ?? 0,
         performanceWork: collectPerformanceDiagnostics({ hoverSummary, nativeInteraction, responsiveSummary, carouselSummary }),
         undoRetention: providers.listMutations.undoDiagnostics(),
         reconciliation: providers.listMutations.deferralDiagnostics(),
-        viewingStatus: providers.source.current?.watchStatus ? {
+        viewingStatus: providers.display.captureSource()?.viewingActive ? {
           completed: viewingPresentation.completedCount,
           unknown: viewingPresentation.unknownCount,
           ...viewingSummary
@@ -7200,7 +7135,7 @@ ${CARD_ACTION_STYLES}
         viewOriginalMyList: settings.preferences().viewOriginalMyList,
         myListSyncMode: "event-driven",
         pendingMyListMutations: providers.listMutations.pendingDiagnostics(),
-        layout: layoutSummary(providers.source.current?.layout),
+        layout: layoutSummary(providers.display.captureSource()?.layout),
         activeVideoId: intent.videoId,
         activePage: intent.page,
         activeClone: intent.clone ? {
@@ -7214,7 +7149,7 @@ ${CARD_ACTION_STYLES}
         activeSourceSlot: providers.nativePopup.describeActiveSource(),
         hoverToken: intent.token,
         ...responsiveSummary,
-        resizeViewportSignature: providers.source.current?.resizeViewportSignature || "",
+        resizeViewportSignature: providers.display.captureSource()?.resizeViewportSignature || "",
         hoverScrollState: hoverSummary.hoverScrollState,
         pointer: { x: intent.pointerX, y: intent.pointerY }
       };
@@ -7231,7 +7166,7 @@ ${CARD_ACTION_STYLES}
       }
     }
     function collectViewingSeriesDiagnostics(state) {
-      return state?.watchStatus ? providers.viewing.seriesDiagnostics(state.watchStatus) : [];
+      return providers.display.seriesDiagnostics();
     }
     function reportInitializationFailure(error, detail) {
       warn(tLog("initializationFailed"), {
@@ -15223,12 +15158,10 @@ ${CARD_ACTION_STYLES}
     });
   }
 
-  // src/app/my-list-source.js
-  function createMyListSource(dependencies) {
-    const { environment, i18n, logger, settings, session } = dependencies;
-    const { document, window, performance } = environment;
-    const { tLog } = i18n;
-    const { log } = logger;
+  // src/app/my-list-display/source.js
+  function createDisplaySource(dependencies) {
+    const { environment, settings, session } = dependencies;
+    const { window } = environment;
     let sourceState = null, completedSection = null, waitingForNativeEmpty = false;
     let nativePresentationLease = null;
     const parents = /* @__PURE__ */ new WeakMap();
@@ -15259,27 +15192,13 @@ ${CARD_ACTION_STYLES}
       if (!value || parents.has(value)) return value;
       value = Object.defineProperties({}, Object.getOwnPropertyDescriptors(value));
       const view = Object.defineProperties({}, Object.fromEntries(fields.map((key) => [key, { enumerable: true, get: () => value[key] }])));
-      Object.defineProperty(view, "watchStatus", { enumerable: true, get: () => dependencies.presentation.watchFor(view) });
+      Object.defineProperty(view, "watchStatus", { enumerable: true, get: () => value.watchStatus });
       parents.set(view, value);
       return Object.freeze(view);
     }
     function accept(parent) {
       if (!parent || parent !== sourceState) throw session.createRouteSessionCancelledError();
       return owned(parent);
-    }
-    function publishSourceState(next) {
-      const previous = sourceState;
-      next = parentView(next);
-      sourceState = next;
-      if (previous !== next) {
-        dependencies.presentation.retireViewing(previous);
-        previous?.listMembership?.dispose();
-        previous?.nativePageHints?.dispose();
-      }
-      return next;
-    }
-    function publishNativeParent({ section, scroller = null, track = null, ...facts }) {
-      return publishSourceState(attachNativeBinding(facts, section, scroller, track));
     }
     function stageGridPublication(parent, transfer, totalCount, { assertCurrent }) {
       const membership = ensureListMembership(parent).preparePublication(transfer.records, totalCount, { assertCurrent });
@@ -15366,31 +15285,6 @@ ${CARD_ACTION_STYLES}
     function markOriginalHeader(section, scroller, track) {
       return nativeSourcePresentation(section, scroller, track)?.anchor || null;
     }
-    function applyOriginalMyListVisibility() {
-      if (!sourceState?.section && !session.isTargetPage()) return;
-      if (!nativeSourcePresentation(void 0, void 0, void 0, { visible: settings.preferences().viewOriginalMyList })) return;
-      if (sourceState?.status) {
-        layoutFrameStatus(sourceState.status, null, settings.preferences().viewOriginalMyList ? sourceState.layout?.rowGap || 0 : 0);
-      }
-    }
-    function cleanupOldArtifacts() {
-      const state = sourceState, sessionToken = session.scope.token;
-      dependencies.gridView.cleanupArtifacts(() => {
-        session.assertRouteSession(sessionToken);
-        if (sourceState !== state) throw session.createRouteSessionCancelledError();
-      });
-      dependencies.nativeCarousel.cleanupArtifacts({ sessionToken, assertCurrent() {
-        session.assertRouteSession(sessionToken);
-        if (sourceState !== state) throw session.initializationError("NATIVE_SOURCE_REPLACED", "native-presentation", "Artifact cleanup caller changed");
-      } });
-    }
-    function measureNativeCarouselGap(section) {
-      const state = sourceState, sessionToken = session.scope.token;
-      const gap = dependencies.netflixDom.readRowGap(section, window.innerWidth);
-      session.assertRouteSession(sessionToken);
-      if (sourceState !== state) throw session.createRouteSessionCancelledError();
-      return gap;
-    }
     function nativeLayoutObservation(section, scroller = null, track = null, mode = "auto", state = sourceState) {
       const sessionToken = session.scope.token;
       const ownerSection = state?.section, ownerScroller = state?.scroller, ownerTrack = state?.track;
@@ -15403,61 +15297,6 @@ ${CARD_ACTION_STYLES}
         }
       } });
     }
-    function applyLegacyEmptyStateGeometry(section, layout) {
-      if (!dependencies.gridView.emptyPresentation().connected || !section || !layout) return;
-      const state = sourceState, sessionToken = session.scope.token;
-      const geometry = currentGridGeometry(section, layout);
-      dependencies.gridView.layoutEmpty(geometry, () => {
-        session.assertRouteSession(sessionToken);
-        if (sourceState !== state) throw session.createRouteSessionCancelledError();
-      });
-    }
-    function syncLegacyEmptyState(section, { allowProvisional = false } = {}) {
-      const state = sourceState, sessionToken = session.scope.token;
-      const binding = state?.section === section ? dependencies.nativeCarousel.borrowBinding(section, state.scroller, state.track) : null;
-      const geometry = state?.layout ? currentGridGeometry(section, state.layout) : null;
-      return dependencies.gridView.presentEmpty({ section, allowProvisional, geometry, assertCurrent() {
-        session.assertRouteSession(sessionToken);
-        if (sourceState !== state) throw session.createRouteSessionCancelledError();
-        if (binding) dependencies.nativeCarousel.assertBinding(binding);
-      } });
-    }
-    function finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, reason = "empty", admission = null) {
-      if (admission) dependencies.nativeCarousel.assertObservation(admission);
-      dependencies.gridView.clearCards(() => {
-        if (admission) dependencies.nativeCarousel.assertObservation(admission);
-      });
-      const elapsedMs = performance.now() - initializationStarted;
-      const frame = dependencies.presentation.placeLegacyFrame(section, scroller, layout, { elapsedMs, finalized: true, totalCount: 0 });
-      if (admission) dependencies.nativeCarousel.assertObservation(admission);
-      dependencies.gridView.setEmpty(true);
-      nativeSourcePresentation(section, scroller, track, { phase: "parked" });
-      publishSourceState(attachNativeBinding({
-        layout,
-        items: [],
-        totalCount: 0,
-        grid: frame.grid,
-        status: frame.status,
-        itemMap: /* @__PURE__ */ new Map(),
-        empty: true,
-        resizeViewportSignature: dependencies.responsive.viewportSignature(),
-        initializationStartedAt: initializationStarted,
-        initializationElapsedMs: elapsedMs
-      }, section, scroller || null, track || null));
-      attachGridRegistry(sourceState);
-      waitingForNativeEmpty = false;
-      syncLegacyEmptyState(section, { allowProvisional: true });
-      completedSection = section;
-      dependencies.initialization.markRecoveryCompleted();
-      dependencies.interaction.resetOrderMismatchStateAfterInitialization();
-      applyOriginalMyListVisibility();
-      dependencies.responsive.observe("native-empty");
-      log(tLog("emptyLegacyListFinalized"), {
-        reason,
-        elapsedMs: Math.round(elapsedMs),
-        layout: dependencies.diagnostics.layoutSummary(layout)
-      });
-    }
     function nativeDiscoveryObservation({ bindingOnly = false } = {}) {
       const state = sourceState, sessionToken = session.scope.token;
       const section = state?.section, scroller = state?.scroller, track = state?.track;
@@ -15468,342 +15307,6 @@ ${CARD_ACTION_STYLES}
           throw session.initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Discovery caller was replaced");
         }
       } });
-    }
-    function ensureSyntheticMyListSection(admission) {
-      const state = sourceState, sessionToken = session.scope.token;
-      const guard = () => {
-        session.assertRouteSession(sessionToken);
-        if (sourceState !== state) throw session.createRouteSessionCancelledError();
-        if (admission) dependencies.nativeCarousel.assertObservation(admission);
-      };
-      guard();
-      const placement = dependencies.netflixDom.readSyntheticPlacement();
-      guard();
-      return dependencies.gridView.ensureSynthetic(placement, guard);
-    }
-    function moveLegacyFrameToSyntheticEmpty() {
-      if (!sourceState) return false;
-      const state = sourceState;
-      const live = nativeDiscoveryObservation();
-      if (live.section && !live.scroller && !live.track) {
-        return adoptLiveMyListSection(live, true);
-      }
-      const synthetic = ensureSyntheticMyListSection(live);
-      if (!synthetic) return false;
-      dependencies.nativeCarousel.assertObservation(live);
-      const status = state.status || document.getElementById(STATUS_ID);
-      const grid = state.grid || document.getElementById(GRID_ID);
-      if (!status || !grid) return false;
-      const observed = nativeLayoutObservation(synthetic, null, null, "empty", state);
-      const layout = { ...observed.layout };
-      layout.rowGap = measureNativeCarouselGap(synthetic);
-      dependencies.nativeCarousel.assertObservation(observed);
-      dependencies.gridView.clearEmpty({ restoreGrid: false });
-      dependencies.nativeCarousel.assertObservation(observed);
-      const geometry = currentGridGeometry(synthetic, layout);
-      dependencies.gridView.mount({
-        section: synthetic,
-        status,
-        geometry,
-        layout,
-        visible: false,
-        assertCurrent: () => dependencies.nativeCarousel.assertObservation(observed)
-      });
-      if (sourceState !== state) throw session.initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Synthetic layout parent was replaced");
-      attachNativeBinding(state, synthetic);
-      owned(sourceState).layout = layout;
-      owned(sourceState).empty = true;
-      owned(sourceState).status = status;
-      owned(sourceState).grid = grid;
-      dependencies.gridView.setEmpty(true);
-      syncLegacyEmptyState(synthetic, { allowProvisional: true });
-      completedSection = synthetic;
-      applyOriginalMyListVisibility();
-      dependencies.responsive.observe("empty");
-      log(tLog("legacyFrameMovedToEmptyAnchor"), {
-        items: sourceState.items?.length ?? 0
-      });
-      return true;
-    }
-    function adoptLiveMyListSection(live, empty = false) {
-      if (!sourceState || !live?.section || (empty ? live.scroller || live.track : !live.scroller || !live.track)) return false;
-      if (!empty && sourceState.section === live.section && sourceState.scroller === live.scroller && sourceState.track === live.track) return false;
-      dependencies.nativeCarousel.assertObservation(live);
-      const state = sourceState;
-      const status = state.status || document.getElementById(STATUS_ID);
-      const grid = state.grid || document.getElementById(GRID_ID);
-      if (!status || !grid) return false;
-      const observed = nativeLayoutObservation(live.section, live.scroller, live.track, empty ? "empty" : "auto", state);
-      const layout = { ...observed.layout, rowGap: measureNativeCarouselGap(live.section) };
-      dependencies.nativeCarousel.assertObservation(observed);
-      dependencies.interaction.clearSourceAlignment();
-      dependencies.nativeCarousel.assertObservation(observed);
-      dependencies.nativePopup.invalidate();
-      dependencies.nativeCarousel.assertObservation(observed);
-      if (!empty) dependencies.gridView.clearEmpty({ restoreGrid: false });
-      const originalAnchor = markOriginalHeader(live.section, live.scroller, live.track);
-      dependencies.nativeCarousel.assertObservation(observed);
-      dependencies.nativeCarousel.assertObservation(live);
-      if (!empty) nativeSourcePresentation(live.section, live.scroller, live.track, { phase: "parked" });
-      const geometry = currentGridGeometry(live.section, layout);
-      dependencies.gridView.mount({
-        section: live.section,
-        anchor: empty ? originalAnchor : live.scroller,
-        status,
-        geometry,
-        layout,
-        visible: settings.preferences().viewOriginalMyList,
-        assertCurrent: () => dependencies.nativeCarousel.assertObservation(observed)
-      });
-      if (sourceState !== state) throw session.initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Incoming layout parent was replaced");
-      attachNativeBinding(state, live.section, live.scroller, live.track);
-      owned(state).layout = layout;
-      owned(state).status = status;
-      owned(state).grid = grid;
-      owned(state).empty = empty || (state.items?.length ?? 0) === 0;
-      if (empty || !state.empty) waitingForNativeEmpty = false;
-      if (empty) {
-        dependencies.gridView.setEmpty(true);
-        syncLegacyEmptyState(live.section, { allowProvisional: true });
-        applyLegacyEmptyStateGeometry(live.section, layout);
-      }
-      syncStatusTypography(live.section, status);
-      completedSection = live.section;
-      dependencies.gridView.removeSynthetic(live.section);
-      applyOriginalMyListVisibility();
-      dependencies.responsive.observe(empty ? "empty" : void 0);
-      if (empty) {
-        log(tLog("nativeEmptyMyListSectionAdopted"), {
-          layout: dependencies.diagnostics.layoutSummary(layout),
-          originalVisible: settings.preferences().viewOriginalMyList
-        });
-      } else {
-        log(tLog("nativeMyListSourceAdoptedWithoutRescan"), {
-          pages: live.pages,
-          selectedPage: live.selectedPage,
-          layout: dependencies.diagnostics.layoutSummary(layout)
-        });
-      }
-      dependencies.nativeCarousel.invalidateReads();
-      return true;
-    }
-    function syncLogicalPageModelAfterDelta(reason = "delta-reindex") {
-      const state = sourceState;
-      if (!state?.section || !state?.scroller || !state?.track) return false;
-      const { section, scroller, track, itemMap } = state;
-      const recordOwner = state.items, items = recordOwner || [];
-      const totalCount = items.length;
-      const assertOwner = () => {
-        if (sourceState !== state || state.items !== recordOwner || state.itemMap !== itemMap || items.length !== totalCount || state.section !== section || state.scroller !== scroller || state.track !== track) {
-          throw session.createRouteSessionCancelledError();
-        }
-      };
-      const result = dependencies.nativeCarousel.refreshMapping({
-        mode: "delta",
-        section,
-        scroller,
-        track,
-        totalCount,
-        columns: Math.max(1, state.layout?.columns || 1),
-        sessionToken: session.scope.token,
-        assertCurrent: assertOwner,
-        pageHintForVideoId: (id) => {
-          const item = itemMap?.get("v:" + id);
-          return item ? pageForItem(item) : void 0;
-        }
-      });
-      if (result.status !== "anchored") return false;
-      dependencies.nativeCarousel.assertMapping(result);
-      dependencies.responsive.expectCountConvergence();
-      log(tLog("logicalPageModelSynchronizedAfterDelta"), {
-        reason,
-        currentPage: result.currentPage,
-        knownPageCount: result.knownPageCount,
-        pageCountFinalized: result.pageCountFinalized,
-        pageMappingStale: result.pageMappingStale,
-        visibleSignature: result.visibleSignature,
-        visibleIds: result.visibleIds,
-        itemIndices: result.itemIndices,
-        logicalIndices: result.logicalIndices,
-        totalCount
-      });
-      dependencies.nativeCarousel.assertMapping(result);
-      return true;
-    }
-    function visibleNativeItems(live) {
-      if (!live?.scroller || !live?.track) return [];
-      const state = sourceState;
-      if (state?.scroller !== live.scroller || state?.track !== live.track) {
-        throw session.initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Visible cards no longer belong to the current parent");
-      }
-      return dependencies.nativeCarousel.sample(() => {
-        dependencies.nativeCarousel.assertObservation(live);
-        const observed = nativePageObservation(state);
-        const items = observed.cards.map((entry) => {
-          const item = dependencies.gridView.captureCard(entry.source.slot, live.selectedPage || 0, false);
-          dependencies.nativeCarousel.assertObservation(observed);
-          return item;
-        }).filter((item) => item?.videoId);
-        dependencies.nativeCarousel.assertObservation(observed);
-        dependencies.nativeCarousel.assertObservation(live);
-        return items;
-      });
-    }
-    function readMutationLayout(parent, { positionOnly = false } = {}) {
-      const runtime = positionOnly ? null : nativeSourceObservation(parent), layout = parent.layout, columns = layout?.columns;
-      const sessionToken = session.scope.token;
-      return Object.freeze({ mode: runtime?.mode, columns, assertCurrent() {
-        session.assertRouteSession(sessionToken);
-        if (runtime) dependencies.nativeCarousel.assertObservation(runtime);
-        if (sourceState !== parent || parent.layout !== layout || parent.layout?.columns !== columns) throw session.createRouteSessionCancelledError();
-      } });
-    }
-    function readMutationVisibleFacts(live, parent, { order = false } = {}) {
-      const sessionToken = session.scope.token, layout = parent.layout, columns = layout?.columns;
-      const assertCurrent = () => {
-        session.assertRouteSession(sessionToken);
-        if (live) dependencies.nativeCarousel.assertObservation(live);
-        if (sourceState !== parent || parent.layout !== layout || parent.layout?.columns !== columns) throw session.createRouteSessionCancelledError();
-      };
-      assertCurrent();
-      const ids = order && !live?.pageSignature ? [] : visibleNativeItems(live).map((item) => item.videoId);
-      assertCurrent();
-      return Object.freeze({
-        ids: Object.freeze(ids),
-        page: live?.selectedPage || 0,
-        columns,
-        available: Boolean(live?.pageSignature),
-        assertCurrent
-      });
-    }
-    function findNativeMyListItemByVideoId(videoId, liveState = null) {
-      const discovery = liveState || nativeDiscoveryObservation();
-      return dependencies.nativeCarousel.captureMountedItem({ discovery, videoId });
-    }
-    function restartInitializationForPopulatedNativeMyList(live, reason = "late-populated-source") {
-      if (!sourceState?.empty || !live?.section || !live?.scroller || !live?.track) return false;
-      const visibleItems = visibleNativeItems(live);
-      if (!visibleItems.length) return false;
-      log(tLog("populatedNativeMyListDetectedAfterEmpty"), {
-        reason,
-        pages: live.pages,
-        selectedPage: live.selectedPage,
-        visibleItems: visibleItems.length
-      });
-      dependencies.nativeCarousel.assertObservation(live);
-      const sessionToken = session.scope.token;
-      session.cleanupTargetSessionDom();
-      dependencies.responsive.dispose();
-      completedSection = null;
-      dependencies.nativeCarousel.clearBinding();
-      publishSourceState(null);
-      waitingForNativeEmpty = false;
-      dependencies.initialization.resetMissingSourceWait();
-      dependencies.initialization.scheduleRun(0, sessionToken);
-      return true;
-    }
-    function ensureLiveNativeBinding(reason = "live-check", bindingOnly = false) {
-      if (!sourceState || !session.isTargetPage()) return null;
-      const owner = sourceState;
-      const sessionToken = session.scope.token;
-      const assertParent = () => {
-        session.assertRouteSession(sessionToken);
-        if (sourceState !== owner) throw session.initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Adoption parent was replaced");
-      };
-      try {
-        if (bindingOnly && !waitingForNativeEmpty && !sourceState.empty) {
-          const binding = nativeDiscoveryObservation({ bindingOnly: true });
-          dependencies.nativeCarousel.assertObservation(binding);
-          if (binding.section && binding.scroller && binding.track && binding.matchesBinding) return binding;
-        }
-        let live = nativeDiscoveryObservation();
-        if (waitingForNativeEmpty && (sourceState.items?.length ?? 0) === 0) {
-          if (live.section && !live.scroller && !live.track) {
-            const emptyState2 = dependencies.gridView.emptyPresentation();
-            const alreadyNative = sourceState.section === live.section && !sourceState.scroller && !sourceState.track && emptyState2.source === "native";
-            if (!alreadyNative) adoptLiveMyListSection(live, true);
-            assertParent();
-            live = nativeDiscoveryObservation();
-            return live;
-          }
-          if (!live.section) {
-            return live;
-          }
-          const emptyState = dependencies.gridView.emptyPresentation();
-          if (!emptyState.connected) {
-            syncLegacyEmptyState(sourceState.section, { allowProvisional: true });
-          }
-          dependencies.nativeCarousel.assertObservation(live);
-          return live;
-        }
-        if (live.section && live.scroller && live.track && sourceState.empty && (sourceState.items?.length ?? 0) === 0) {
-          if (restartInitializationForPopulatedNativeMyList(live, reason)) return null;
-        }
-        if (live.section && live.scroller && live.track && !live.matchesBinding) {
-          const previous = {
-            sectionConnected: Boolean(sourceState.section?.isConnected),
-            scrollerConnected: Boolean(sourceState.scroller?.isConnected),
-            trackConnected: Boolean(sourceState.track?.isConnected),
-            sameSection: sourceState.section === live.section,
-            sameScroller: sourceState.scroller === live.scroller,
-            sameTrack: sourceState.track === live.track
-          };
-          if (adoptLiveMyListSection(live)) {
-            log(tLog("nativeMyListBindingRefreshed"), {
-              reason,
-              pages: live.pages,
-              selectedPage: live.selectedPage,
-              previous
-            });
-          }
-          assertParent();
-          live = nativeDiscoveryObservation();
-        } else if (live.section && !live.scroller && !live.track && (sourceState.items?.length ?? 0) === 0) {
-          const emptyState = dependencies.gridView.emptyPresentation();
-          const alreadyNative = sourceState.section === live.section && !sourceState.scroller && !sourceState.track && emptyState.source === "native";
-          if (!alreadyNative) {
-            adoptLiveMyListSection(live, true);
-            assertParent();
-            live = nativeDiscoveryObservation();
-          }
-        } else if (!live.section && (sourceState.items?.length ?? 0) === 0 && sourceState.section?.id !== SYNTHETIC_SECTION_ID) {
-          if (!waitingForNativeEmpty) {
-            moveLegacyFrameToSyntheticEmpty();
-            assertParent();
-            live = nativeDiscoveryObservation();
-          }
-        }
-        dependencies.nativeCarousel.assertObservation(live);
-        return live;
-      } catch (error) {
-        if (error?.code !== "NATIVE_SOURCE_REPLACED" && !session.isRouteSessionCancelledError(error)) throw error;
-        return null;
-      }
-    }
-    function refreshNativeSectionAfterDelta() {
-      return ensureLiveNativeBinding("delta-refresh");
-    }
-    function layoutFrameStatus(status, geometry = null, rowGap) {
-      const state = sourceState, sessionToken = session.scope.token;
-      const section = state?.section, scroller = state?.scroller, track = state?.track;
-      const grid = state?.grid, layout = state?.layout, previousStatus = state?.status;
-      dependencies.gridView.layoutStatus(status, geometry, rowGap, () => {
-        session.assertRouteSession(sessionToken);
-        if (sourceState !== state || state?.section !== section || state?.scroller !== scroller || state?.track !== track || state?.grid !== grid || state?.layout !== layout || state?.status !== previousStatus) {
-          throw session.createRouteSessionCancelledError();
-        }
-      });
-    }
-    function syncStatusTypography(section, status) {
-      if (!status) return;
-      const state = sourceState, sessionToken = session.scope.token;
-      const typography = dependencies.netflixDom.readHeadingTypography(section);
-      session.assertRouteSession(sessionToken);
-      if (sourceState !== state) throw session.createRouteSessionCancelledError();
-      dependencies.gridView.applyStatusTypography(status, typography, () => {
-        session.assertRouteSession(sessionToken);
-        if (sourceState !== state) throw session.createRouteSessionCancelledError();
-      });
     }
     function nativeSourceDiagnostics(section = sourceState?.section, scroller = sourceState?.scroller, track = sourceState?.track, discover = false) {
       return dependencies.nativeCarousel.diagnostics({ source: { section, scroller, track, discover } }).source;
@@ -15852,6 +15355,55 @@ ${CARD_ACTION_STYLES}
     function itemKey(item) {
       return item.videoId ? `v:${item.videoId}` : `h:${item.href}`;
     }
+    function attachGridRegistry(state) {
+      Object.defineProperty(owned(state), "cloneMap", { enumerable: true, configurable: true, get: () => dependencies.gridView.cards });
+      return state;
+    }
+    function applyOriginalMyListVisibility() {
+      if (!sourceState?.section && !session.isTargetPage()) return;
+      if (!nativeSourcePresentation(void 0, void 0, void 0, { visible: settings.preferences().viewOriginalMyList })) return;
+      if (sourceState?.status) {
+        layoutFrameStatus(sourceState.status, null, settings.preferences().viewOriginalMyList ? sourceState.layout?.rowGap || 0 : 0);
+      }
+    }
+    function measureNativeCarouselGap(section) {
+      const state = sourceState, sessionToken = session.scope.token;
+      const gap = dependencies.netflixDom.readRowGap(section, window.innerWidth);
+      session.assertRouteSession(sessionToken);
+      if (sourceState !== state) throw session.createRouteSessionCancelledError();
+      return gap;
+    }
+    function applyLegacyEmptyStateGeometry(section, layout) {
+      if (!dependencies.gridView.emptyPresentation().connected || !section || !layout) return;
+      const state = sourceState, sessionToken = session.scope.token;
+      const geometry = currentGridGeometry(section, layout);
+      dependencies.gridView.layoutEmpty(geometry, () => {
+        session.assertRouteSession(sessionToken);
+        if (sourceState !== state) throw session.createRouteSessionCancelledError();
+      });
+    }
+    function layoutFrameStatus(status, geometry = null, rowGap) {
+      const state = sourceState, sessionToken = session.scope.token;
+      const section = state?.section, scroller = state?.scroller, track = state?.track;
+      const grid = state?.grid, layout = state?.layout, previousStatus = state?.status;
+      dependencies.gridView.layoutStatus(status, geometry, rowGap, () => {
+        session.assertRouteSession(sessionToken);
+        if (sourceState !== state || state?.section !== section || state?.scroller !== scroller || state?.track !== track || state?.grid !== grid || state?.layout !== layout || state?.status !== previousStatus) {
+          throw session.createRouteSessionCancelledError();
+        }
+      });
+    }
+    function syncStatusTypography(section, status) {
+      if (!status) return;
+      const state = sourceState, sessionToken = session.scope.token;
+      const typography = dependencies.netflixDom.readHeadingTypography(section);
+      session.assertRouteSession(sessionToken);
+      if (sourceState !== state) throw session.createRouteSessionCancelledError();
+      dependencies.gridView.applyStatusTypography(status, typography, () => {
+        session.assertRouteSession(sessionToken);
+        if (sourceState !== state) throw session.createRouteSessionCancelledError();
+      });
+    }
     function currentGridGeometry(section, layout) {
       return dependencies.nativeCarousel.sample(() => {
         const observed = nativeLayoutObservation(section, null, null, "bounds");
@@ -15870,10 +15422,55 @@ ${CARD_ACTION_STYLES}
       if (!handle || handle.node !== target) throw session.initializationError("GRID_CARD_RETIRED", "grid-cards", "Card record changed");
       dependencies.gridView.updateCard(handle, item, index);
     }
-    function attachGridRegistry(state) {
-      Object.defineProperty(owned(state), "cloneMap", { enumerable: true, configurable: true, get: () => dependencies.gridView.cards });
-      return state;
+    function layoutSummary(layout) {
+      if (!layout) return null;
+      return {
+        columns: layout.columns,
+        cardWidth: Math.round((layout.cardWidth || 0) * 10) / 10,
+        gap: Math.round((layout.gap || 0) * 10) / 10,
+        rowGap: Math.round((layout.rowGap || 0) * 10) / 10,
+        gridLeft: Math.round((layout.gridLeft || 0) * 10) / 10,
+        gridWidth: Math.round((layout.gridWidth || 0) * 10) / 10,
+        sidePadding: Math.round((layout.sidePadding || 0) * 10) / 10,
+        sidePaddingLeft: Math.round((layout.sidePaddingLeft ?? layout.sidePadding ?? 0) * 10) / 10,
+        sidePaddingRight: Math.round((layout.sidePaddingRight ?? layout.sidePadding ?? 0) * 10) / 10,
+        scrollerWidth: Math.round((layout.scrollerWidth || 0) * 10) / 10,
+        scrollerHeight: Math.round((layout.scrollerHeight || 0) * 10) / 10,
+        widthRatio: Number.isFinite(layout.widthRatio) ? Math.round(layout.widthRatio * 1e5) / 1e5 : null,
+        formulaBased: Boolean(layout.formulaBased)
+      };
     }
+    const receipts = /* @__PURE__ */ new WeakMap(), receiptParents = /* @__PURE__ */ new WeakMap();
+    function captureSource() {
+      const parent = sourceState;
+      if (!parent) return null;
+      if (!receipts.has(parent)) {
+        const fields2 = [
+          "section",
+          "scroller",
+          "track",
+          "layout",
+          "grid",
+          "status",
+          "items",
+          "totalCount",
+          "collectedCount",
+          "empty",
+          "resizeViewportSignature",
+          "initialPage",
+          "initializationStartedAt",
+          "initializationElapsedMs"
+        ];
+        const receipt = Object.defineProperties({}, Object.fromEntries(fields2.map((key) => [key, { enumerable: true, get: () => parent[key] }])));
+        Object.defineProperty(receipt, "viewingActive", { enumerable: true, get: () => Boolean(parent.watchStatus) });
+        Object.defineProperty(receipt, "cardCount", { enumerable: true, get: () => parent.cloneMap?.size ?? 0 });
+        Object.freeze(receipt);
+        receipts.set(parent, receipt);
+        receiptParents.set(receipt, parent);
+      }
+      return receipts.get(parent);
+    }
+    const unwrap = (value) => receiptParents.get(value) || value;
     return Object.freeze({
       get current() {
         return sourceState;
@@ -15883,6 +15480,14 @@ ${CARD_ACTION_STYLES}
       },
       get waitingForEmpty() {
         return waitingForNativeEmpty;
+      },
+      replace(next) {
+        sourceState = parentView(next);
+        return sourceState;
+      },
+      retireParent(parent) {
+        parent?.listMembership?.dispose();
+        parent?.nativePageHints?.dispose();
       },
       complete(section) {
         completedSection = section;
@@ -15899,12 +15504,6 @@ ${CARD_ACTION_STYLES}
       acceptViewportSignature(parent, signature) {
         accept(parent).resizeViewportSignature = signature;
       },
-      retireMembership() {
-        sourceState?.listMembership?.dispose();
-      },
-      retirePageHints() {
-        sourceState?.nativePageHints?.dispose();
-      },
       acceptStatus(parent, status) {
         accept(parent).status = status;
       },
@@ -15914,108 +15513,78 @@ ${CARD_ACTION_STYLES}
       acceptElapsed(parent, elapsed) {
         accept(parent).initializationElapsedMs = elapsed;
       },
+      acceptViewing(parent, watch) {
+        accept(parent).watchStatus = watch;
+      },
       releasePresentation() {
         const lease = nativePresentationLease;
         nativePresentationLease = null;
         lease?.release();
       },
-      publishNativeParent,
+      captureSource,
+      unwrap,
+      layoutSummary,
+      applyOriginalMyListVisibility,
+      measureNativeCarouselGap,
+      applyLegacyEmptyStateGeometry,
+      layoutFrameStatus,
+      syncStatusTypography,
+      currentGridGeometry,
+      applyGridGeometry,
+      copyItemAttributes,
+      owned,
       stageGridPublication,
-      publishSourceState,
       pageForItem,
       setPageForItem,
       ensureListMembership,
       attachNativeBinding,
       nativeSourcePresentation,
       markOriginalHeader,
-      applyOriginalMyListVisibility,
-      cleanupOldArtifacts,
-      measureNativeCarouselGap,
       nativeLayoutObservation,
-      applyLegacyEmptyStateGeometry,
-      syncLegacyEmptyState,
-      finalizeEmptyLegacyList,
       nativeDiscoveryObservation,
-      ensureSyntheticMyListSection,
-      syncLogicalPageModelAfterDelta,
-      readMutationLayout,
-      readMutationVisibleFacts,
-      findNativeMyListItemByVideoId,
-      ensureLiveNativeBinding,
-      refreshNativeSectionAfterDelta,
-      layoutFrameStatus,
-      syncStatusTypography,
       nativeSourceDiagnostics,
       nativeSourceObservation,
       nativePageObservation,
       itemKey,
-      currentGridGeometry,
-      applyGridGeometry,
-      copyItemAttributes
+      attachGridRegistry
     });
   }
 
-  // src/app/my-list-presentation.js
-  function createMyListPresentation(dependencies) {
-    const { environment, i18n, logger, settings, session } = dependencies;
-    const { document } = environment;
-    const { getUiLocale, tUi, tUiPlural, tLog, formatUiNumber, formatItemCount, formatInitializationTime } = i18n;
-    const { log } = logger;
+  // src/app/my-list-display/page-mapping.js
+  function applyPageAssignments(assignments, {
+    hints,
+    cards,
+    assertCurrent,
+    skipUnchanged = false,
+    connectedOnly = false,
+    onChanged = () => {
+    }
+  }) {
+    let changed = 0;
+    for (const { item, page } of assignments) {
+      assertCurrent();
+      const previous = hints.read(item);
+      if (skipUnchanged && previous === page) continue;
+      if (previous !== page) changed++;
+      hints.write(item, page);
+      const card = cards.get(item);
+      if (card && (!connectedOnly || card.node.isConnected)) cards.update(card, item);
+      onChanged(item, previous, page);
+      assertCurrent();
+    }
+    return changed;
+  }
+
+  // src/app/my-list-display/viewing.js
+  function createDisplayViewing(dependencies) {
+    const { session, logger, i18n } = dependencies;
+    const { log } = logger, { tLog, getUiLocale } = i18n;
     const watches = /* @__PURE__ */ new WeakMap();
-    function formatInitializationErrorMeta(error, fallbackTotalCount = null) {
-      const details = error?.details || {};
-      const rawCollected = Number(
-        details.collected ?? details.actual ?? dependencies.source.current?.collectedCount ?? 0
-      );
-      const collected = Number.isFinite(rawCollected) && rawCollected >= 0 ? rawCollected : 0;
-      const itemText = tUiPlural("itemCount", collected, { count: formatUiNumber(collected) });
-      const rawTotal = Number(
-        details.totalCount ?? details.expected ?? fallbackTotalCount
-      );
-      if (!Number.isFinite(rawTotal) || rawTotal < collected) {
-        return `${itemText} ${tUi("errorCount", { count: "" })}`;
-      }
-      const missing = Math.max(0, rawTotal - collected);
-      const missingText = tUiPlural("itemCount", missing, { count: formatUiNumber(missing) });
-      return `${itemText} ${tUi("errorCount", { count: missingText })}`;
-    }
-    function formatHeaderParts(current, total, elapsedMs = null, finalized = false, presentation = null) {
-      if (finalized && dependencies.source.current?.watchStatus && current === dependencies.source.current.items?.length && total === current) {
-        const watch = presentation || dependencies.gridView.presentation();
-        current = Number.isFinite(watch.visibleCount) ? watch.visibleCount : Math.max(0, current - (watch.completedCount || 0));
-        total = current;
-      }
-      return {
-        label: tUi("legacyMyList"),
-        meta: `${formatItemCount(current, total, finalized)}  ${formatInitializationTime(elapsedMs)}`
-      };
-    }
-    function placeLegacyFrame(section, scroller, layout, { elapsedMs = null, finalized = false, totalCount = null } = {}) {
-      const state = dependencies.source.current, sessionToken = session.scope.token;
-      dependencies.source.markOriginalHeader(section);
-      const geometry = dependencies.source.currentGridGeometry(section, layout);
-      const status = updateStatus(formatHeaderParts(0, totalCount, elapsedMs, finalized));
-      const header = dependencies.source.markOriginalHeader(section);
-      const grid = dependencies.gridView.mount({
-        section,
-        anchor: scroller?.isConnected ? scroller : header,
-        status,
-        geometry,
-        layout,
-        visible: settings.preferences().viewOriginalMyList,
-        assertCurrent() {
-          session.assertRouteSession(sessionToken);
-          if (dependencies.source.current !== state) throw session.initializationError("NATIVE_SOURCE_REPLACED", "grid-frame", "Frame caller changed");
-        }
-      });
-      dependencies.source.syncStatusTypography(section, status);
-      return { status, grid, geometry };
-    }
     function applyManualViewingChoice(state, item) {
       const watch = state.watchStatus, grid = state.grid;
       const assertCurrent = () => {
         dependencies.viewing.assertCurrent(watch);
-        if (dependencies.source.current !== state || state.watchStatus !== watch || state.grid !== grid || !grid?.isConnected || !state.items.includes(item)) throw session.createRouteSessionCancelledError();
+        if (!dependencies.isCurrent(state) || state.watchStatus !== watch || state.grid !== grid || !grid?.isConnected || !state.items.includes(item)) throw session.createRouteSessionCancelledError();
       };
       if (dependencies.netflixContext.activeProfile() !== dependencies.viewing.presentation(watch).profile) {
         syncWatchGroups(state);
@@ -16042,11 +15611,11 @@ ${CARD_ACTION_STYLES}
       dependencies.hover.cancel("group");
     }
     function syncWatchGroups(state, changedIds = null, reason = "reconcile") {
-      if (dependencies.source.current !== state || !state.grid?.isConnected || !state.watchStatus) return;
+      if (!dependencies.isCurrent(state) || !state.grid?.isConnected || !state.watchStatus) return;
       const watch = state.watchStatus, grid = state.grid;
       const guard = () => {
         dependencies.viewing.assertCurrent(watch);
-        if (dependencies.source.current !== state || state.watchStatus !== watch || state.grid !== grid || dependencies.gridView.root !== grid) throw session.createRouteSessionCancelledError();
+        if (!dependencies.isCurrent(state) || state.watchStatus !== watch || state.grid !== grid || dependencies.gridView.root !== grid) throw session.createRouteSessionCancelledError();
       };
       guard();
       const reconciled = dependencies.viewing.reconcile(watch, changedIds);
@@ -16076,10 +15645,10 @@ ${CARD_ACTION_STYLES}
         readProtectedCards: () => dependencies.hover.protectedCards(),
         isProtectedSourceCurrent: () => !dependencies.nativePopup.diagnostics().geometryOwned || dependencies.nativePopup.diagnostics().sourceConnected,
         releaseInteraction: (handle) => dependencies.nativePopup.retire(handle),
-        formatHeader: (summary) => formatHeaderParts(state.items.length, state.totalCount, state.initializationElapsedMs, true, summary)
+        formatHeader: (summary) => dependencies.formatHeaderParts(state.items.length, state.totalCount, state.initializationElapsedMs, true, summary)
       });
       guard();
-      dependencies.source.acceptStatus(state, dependencies.gridView.status);
+      dependencies.onStatus(state, dependencies.gridView.status);
     }
     function bindViewingSession(state, sessionToken, preserve = false) {
       const grid = state.grid, previous = state.watchStatus;
@@ -16089,13 +15658,14 @@ ${CARD_ACTION_STYLES}
         readItems: () => state.items || [],
         assertCurrent() {
           session.assertRouteSession(sessionToken);
-          if (dependencies.source.current !== state || state.watchStatus !== watch || state.grid !== grid || !grid?.isConnected) throw session.createRouteSessionCancelledError();
+          if (!dependencies.isCurrent(state) || state.watchStatus !== watch || state.grid !== grid || !grid?.isConnected) throw session.createRouteSessionCancelledError();
         },
         onChange: (change) => syncWatchGroups(state, change.ids, change.reason),
         readPresentation: () => ({ completed: dependencies.gridView.presentation().completedCount, unknown: dependencies.gridView.presentation().unknownCount }),
-        readWork: dependencies.diagnostics.collectPerformanceDiagnostics
+        readWork: dependencies.readWork
       });
       watches.set(state, watch);
+      dependencies.onAttached(state, watch);
       dependencies.viewing.dispose(previous);
       return watch;
     }
@@ -16106,11 +15676,532 @@ ${CARD_ACTION_STYLES}
       dependencies.viewing.start(watch);
     }
     function refreshViewingStatus(state) {
-      if (dependencies.source.current === state && state.watchStatus) return dependencies.viewing.refresh(state.watchStatus);
+      if (dependencies.isCurrent(state) && state.watchStatus) return dependencies.viewing.refresh(state.watchStatus);
+    }
+    return Object.freeze({
+      retire: (parent) => dependencies.viewing.dispose(watches.get(parent)),
+      bindViewingSession,
+      initializeWatchGroups,
+      syncWatchGroups
+    });
+  }
+
+  // src/app/my-list-display.js
+  function createMyListDisplay(dependencies) {
+    const { environment, i18n, logger, settings, session } = dependencies;
+    const { document, window, performance } = environment;
+    const { tUi, tUiPlural, tLog, formatUiNumber, formatItemCount, formatInitializationTime } = i18n;
+    const { log } = logger;
+    const route = Object.freeze({
+      get scope() {
+        return { token: session.scope.token };
+      },
+      assertRouteSession: session.assertRouteSession,
+      createRouteSessionCancelledError: session.createRouteSessionCancelledError,
+      initializationError: session.initializationError
+    });
+    const source = createDisplaySource({
+      environment,
+      settings,
+      session: route,
+      get gridView() {
+        return dependencies.gridView;
+      },
+      get listView() {
+        return dependencies.listView;
+      },
+      get nativeCarousel() {
+        return dependencies.nativeCarousel;
+      },
+      get netflixDom() {
+        return dependencies.netflixDom;
+      }
+    });
+    const {
+      captureSource,
+      unwrap,
+      layoutSummary,
+      applyOriginalMyListVisibility,
+      measureNativeCarouselGap,
+      applyLegacyEmptyStateGeometry,
+      layoutFrameStatus,
+      syncStatusTypography,
+      currentGridGeometry,
+      applyGridGeometry,
+      copyItemAttributes,
+      stageGridPublication,
+      pageForItem,
+      setPageForItem,
+      ensureListMembership,
+      attachNativeBinding,
+      nativeSourcePresentation,
+      markOriginalHeader,
+      nativeLayoutObservation,
+      nativeDiscoveryObservation,
+      nativeSourceDiagnostics,
+      nativeSourceObservation,
+      nativePageObservation,
+      itemKey,
+      attachGridRegistry
+    } = source;
+    const viewingAttachment = createDisplayViewing({
+      session: route,
+      logger,
+      i18n,
+      get viewing() {
+        return dependencies.viewing;
+      },
+      get gridView() {
+        return dependencies.gridView;
+      },
+      get hover() {
+        return dependencies.hover;
+      },
+      get nativePopup() {
+        return dependencies.nativePopup;
+      },
+      get netflixContext() {
+        return dependencies.netflixContext;
+      },
+      isCurrent: (parent) => source.current === parent,
+      onAttached: source.acceptViewing,
+      onStatus: source.acceptStatus,
+      formatHeaderParts,
+      readWork: (...args) => dependencies.readWork(...args)
+    });
+    const { initializeWatchGroups } = viewingAttachment;
+    function publishSourceState(next) {
+      const previous = source.current;
+      next = source.replace(next);
+      if (previous !== next) {
+        viewingAttachment.retire(previous);
+        source.retireParent(previous);
+      }
+      return next;
+    }
+    function publishNativeParent({ section, scroller = null, track = null, ...facts }) {
+      return publishSourceState(attachNativeBinding(facts, section, scroller, track));
+    }
+    function cleanupOldArtifacts() {
+      const state = source.current, sessionToken = session.scope.token;
+      dependencies.gridView.cleanupArtifacts(() => {
+        session.assertRouteSession(sessionToken);
+        if (source.current !== state) throw session.createRouteSessionCancelledError();
+      });
+      dependencies.nativeCarousel.cleanupArtifacts({ sessionToken, assertCurrent() {
+        session.assertRouteSession(sessionToken);
+        if (source.current !== state) throw session.initializationError("NATIVE_SOURCE_REPLACED", "native-presentation", "Artifact cleanup caller changed");
+      } });
+    }
+    function syncLegacyEmptyState(section, { allowProvisional = false } = {}) {
+      const state = source.current, sessionToken = session.scope.token;
+      const binding = state?.section === section ? dependencies.nativeCarousel.borrowBinding(section, state.scroller, state.track) : null;
+      const geometry = state?.layout ? currentGridGeometry(section, state.layout) : null;
+      return dependencies.gridView.presentEmpty({ section, allowProvisional, geometry, assertCurrent() {
+        session.assertRouteSession(sessionToken);
+        if (source.current !== state) throw session.createRouteSessionCancelledError();
+        if (binding) dependencies.nativeCarousel.assertBinding(binding);
+      } });
+    }
+    function finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, reason = "empty", admission = null) {
+      if (admission) dependencies.nativeCarousel.assertObservation(admission);
+      dependencies.gridView.clearCards(() => {
+        if (admission) dependencies.nativeCarousel.assertObservation(admission);
+      });
+      const elapsedMs = performance.now() - initializationStarted;
+      const frame = placeLegacyFrame(section, scroller, layout, { elapsedMs, finalized: true, totalCount: 0 });
+      if (admission) dependencies.nativeCarousel.assertObservation(admission);
+      dependencies.gridView.setEmpty(true);
+      nativeSourcePresentation(section, scroller, track, { phase: "parked" });
+      publishSourceState(attachNativeBinding({
+        layout,
+        items: [],
+        totalCount: 0,
+        grid: frame.grid,
+        status: frame.status,
+        itemMap: /* @__PURE__ */ new Map(),
+        empty: true,
+        resizeViewportSignature: dependencies.viewportSignature(),
+        initializationStartedAt: initializationStarted,
+        initializationElapsedMs: elapsedMs
+      }, section, scroller || null, track || null));
+      attachGridRegistry(source.current);
+      source.waitForEmpty(false);
+      syncLegacyEmptyState(section, { allowProvisional: true });
+      source.complete(section);
+      dependencies.onTransition({ kind: "initialization-accepted", empty: true });
+      applyOriginalMyListVisibility();
+      dependencies.onTransition({ kind: "source-adopted", mode: "native-empty" });
+      log(tLog("emptyLegacyListFinalized"), {
+        reason,
+        elapsedMs: Math.round(elapsedMs),
+        layout: layoutSummary(layout)
+      });
+    }
+    function ensureSyntheticMyListSection(admission) {
+      const state = source.current, sessionToken = session.scope.token;
+      const guard = () => {
+        session.assertRouteSession(sessionToken);
+        if (source.current !== state) throw session.createRouteSessionCancelledError();
+        if (admission) dependencies.nativeCarousel.assertObservation(admission);
+      };
+      guard();
+      const placement = dependencies.netflixDom.readSyntheticPlacement();
+      guard();
+      return dependencies.gridView.ensureSynthetic(placement, guard);
+    }
+    function moveLegacyFrameToSyntheticEmpty() {
+      if (!source.current) return false;
+      const state = source.current;
+      const live = nativeDiscoveryObservation();
+      if (live.section && !live.scroller && !live.track) {
+        return adoptLiveMyListSection(live, true);
+      }
+      const synthetic = ensureSyntheticMyListSection(live);
+      if (!synthetic) return false;
+      dependencies.nativeCarousel.assertObservation(live);
+      const status = state.status || document.getElementById(STATUS_ID);
+      const grid = state.grid || document.getElementById(GRID_ID);
+      if (!status || !grid) return false;
+      const observed = nativeLayoutObservation(synthetic, null, null, "empty", state);
+      const layout = { ...observed.layout };
+      layout.rowGap = measureNativeCarouselGap(synthetic);
+      dependencies.nativeCarousel.assertObservation(observed);
+      dependencies.gridView.clearEmpty({ restoreGrid: false });
+      dependencies.nativeCarousel.assertObservation(observed);
+      const geometry = currentGridGeometry(synthetic, layout);
+      dependencies.gridView.mount({
+        section: synthetic,
+        status,
+        geometry,
+        layout,
+        visible: false,
+        assertCurrent: () => dependencies.nativeCarousel.assertObservation(observed)
+      });
+      if (source.current !== state) throw session.initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Synthetic layout parent was replaced");
+      attachNativeBinding(state, synthetic);
+      source.owned(source.current).layout = layout;
+      source.owned(source.current).empty = true;
+      source.owned(source.current).status = status;
+      source.owned(source.current).grid = grid;
+      dependencies.gridView.setEmpty(true);
+      syncLegacyEmptyState(synthetic, { allowProvisional: true });
+      source.complete(synthetic);
+      applyOriginalMyListVisibility();
+      dependencies.onTransition({ kind: "source-adopted", mode: "empty" });
+      log(tLog("legacyFrameMovedToEmptyAnchor"), {
+        items: source.current.items?.length ?? 0
+      });
+      return true;
+    }
+    function adoptLiveMyListSection(live, empty = false) {
+      if (!source.current || !live?.section || (empty ? live.scroller || live.track : !live.scroller || !live.track)) return false;
+      if (!empty && source.current.section === live.section && source.current.scroller === live.scroller && source.current.track === live.track) return false;
+      dependencies.nativeCarousel.assertObservation(live);
+      const state = source.current;
+      const status = state.status || document.getElementById(STATUS_ID);
+      const grid = state.grid || document.getElementById(GRID_ID);
+      if (!status || !grid) return false;
+      const observed = nativeLayoutObservation(live.section, live.scroller, live.track, empty ? "empty" : "auto", state);
+      const layout = { ...observed.layout, rowGap: measureNativeCarouselGap(live.section) };
+      dependencies.nativeCarousel.assertObservation(observed);
+      dependencies.nativePopup.release("source-release");
+      dependencies.nativeCarousel.assertObservation(observed);
+      dependencies.nativePopup.invalidate();
+      dependencies.nativeCarousel.assertObservation(observed);
+      if (!empty) dependencies.gridView.clearEmpty({ restoreGrid: false });
+      const originalAnchor = markOriginalHeader(live.section, live.scroller, live.track);
+      dependencies.nativeCarousel.assertObservation(observed);
+      dependencies.nativeCarousel.assertObservation(live);
+      if (!empty) nativeSourcePresentation(live.section, live.scroller, live.track, { phase: "parked" });
+      const geometry = currentGridGeometry(live.section, layout);
+      dependencies.gridView.mount({
+        section: live.section,
+        anchor: empty ? originalAnchor : live.scroller,
+        status,
+        geometry,
+        layout,
+        visible: settings.preferences().viewOriginalMyList,
+        assertCurrent: () => dependencies.nativeCarousel.assertObservation(observed)
+      });
+      if (source.current !== state) throw session.initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Incoming layout parent was replaced");
+      attachNativeBinding(state, live.section, live.scroller, live.track);
+      source.owned(state).layout = layout;
+      source.owned(state).status = status;
+      source.owned(state).grid = grid;
+      source.owned(state).empty = empty || (state.items?.length ?? 0) === 0;
+      if (empty || !state.empty) source.waitForEmpty(false);
+      if (empty) {
+        dependencies.gridView.setEmpty(true);
+        syncLegacyEmptyState(live.section, { allowProvisional: true });
+        applyLegacyEmptyStateGeometry(live.section, layout);
+      }
+      syncStatusTypography(live.section, status);
+      source.complete(live.section);
+      dependencies.gridView.removeSynthetic(live.section);
+      applyOriginalMyListVisibility();
+      dependencies.onTransition({ kind: "source-adopted", mode: empty ? "empty" : void 0 });
+      if (empty) {
+        log(tLog("nativeEmptyMyListSectionAdopted"), {
+          layout: layoutSummary(layout),
+          originalVisible: settings.preferences().viewOriginalMyList
+        });
+      } else {
+        log(tLog("nativeMyListSourceAdoptedWithoutRescan"), {
+          pages: live.pages,
+          selectedPage: live.selectedPage,
+          layout: layoutSummary(layout)
+        });
+      }
+      dependencies.nativeCarousel.invalidateReads();
+      return true;
+    }
+    function syncLogicalPageModelAfterDelta(reason = "delta-reindex") {
+      const state = source.current;
+      if (!state?.section || !state?.scroller || !state?.track) return false;
+      const { section, scroller, track, itemMap } = state;
+      const recordOwner = state.items, items = recordOwner || [];
+      const totalCount = items.length;
+      const assertOwner = () => {
+        if (source.current !== state || state.items !== recordOwner || state.itemMap !== itemMap || items.length !== totalCount || state.section !== section || state.scroller !== scroller || state.track !== track) {
+          throw session.createRouteSessionCancelledError();
+        }
+      };
+      const result = dependencies.nativeCarousel.refreshMapping({
+        mode: "delta",
+        section,
+        scroller,
+        track,
+        totalCount,
+        columns: Math.max(1, state.layout?.columns || 1),
+        sessionToken: session.scope.token,
+        assertCurrent: assertOwner,
+        pageHintForVideoId: (id) => {
+          const item = itemMap?.get("v:" + id);
+          return item ? pageForItem(item) : void 0;
+        }
+      });
+      if (result.status !== "anchored") return false;
+      dependencies.nativeCarousel.assertMapping(result);
+      dependencies.onTransition({ kind: "membership-mapped" });
+      log(tLog("logicalPageModelSynchronizedAfterDelta"), {
+        reason,
+        currentPage: result.currentPage,
+        knownPageCount: result.knownPageCount,
+        pageCountFinalized: result.pageCountFinalized,
+        pageMappingStale: result.pageMappingStale,
+        visibleSignature: result.visibleSignature,
+        visibleIds: result.visibleIds,
+        itemIndices: result.itemIndices,
+        logicalIndices: result.logicalIndices,
+        totalCount
+      });
+      dependencies.nativeCarousel.assertMapping(result);
+      return true;
+    }
+    function visibleNativeItems(live) {
+      if (!live?.scroller || !live?.track) return [];
+      const state = source.current;
+      if (state?.scroller !== live.scroller || state?.track !== live.track) {
+        throw session.initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Visible cards no longer belong to the current parent");
+      }
+      return dependencies.nativeCarousel.sample(() => {
+        dependencies.nativeCarousel.assertObservation(live);
+        const observed = nativePageObservation(state);
+        const items = observed.cards.map((entry) => {
+          const item = dependencies.gridView.captureCard(entry.source.slot, live.selectedPage || 0, false);
+          dependencies.nativeCarousel.assertObservation(observed);
+          return item;
+        }).filter((item) => item?.videoId);
+        dependencies.nativeCarousel.assertObservation(observed);
+        dependencies.nativeCarousel.assertObservation(live);
+        return items;
+      });
+    }
+    function readMutationLayout(parent, { positionOnly = false } = {}) {
+      const runtime = positionOnly ? null : nativeSourceObservation(parent), layout = parent.layout, columns = layout?.columns;
+      const sessionToken = session.scope.token;
+      return Object.freeze({ mode: runtime?.mode, columns, assertCurrent() {
+        session.assertRouteSession(sessionToken);
+        if (runtime) dependencies.nativeCarousel.assertObservation(runtime);
+        if (source.current !== parent || parent.layout !== layout || parent.layout?.columns !== columns) throw session.createRouteSessionCancelledError();
+      } });
+    }
+    function readMutationVisibleFacts(live, parent, { order = false } = {}) {
+      const sessionToken = session.scope.token, layout = parent.layout, columns = layout?.columns;
+      const assertCurrent = () => {
+        session.assertRouteSession(sessionToken);
+        if (live) dependencies.nativeCarousel.assertObservation(live);
+        if (source.current !== parent || parent.layout !== layout || parent.layout?.columns !== columns) throw session.createRouteSessionCancelledError();
+      };
+      assertCurrent();
+      const ids = order && !live?.pageSignature ? [] : visibleNativeItems(live).map((item) => item.videoId);
+      assertCurrent();
+      return Object.freeze({
+        ids: Object.freeze(ids),
+        page: live?.selectedPage || 0,
+        columns,
+        available: Boolean(live?.pageSignature),
+        assertCurrent
+      });
+    }
+    function findNativeMyListItemByVideoId(videoId, liveState = null) {
+      const discovery = liveState || nativeDiscoveryObservation();
+      return dependencies.nativeCarousel.captureMountedItem({ discovery, videoId });
+    }
+    function restartInitializationForPopulatedNativeMyList(live, reason = "late-populated-source") {
+      if (!source.current?.empty || !live?.section || !live?.scroller || !live?.track) return false;
+      const visibleItems = visibleNativeItems(live);
+      if (!visibleItems.length) return false;
+      log(tLog("populatedNativeMyListDetectedAfterEmpty"), {
+        reason,
+        pages: live.pages,
+        selectedPage: live.selectedPage,
+        visibleItems: visibleItems.length
+      });
+      dependencies.nativeCarousel.assertObservation(live);
+      const sessionToken = session.scope.token;
+      dependencies.onTransition({ kind: "source-reinitializing" });
+      source.complete(null);
+      dependencies.nativeCarousel.clearBinding();
+      publishSourceState(null);
+      source.waitForEmpty(false);
+      dependencies.onTransition({ kind: "initialization-required", reason, sessionToken });
+      return true;
+    }
+    function ensureLiveNativeBinding(reason = "live-check", bindingOnly = false) {
+      if (!source.current || !session.isTargetPage()) return null;
+      const owner = source.current;
+      const sessionToken = session.scope.token;
+      const assertParent = () => {
+        session.assertRouteSession(sessionToken);
+        if (source.current !== owner) throw session.initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Adoption parent was replaced");
+      };
+      try {
+        if (bindingOnly && !source.waitingForEmpty && !source.current.empty) {
+          const binding = nativeDiscoveryObservation({ bindingOnly: true });
+          dependencies.nativeCarousel.assertObservation(binding);
+          if (binding.section && binding.scroller && binding.track && binding.matchesBinding) return binding;
+        }
+        let live = nativeDiscoveryObservation();
+        if (source.waitingForEmpty && (source.current.items?.length ?? 0) === 0) {
+          if (live.section && !live.scroller && !live.track) {
+            const emptyState2 = dependencies.gridView.emptyPresentation();
+            const alreadyNative = source.current.section === live.section && !source.current.scroller && !source.current.track && emptyState2.source === "native";
+            if (!alreadyNative) adoptLiveMyListSection(live, true);
+            assertParent();
+            live = nativeDiscoveryObservation();
+            return live;
+          }
+          if (!live.section) {
+            return live;
+          }
+          const emptyState = dependencies.gridView.emptyPresentation();
+          if (!emptyState.connected) {
+            syncLegacyEmptyState(source.current.section, { allowProvisional: true });
+          }
+          dependencies.nativeCarousel.assertObservation(live);
+          return live;
+        }
+        if (live.section && live.scroller && live.track && source.current.empty && (source.current.items?.length ?? 0) === 0) {
+          if (restartInitializationForPopulatedNativeMyList(live, reason)) return null;
+        }
+        if (live.section && live.scroller && live.track && !live.matchesBinding) {
+          const previous = {
+            sectionConnected: Boolean(source.current.section?.isConnected),
+            scrollerConnected: Boolean(source.current.scroller?.isConnected),
+            trackConnected: Boolean(source.current.track?.isConnected),
+            sameSection: source.current.section === live.section,
+            sameScroller: source.current.scroller === live.scroller,
+            sameTrack: source.current.track === live.track
+          };
+          if (adoptLiveMyListSection(live)) {
+            log(tLog("nativeMyListBindingRefreshed"), {
+              reason,
+              pages: live.pages,
+              selectedPage: live.selectedPage,
+              previous
+            });
+          }
+          assertParent();
+          live = nativeDiscoveryObservation();
+        } else if (live.section && !live.scroller && !live.track && (source.current.items?.length ?? 0) === 0) {
+          const emptyState = dependencies.gridView.emptyPresentation();
+          const alreadyNative = source.current.section === live.section && !source.current.scroller && !source.current.track && emptyState.source === "native";
+          if (!alreadyNative) {
+            adoptLiveMyListSection(live, true);
+            assertParent();
+            live = nativeDiscoveryObservation();
+          }
+        } else if (!live.section && (source.current.items?.length ?? 0) === 0 && source.current.section?.id !== SYNTHETIC_SECTION_ID) {
+          if (!source.waitingForEmpty) {
+            moveLegacyFrameToSyntheticEmpty();
+            assertParent();
+            live = nativeDiscoveryObservation();
+          }
+        }
+        dependencies.nativeCarousel.assertObservation(live);
+        return live;
+      } catch (error) {
+        if (error?.code !== "NATIVE_SOURCE_REPLACED" && !session.isRouteSessionCancelledError(error)) throw error;
+        return null;
+      }
+    }
+    function refreshNativeSectionAfterDelta() {
+      return ensureLiveNativeBinding("delta-refresh");
+    }
+    function formatInitializationErrorMeta(error, fallbackTotalCount = null) {
+      const details = error?.details || {};
+      const rawCollected = Number(
+        details.collected ?? details.actual ?? source.current?.collectedCount ?? 0
+      );
+      const collected = Number.isFinite(rawCollected) && rawCollected >= 0 ? rawCollected : 0;
+      const itemText = tUiPlural("itemCount", collected, { count: formatUiNumber(collected) });
+      const rawTotal = Number(
+        details.totalCount ?? details.expected ?? fallbackTotalCount
+      );
+      if (!Number.isFinite(rawTotal) || rawTotal < collected) {
+        return `${itemText} ${tUi("errorCount", { count: "" })}`;
+      }
+      const missing = Math.max(0, rawTotal - collected);
+      const missingText = tUiPlural("itemCount", missing, { count: formatUiNumber(missing) });
+      return `${itemText} ${tUi("errorCount", { count: missingText })}`;
+    }
+    function formatHeaderParts(current, total, elapsedMs = null, finalized = false, presentation = null) {
+      if (finalized && source.current?.watchStatus && current === source.current.items?.length && total === current) {
+        const watch = presentation || dependencies.gridView.presentation();
+        current = Number.isFinite(watch.visibleCount) ? watch.visibleCount : Math.max(0, current - (watch.completedCount || 0));
+        total = current;
+      }
+      return {
+        label: tUi("legacyMyList"),
+        meta: `${formatItemCount(current, total, finalized)}  ${formatInitializationTime(elapsedMs)}`
+      };
+    }
+    function placeLegacyFrame(section, scroller, layout, { elapsedMs = null, finalized = false, totalCount = null } = {}) {
+      const state = source.current, sessionToken = session.scope.token;
+      source.markOriginalHeader(section);
+      const geometry = currentGridGeometry(section, layout);
+      const status = updateStatus(formatHeaderParts(0, totalCount, elapsedMs, finalized));
+      const header = source.markOriginalHeader(section);
+      const grid = dependencies.gridView.mount({
+        section,
+        anchor: scroller?.isConnected ? scroller : header,
+        status,
+        geometry,
+        layout,
+        visible: settings.preferences().viewOriginalMyList,
+        assertCurrent() {
+          session.assertRouteSession(sessionToken);
+          if (source.current !== state) throw session.initializationError("NATIVE_SOURCE_REPLACED", "grid-frame", "Frame caller changed");
+        }
+      });
+      syncStatusTypography(section, status);
+      return { status, grid, geometry };
     }
     function retireMutationCard(record, { correlationId, parent, assertCurrent, onAccepted }) {
       assertCurrent();
-      const clone = parent.cloneMap?.get(dependencies.source.itemKey(record));
+      const clone = parent.cloneMap?.get(source.itemKey(record));
       if (dependencies.hover.intent().videoId === String(record.videoId) || dependencies.hover.intent().clone === clone) {
         dependencies.hover.cancel("source");
         assertCurrent();
@@ -16136,8 +16227,8 @@ ${CARD_ACTION_STYLES}
     }
     function updateMutationCard(record, index, { parent, assertCurrent }) {
       assertCurrent();
-      const clone = parent.cloneMap?.get(dependencies.source.itemKey(record));
-      if (clone?.isConnected) dependencies.source.copyItemAttributes(clone, record, index);
+      const clone = parent.cloneMap?.get(source.itemKey(record));
+      if (clone?.isConnected) copyItemAttributes(clone, record, index);
       assertCurrent();
     }
     function presentListOrder(change, { parent, assertCurrent }) {
@@ -16146,28 +16237,28 @@ ${CARD_ACTION_STYLES}
     }
     function presentListChange({ count, empty, logical }, { parent, assertCurrent }) {
       assertCurrent();
-      dependencies.source.acceptEmpty(parent, empty);
+      source.acceptEmpty(parent, empty);
       if (logical && count) {
-        dependencies.responsive.requestCheck(140, "my-list-delta");
+        dependencies.onTransition({ kind: "membership-layout-changed" });
         assertCurrent();
       }
       dependencies.gridView.setEmpty(empty);
       assertCurrent();
-      dependencies.source.waitForEmpty(empty);
-      if (empty) dependencies.source.syncLegacyEmptyState(parent.section, { allowProvisional: true });
+      source.waitForEmpty(empty);
+      if (empty) syncLegacyEmptyState(parent.section, { allowProvisional: true });
       else dependencies.gridView.clearEmpty();
       assertCurrent();
       dependencies.nativePopup.invalidate();
       assertCurrent();
       if (parent.watchStatus) {
-        syncWatchGroups(parent);
+        viewingAttachment.syncWatchGroups(parent);
         assertCurrent();
       }
       const status = updateStatus(formatHeaderParts(count, count, parent.initializationElapsedMs, true));
       assertCurrent();
-      dependencies.source.acceptStatus(parent, status);
+      source.acceptStatus(parent, status);
       if (status && parent.layout) {
-        dependencies.source.layoutFrameStatus(status, null, settings.preferences().viewOriginalMyList && !empty ? parent.layout.rowGap || 0 : 0);
+        layoutFrameStatus(status, null, settings.preferences().viewOriginalMyList && !empty ? parent.layout.rowGap || 0 : 0);
         assertCurrent();
       }
     }
@@ -16175,11 +16266,11 @@ ${CARD_ACTION_STYLES}
       return dependencies.gridView.updateStatus(content);
     }
     async function buildGrid(section, scroller, transfer, layout, totalCount, sessionToken = session.scope.token) {
-      const buildState = dependencies.source.current;
+      const buildState = source.current;
       const track = buildState?.track;
       const assertBuildParent = () => {
         session.assertRouteSession(sessionToken);
-        if (dependencies.source.current !== buildState) throw session.createRouteSessionCancelledError();
+        if (source.current !== buildState) throw session.createRouteSessionCancelledError();
         if (!section.isConnected || !scroller.isConnected || !track?.isConnected || buildState.section !== section || buildState.scroller !== scroller || buildState.track !== track) {
           throw session.initializationError(
             "GRID_BUILD_SOURCE_REPLACED",
@@ -16189,12 +16280,12 @@ ${CARD_ACTION_STYLES}
         }
       };
       const items = transfer.records;
-      const publication = dependencies.source.stageGridPublication(buildState, transfer, totalCount, { assertCurrent: assertBuildParent });
+      const publication = source.stageGridPublication(buildState, transfer, totalCount, { assertCurrent: assertBuildParent });
       const assertBuildActive = publication.assertCurrent;
       assertBuildActive();
-      const geometry = dependencies.source.currentGridGeometry(section, layout);
+      const geometry = currentGridGeometry(section, layout);
       const status = updateStatus(formatHeaderParts(items.length, totalCount, null));
-      dependencies.source.syncStatusTypography(section, status);
+      syncStatusTypography(section, status);
       let grid;
       try {
         grid = await dependencies.gridView.publish({
@@ -16211,7 +16302,7 @@ ${CARD_ACTION_STYLES}
           assertCurrent: assertBuildActive,
           onAccepted(root) {
             publication.commit({ grid: root, status, layout });
-            if (buildState.watchStatus) bindViewingSession(buildState, sessionToken, true);
+            if (buildState.watchStatus) viewingAttachment.bindViewingSession(buildState, sessionToken, true);
           }
         });
       } finally {
@@ -16219,34 +16310,298 @@ ${CARD_ACTION_STYLES}
         transfer.discard();
       }
       dependencies.gridView.clearEmpty({ restoreGrid: false });
-      if (dependencies.source.current.watchStatus) syncWatchGroups(dependencies.source.current);
-      dependencies.responsive.acceptLayout(layout);
-      dependencies.source.acceptViewportSignature(buildState, dependencies.responsive.viewportSignature());
-      dependencies.responsive.observe();
+      if (source.current.watchStatus) viewingAttachment.syncWatchGroups(source.current);
+      dependencies.onTransition({ kind: "layout-published", layout });
+      source.acceptViewportSignature(buildState, dependencies.viewportSignature());
+      dependencies.onTransition({ kind: "source-adopted" });
       log(tLog("legacyGridBuilt"), {
         items: items.length,
         totalCount,
         geometry,
-        layout: dependencies.diagnostics.layoutSummary(layout),
+        layout: layoutSummary(layout),
         gridCards: dependencies.gridView.cards.size
       });
       return grid;
     }
+    async function publishCollection(section, scroller, transfer, layout, totalCount, initializationStarted, sessionToken = session.scope.token) {
+      const items = transfer.records;
+      const track = source.current?.track;
+      await buildGrid(section, scroller, transfer, layout, totalCount, sessionToken);
+      session.assertRouteSession(sessionToken);
+      source.acceptEmpty(source.current, false);
+      applyOriginalMyListVisibility();
+      const deferredNative = nativeSourceDiagnostics(section, scroller, track);
+      log(tLog("initialHoverPreparationDeferred"), {
+        selectedPage: deferredNative?.selectedPage ?? null,
+        currentPageCards: deferredNative?.currentPageCards ?? 0
+      });
+      if (source.current) ensureListMembership(source.current).observeCount({ collectedCount: items.length, totalCount });
+      source.complete(section);
+      dependencies.onTransition({ kind: "initialization-accepted", empty: false });
+      source.acceptElapsed(source.current, performance.now() - initializationStarted);
+      updateStatus(formatHeaderParts(items.length, totalCount, source.current.initializationElapsedMs, true));
+      initializeWatchGroups(source.current, sessionToken);
+      return captureSource();
+    }
+    function showProvisional({ section, scroller, track, layout, initializationStarted, assertCurrent }) {
+      const frame = placeLegacyFrame(section, scroller, layout, { elapsedMs: null, finalized: false, totalCount: null });
+      assertCurrent();
+      publishNativeParent({
+        section,
+        scroller,
+        track,
+        layout,
+        items: [],
+        collectedCount: 0,
+        totalCount: null,
+        grid: frame.grid,
+        status: frame.status,
+        empty: false,
+        resizeViewportSignature: dependencies.viewportSignature(),
+        initializationStartedAt: initializationStarted
+      });
+      applyOriginalMyListVisibility();
+      return frame;
+    }
+    function showInitializationFailure(error, totalCount = null) {
+      updateStatus(formatInitializationErrorMeta(error, totalCount));
+    }
+    function showCollectionProgress(parent, facts, { assertCurrent = () => {
+    }, header = true } = {}) {
+      const guard = acceptedParentGuard(parent, assertCurrent);
+      guard();
+      ensureListMembership(parent).observeCount(facts, { assertCurrent: guard });
+      guard();
+      if (header) updateStatus(formatHeaderParts(facts.collectedCount, facts.totalCount, null));
+    }
+    function showCollectionFrame(section, scroller, track, layout, totalCount, initializationStarted, observation) {
+      const guard = () => dependencies.nativeCarousel.assertObservation(observation);
+      const status = updateStatus(formatHeaderParts(0, totalCount, null));
+      dependencies.gridView.placeStatus(status, { section, anchor: scroller, assertCurrent: guard });
+      syncStatusTypography(section, status);
+      layoutFrameStatus(status, currentGridGeometry(section, layout), layout.rowGap);
+      guard();
+      nativeSourcePresentation(section, scroller, track, { phase: "mounted" });
+      source.waitForEmpty(false);
+      publishNativeParent({
+        section,
+        scroller,
+        track,
+        layout,
+        initializationStartedAt: initializationStarted,
+        empty: false,
+        collectedCount: 0,
+        totalCount
+      });
+      return captureSource();
+    }
+    function mappingCards() {
+      return {
+        get: dependencies.gridView.getCard,
+        update: (card, item) => copyItemAttributes(card.node, item)
+      };
+    }
+    function repairPageMapping(item, page, parent, { assertCurrent = () => {
+    }, connectedOnly = false, report = false } = {}) {
+      const guard = acceptedParentGuard(parent, assertCurrent);
+      return applyPageAssignments([{ item, page }], {
+        hints: { read: pageForItem, write: (record, value) => setPageForItem(record, value, parent) },
+        cards: mappingCards(),
+        assertCurrent: guard,
+        skipUnchanged: true,
+        connectedOnly,
+        onChanged(record, previous, actualPage) {
+          if (report) log(tLog("itemPageMappingCorrected"), {
+            item: { videoId: record.videoId || "", page: pageForItem(record), href: record.href || "", ariaLabel: record.ariaLabel || "" },
+            oldPage: previous,
+            actualPage,
+            reason: "logical-visible-page-repair"
+          });
+        }
+      });
+    }
+    function applyResponsiveMapping(parent, { columns, pages, assertCurrent, connectedOnly = false, initialPage }) {
+      const guard = acceptedParentGuard(parent, assertCurrent);
+      const records = parent.items;
+      function* assignments() {
+        for (let index = 0; index < records.length; index++) {
+          yield { item: records[index], page: Math.min(pages - 1, Math.floor(index / columns)) };
+        }
+      }
+      const changed = applyPageAssignments(assignments(), {
+        hints: { read: pageForItem, write: (record, page) => setPageForItem(record, page, parent, { assertCurrent }) },
+        cards: mappingCards(),
+        assertCurrent: guard,
+        connectedOnly
+      });
+      guard();
+      if (initialPage !== void 0) source.acceptInitialPage(parent, initialPage);
+      return changed;
+    }
+    function acceptedParentGuard(parent, admission = () => {
+    }) {
+      const token = session.scope.token;
+      return () => {
+        session.assertRouteSession(token);
+        admission();
+        if (source.current !== parent) throw session.createRouteSessionCancelledError();
+      };
+    }
+    function collectionReceipt(parent = source.current) {
+      const records = parent.items, itemMap = parent.itemMap, cloneMap = parent.cloneMap, grid = parent.grid;
+      const size = records?.length;
+      return Object.freeze({
+        records,
+        find: (identity) => itemMap?.get(itemKey(identity)) || null,
+        assertCurrent() {
+          if (source.current !== parent || parent.items !== records || parent.itemMap !== itemMap || parent.cloneMap !== cloneMap || parent.grid !== grid || records?.length !== size) throw session.createRouteSessionCancelledError();
+        }
+      });
+    }
+    const admitted = (operation) => (...args) => {
+      const result = operation(...args.map(unwrap));
+      return result && result === source.current ? captureSource() : result;
+    };
+    function applyLayout(parent, layout, { mode = "measurement", note = "", assertCurrent = () => {
+    }, rowGap } = {}) {
+      const guard = acceptedParentGuard(parent, assertCurrent);
+      guard();
+      source.acceptLayout(parent, layout);
+      if (mode === "measurement") return;
+      const geometry = applyGridGeometry(parent.section, parent.grid, layout);
+      guard();
+      const gap = rowGap ?? (mode === "status" ? settings.preferences().viewOriginalMyList ? layout.rowGap || parent.layout?.rowGap || 0 : 0 : void 0);
+      layoutFrameStatus(parent.status, geometry, gap);
+      if (mode === "status") showLayoutStatus(parent, layout, note, false);
+      if (mode === "empty-source") applyLegacyEmptyStateGeometry(parent.section, layout);
+    }
+    function showLayoutStatus(parent, layout, note = "", geometry = true) {
+      if (!parent?.status || !parent.items) return;
+      const guard = acceptedParentGuard(parent);
+      guard();
+      if (geometry) {
+        const measured = applyGridGeometry(parent.section, parent.grid, layout);
+        layoutFrameStatus(parent.status, measured, settings.preferences().viewOriginalMyList ? layout.rowGap || parent.layout?.rowGap || 0 : 0);
+      }
+      guard();
+      updateStatus(formatHeaderParts(parent.items.length, parent.totalCount, parent.initializationElapsedMs, true));
+      if (note) log(tLog("responsiveStatusNote"), { note });
+    }
+    function retireAcceptedResources(release = (operation) => operation()) {
+      const parent = source.current, membership = parent?.listMembership, hints = parent?.nativePageHints;
+      release(() => viewingAttachment.retire(parent));
+      release(() => membership?.dispose());
+      release(() => hints?.dispose());
+    }
+    function discardSource() {
+      source.complete(null);
+      dependencies.nativeCarousel.clearBinding();
+      publishSourceState(null);
+      source.waitForEmpty(false);
+    }
+    function createMutations2(options) {
+      return dependencies.listView.createMutations({
+        ...options,
+        readParent: () => source.current,
+        canApply: () => Boolean(source.current && session.isTargetPage()),
+        hasMember: (id) => source.current.grid ? source.current.itemMap.has("v:" + id) : null,
+        refreshNative: refreshNativeSectionAfterDelta,
+        observeNative: nativeDiscoveryObservation,
+        captureNative: findNativeMyListItemByVideoId,
+        hasMaterial: (item, correlationId) => dependencies.gridView.materialFor(item, correlationId),
+        assertNative: (observation) => dependencies.nativeCarousel.assertObservation(observation),
+        readMembership: ensureListMembership,
+        readLayout: readMutationLayout,
+        readVisible: readMutationVisibleFacts,
+        hasCard: (record) => Boolean(dependencies.gridView.getCard(record)),
+        retireCard: retireMutationCard,
+        canInsertCard: prepareMutationInsertion,
+        insertCard: insertMutationCard,
+        readPage: pageForItem,
+        writePage: (record, page, { parent, assertCurrent }) => setPageForItem(record, page, parent, { assertCurrent }),
+        updateCard: updateMutationCard,
+        sample: (operation) => dependencies.nativeCarousel.sample(operation),
+        refreshMapping: syncLogicalPageModelAfterDelta,
+        onReindexed: presentListChange,
+        onOrder: presentListOrder
+      });
+    }
+    function itemSummary(item) {
+      if (!item) return null;
+      const parent = source.current;
+      return {
+        videoId: item.videoId || "",
+        page: dependencies.nativeCarousel.preferredPage({
+          record: item,
+          hints: parent ? source.owned(parent).nativePageHints : null,
+          records: parent?.items || [],
+          columns: parent?.layout?.columns || 1
+        }),
+        href: item.href || "",
+        ariaLabel: item.ariaLabel || ""
+      };
+    }
+    function bindSource(parent, section, scroller, track) {
+      acceptedParentGuard(parent)();
+      return attachNativeBinding(parent, section, scroller, track);
+    }
+    function recordCollectionPage(parent, page) {
+      acceptedParentGuard(parent)();
+      source.acceptInitialPage(parent, page);
+    }
+    function recordViewportChange(parent, signature) {
+      acceptedParentGuard(parent)();
+      source.acceptViewportSignature(parent, signature);
+    }
     return Object.freeze({
-      watchFor: (parent) => watches.get(parent),
-      retireViewing: (parent) => dependencies.viewing.dispose(watches.get(parent)),
-      formatInitializationErrorMeta,
-      formatHeaderParts,
-      placeLegacyFrame,
-      initializeWatchGroups,
-      retireMutationCard,
-      prepareMutationInsertion,
-      insertMutationCard,
-      updateMutationCard,
-      presentListOrder,
-      presentListChange,
-      updateStatus,
-      buildGrid
+      captureSource,
+      createMutations: createMutations2,
+      itemSummary,
+      layoutSummary,
+      get completed() {
+        return source.completed;
+      },
+      get waitingForEmpty() {
+        return source.waitingForEmpty;
+      },
+      showProvisional,
+      publishCollection,
+      publishEmpty: finalizeEmptyLegacyList,
+      showInitializationFailure,
+      showCollectionProgress: admitted(showCollectionProgress),
+      showCollectionFrame,
+      applyLayout: admitted(applyLayout),
+      showLayoutStatus: admitted(showLayoutStatus),
+      recordViewportChange: admitted(recordViewportChange),
+      repairPageMapping: admitted(repairPageMapping),
+      applyResponsiveMapping: admitted(applyResponsiveMapping),
+      collectionReceipt: admitted(collectionReceipt),
+      findRecord: (identity) => source.current?.itemMap?.get(itemKey(identity)) || null,
+      positionDeviation: (item, index) => ensureListMembership(source.current).positionDeviation(item, index),
+      firstPositionMismatch: (cards, threshold) => source.current ? ensureListMembership(source.current).firstPositionMismatch(cards, threshold) : null,
+      refreshSource: ensureLiveNativeBinding,
+      applyPreferences: applyOriginalMyListVisibility,
+      discoverSource: nativeDiscoveryObservation,
+      measureSource: admitted(nativeLayoutObservation),
+      inspectSource: nativeSourceDiagnostics,
+      observeSource: admitted(nativeSourceObservation),
+      observePage: admitted(nativePageObservation),
+      measureGap: measureNativeCarouselGap,
+      measureGrid: currentGridGeometry,
+      itemKey,
+      preferredPage: pageForItem,
+      ensureSynthetic: ensureSyntheticMyListSection,
+      prepareArtifacts: cleanupOldArtifacts,
+      bindSource: admitted(bindSource),
+      presentSource: nativeSourcePresentation,
+      recordCollectionPage: admitted(recordCollectionPage),
+      retireAcceptedResources,
+      releasePresentation: source.releasePresentation,
+      discardSource,
+      invalidateCompletion: () => source.complete(null),
+      viewingDiagnostics: () => source.current?.watchStatus ? dependencies.viewing.diagnostics(source.current.watchStatus) : null,
+      seriesDiagnostics: () => source.current?.watchStatus ? dependencies.viewing.seriesDiagnostics(source.current.watchStatus) : [],
+      clearEmptyWait: () => source.waitForEmpty(false)
     });
   }
 
@@ -16301,7 +16656,7 @@ ${CARD_ACTION_STYLES}
           const details = {
             graphqlAvailable: available,
             graphqlKey: dependencies.listData.diagnostics().graphqlKey,
-            domGeneration: dependencies.source.nativeSourceDiagnostics()?.carouselDom?.generation ?? null
+            domGeneration: dependencies.display.inspectSource()?.carouselDom?.generation ?? null
           };
           dependencies.diagnostics.logOperationTimeout("total-count-detection", timeout, details);
           return initializationTimeoutError("total-count-detection", timeout, details);
@@ -16319,9 +16674,9 @@ ${CARD_ACTION_STYLES}
         totalCount,
         columns,
         sessionToken,
-        section: dependencies.source.current?.section,
-        scroller: dependencies.source.current?.scroller,
-        track: dependencies.source.current?.track
+        section: dependencies.display.captureSource()?.section,
+        scroller: dependencies.display.captureSource()?.scroller,
+        track: dependencies.display.captureSource()?.track
       });
     }
     async function tryMountedSinglePageFastBootstrap(section, scroller, track, sessionToken = null) {
@@ -16330,7 +16685,7 @@ ${CARD_ACTION_STYLES}
       return dependencies.nativeCarousel.mountedBootstrap({ section, scroller, track, sessionToken });
     }
     function waitForNativeCarouselReady(section, scroller, track, sessionToken = null, options = {}) {
-      const owner = dependencies.source.current;
+      const owner = dependencies.display.captureSource();
       return dependencies.nativeCarousel.prepareSource({
         section,
         scroller,
@@ -16339,7 +16694,7 @@ ${CARD_ACTION_STYLES}
         fastSinglePageTotalCount: options.fastSinglePageTotalCount,
         assertCurrent() {
           session.assertRouteSession(sessionToken);
-          if (dependencies.source.current !== owner) throw session.initializationError(
+          if (dependencies.display.captureSource() !== owner) throw session.initializationError(
             "NATIVE_SOURCE_REPLACED",
             "native-preparation",
             "Page session source changed during native preparation"
@@ -16348,7 +16703,7 @@ ${CARD_ACTION_STYLES}
       });
     }
     async function collectAllItems(section, scroller, track, totalCount, sessionToken = null) {
-      const state = dependencies.source.current;
+      const state = dependencies.display.captureSource();
       const result = await dependencies.nativeCarousel.collect({
         section,
         scroller,
@@ -16357,11 +16712,10 @@ ${CARD_ACTION_STYLES}
         columns: state?.layout?.columns,
         sessionToken,
         onProgress(facts) {
-          if (dependencies.source.current !== state) return;
-          if (facts.initialPage !== void 0 && state) dependencies.source.acceptInitialPage(state, facts.initialPage);
+          if (dependencies.display.captureSource() !== state) return;
+          if (facts.initialPage !== void 0 && state) dependencies.display.recordCollectionPage(state, facts.initialPage);
           if (facts.collectedCount !== void 0) {
-            if (state) dependencies.source.ensureListMembership(state).observeCount({ collectedCount: facts.collectedCount });
-            dependencies.presentation.updateStatus(dependencies.presentation.formatHeaderParts(facts.collectedCount, totalCount, null));
+            if (state) dependencies.display.showCollectionProgress(state, { collectedCount: facts.collectedCount, totalCount });
           }
         }
       });
@@ -16379,7 +16733,7 @@ ${CARD_ACTION_STYLES}
         return false;
       }
       try {
-        const discovered = dependencies.source.nativeDiscoveryObservation({ bindingOnly: true });
+        const discovered = dependencies.display.discoverSource({ bindingOnly: true });
         const { section, scroller, track } = discovered;
         if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected || !section.contains(scroller) || !scroller.contains(track) || section === failure.section && scroller === failure.scroller && track === failure.track) return false;
         dependencies.hover.cancel("source");
@@ -16392,10 +16746,8 @@ ${CARD_ACTION_STYLES}
       performanceDiagnostics.nativeRecovery.attempts++;
       dependencies.listMutations.deferPending();
       session.cleanupTargetSessionDom();
-      dependencies.responsive.dispose();
-      dependencies.nativeCarousel.clearBinding();
-      dependencies.source.publishSourceState(null);
-      dependencies.source.complete(null);
+      dependencies.stopResponsive();
+      dependencies.display.discardSource();
       blockedInitialization = null;
       clearRunningSession(sessionToken, false);
       dependencies.nativeCarousel.refreshDiscovery();
@@ -16418,7 +16770,7 @@ ${CARD_ACTION_STYLES}
       if (runningInitialization?.sessionToken === sessionToken) return;
       let discovered;
       try {
-        discovered = dependencies.source.nativeDiscoveryObservation({ bindingOnly: true });
+        discovered = dependencies.display.discoverSource({ bindingOnly: true });
       } catch (error) {
         if (error?.code !== "NATIVE_SOURCE_REPLACED" && !session.isRouteSessionCancelledError(error)) throw error;
         if (session.isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
@@ -16426,7 +16778,7 @@ ${CARD_ACTION_STYLES}
       }
       let section = discovered.section;
       if (!section) {
-        if (dependencies.source.waitingForEmpty && dependencies.source.current?.empty) {
+        if (dependencies.display.waitingForEmpty && dependencies.display.captureSource()?.empty) {
           return;
         }
         const now = performance.now();
@@ -16436,7 +16788,7 @@ ${CARD_ACTION_STYLES}
           scheduleRun(Math.max(40, NATIVE_EMPTY_STABLE_MS - elapsed), sessionToken);
           return;
         }
-        section = dependencies.source.ensureSyntheticMyListSection(discovered);
+        section = dependencies.display.ensureSynthetic(discovered);
         if (!section) {
           scheduleRun(120, sessionToken);
           return;
@@ -16445,16 +16797,16 @@ ${CARD_ACTION_STYLES}
         missingSectionSince = 0;
         dependencies.gridView.removeSynthetic(section);
       }
-      if (dependencies.source.completed === section && document.getElementById(GRID_ID) && !dependencies.source.current?.empty) return;
+      if (dependencies.display.completed === section && document.getElementById(GRID_ID) && !dependencies.display.captureSource()?.empty) return;
       try {
         dependencies.nativeCarousel.assertObservation(discovered);
-        dependencies.source.cleanupOldArtifacts();
+        dependencies.display.prepareArtifacts();
         dependencies.nativeCarousel.assertObservation(discovered);
         dependencies.gridView.installResources(() => {
           session.assertRouteSession(sessionToken);
           dependencies.nativeCarousel.assertObservation(discovered);
         });
-        dependencies.source.markOriginalHeader(section);
+        dependencies.display.presentSource(section);
         dependencies.nativeCarousel.assertObservation(discovered);
       } catch (error) {
         if (error?.code !== "NATIVE_SOURCE_REPLACED" && !session.isRouteSessionCancelledError(error)) throw error;
@@ -16463,50 +16815,43 @@ ${CARD_ACTION_STYLES}
       }
       const initializationStarted = performance.now();
       let mountedSource, scroller, track;
-      let provisionalLayout, provisionalFrame;
+      let provisionalLayout;
       try {
-        mountedSource = dependencies.source.nativeDiscoveryObservation({ bindingOnly: true });
+        mountedSource = dependencies.display.discoverSource({ bindingOnly: true });
         if (mountedSource.section && mountedSource.section !== section) {
           throw session.initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Initialization source was replaced");
         }
         scroller = mountedSource.section === section ? mountedSource.scroller : null;
         track = mountedSource.section === section ? mountedSource.track : null;
         dependencies.nativeCarousel.sample(() => {
-          const observed = dependencies.source.nativeLayoutObservation(section, scroller, track);
+          const observed = dependencies.display.measureSource(section, scroller, track);
           provisionalLayout = { ...observed.layout };
-          provisionalLayout.rowGap = dependencies.source.measureNativeCarouselGap(section);
+          provisionalLayout.rowGap = dependencies.display.measureGap(section);
           dependencies.nativeCarousel.assertObservation(observed);
-          provisionalFrame = dependencies.presentation.placeLegacyFrame(section, scroller, provisionalLayout, { elapsedMs: null, finalized: false, totalCount: null });
-          dependencies.nativeCarousel.assertObservation(observed);
-          dependencies.nativeCarousel.assertObservation(mountedSource);
+          dependencies.display.showProvisional({
+            section,
+            scroller,
+            track,
+            layout: provisionalLayout,
+            initializationStarted,
+            assertCurrent() {
+              dependencies.nativeCarousel.assertObservation(observed);
+              dependencies.nativeCarousel.assertObservation(mountedSource);
+            }
+          });
         });
       } catch (error) {
         if (error?.code !== "NATIVE_SOURCE_REPLACED" && !session.isRouteSessionCancelledError(error)) throw error;
         if (session.isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
         return;
       }
-      dependencies.source.publishNativeParent({
-        section,
-        scroller,
-        track,
-        layout: provisionalLayout,
-        items: [],
-        collectedCount: 0,
-        totalCount: null,
-        grid: provisionalFrame.grid,
-        status: provisionalFrame.status,
-        empty: false,
-        resizeViewportSignature: dependencies.responsive.viewportSignature(),
-        initializationStartedAt: initializationStarted
-      });
-      dependencies.source.applyOriginalMyListVisibility();
       const initializationOwner = beginRunningSession(sessionToken);
       session.assertRouteSession(sessionToken);
       let earlyTotalCount;
       let freshMyListBootstrap = null, entryCollection;
       let fastCollection = null;
       let fastCollectionSource = "graphql";
-      const entryParent = dependencies.source.current;
+      const entryParent = dependencies.display.captureSource();
       function finishInitialization({ resume = true, retry = null } = {}) {
         clearRunningSession(sessionToken, resume, initializationOwner);
         if (!session.isRouteSessionActive(sessionToken)) return;
@@ -16520,16 +16865,16 @@ ${CARD_ACTION_STYLES}
           timeoutMs: error?.details?.timeoutMs ?? timeoutMs,
           details: error?.details || null
         });
-        dependencies.presentation.updateStatus(dependencies.presentation.formatInitializationErrorMeta(error, totalCount));
+        dependencies.display.showInitializationFailure(error, totalCount);
       }
       function finishEmpty(reason, preparation = null) {
         try {
           if (preparation) dependencies.nativeCarousel.assertPreparation(preparation);
           dependencies.nativeCarousel.sample(() => {
-            const observed = dependencies.source.nativeLayoutObservation(section, scroller, track);
-            const layout = { ...observed.layout, rowGap: dependencies.source.measureNativeCarouselGap(section) };
+            const observed = dependencies.display.measureSource(section, scroller, track);
+            const layout = { ...observed.layout, rowGap: dependencies.display.measureGap(section) };
             dependencies.nativeCarousel.assertObservation(observed);
-            dependencies.source.finalizeEmptyLegacyList(
+            dependencies.display.publishEmpty(
               section,
               scroller,
               track,
@@ -16553,14 +16898,14 @@ ${CARD_ACTION_STYLES}
           hasNativeSource: Boolean(scroller && track),
           readMountedBootstrap: () => tryMountedSinglePageFastBootstrap(section, scroller, track, sessionToken),
           readMountedCards() {
-            const mounted = dependencies.source.nativePageObservation();
+            const mounted = dependencies.display.observePage();
             dependencies.nativeCarousel.assertObservation(mounted);
             return mounted.cards.length;
           },
           startReadiness: () => waitForNativeCarouselReady(section, scroller, track, sessionToken),
           onCount: (detail) => log(tLog("totalCountDetected"), detail),
           assertCurrent() {
-            if (dependencies.source.current !== entryParent) throw session.initializationError(
+            if (dependencies.display.captureSource() !== entryParent) throw session.initializationError(
               "NATIVE_SOURCE_REPLACED",
               "list-entry",
               "List entry parent changed during source selection"
@@ -16598,9 +16943,7 @@ ${CARD_ACTION_STYLES}
         if (sourceWait.nativeSection) {
           dependencies.nativePopup.invalidate();
           dependencies.gridView.dispose();
-          dependencies.nativeCarousel.clearBinding();
-          dependencies.source.publishSourceState(null);
-          dependencies.source.complete(null);
+          dependencies.display.discardSource();
           finishInitialization({ retry: "scheduled" });
           return;
         }
@@ -16615,14 +16958,14 @@ ${CARD_ACTION_STYLES}
             timeoutMs: error.details?.timeoutMs ?? null,
             details: error.details || null
           });
-          dependencies.presentation.updateStatus(dependencies.presentation.formatInitializationErrorMeta(error, earlyTotalCount));
+          dependencies.display.showInitializationFailure(error, earlyTotalCount);
           finishInitialization({ resume: false });
           recoverNativeInitialization(sessionToken, "native-source-wait");
           return;
         }
         scroller = sourceWait.scroller;
         track = sourceWait.track;
-        dependencies.source.attachNativeBinding(dependencies.source.current, section, scroller, track);
+        dependencies.display.bindSource(dependencies.display.captureSource(), section, scroller, track);
       }
       let readiness;
       try {
@@ -16651,11 +16994,11 @@ ${CARD_ACTION_STYLES}
           stage: readinessError.stage,
           timeoutMs: readinessError.details?.timeoutMs ?? null
         });
-        dependencies.presentation.updateStatus(dependencies.presentation.formatInitializationErrorMeta(readinessError, earlyTotalCount));
+        dependencies.display.showInitializationFailure(readinessError, earlyTotalCount);
         return;
       }
       if (readiness.empty) return finishEmpty(null, readiness);
-      const mountedMode = dependencies.source.nativeSourceObservation()?.mode || "unknown";
+      const mountedMode = dependencies.display.observeSource()?.mode || "unknown";
       {
         try {
           await entryCollection.prepareAnchor({ mode: mountedMode, normalize: (firstVideoId) => dependencies.nativeCarousel.anchorPageZero({
@@ -16664,7 +17007,7 @@ ${CARD_ACTION_STYLES}
             track,
             firstVideoId,
             sessionToken,
-            columns: dependencies.source.current?.layout?.columns
+            columns: dependencies.display.captureSource()?.layout?.columns
           }) });
         } catch (error) {
           if (!session.isRouteSessionCancelledError(error)) {
@@ -16675,11 +17018,11 @@ ${CARD_ACTION_STYLES}
         }
       }
       {
-        const countOwner = dependencies.source.current;
+        const countOwner = dependencies.display.captureSource();
         try {
           let countObservation;
           const mountedCount = entryCollection.confirmCount({ mode: mountedMode, readNativeCount() {
-            countObservation = dependencies.source.nativeSourceObservation(countOwner, { count: "required", provisionalTotalCount: earlyTotalCount });
+            countObservation = dependencies.display.observeSource(countOwner, { count: "required", provisionalTotalCount: earlyTotalCount });
             return countObservation.count;
           }, assertNativeCurrent: () => dependencies.nativeCarousel.assertObservation(countObservation) });
           if (mountedCount) {
@@ -16701,10 +17044,10 @@ ${CARD_ACTION_STYLES}
             }
             mountedCount.assertCurrent();
             earlyTotalCount = mountedTotalCount;
-            dependencies.source.ensureListMembership(countOwner).observeCount({ totalCount: mountedTotalCount }, { assertCurrent: mountedCount.assertCurrent });
+            dependencies.display.showCollectionProgress(countOwner, { totalCount: mountedTotalCount }, { assertCurrent: mountedCount.assertCurrent, header: false });
           }
         } catch (error) {
-          if (error?.code === "NATIVE_SOURCE_REPLACED" || dependencies.source.current !== countOwner) {
+          if (error?.code === "NATIVE_SOURCE_REPLACED" || dependencies.display.captureSource() !== countOwner) {
             finishInitialization({ resume: false });
             if (!recoverNativeInitialization(sessionToken, "native-count-source-replaced")) scheduleRun(0, sessionToken);
             return;
@@ -16725,9 +17068,9 @@ ${CARD_ACTION_STYLES}
             sessionToken,
             assertCurrent: () => dependencies.nativeCarousel.assertPreparation(readiness),
             readInput() {
-              graphqlGeometry = dependencies.source.nativeLayoutObservation(section, scroller, track);
+              graphqlGeometry = dependencies.display.measureSource(section, scroller, track);
               graphqlLayout = graphqlGeometry.layout;
-              templateView = dependencies.source.nativePageObservation(dependencies.source.current, { template: true });
+              templateView = dependencies.display.observePage(dependencies.display.captureSource(), { template: true });
               dependencies.nativeCarousel.assertObservation(templateView);
               dependencies.nativeCarousel.assertObservation(graphqlGeometry);
               return {
@@ -16795,7 +17138,7 @@ ${CARD_ACTION_STYLES}
           });
         }
       }
-      const initializationNative = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
+      const initializationNative = dependencies.display.inspectSource(section, scroller, track);
       log(tLog("initializationStarted"), {
         version: session.version,
         browserLanguage: navigator.language || "",
@@ -16813,10 +17156,10 @@ ${CARD_ACTION_STYLES}
       });
       let initializationRetry = null;
       try {
-        const layoutObservation = dependencies.source.nativeLayoutObservation(section, scroller, track);
-        const layout = { ...layoutObservation.layout, rowGap: dependencies.source.measureNativeCarouselGap(section) };
+        const layoutObservation = dependencies.display.measureSource(section, scroller, track);
+        const layout = { ...layoutObservation.layout, rowGap: dependencies.display.measureGap(section) };
         const totalCount = earlyTotalCount;
-        const measuredNative = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
+        const measuredNative = dependencies.display.inspectSource(section, scroller, track);
         const initialPages = measuredNative?.pageCount ?? null;
         log(tLog("initialLayoutMeasured"), {
           layout: dependencies.diagnostics.layoutSummary(layout),
@@ -16826,34 +17169,13 @@ ${CARD_ACTION_STYLES}
           currentPageCards: measuredNative?.currentPageCards ?? 0
         });
         dependencies.nativeCarousel.assertObservation(layoutObservation);
-        const status = dependencies.presentation.updateStatus(dependencies.presentation.formatHeaderParts(0, totalCount, null));
-        dependencies.gridView.placeStatus(status, {
-          section,
-          anchor: scroller,
-          assertCurrent: () => dependencies.nativeCarousel.assertObservation(layoutObservation)
-        });
-        dependencies.source.syncStatusTypography(section, status);
-        const initialStatusGeometry = dependencies.source.currentGridGeometry(section, layout);
-        dependencies.source.layoutFrameStatus(status, initialStatusGeometry, layout.rowGap);
-        dependencies.nativeCarousel.assertObservation(layoutObservation);
-        dependencies.source.nativeSourcePresentation(section, scroller, track, { phase: "mounted" });
-        dependencies.source.waitForEmpty(false);
-        dependencies.source.publishNativeParent({
-          section,
-          scroller,
-          track,
-          layout,
-          initializationStartedAt: initializationStarted,
-          empty: false,
-          collectedCount: 0,
-          totalCount
-        });
-        const collectionState = dependencies.source.current;
+        dependencies.display.showCollectionFrame(section, scroller, track, layout, totalCount, initializationStarted, layoutObservation);
+        const collectionState = dependencies.display.captureSource();
         const collectionBinding = dependencies.nativeCarousel.borrowBinding(section, scroller, track);
         const assertCollectionCurrent = () => {
           session.assertRouteSession(sessionToken);
           dependencies.nativeCarousel.assertBinding(collectionBinding);
-          if (dependencies.source.current !== collectionState) throw session.initializationError(
+          if (dependencies.display.captureSource() !== collectionState) throw session.initializationError(
             "NATIVE_SOURCE_REPLACED",
             "native-collection",
             "Collection parent was replaced"
@@ -16866,7 +17188,7 @@ ${CARD_ACTION_STYLES}
           sessionToken,
           assertCurrent: assertCollectionCurrent,
           onPreferred(items2) {
-            const fastNative = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
+            const fastNative = dependencies.display.inspectSource(section, scroller, track);
             log(fastCollectionSource === "mounted-single-page" ? "Mounted single-page My List fast collection used" : "GraphQL My List fast collection used", {
               collectionSource: fastCollectionSource,
               collected: items2.length,
@@ -16877,8 +17199,8 @@ ${CARD_ACTION_STYLES}
             });
           },
           beforeNative() {
-            dependencies.source.nativeSourcePresentation(section, scroller, track, { phase: "scan" });
-            const scanNative = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
+            dependencies.display.presentSource(section, scroller, track, { phase: "scan" });
+            const scanNative = dependencies.display.inspectSource(section, scroller, track);
             log(tLog("nativeCarouselScanModeStarted"), {
               selectedPage: scanNative?.selectedPage ?? null,
               pages: scanNative?.pageCount ?? null,
@@ -16914,7 +17236,7 @@ ${CARD_ACTION_STYLES}
               {
                 collected: facts.collected,
                 totalCount: facts.totalCount,
-                endingPage: dependencies.source.nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null
+                endingPage: dependencies.display.inspectSource(section, scroller, track)?.selectedPage ?? null
               }
             );
             warn(tLog("collectedCountDoesNotMatchTotalCount"), {
@@ -16929,49 +17251,32 @@ ${CARD_ACTION_STYLES}
         assertCollectionCurrent();
         if (collected.status === "empty") {
           dependencies.nativeCarousel.assertObservation(emptyObservation);
-          dependencies.source.finalizeEmptyLegacyList(section, scroller, track, layout, initializationStarted, "collection-confirmed-empty", emptyObservation);
+          dependencies.display.publishEmpty(section, scroller, track, layout, initializationStarted, "collection-confirmed-empty", emptyObservation);
           return;
         }
         const items = collected.transfer.records;
         log(tLog("fullCollectionResultFinalized"), {
           collected: items.length,
           totalCount,
-          endingPage: dependencies.source.nativeSourceDiagnostics(section, scroller, track)?.selectedPage ?? null,
+          endingPage: dependencies.display.inspectSource(section, scroller, track)?.selectedPage ?? null,
           items: items.map(dependencies.diagnostics.itemSummary)
         });
         assertCollectionCurrent();
-        dependencies.source.nativeSourcePresentation(section, scroller, track, { phase: "parked" });
-        const standbyNative = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
+        dependencies.display.presentSource(section, scroller, track, { phase: "parked" });
+        const standbyNative = dependencies.display.inspectSource(section, scroller, track);
         log(tLog("nativeCarouselStandbyMode"), {
           selectedPage: standbyNative?.selectedPage ?? null,
           parked: standbyNative?.sourceParked ?? false
         });
         assertCollectionCurrent();
-        await dependencies.presentation.buildGrid(section, scroller, collected.transfer, layout, totalCount, sessionToken);
-        session.assertRouteSession(sessionToken);
-        dependencies.source.acceptEmpty(dependencies.source.current, false);
-        dependencies.source.applyOriginalMyListVisibility();
-        const deferredNative = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
-        log(tLog("initialHoverPreparationDeferred"), {
-          selectedPage: deferredNative?.selectedPage ?? null,
-          currentPageCards: deferredNative?.currentPageCards ?? 0
-        });
-        if (dependencies.source.current) dependencies.source.ensureListMembership(dependencies.source.current).observeCount({ collectedCount: items.length, totalCount });
-        dependencies.source.complete(section);
-        if (performanceDiagnostics.nativeRecovery.attempts > performanceDiagnostics.nativeRecovery.completed) {
-          performanceDiagnostics.nativeRecovery.completed++;
-        }
-        dependencies.interaction.resetOrderMismatchStateAfterInitialization();
-        dependencies.source.acceptElapsed(dependencies.source.current, performance.now() - initializationStarted);
-        dependencies.presentation.updateStatus(dependencies.presentation.formatHeaderParts(items.length, totalCount, dependencies.source.current.initializationElapsedMs, true));
-        dependencies.presentation.initializeWatchGroups(dependencies.source.current, sessionToken);
+        await dependencies.display.publishCollection(section, scroller, collected.transfer, layout, totalCount, initializationStarted, sessionToken);
         log(tLog("initializationCompleted"), {
           collected: items.length,
           totalCount,
           initialPages,
           initialColumns: layout.columns,
           initialCardWidth: layout.cardWidth,
-          initializationElapsedMs: Math.round(dependencies.source.current.initializationElapsedMs),
+          initializationElapsedMs: Math.round(dependencies.display.captureSource().initializationElapsedMs),
           snapshot: dependencies.diagnostics.collectRuntimeSnapshot()
         });
       } catch (error) {
@@ -16986,9 +17291,7 @@ ${CARD_ACTION_STYLES}
         } else if (error?.code === "GRID_BUILD_SOURCE_REPLACED") {
           log("Grid construction discarded after native source replacement", { sessionToken });
           session.cleanupTargetSessionDom();
-          dependencies.nativeCarousel.clearBinding();
-          dependencies.source.publishSourceState(null);
-          dependencies.source.complete(null);
+          dependencies.display.discardSource();
           initializationRetry = "immediate";
         } else {
           blockFailure(error, null, null, earlyTotalCount);
@@ -17026,8 +17329,9 @@ ${CARD_ACTION_STYLES}
       resetMissingSourceWait() {
         missingSectionSince = 0;
       },
-      markRecoveryCompleted() {
+      acceptPublication() {
         if (performanceDiagnostics.nativeRecovery.attempts > performanceDiagnostics.nativeRecovery.completed) performanceDiagnostics.nativeRecovery.completed++;
+        dependencies.onAccepted();
       },
       begin() {
         blockedInitialization = null;
@@ -17062,14 +17366,14 @@ ${CARD_ACTION_STYLES}
     let orderMismatchDismissed = false, orderMismatchDialogOpen = false, orderMismatchReinitializing = false;
     let mutationSourceRecoveryPending = false;
     function pageItemKeys(items, page) {
-      return new Set(items.filter((item) => dependencies.source.pageForItem(item) === page).map(dependencies.source.itemKey).filter(Boolean));
+      return new Set(items.filter((item) => dependencies.display.preferredPage(item) === page).map(dependencies.display.itemKey).filter(Boolean));
     }
     function resolveReadyHover(item, card) {
       if (!card) return null;
-      const state = dependencies.source.current;
+      const state = dependencies.display.captureSource();
       return dependencies.nativeCarousel.sample(() => {
-        dependencies.source.ensureLiveNativeBinding("hover-reuse");
-        const observation = dependencies.source.nativeSourceObservation(state, { position: true });
+        dependencies.display.refreshSource("hover-reuse");
+        const observation = dependencies.display.observeSource(state, { position: true });
         const page = observation.position.page, backedPage = Number(card.node.getAttribute("data-tm-backed-page"));
         const source = card.node.getAttribute("data-tm-hover-ready") === "true" && Number.isFinite(backedPage) && page === backedPage ? dependencies.nativeCarousel.mountedCard({
           section: state.section,
@@ -17080,22 +17384,22 @@ ${CARD_ACTION_STYLES}
           sessionToken: session.scope.token
         }) : null;
         const assertCurrent = () => {
-          if (dependencies.source.current !== state) throw session.createRouteSessionCancelledError();
+          if (dependencies.display.captureSource() !== state) throw session.createRouteSessionCancelledError();
           dependencies.nativeCarousel.assertObservation(observation);
         };
         assertCurrent();
-        return { source, card, page, backedPage, targetPage: dependencies.source.pageForItem(item), assertCurrent };
+        return { source, card, page, backedPage, targetPage: dependencies.display.preferredPage(item), assertCurrent };
       });
     }
     function prepareHoverCard(item, card, event, token, sessionToken) {
       if (!card || !dependencies.gridView.isCardCurrent(card)) return null;
-      return prepareMountedPage(dependencies.source.pageForItem(item), item, event, token, sessionToken);
+      return prepareMountedPage(dependencies.display.preferredPage(item), item, event, token, sessionToken);
     }
     function clearSourceAlignment(slot, reason = "source-release", relatedTarget = null) {
       dependencies.nativePopup.release(reason, relatedTarget, slot);
     }
     function popupSource(slot, item) {
-      const state = dependencies.source.current;
+      const state = dependencies.display.captureSource();
       const source = dependencies.nativeCarousel.mountedCard({
         section: state.section,
         scroller: state.scroller,
@@ -17123,16 +17427,16 @@ ${CARD_ACTION_STYLES}
       orderMismatchReinitializing = false;
     }
     async function reinitializeAfterOrderMismatch() {
-      if (orderMismatchReinitializing || dependencies.initialization.running || !session.isTargetPage() || !session.active) return;
+      if (orderMismatchReinitializing || dependencies.isInitializing() || !session.isTargetPage() || !session.active) return;
       const sessionToken = session.scope.token;
-      const state = dependencies.source.current;
+      const state = dependencies.display.captureSource();
       orderMismatchReinitializing = true;
       orderMismatchDismissed = true;
       hideOrderMismatchDialog();
       dependencies.hover.cancel("source");
       log(tLog("manualReinitializationRequested"), {
-        selectedPage: dependencies.source.nativeSourceDiagnostics()?.selectedPage ?? null,
-        items: dependencies.source.current?.items?.length ?? null
+        selectedPage: dependencies.display.inspectSource()?.selectedPage ?? null,
+        items: dependencies.display.captureSource()?.items?.length ?? null
       });
       try {
         const { section, scroller, track } = state || {};
@@ -17147,7 +17451,7 @@ ${CARD_ACTION_STYLES}
         const assertCurrent = () => {
           session.assertRouteSession(sessionToken);
           dependencies.nativeCarousel.assertBinding(nativeOwner);
-          if (dependencies.source.current !== state || state.section !== section || state.scroller !== scroller || state.track !== track) {
+          if (dependencies.display.captureSource() !== state || state.section !== section || state.scroller !== scroller || state.track !== track) {
             throw session.createRouteSessionCancelledError();
           }
         };
@@ -17158,11 +17462,11 @@ ${CARD_ACTION_STYLES}
         }
         await dependencies.nativeCarousel.whenNavigationIdle();
         assertCurrent();
-        const before = dependencies.source.nativeSourceObservation(state, { position: true });
+        const before = dependencies.display.observeSource(state, { position: true });
         const fromPage = before.position.page;
         const returnedPage = await dependencies.nativeCarousel.navigateTo(section, scroller, 0, null, sessionToken);
         assertCurrent();
-        const after = dependencies.source.nativeSourceObservation(state, { position: true });
+        const after = dependencies.display.observeSource(state, { position: true });
         dependencies.nativeCarousel.assertObservation(after);
         if (returnedPage !== 0 || after.position.page !== 0) {
           throw session.initializationError(
@@ -17181,7 +17485,7 @@ ${CARD_ACTION_STYLES}
             stage: error?.stage || "order-mismatch-reinitialize",
             details: error?.details || null
           });
-          dependencies.presentation.updateStatus(dependencies.presentation.formatInitializationErrorMeta(error, dependencies.source.current?.totalCount ?? null));
+          dependencies.display.showInitializationFailure(error, dependencies.display.captureSource()?.totalCount ?? null);
         }
       } finally {
         orderMismatchReinitializing = false;
@@ -17189,7 +17493,7 @@ ${CARD_ACTION_STYLES}
     }
     function showOrderMismatchDialog(item, expectedPage, visibleIds = []) {
       if (orderMismatchDismissed || orderMismatchDialogOpen || orderMismatchReinitializing) return;
-      const state = dependencies.source.current, sessionToken = session.scope.token;
+      const state = dependencies.display.captureSource(), sessionToken = session.scope.token;
       const detail = { item: dependencies.diagnostics.itemSummary(item), expectedPage, visibleIds: [...visibleIds] };
       dependencies.gridView.showMismatch({
         message: tUi("orderChangedPrompt"),
@@ -17197,7 +17501,7 @@ ${CARD_ACTION_STYLES}
         cancelLabel: tUi("orderChangedCancel"),
         assertCurrent() {
           session.assertRouteSession(sessionToken);
-          if (dependencies.source.current !== state) throw session.createRouteSessionCancelledError();
+          if (dependencies.display.captureSource() !== state) throw session.createRouteSessionCancelledError();
         },
         onAccept() {
           log(tLog("orderMismatchPromptAccepted"), detail);
@@ -17213,27 +17517,27 @@ ${CARD_ACTION_STYLES}
       log(tLog("orderMismatchPromptShown"), detail);
     }
     function findActiveSourceSlot(item) {
-      dependencies.source.ensureLiveNativeBinding("hover-source-direct");
-      if (!dependencies.source.current?.track?.isConnected || !dependencies.source.current?.scroller?.isConnected) return null;
+      dependencies.display.refreshSource("hover-source-direct");
+      if (!dependencies.display.captureSource()?.track?.isConnected || !dependencies.display.captureSource()?.scroller?.isConnected) return null;
       return dependencies.nativeCarousel.sample(() => dependencies.nativeCarousel.mountedCard({
-        section: dependencies.source.current.section,
-        scroller: dependencies.source.current.scroller,
-        track: dependencies.source.current.track,
+        section: dependencies.display.captureSource().section,
+        scroller: dependencies.display.captureSource().scroller,
+        track: dependencies.display.captureSource().track,
         item: { href: item.href, videoId: item.videoId },
         activeOnly: true,
         sessionToken: session.scope.token
       })?.slot || null);
     }
     function nativePositionDeviation(item, source) {
-      if (!item || !source || !dependencies.source.current?.items?.length) return null;
+      if (!item || !source || !dependencies.display.captureSource()?.items?.length) return null;
       dependencies.nativeCarousel.assertSource(source);
-      return dependencies.source.ensureListMembership(dependencies.source.current).positionDeviation(item, source.itemIndex);
+      return dependencies.display.positionDeviation(item, source.itemIndex);
     }
     function firstVisibleNativePositionMismatch(cards) {
-      return dependencies.source.current ? dependencies.source.ensureListMembership(dependencies.source.current).firstPositionMismatch(cards, ORDER_MISMATCH_POSITION_THRESHOLD) : null;
+      return dependencies.display.firstPositionMismatch(cards, ORDER_MISMATCH_POSITION_THRESHOLD);
     }
     function rejectLargeNativePositionDeviation(item, source, expectedPage, visibleIds = []) {
-      const state = dependencies.source.current;
+      const state = dependencies.display.captureSource();
       const deviation = nativePositionDeviation(item, source);
       if (!deviation || deviation.absoluteDelta < ORDER_MISMATCH_POSITION_THRESHOLD) return false;
       const actualVideoId = source.videoId;
@@ -17248,7 +17552,7 @@ ${CARD_ACTION_STYLES}
       };
       warn("Native My List position deviates beyond order-mismatch threshold", diagnostic);
       dependencies.nativeCarousel.assertSource(source);
-      if (dependencies.source.current !== state) throw session.createRouteSessionCancelledError();
+      if (dependencies.display.captureSource() !== state) throw session.createRouteSessionCancelledError();
       showOrderMismatchDialog(
         item,
         expectedPage,
@@ -17261,7 +17565,7 @@ ${CARD_ACTION_STYLES}
     }
     function findItemForSourceSlot(slot) {
       const identity = dependencies.nativeCarousel.cardIdentity(slot);
-      return identity && dependencies.source.current?.itemMap ? dependencies.source.current.itemMap.get(dependencies.source.itemKey(identity)) || null : null;
+      return identity ? dependencies.display.findRecord(identity) : null;
     }
     async function prepareMountedPage(page, targetItem, triggerEvent = null, token = null, sessionToken = null) {
       const preparationDetail = (detail) => ({ requestedPage: page, targetItem: dependencies.diagnostics.itemSummary(targetItem), ...detail });
@@ -17271,8 +17575,8 @@ ${CARD_ACTION_STYLES}
       dependencies.gridView.assertCard(targetCard);
       dependencies.hover.count("hoverPreparation", "calls");
       const hoverTiming = dependencies.hover.captureTiming();
-      dependencies.source.ensureLiveNativeBinding("hover-prepare-start");
-      const state = dependencies.source.current;
+      dependencies.display.refreshSource("hover-prepare-start");
+      const state = dependencies.display.captureSource();
       const { section, scroller, track } = state || {};
       if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
         warn(tLog("nativePagePreparationFailed"), preparationDetail({
@@ -17281,17 +17585,17 @@ ${CARD_ACTION_STYLES}
         return null;
       }
       const nativeOwner = dependencies.nativeCarousel.borrowBinding(section, scroller, track);
-      const records = state.items, itemMap = state.itemMap, cloneMap = state.cloneMap, grid = state.grid;
+      const collection = dependencies.display.collectionReceipt(state), records = collection.records;
       const assertCurrent = () => {
         session.assertRouteSession(sessionToken);
         dependencies.nativeCarousel.assertBinding(nativeOwner);
-        if (dependencies.source.current !== state || state.items !== records || state.itemMap !== itemMap || state.cloneMap !== cloneMap || state.grid !== grid) throw session.createRouteSessionCancelledError();
+        collection.assertCurrent();
       };
       const resolveSource = async (mode = null, options = {}) => {
         session.assertRouteSession(sessionToken);
         if (dependencies.hover.isCancelled(token)) return { status: "unknown", reason: "hover-cancelled" };
         const reason = mode === "search" ? "hover-locate-start" : mode === "preferred-refresh" ? "hover-stale-refresh-start" : "hover-expected-page-start";
-        dependencies.source.ensureLiveNativeBinding(reason);
+        dependencies.display.refreshSource(reason);
         assertCurrent();
         dependencies.gridView.assertCard(targetCard);
         if (!mode) dependencies.hover.releaseInteraction();
@@ -17312,7 +17616,7 @@ ${CARD_ACTION_STYLES}
         });
         session.assertRouteSession(sessionToken);
         if (dependencies.hover.isCancelled(token)) return { status: "unknown", reason: "hover-cancelled" };
-        if (dependencies.source.current !== state) return { status: "unknown", reason: "native-binding-lost-after-page-move" };
+        if (dependencies.display.captureSource() !== state) return { status: "unknown", reason: "native-binding-lost-after-page-move" };
         assertCurrent();
         if (result.status === "mismatch" && !mode) {
           const positionMismatch = firstVisibleNativePositionMismatch(result.visibleCards);
@@ -17336,18 +17640,8 @@ ${CARD_ACTION_STYLES}
               if (dependencies.hover.isCancelled(token)) return { status: "unknown", reason: "hover-cancelled" };
               dependencies.nativeCarousel.assertSource(result.source);
               dependencies.nativeCarousel.assertSource(result.sources[index]);
-              const visibleItem = itemMap?.get(dependencies.source.itemKey(result.visibleCards[index]));
-              if (!visibleItem || dependencies.source.pageForItem(visibleItem) === result.page) continue;
-              const oldPage = dependencies.source.pageForItem(visibleItem);
-              dependencies.source.setPageForItem(visibleItem, result.page, state);
-              const visibleClone = findGridClone(visibleItem);
-              if (visibleClone) dependencies.source.copyItemAttributes(visibleClone, visibleItem);
-              log(tLog("itemPageMappingCorrected"), {
-                item: dependencies.diagnostics.itemSummary(visibleItem),
-                oldPage,
-                actualPage: result.page,
-                reason: "logical-visible-page-repair"
-              });
+              const visibleItem = collection.find(result.visibleCards[index]);
+              if (visibleItem) dependencies.display.repairPageMapping(visibleItem, result.page, state, { assertCurrent, report: true });
             }
           }
           assertCurrent();
@@ -17415,7 +17709,7 @@ ${CARD_ACTION_STYLES}
         resolvedSource = located.source || null;
         actualPage = located.page;
       } else {
-        const runtime = dependencies.source.nativeSourceObservation();
+        const runtime = dependencies.display.observeSource();
         const staleLogicalMapping = runtime?.mode === "logical" && runtime.needsRemapping;
         const mutationRecoveryPending = mutationSourceRecoveryPending;
         const expectedPageMismatch = located?.status === "mismatch";
@@ -17477,7 +17771,7 @@ ${CARD_ACTION_STYLES}
         }
       }
       trace(() => {
-        const native = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
+        const native = dependencies.display.inspectSource(section, scroller, track);
         return [tLog("nativePagePreparationPositionResolved"), {
           requestedPage: page,
           actualPage,
@@ -17516,13 +17810,14 @@ ${CARD_ACTION_STYLES}
           const sourceSlot = entry.source.slot;
           const pageItem = findItemForSourceSlot(sourceSlot);
           if (!pageItem) continue;
-          if (!staleSourceRecovery && dependencies.source.pageForItem(pageItem) !== actualPage) {
-            dependencies.source.setPageForItem(pageItem, actualPage, state);
-            const mappedClone = findGridClone(pageItem);
-            if (mappedClone?.isConnected) dependencies.source.copyItemAttributes(mappedClone, pageItem);
+          if (!staleSourceRecovery) {
+            dependencies.display.repairPageMapping(pageItem, actualPage, state, {
+              assertCurrent: () => dependencies.nativeCarousel.assertObservation(pageView),
+              connectedOnly: true
+            });
             dependencies.nativeCarousel.assertObservation(pageView);
           }
-          if (dependencies.source.itemKey(pageItem) !== dependencies.source.itemKey(targetItem)) {
+          if (dependencies.display.itemKey(pageItem) !== dependencies.display.itemKey(targetItem)) {
             neighborsSkipped++;
             dependencies.hover.count("hoverPreparation", "neighborsSkipped");
             continue;
@@ -17553,7 +17848,7 @@ ${CARD_ACTION_STYLES}
           fiberAssignments += stats?.fiberAssignments || 0;
           propsAssignments += stats?.propsAssignments || 0;
           dependencies.nativeCarousel.assertObservation(pageView);
-          if (dependencies.source.itemKey(pageItem) === dependencies.source.itemKey(targetItem)) {
+          if (dependencies.display.itemKey(pageItem) === dependencies.display.itemKey(targetItem)) {
             dependencies.hover.observeReplacement(handle);
             freshTarget = fresh;
             targetSourceSlot = sourceSlot;
@@ -17705,18 +18000,12 @@ ${CARD_ACTION_STYLES}
         if (isTargetPage()) startTargetSession(reason);
       }
     });
-    const myListSource = createMyListSource({
+    const display = createMyListDisplay({
       environment,
       i18n,
       logger,
       settings,
       session,
-      get initialization() {
-        return initialization;
-      },
-      get interaction() {
-        return interaction;
-      },
       get gridView() {
         return gridView;
       },
@@ -17729,72 +18018,20 @@ ${CARD_ACTION_STYLES}
       get nativePopup() {
         return nativePopup;
       },
-      get responsive() {
-        return responsive;
-      },
       get netflixDom() {
         return netflixDom;
-      },
-      get diagnostics() {
-        return diagnostics;
-      },
-      get presentation() {
-        return presentation;
-      }
-    });
-    const {
-      publishSourceState,
-      pageForItem,
-      setPageForItem,
-      ensureListMembership,
-      applyOriginalMyListVisibility,
-      nativeDiscoveryObservation,
-      syncLogicalPageModelAfterDelta,
-      readMutationLayout,
-      readMutationVisibleFacts,
-      findNativeMyListItemByVideoId,
-      ensureLiveNativeBinding,
-      refreshNativeSectionAfterDelta
-    } = myListSource;
-    const presentation = createMyListPresentation({
-      environment,
-      i18n,
-      logger,
-      settings,
-      session,
-      get gridView() {
-        return gridView;
-      },
-      get nativePopup() {
-        return nativePopup;
       },
       get hover() {
         return hover;
       },
-      get responsive() {
-        return responsive;
-      },
       get viewing() {
         return viewing;
       },
-      get netflixContext() {
-        return netflixContext;
-      },
-      get diagnostics() {
-        return diagnostics;
-      },
-      get source() {
-        return myListSource;
-      }
+      netflixContext,
+      viewportSignature: () => responsive.viewportSignature(),
+      onTransition: handleDisplayTransition,
+      readWork: (...args) => diagnostics.collectPerformanceDiagnostics(...args)
     });
-    const {
-      retireMutationCard,
-      prepareMutationInsertion,
-      insertMutationCard,
-      updateMutationCard,
-      presentListOrder,
-      presentListChange
-    } = presentation;
     const initialization = createMyListInitialization({
       environment,
       i18n,
@@ -17818,9 +18055,7 @@ ${CARD_ACTION_STYLES}
       get hover() {
         return hover;
       },
-      get responsive() {
-        return responsive;
-      },
+      stopResponsive: () => responsive.dispose(),
       get listData() {
         return listData;
       },
@@ -17830,13 +18065,8 @@ ${CARD_ACTION_STYLES}
       get diagnostics() {
         return diagnostics;
       },
-      get presentation() {
-        return presentation;
-      },
-      get interaction() {
-        return interaction;
-      },
-      source: myListSource
+      display,
+      onAccepted: () => interaction.resetOrderMismatchStateAfterInitialization()
     });
     const { waitForMyListTotalCount, collectMountedSinglePageItems, recoverNativeInitialization, scheduleRun } = initialization;
     const interaction = createMyListInteraction({
@@ -17862,13 +18092,8 @@ ${CARD_ACTION_STYLES}
       get diagnostics() {
         return diagnostics;
       },
-      get presentation() {
-        return presentation;
-      },
-      get initialization() {
-        return initialization;
-      },
-      source: myListSource
+      display,
+      isInitializing: () => Boolean(initialization.running)
     });
     const {
       resolveReadyHover,
@@ -17915,9 +18140,7 @@ ${CARD_ACTION_STYLES}
       get viewing() {
         return viewing;
       },
-      get source() {
-        return myListSource;
-      },
+      display,
       get initialization() {
         return initialization;
       }
@@ -17973,15 +18196,15 @@ ${CARD_ACTION_STYLES}
         performance,
         PerformanceObserver: environment.PerformanceObserver,
         getComputedStyle,
-        readInitializationStartedAt: () => myListSource.current?.initializationStartedAt,
+        readInitializationStartedAt: () => display.captureSource()?.initializationStartedAt,
         readSessionToken: () => sessionScope.token,
         isRouteSessionActive,
-        readScanFinishedAt: () => myListSource.current?.watchStatus ? viewing.diagnostics(myListSource.current.watchStatus).network?.finishedAt : null
+        readScanFinishedAt: () => display.viewingDiagnostics()?.network?.finishedAt ?? null
       },
       runChunks: runConstructionChunks,
       createError: (code, message) => initializationError(code, "grid-cards", message),
       installHover: (grid) => hover.install(grid),
-      readPage: pageForItem,
+      readPage: display.preferredPage,
       onRetire: (handle, detail) => {
         nativePopup.retire(handle);
         hover.retire(handle, detail);
@@ -18006,7 +18229,7 @@ ${CARD_ACTION_STYLES}
       fetchBootstrap: (token) => listData.fetchBootstrap(token),
       onReuseRejected: (detail) => log("Mounted single-page membership reuse rejected; using fresh collection", detail)
     });
-    const listMutations = listView.createMutations({
+    const listMutations = display.createMutations({
       now: () => performance.now(),
       readSession: () => sessionScope.token,
       isSessionActive: isRouteSessionActive,
@@ -18017,31 +18240,6 @@ ${CARD_ACTION_STYLES}
       releaseRetained: (id) => gridView.releaseRetained(id),
       mutationTimeout: DELTA_MUTATION_TIMEOUT_MS,
       isBlocked: () => initialization.isNativeBlocked(sessionScope.token),
-      readParent: () => myListSource.current,
-      canApply: () => Boolean(myListSource.current && isTargetPage()),
-      assertSession: assertRouteSession,
-      isCancelled: isRouteSessionCancelledError,
-      createError: (code, message) => initializationError(code, "native-discovery", message),
-      hasMember: (id) => myListSource.current.grid ? myListSource.current.itemMap.has("v:" + id) : null,
-      refreshNative: refreshNativeSectionAfterDelta,
-      observeNative: nativeDiscoveryObservation,
-      captureNative: findNativeMyListItemByVideoId,
-      hasMaterial: (item, correlationId) => gridView.materialFor(item, correlationId),
-      assertNative: (observation) => nativeCarousel.assertObservation(observation),
-      readMembership: ensureListMembership,
-      readLayout: readMutationLayout,
-      readVisible: readMutationVisibleFacts,
-      hasCard: (record) => Boolean(gridView.getCard(record)),
-      retireCard: retireMutationCard,
-      canInsertCard: prepareMutationInsertion,
-      insertCard: insertMutationCard,
-      readPage: pageForItem,
-      writePage: (record, page, { parent, assertCurrent }) => setPageForItem(record, page, parent, { assertCurrent }),
-      updateCard: updateMutationCard,
-      sample: (operation) => nativeCarousel.sample(operation),
-      refreshMapping: syncLogicalPageModelAfterDelta,
-      onReindexed: presentListChange,
-      onOrder: presentListOrder,
       onChanged: reportListChange,
       createCancelledError: createRouteSessionCancelledError,
       findFallback: (videoId) => nativeCarousel.captureFallbackItem(videoId),
@@ -18086,8 +18284,8 @@ ${CARD_ACTION_STYLES}
       now: () => performance.now(),
       isCurrentSession: (token) => targetSessionActive && isRouteSessionActive(token),
       readSessionToken: () => sessionScope.token,
-      isSourceMounted: () => Boolean(myListSource.current?.grid?.isConnected),
-      readSourceCard: () => myListSource.current.track?.querySelector(NETFLIX_DOM_SELECTORS.standardCard)
+      isSourceMounted: () => Boolean(display.captureSource()?.grid?.isConnected),
+      readSourceCard: () => display.captureSource().track?.querySelector(NETFLIX_DOM_SELECTORS.standardCard)
     });
     const listData = createListData({
       context: netflixContext,
@@ -18119,9 +18317,9 @@ ${CARD_ACTION_STYLES}
       clearTimeout,
       requestAnimationFrame,
       cancelAnimationFrame,
-      readListShape: (section) => myListSource.current?.section === section ? {
-        totalCount: myListSource.current.totalCount,
-        columns: Math.max(1, myListSource.current.layout?.columns || 1)
+      readListShape: (section) => display.captureSource()?.section === section ? {
+        totalCount: display.captureSource().totalCount,
+        columns: Math.max(1, display.captureSource().layout?.columns || 1)
       } : null,
       readGraphqlCount: () => listData.readMyListTotalCount(),
       cardMarkup: { capture: gridView.captureCard, captureTemplate: gridView.captureTemplate },
@@ -18139,8 +18337,8 @@ ${CARD_ACTION_STYLES}
       onMutationDelivery: () => nativePopup.checkDetached(),
       isInitializationBlocked: () => initialization.isBlocked(sessionScope.token),
       onBlockedMutation: (token) => recoverNativeInitialization(token, "document-mutation"),
-      isGridDetached: () => Boolean(myListSource.completed && myListSource.current?.grid && !myListSource.current.grid.isConnected),
-      shouldCoalesce: () => Boolean(myListSource.completed || myListSource.waitingForEmpty && myListSource.current?.empty),
+      isGridDetached: () => Boolean(display.completed && display.captureSource()?.grid && !display.captureSource().grid.isConnected),
+      shouldCoalesce: () => Boolean(display.completed || display.waitingForEmpty && display.captureSource()?.empty),
       onRelevantMutation: handleRelevantTargetDocumentMutation
     });
     let nativePopup;
@@ -18156,7 +18354,7 @@ ${CARD_ACTION_STYLES}
       grid: gridView,
       readSessionToken: () => sessionScope.token,
       isSessionCurrent: isRouteSessionActive,
-      readEnvironment: () => ({ grid: myListSource.current?.grid, blockedReason: interaction.blockedReason }),
+      readEnvironment: () => ({ grid: display.captureSource()?.grid, blockedReason: interaction.blockedReason }),
       whenStable: () => responsive.whenStable(),
       resolveReady: resolveReadyHover,
       prepare: prepareHoverCard,
@@ -18184,7 +18382,7 @@ ${CARD_ACTION_STYLES}
           pageDom: netflixDom,
           selectors: NETFLIX_DOM_SELECTORS,
           ...policy,
-          readEnvironment: () => ({ grid: myListSource.current?.grid, scroller: myListSource.current?.scroller }),
+          readEnvironment: () => ({ grid: display.captureSource()?.grid, scroller: display.captureSource()?.scroller }),
           isSessionCurrent: isRouteSessionActive,
           itemForSource: findItemForSourceSlot,
           activeSource: findActiveSourceSlot,
@@ -18209,8 +18407,7 @@ ${CARD_ACTION_STYLES}
       gridView,
       hover,
       listMutations,
-      source: myListSource,
-      presentation,
+      display,
       readSessionToken: () => sessionScope.token,
       isRouteSessionActive,
       assertRouteSession,
@@ -18231,6 +18428,35 @@ ${CARD_ACTION_STYLES}
     let targetSessionEntryKind = "initial";
     let targetSessionReason = "route:initial";
     let targetListenersActive = false;
+    function handleDisplayTransition(transition) {
+      switch (transition.kind) {
+        case "initialization-accepted":
+          initialization.acceptPublication();
+          break;
+        case "source-adopted":
+          responsive.observe(transition.mode);
+          break;
+        case "layout-published":
+          responsive.acceptLayout(transition.layout);
+          break;
+        case "membership-mapped":
+          responsive.expectCountConvergence();
+          break;
+        case "membership-layout-changed":
+          responsive.requestCheck(140, "my-list-delta");
+          break;
+        case "source-reinitializing":
+          cleanupTargetSessionDom();
+          responsive.dispose();
+          break;
+        case "initialization-required":
+          initialization.resetMissingSourceWait();
+          initialization.scheduleRun(0, transition.sessionToken);
+          break;
+        default:
+          throw new Error("Unknown My List display transition: " + transition.kind);
+      }
+    }
     function createNavigationDiagnosticSink(token) {
       return hover.navigationSink(token);
     }
@@ -18258,20 +18484,17 @@ ${CARD_ACTION_STYLES}
       sessionScope.finishRequest(request);
     }
     function resetDetachedTargetState() {
-      if (myListSource.completed?.isConnected && document.getElementById(GRID_ID)) return;
-      if (myListSource.current?.section && !myListSource.current.section.isConnected) {
-        presentation.retireViewing(myListSource.current);
-        myListSource.retireMembership();
-        myListSource.retirePageHints();
+      if (display.completed?.isConnected && document.getElementById(GRID_ID)) return;
+      if (display.captureSource()?.section && !display.captureSource().section.isConnected) {
+        display.retireAcceptedResources();
       }
       listMutations.dispose();
       initialization.dropDeferral();
       hover.cancel("source");
       nativeCarousel.restoreMotion();
-      myListSource.complete(null);
-      if (myListSource.current?.section && !myListSource.current.section.isConnected) {
-        nativeCarousel.clearBinding();
-        publishSourceState(null);
+      display.invalidateCompletion();
+      if (display.captureSource()?.section && !display.captureSource().section.isConnected) {
+        display.discardSource();
       }
       responsive.dispose();
       interaction.clearMutationRecovery();
@@ -18279,7 +18502,7 @@ ${CARD_ACTION_STYLES}
       gridView.cancelBuild();
       gridView.resetEmpty();
       listData.reset();
-      myListSource.waitForEmpty(false);
+      display.clearEmptyWait();
     }
     function cleanupTargetSessionDom() {
       const release = (operation) => {
@@ -18289,15 +18512,13 @@ ${CARD_ACTION_STYLES}
           sessionCleanupFailures++;
         }
       };
-      release(() => presentation.retireViewing(myListSource.current));
-      release(myListSource.retireMembership);
-      release(myListSource.retirePageHints);
+      display.retireAcceptedResources(release);
       release(nativeCarousel.restoreMotion);
       release(clearSourceAlignment);
       release(() => nativePopup.invalidate());
       release(() => gridView.dispose());
       interaction.closeState();
-      release(myListSource.releasePresentation);
+      release(display.releasePresentation);
     }
     function suspendTargetSession(reason = "route-leave") {
       const release = (operation) => {
@@ -18307,13 +18528,11 @@ ${CARD_ACTION_STYLES}
           sessionCleanupFailures++;
         }
       };
-      const hadSession = targetSessionActive || initialization.hasWork || myListSource.current || myListSource.completed;
+      const hadSession = targetSessionActive || initialization.hasWork || display.captureSource() || display.completed;
       const previousToken = sessionScope.token;
       listMutations.dispose();
       initialization.dropDeferral();
-      presentation.retireViewing(myListSource.current);
-      myListSource.retireMembership();
-      myListSource.retirePageHints();
+      display.retireAcceptedResources();
       sessionScope.dispose();
       targetSessionActive = false;
       const pauses = [...sessionPauses];
@@ -18330,12 +18549,11 @@ ${CARD_ACTION_STYLES}
       release(() => responsive.dispose());
       release(() => nativeCarousel.resetSource());
       initialization.retire();
-      myListSource.complete(null);
-      nativeCarousel.clearBinding();
-      publishSourceState(null);
+      display.invalidateCompletion();
+      display.discardSource();
       initialization.resetMissingSourceWait();
       listData.reset();
-      myListSource.waitForEmpty(false);
+      display.clearEmptyWait();
       interaction.retire();
       if (hadSession) {
         log(tLog("targetSessionSuspended"), {
@@ -18404,7 +18622,7 @@ ${CARD_ACTION_STYLES}
       return true;
     }
     function handleObservedMyListToggleClick(event) {
-      if (!isTargetPage() || !myListSource.current) return;
+      if (!isTargetPage() || !display.captureSource()) return;
       listMutations.observeClick(() => {
         const membership = netflixDom.describeMembershipClick(event, { activeVideoId: hover.intent().videoId });
         return { membership, toastAction: !membership && netflixDom.describeToastActionClick(event) };
@@ -18412,8 +18630,8 @@ ${CARD_ACTION_STYLES}
     }
     function handleRelevantTargetDocumentMutation(sessionToken) {
       if (!isRouteSessionActive(sessionToken)) return;
-      if ((myListSource.completed || myListSource.waitingForEmpty && myListSource.current?.empty) && myListSource.current?.grid?.isConnected) {
-        ensureLiveNativeBinding("document-mutation", true);
+      if ((display.completed || display.waitingForEmpty && display.captureSource()?.empty) && display.captureSource()?.grid?.isConnected) {
+        display.refreshSource("document-mutation", true);
       } else {
         scheduleRun(40, sessionToken);
       }
@@ -18459,7 +18677,7 @@ ${CARD_ACTION_STYLES}
       preferencesChanged() {
         if (!started || disposed) return;
         try {
-          applyOriginalMyListVisibility();
+          display.applyPreferences();
         } catch (error) {
           if (error?.code !== "NATIVE_SOURCE_REPLACED") throw error;
           scheduleRun(0, sessionScope.token);
@@ -18469,7 +18687,7 @@ ${CARD_ACTION_STYLES}
         active: targetSessionActive,
         token: sessionScope.token,
         running: Boolean(initialization.running),
-        completed: Boolean(myListSource.completed),
+        completed: Boolean(display.completed),
         blocked: initialization.isBlocked(sessionScope.token),
         cleanupFailures: sessionCleanupFailures
       })
@@ -21851,7 +22069,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.26";
+  var SCRIPT_VERSION = "1.9.27";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

@@ -2,6 +2,24 @@
 
 ## Current refactor measurements
 
+Release **1.9.27**, 2026-10-12: **63 authored runtime modules, 17,702 readable physical lines**, compared with 61 modules / 17,584 lines in 1.9.26. Source/presentation are consolidated behind display; the two previous entry points are removed. Counts include comments and blanks, excluding a final empty line. Net source change is **+118 lines**; ownership and reduced caller coordination are the improvement criteria.
+
+| Affected module under src/ | Before | After | Responsibility |
+| --- | ---: | ---: | --- |
+| `app/my-list-session.js` | 481 | 454 | Route/request/pause lifetime, explicit display lifecycle outcomes and ordered teardown. |
+| `app/my-list-display.js` | — | 780 | Complete accepted publication, adoption, layout and membership presentation; hides private resources. |
+| `app/my-list-display/source.js` | — | 281 | Accepted source facts, membership/binding/hints, native leases, admission and geometry. |
+| `app/my-list-display/viewing.js` | — | 89 | Exact viewing attachment/transfer, group delivery, manual choice and refresh. |
+| `app/my-list-display/page-mapping.js` | — | 17 | One guarded hint/card update sequence with mode-specific eligibility. |
+| `app/my-list-initialization.js` | 712 | 663 | Phase admissions, publication requests, scheduling, exact tickets and bounded recovery. |
+| `app/my-list-interaction.js` | 545 | 537 | Hover/search/mismatch policy; accepted mapping repair belongs to display. |
+| `app/my-list-diagnostics.js` | 182 | 157 | Passive display/work projections and diagnostic report delivery. |
+| `app/responsive.js` | 602 | 566 | Measurement, settling, deferral and convergence; requests display layout/mapping operations. |
+
+The display owner exceeds its 500–650 estimate because it retains complete source-adoption transactions, the existing list-feature adapter and explicit receipt/projection operations. Keeping these together makes their admission and write order local; private facts, viewing and shared mapping mechanics remain separate. Estimates were not size limits. Generated output changes separately from **21,863 → 22,081 lines**. Runtime source, tests and tooling are counted independently.
+
+## Previous refactor measurements (through 1.9.26)
+
 Release **1.9.26**, 2026-10-12: **61 authored runtime modules, 17,584 readable physical lines**. Counts include comments and blank lines, excluding a final empty line. Restoration extraction in 1.9.16 added 20 lines (17,381 → 17,401); initialization-exit consolidation in 1.9.17 removed six (17,401 → 17,395); diagnostic-record consolidation in 1.9.18 added three (17,395 → 17,398); recommendation-row sampling in 1.9.19 left the total unchanged; saved-panel ownership in 1.9.20 added 27 (17,398 → 17,425); responsive page-hint publication in 1.9.21 removes one (17,425 → 17,424). Readiness ownership in 1.9.22 adds 18 (17,424 → 17,442). Diagnostic snapshot sampling in 1.9.23 adds six (17,442 → 17,448). Diagnostic export simplification in 1.9.24 removes 27 lines (17,448 → 17,421) and the unreachable clipboard transport. Mismatch-dialog ownership in 1.9.25 adds ten lines (17,421 → 17,431). Session ownership in 1.9.26 adds 153 lines (17,431 → 17,584), including the responsive capability interface. These changes improve ownership/locality rather than reducing total source. Before/after counts below refer to each module's selected refactor.
 
 | Affected module under src/ | Before | After | Responsibility |

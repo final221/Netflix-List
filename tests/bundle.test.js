@@ -388,6 +388,26 @@ test('importing authored application/session source does not activate the runtim
     assert.equal(typeof session.createMyListSession, 'function');
 });
 
+test('production graph rejects app callers importing private display helpers', async () => {
+    const { checkUserscript } = await import('../scripts/check.mjs');
+    await fixture(async directory => {
+        const file = path.join(directory, 'src/app/my-list-diagnostics.js');
+        await writeFile(file, "import { applyPageAssignments } from './my-list-display/page-mapping.js';\n" +
+            await readFile(file, 'utf8') + '\nglobalThis.forbiddenDisplayHelper = applyPageAssignments;\n');
+        await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*my-list-diagnostics\.js.*my-list-display\/page-mapping\.js/);
+    });
+});
+
+test('production graph rejects private display owners depending on app callers', async () => {
+    const { checkUserscript } = await import('../scripts/check.mjs');
+    await fixture(async directory => {
+        const file = path.join(directory, 'src/app/my-list-display/source.js');
+        await writeFile(file, "import { createMyListInitialization } from '../my-list-initialization.js';\n" +
+            await readFile(file, 'utf8') + '\nglobalThis.forbiddenDisplayCaller = createMyListInitialization;\n');
+        await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*my-list-display\/source\.js.*my-list-initialization\.js/);
+    });
+});
+
 test('production graph rejects a forbidden feature import before output comparison', async () => {
     const { checkUserscript } = await import('../scripts/check.mjs');
     await fixture(async directory => {

@@ -8,29 +8,29 @@ export function createMyListInteraction(dependencies) {
     let mutationSourceRecoveryPending = false;
 
     function pageItemKeys(items, page) {
-        return new Set(items.filter(item => dependencies.source.pageForItem(item) === page)
-            .map(dependencies.source.itemKey).filter(Boolean));
+        return new Set(items.filter(item => dependencies.display.preferredPage(item) === page)
+            .map(dependencies.display.itemKey).filter(Boolean));
     }
 
     function resolveReadyHover(item, card) {
         if (!card) return null;
-        const state = dependencies.source.current;
+        const state = dependencies.display.captureSource();
         return dependencies.nativeCarousel.sample(() => {
-            dependencies.source.ensureLiveNativeBinding('hover-reuse');
-            const observation = dependencies.source.nativeSourceObservation(state, { position: true });
+            dependencies.display.refreshSource('hover-reuse');
+            const observation = dependencies.display.observeSource(state, { position: true });
             const page = observation.position.page, backedPage = Number(card.node.getAttribute('data-tm-backed-page'));
             const source = card.node.getAttribute('data-tm-hover-ready') === 'true' && Number.isFinite(backedPage) && page === backedPage
                 ? dependencies.nativeCarousel.mountedCard({ section: state.section, scroller: state.scroller, track: state.track,
                     item: { videoId: item.videoId, href: item.href }, activeOnly: true, sessionToken: session.scope.token }) : null;
-            const assertCurrent = () => { if (dependencies.source.current !== state) throw session.createRouteSessionCancelledError(); dependencies.nativeCarousel.assertObservation(observation); };
+            const assertCurrent = () => { if (dependencies.display.captureSource() !== state) throw session.createRouteSessionCancelledError(); dependencies.nativeCarousel.assertObservation(observation); };
             assertCurrent();
-            return { source, card, page, backedPage, targetPage: dependencies.source.pageForItem(item), assertCurrent };
+            return { source, card, page, backedPage, targetPage: dependencies.display.preferredPage(item), assertCurrent };
         });
     }
 
     function prepareHoverCard(item, card, event, token, sessionToken) {
         if (!card || !dependencies.gridView.isCardCurrent(card)) return null;
-        return prepareMountedPage(dependencies.source.pageForItem(item), item, event, token, sessionToken);
+        return prepareMountedPage(dependencies.display.preferredPage(item), item, event, token, sessionToken);
     }
 
     function clearSourceAlignment(slot, reason = 'source-release', relatedTarget = null) {
@@ -38,7 +38,7 @@ export function createMyListInteraction(dependencies) {
     }
 
     function popupSource(slot, item) {
-        const state = dependencies.source.current;
+        const state = dependencies.display.captureSource();
         const source = dependencies.nativeCarousel.mountedCard({ section: state.section, scroller: state.scroller, track: state.track,
             item: { videoId: item.videoId, href: item.href }, activeOnly: true, sessionToken: session.scope.token });
         if (!source || source.slot !== slot) throw session.initializationError('NATIVE_SOURCE_REPLACED', 'native-popup', 'Native card changed');
@@ -63,9 +63,9 @@ export function createMyListInteraction(dependencies) {
     }
 
     async function reinitializeAfterOrderMismatch() {
-        if (orderMismatchReinitializing || dependencies.initialization.running || !session.isTargetPage() || !session.active) return;
+        if (orderMismatchReinitializing || dependencies.isInitializing() || !session.isTargetPage() || !session.active) return;
         const sessionToken = session.scope.token;
-        const state = dependencies.source.current;
+        const state = dependencies.display.captureSource();
         orderMismatchReinitializing = true;
         orderMismatchDismissed = true;
         hideOrderMismatchDialog();
@@ -73,8 +73,8 @@ export function createMyListInteraction(dependencies) {
         dependencies.hover.cancel('source');
 
         log(tLog('manualReinitializationRequested'), {
-            selectedPage: dependencies.source.nativeSourceDiagnostics()?.selectedPage ?? null,
-            items: dependencies.source.current?.items?.length ?? null
+            selectedPage: dependencies.display.inspectSource()?.selectedPage ?? null,
+            items: dependencies.display.captureSource()?.items?.length ?? null
         });
 
         try {
@@ -94,7 +94,7 @@ export function createMyListInteraction(dependencies) {
             const assertCurrent = () => {
                 session.assertRouteSession(sessionToken);
                 dependencies.nativeCarousel.assertBinding(nativeOwner);
-                if (dependencies.source.current !== state || state.section !== section || state.scroller !== scroller || state.track !== track) {
+                if (dependencies.display.captureSource() !== state || state.section !== section || state.scroller !== scroller || state.track !== track) {
                     throw session.createRouteSessionCancelledError();
                 }
             };
@@ -102,11 +102,11 @@ export function createMyListInteraction(dependencies) {
             try { await Promise.resolve(dependencies.responsive.whenStable()); } catch (_) {}
             await dependencies.nativeCarousel.whenNavigationIdle();
             assertCurrent();
-            const before = dependencies.source.nativeSourceObservation(state, { position: true });
+            const before = dependencies.display.observeSource(state, { position: true });
             const fromPage = before.position.page;
             const returnedPage = await dependencies.nativeCarousel.navigateTo(section, scroller, 0, null, sessionToken);
             assertCurrent();
-            const after = dependencies.source.nativeSourceObservation(state, { position: true });
+            const after = dependencies.display.observeSource(state, { position: true });
             dependencies.nativeCarousel.assertObservation(after);
             if (returnedPage !== 0 || after.position.page !== 0) {
                 throw session.initializationError(
@@ -128,7 +128,7 @@ export function createMyListInteraction(dependencies) {
                     stage: error?.stage || 'order-mismatch-reinitialize',
                     details: error?.details || null,
                 });
-                dependencies.presentation.updateStatus(dependencies.presentation.formatInitializationErrorMeta(error, dependencies.source.current?.totalCount ?? null));
+                dependencies.display.showInitializationFailure(error, dependencies.display.captureSource()?.totalCount ?? null);
             }
         } finally {
             orderMismatchReinitializing = false;
@@ -137,12 +137,12 @@ export function createMyListInteraction(dependencies) {
 
     function showOrderMismatchDialog(item, expectedPage, visibleIds = []) {
         if (orderMismatchDismissed || orderMismatchDialogOpen || orderMismatchReinitializing) return;
-        const state = dependencies.source.current, sessionToken = session.scope.token;
+        const state = dependencies.display.captureSource(), sessionToken = session.scope.token;
         const detail = { item: dependencies.diagnostics.itemSummary(item), expectedPage, visibleIds: [...visibleIds] };
         dependencies.gridView.showMismatch({ message: tUi('orderChangedPrompt'), acceptLabel: tUi('orderChangedOk'),
             cancelLabel: tUi('orderChangedCancel'), assertCurrent() {
                 session.assertRouteSession(sessionToken);
-                if (dependencies.source.current !== state) throw session.createRouteSessionCancelledError();
+                if (dependencies.display.captureSource() !== state) throw session.createRouteSessionCancelledError();
             }, onAccept() {
                 log(tLog('orderMismatchPromptAccepted'), detail);
                 void reinitializeAfterOrderMismatch();
@@ -156,25 +156,25 @@ export function createMyListInteraction(dependencies) {
     }
 
     function findActiveSourceSlot(item) {
-        dependencies.source.ensureLiveNativeBinding('hover-source-direct');
-        if (!dependencies.source.current?.track?.isConnected || !dependencies.source.current?.scroller?.isConnected) return null;
-        return dependencies.nativeCarousel.sample(() => dependencies.nativeCarousel.mountedCard({ section: dependencies.source.current.section,
-            scroller: dependencies.source.current.scroller, track: dependencies.source.current.track, item: { href: item.href, videoId: item.videoId },
+        dependencies.display.refreshSource('hover-source-direct');
+        if (!dependencies.display.captureSource()?.track?.isConnected || !dependencies.display.captureSource()?.scroller?.isConnected) return null;
+        return dependencies.nativeCarousel.sample(() => dependencies.nativeCarousel.mountedCard({ section: dependencies.display.captureSource().section,
+            scroller: dependencies.display.captureSource().scroller, track: dependencies.display.captureSource().track, item: { href: item.href, videoId: item.videoId },
             activeOnly: true, sessionToken: session.scope.token })?.slot || null);
     }
 
     function nativePositionDeviation(item, source) {
-        if (!item || !source || !dependencies.source.current?.items?.length) return null;
+        if (!item || !source || !dependencies.display.captureSource()?.items?.length) return null;
         dependencies.nativeCarousel.assertSource(source);
-        return dependencies.source.ensureListMembership(dependencies.source.current).positionDeviation(item, source.itemIndex);
+        return dependencies.display.positionDeviation(item, source.itemIndex);
     }
 
     function firstVisibleNativePositionMismatch(cards) {
-        return dependencies.source.current ? dependencies.source.ensureListMembership(dependencies.source.current).firstPositionMismatch(cards, ORDER_MISMATCH_POSITION_THRESHOLD) : null;
+        return dependencies.display.firstPositionMismatch(cards, ORDER_MISMATCH_POSITION_THRESHOLD);
     }
 
     function rejectLargeNativePositionDeviation(item, source, expectedPage, visibleIds = []) {
-        const state = dependencies.source.current;
+        const state = dependencies.display.captureSource();
         const deviation = nativePositionDeviation(item, source);
         if (!deviation || deviation.absoluteDelta < ORDER_MISMATCH_POSITION_THRESHOLD) return false;
         const actualVideoId = source.videoId;
@@ -189,7 +189,7 @@ export function createMyListInteraction(dependencies) {
         };
         warn('Native My List position deviates beyond order-mismatch threshold', diagnostic);
         dependencies.nativeCarousel.assertSource(source);
-        if (dependencies.source.current !== state) throw session.createRouteSessionCancelledError();
+        if (dependencies.display.captureSource() !== state) throw session.createRouteSessionCancelledError();
         showOrderMismatchDialog(
             item,
             expectedPage,
@@ -204,7 +204,7 @@ export function createMyListInteraction(dependencies) {
 
     function findItemForSourceSlot(slot) {
         const identity = dependencies.nativeCarousel.cardIdentity(slot);
-        return identity && dependencies.source.current?.itemMap ? dependencies.source.current.itemMap.get(dependencies.source.itemKey(identity)) || null : null;
+        return identity ? dependencies.display.findRecord(identity) : null;
     }
 
     async function prepareMountedPage(page, targetItem, triggerEvent = null, token = null, sessionToken = null) {
@@ -215,8 +215,8 @@ export function createMyListInteraction(dependencies) {
         dependencies.gridView.assertCard(targetCard);
         dependencies.hover.count('hoverPreparation', 'calls');
         const hoverTiming = dependencies.hover.captureTiming();
-        dependencies.source.ensureLiveNativeBinding('hover-prepare-start');
-        const state = dependencies.source.current;
+        dependencies.display.refreshSource('hover-prepare-start');
+        const state = dependencies.display.captureSource();
         const { section, scroller, track } = state || {};
         if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
             warn(tLog('nativePagePreparationFailed'), preparationDetail({
@@ -225,19 +225,18 @@ export function createMyListInteraction(dependencies) {
             return null;
         }
         const nativeOwner = dependencies.nativeCarousel.borrowBinding(section, scroller, track);
-        const records = state.items, itemMap = state.itemMap, cloneMap = state.cloneMap, grid = state.grid;
+        const collection = dependencies.display.collectionReceipt(state), records = collection.records;
         const assertCurrent = () => {
             session.assertRouteSession(sessionToken);
             dependencies.nativeCarousel.assertBinding(nativeOwner);
-            if (dependencies.source.current !== state || state.items !== records || state.itemMap !== itemMap ||
-                state.cloneMap !== cloneMap || state.grid !== grid) throw session.createRouteSessionCancelledError();
+            collection.assertCurrent();
         };
         const resolveSource = async (mode = null, options = {}) => {
             session.assertRouteSession(sessionToken);
             if (dependencies.hover.isCancelled(token)) return { status: 'unknown', reason: 'hover-cancelled' };
             const reason = mode === 'search' ? 'hover-locate-start' : mode === 'preferred-refresh'
                 ? 'hover-stale-refresh-start' : 'hover-expected-page-start';
-            dependencies.source.ensureLiveNativeBinding(reason);
+            dependencies.display.refreshSource(reason);
             assertCurrent();
             dependencies.gridView.assertCard(targetCard);
             if (!mode) dependencies.hover.releaseInteraction();
@@ -247,7 +246,7 @@ export function createMyListInteraction(dependencies) {
                 hoverToken: token, sessionToken, ...options });
             session.assertRouteSession(sessionToken);
             if (dependencies.hover.isCancelled(token)) return { status: 'unknown', reason: 'hover-cancelled' };
-            if (dependencies.source.current !== state) return { status: 'unknown', reason: 'native-binding-lost-after-page-move' };
+            if (dependencies.display.captureSource() !== state) return { status: 'unknown', reason: 'native-binding-lost-after-page-move' };
             assertCurrent();
             if (result.status === 'mismatch' && !mode) {
                 const positionMismatch = firstVisibleNativePositionMismatch(result.visibleCards);
@@ -266,14 +265,8 @@ export function createMyListInteraction(dependencies) {
                         if (dependencies.hover.isCancelled(token)) return { status: 'unknown', reason: 'hover-cancelled' };
                         dependencies.nativeCarousel.assertSource(result.source);
                         dependencies.nativeCarousel.assertSource(result.sources[index]);
-                        const visibleItem = itemMap?.get(dependencies.source.itemKey(result.visibleCards[index]));
-                        if (!visibleItem || dependencies.source.pageForItem(visibleItem) === result.page) continue;
-                        const oldPage = dependencies.source.pageForItem(visibleItem);
-                        dependencies.source.setPageForItem(visibleItem, result.page, state);
-                        const visibleClone = findGridClone(visibleItem);
-                        if (visibleClone) dependencies.source.copyItemAttributes(visibleClone, visibleItem);
-                        log(tLog('itemPageMappingCorrected'), { item: dependencies.diagnostics.itemSummary(visibleItem), oldPage,
-                            actualPage: result.page, reason: 'logical-visible-page-repair' });
+                        const visibleItem = collection.find(result.visibleCards[index]);
+                        if (visibleItem) dependencies.display.repairPageMapping(visibleItem, result.page, state, { assertCurrent, report: true });
                     }
                 }
                 assertCurrent();
@@ -347,7 +340,7 @@ export function createMyListInteraction(dependencies) {
             resolvedSource = located.source || null;
             actualPage = located.page;
         } else {
-            const runtime = dependencies.source.nativeSourceObservation();
+            const runtime = dependencies.display.observeSource();
             const staleLogicalMapping = runtime?.mode === 'logical' && runtime.needsRemapping;
             const mutationRecoveryPending = mutationSourceRecoveryPending;
             const expectedPageMismatch = located?.status === 'mismatch';
@@ -409,7 +402,7 @@ export function createMyListInteraction(dependencies) {
         }
 
         trace(() => {
-            const native = dependencies.source.nativeSourceDiagnostics(section, scroller, track);
+            const native = dependencies.display.inspectSource(section, scroller, track);
             return [tLog('nativePagePreparationPositionResolved'), {
                 requestedPage: page,
                 actualPage,
@@ -446,14 +439,13 @@ export function createMyListInteraction(dependencies) {
                 const pageItem = findItemForSourceSlot(sourceSlot);
                 if (!pageItem) continue;
 
-                if (!staleSourceRecovery && dependencies.source.pageForItem(pageItem) !== actualPage) {
-                    dependencies.source.setPageForItem(pageItem, actualPage, state);
-                    const mappedClone = findGridClone(pageItem);
-                    if (mappedClone?.isConnected) dependencies.source.copyItemAttributes(mappedClone, pageItem);
+                if (!staleSourceRecovery) {
+                    dependencies.display.repairPageMapping(pageItem, actualPage, state, {
+                        assertCurrent: () => dependencies.nativeCarousel.assertObservation(pageView), connectedOnly: true });
                     dependencies.nativeCarousel.assertObservation(pageView);
                 }
 
-                if (dependencies.source.itemKey(pageItem) !== dependencies.source.itemKey(targetItem)) {
+                if (dependencies.display.itemKey(pageItem) !== dependencies.display.itemKey(targetItem)) {
                     neighborsSkipped++;
                     dependencies.hover.count('hoverPreparation', 'neighborsSkipped');
                     continue;
@@ -478,7 +470,7 @@ export function createMyListInteraction(dependencies) {
 
                 dependencies.nativeCarousel.assertObservation(pageView);
 
-                if (dependencies.source.itemKey(pageItem) === dependencies.source.itemKey(targetItem)) {
+                if (dependencies.display.itemKey(pageItem) === dependencies.display.itemKey(targetItem)) {
                     dependencies.hover.observeReplacement(handle);
                     freshTarget = fresh;
                     targetSourceSlot = sourceSlot;
