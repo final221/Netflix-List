@@ -1,5 +1,6 @@
 import { readVideoIdFromHref } from './page-dom.js';
 import { createRecommendationRequests } from './recommendation-requests.js';
+import { createLoaderSurvey } from './recommendation-loader.js';
 
 
 export const RECOMMENDATION_ARROW_STYLES = `
@@ -182,7 +183,7 @@ export function createRecommendationDom(environment) {
             cardPositions.push({ id: item.id, rect });
             if (center >= bounds.left && center <= bounds.right) visibleIds.push(item.id);
         }
-        return { items, firstCard: scanned[0].card, visibleIds, cardPositions, unhidden,
+        return { items, bounds, firstCard: scanned[0].card, visibleIds, cardPositions, unhidden,
             state: { scroller, remaining: visibleIds.length, mounted: items.length, offscreen: unhidden - visibleIds.length } };
     }
     function refillState(row, choices) { return sampleRow(row, choices)?.state || null; }
@@ -215,6 +216,8 @@ export function createRecommendationDom(environment) {
     }
     function navigationStart(control) {
         const components = []; let truncated = false, shapeBudget = 360; const quotas = { props: 0, state: 0 };
+        const row = control.closest?.('section, .lolomoRow');
+        const loader = createLoaderSurvey(row ? scan(row).slice(0, 120).map(item => item.id) : []);
         const pagination = []; let paginationTruncated = false;
         // Independent of the general shape budget: theme/portal state must not hide loader clues.
         function paginationFacts(root, depth, source) {
@@ -222,7 +225,7 @@ export function createRecommendationDom(environment) {
             while (queue.length && inspected++ < 32) {
                 const [value, path, level] = queue.shift();
                 if (!value || typeof value !== 'object' || seen.has(value)) continue;
-                seen.add(value);
+                seen.add(value); loader.inspect(value, { depth, source, path });
                 const keys = Object.keys(value).filter(name => /^[A-Za-z_0-9]{1,80}$/.test(name) &&
                     !/auth|token|cookie|credential|profile|account|session|theme|style|portal|toast/i.test(name));
                 for (const name of keys.slice(0, 24)) {
@@ -319,7 +322,7 @@ export function createRecommendationDom(environment) {
                 }
                 if (depth === 23 && fiber.return) truncated = true;
             }
-            return { at: diagnosticTime(), components, truncated, pagination, paginationTruncated, control: controlFacts(control) };
+            return { at: diagnosticTime(), components, truncated, pagination, paginationTruncated, loader: loader.snapshot(), control: controlFacts(control) };
         } catch (_) { return { at: diagnosticTime(), unavailable: true, components }; }
     }
     function controlFacts(control) {
@@ -402,12 +405,14 @@ export function createRecommendationDom(environment) {
         try {
             const sample = sampleRow(row, choices);
             if (!sample) return null;
-            const { items, state, visibleIds, cardPositions, unhidden } = sample;
+            const { items, state, visibleIds, cardPositions, unhidden, bounds } = sample;
             const indicators = [...row.querySelectorAll('[data-indicator-selected]')];
             const track = state.scroller.querySelector('.sliderContent, .slider-content') || state.scroller;
             return { rowId: (row.getAttribute('data-list-id') || row.getAttribute('data-uia') || row.id || '').slice(0, 160),
                 label: (row.querySelector('h2, .rowTitle')?.textContent || row.getAttribute('aria-label') || '').trim().slice(0, 160),
                 mounted: state.mounted, visible: state.remaining, offscreen: state.offscreen,
+                pageCapacity: cardPositions[0]?.rect.width > 1 ? Math.max(1, Math.min(20,
+                    Math.floor((bounds.width || bounds.right - bounds.left) / cardPositions[0].rect.width) || 1)) : null,
                 hidden: items.length - unhidden,
                 ids: items.slice(0, 120).map(item => item.id), idsTruncated: items.length > 120,
                 cardPositions: cardPositions.slice(0, 24).map(({ id, rect }) => ({ id,

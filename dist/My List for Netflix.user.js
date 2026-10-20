@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.10.1
+// @version      1.10.2
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -21056,6 +21056,100 @@ ${CARD_ACTION_STYLES}
     } };
   }
 
+  // src/netflix/recommendation-loader.js
+  function createLoaderSurvey(rowIds) {
+    const mounted = new Set(rowIds), candidates = [], seen = /* @__PURE__ */ new WeakSet();
+    const own = (value, key) => value && typeof value === "object" ? Object.getOwnPropertyDescriptor(value, key)?.value : void 0;
+    const safeName = (value) => typeof value === "string" && /^[A-Za-z_][A-Za-z_0-9]{0,79}$/.test(value) ? value : null;
+    const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
+    let truncated = false;
+    const items = (value, limit) => Array.isArray(value) ? Array.from({ length: Math.min(value.length, limit) }, (_, i) => own(value, String(i))) : [];
+    function definitions(query) {
+      const operations = [];
+      for (const definition of items(own(query, "definitions"), 4)) {
+        if (own(definition, "kind") !== "OperationDefinition") continue;
+        const variables = [];
+        for (const variable of items(own(definition, "variableDefinitions"), 20)) {
+          const name = safeName(own(own(own(variable, "variable"), "name"), "value"));
+          if (!name || /auth|token|cookie|credential|profile|account|session/i.test(name)) continue;
+          let type = own(variable, "type"), parts = [];
+          for (let i = 0; type && i < 6; i++, type = own(type, "type")) {
+            const kind = own(type, "kind"), name2 = safeName(own(own(type, "name"), "value"));
+            if (kind === "NamedType" && name2) parts.push(name2);
+            else if (kind === "ListType" || kind === "NonNullType") parts.push(kind);
+          }
+          variables.push({ name, type: parts.join(":") });
+        }
+        operations.push({
+          name: safeName(own(own(definition, "name"), "value")),
+          kind: ["query", "mutation", "subscription"].includes(own(definition, "operation")) ? own(definition, "operation") : null,
+          variables
+        });
+      }
+      return operations;
+    }
+    function inspect(result, location) {
+      if (!result || typeof result !== "object" || seen.has(result) || typeof own(result, "fetchMore") !== "function") return;
+      seen.add(result);
+      if (candidates.length >= 16) {
+        truncated = true;
+        return;
+      }
+      const observable = own(result, "observable"), options = own(observable, "options") || own(result, "options");
+      const variables = own(result, "variables") || own(options, "variables");
+      const query = own(options, "query") || own(result, "query");
+      const data = own(result, "data"), node = own(data, "node");
+      const dataKeys = Object.keys(data && typeof data === "object" ? data : {}).filter((key) => safeName(key) && !/auth|token|cookie|credential|profile|account|session/i.test(key)).slice(0, 12);
+      const connection = own(node, "entities"), edges = own(connection, "edges"), pageInfo = own(connection, "pageInfo");
+      const ids = [];
+      if (Array.isArray(edges)) for (let i = 0; i < Math.min(edges.length, 200); i++) {
+        const edge = own(edges, String(i)), entity = own(edge, "node"), unified = own(entity, "unifiedEntity");
+        const id = own(unified, "videoId") || own(entity, "videoId") || own(entity, "id");
+        if ((typeof id === "string" || typeof id === "number" && Number.isSafeInteger(id)) && /^\d+$/.test(String(id))) ids.push(String(id));
+      }
+      const variableFacts = [];
+      for (const name of Object.keys(variables || {}).slice(0, 24)) {
+        if (!safeName(name) || /auth|token|cookie|credential|profile|account|session/i.test(name)) continue;
+        const value = own(variables, name);
+        variableFacts.push({
+          name,
+          type: value === null ? "null" : Array.isArray(value) ? "array" : typeof value,
+          .../^(first|last|count|limit|offset|pageSize)$/i.test(name) && count(value) !== null ? { value } : {}
+        });
+      }
+      const identity = own(node, "id");
+      const identityMatches = typeof identity === "string" && Object.keys(variables || {}).some((key) => /^(id|rowId|listId|nodeId)$/i.test(key) && own(variables, key) === identity);
+      const fetchPolicy = own(options, "fetchPolicy");
+      candidates.push({
+        ...location,
+        dataKeys,
+        accessors: ["data", "variables", "observable", "options"].filter((key) => Boolean(Object.getOwnPropertyDescriptor(result, key)?.get)),
+        operations: definitions(query),
+        variables: variableFacts,
+        observable: Boolean(observable),
+        observableFetchMore: typeof own(observable, "fetchMore") === "function",
+        fetchPolicy: ["cache-first", "cache-only", "cache-and-network", "network-only", "no-cache", "standby"].includes(fetchPolicy) ? fetchPolicy : null,
+        connection: {
+          totalCount: count(own(connection, "totalCount")),
+          edges: Array.isArray(edges) ? edges.length : null,
+          hasNextPage: typeof own(pageInfo, "hasNextPage") === "boolean" ? own(pageInfo, "hasNextPage") : null,
+          cursorPresent: typeof own(pageInfo, "endCursor") === "string" && Boolean(own(pageInfo, "endCursor")),
+          identityMatchesVariable: identityMatches,
+          titleIds: ids.slice(0, 12),
+          titleIdsTruncated: ids.length > 12,
+          rowOverlap: new Set(ids.filter((id) => mounted.has(id))).size
+        },
+        limitation: "candidate only; arguments and native cache/render behavior unverified"
+      });
+    }
+    return Object.freeze({ inspect, snapshot() {
+      return JSON.parse(JSON.stringify({
+        candidates: candidates.slice().sort((a, b) => b.connection.rowOverlap - a.connection.rowOverlap).slice(0, 4),
+        truncated: truncated || candidates.length > 4
+      }));
+    } });
+  }
+
   // src/netflix/recommendation-dom.js
   var RECOMMENDATION_ARROW_STYLES = `
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev){
@@ -21286,6 +21380,7 @@ ${CARD_ACTION_STYLES}
       }
       return {
         items,
+        bounds,
         firstCard: scanned[0].card,
         visibleIds,
         cardPositions,
@@ -21332,6 +21427,8 @@ ${CARD_ACTION_STYLES}
       const components = [];
       let truncated = false, shapeBudget = 360;
       const quotas = { props: 0, state: 0 };
+      const row = control.closest?.("section, .lolomoRow");
+      const loader = createLoaderSurvey(row ? scan(row).slice(0, 120).map((item) => item.id) : []);
       const pagination = [];
       let paginationTruncated = false;
       function paginationFacts(root, depth, source) {
@@ -21341,6 +21438,7 @@ ${CARD_ACTION_STYLES}
           const [value, path, level] = queue.shift();
           if (!value || typeof value !== "object" || seen.has(value)) continue;
           seen.add(value);
+          loader.inspect(value, { depth, source, path });
           const keys = Object.keys(value).filter((name) => /^[A-Za-z_0-9]{1,80}$/.test(name) && !/auth|token|cookie|credential|profile|account|session|theme|style|portal|toast/i.test(name));
           for (const name of keys.slice(0, 24)) {
             const descriptor = Object.getOwnPropertyDescriptor(value, name), child = descriptor?.value;
@@ -21454,7 +21552,7 @@ ${CARD_ACTION_STYLES}
           }
           if (depth === 23 && fiber.return) truncated = true;
         }
-        return { at: diagnosticTime(), components, truncated, pagination, paginationTruncated, control: controlFacts(control) };
+        return { at: diagnosticTime(), components, truncated, pagination, paginationTruncated, loader: loader.snapshot(), control: controlFacts(control) };
       } catch (_) {
         return { at: diagnosticTime(), unavailable: true, components };
       }
@@ -21605,7 +21703,7 @@ ${CARD_ACTION_STYLES}
       try {
         const sample = sampleRow(row, choices);
         if (!sample) return null;
-        const { items, state, visibleIds, cardPositions, unhidden } = sample;
+        const { items, state, visibleIds, cardPositions, unhidden, bounds } = sample;
         const indicators = [...row.querySelectorAll("[data-indicator-selected]")];
         const track = state.scroller.querySelector(".sliderContent, .slider-content") || state.scroller;
         return {
@@ -21614,6 +21712,10 @@ ${CARD_ACTION_STYLES}
           mounted: state.mounted,
           visible: state.remaining,
           offscreen: state.offscreen,
+          pageCapacity: cardPositions[0]?.rect.width > 1 ? Math.max(1, Math.min(
+            20,
+            Math.floor((bounds.width || bounds.right - bounds.left) / cardPositions[0].rect.width) || 1
+          )) : null,
           hidden: items.length - unhidden,
           ids: items.slice(0, 120).map((item) => item.id),
           idsTruncated: items.length > 120,
@@ -21720,6 +21822,62 @@ ${CARD_ACTION_STYLES}
       },
       diagnostics: () => ({ ...counters, pending: [...rows.values()].filter((job) => job.timer !== null).length })
     });
+  }
+
+  // src/recommendations/row-buffer.js
+  function createRowBuffer(limit = 500) {
+    const titles = /* @__PURE__ */ new Map();
+    let anchor = null, truncated = false;
+    function observe(items) {
+      for (const { id, title } of items) {
+        if (typeof id !== "string" || !/^\d+$/.test(id)) continue;
+        const name = typeof title === "string" ? title.trim().slice(0, 300) : "";
+        if (titles.has(id)) {
+          if (name) titles.set(id, name);
+          continue;
+        }
+        if (titles.size >= limit) {
+          truncated = true;
+          continue;
+        }
+        titles.set(id, name);
+      }
+    }
+    function project(choices = {}, { anchorId, capacity = 8, mountedIds = [] } = {}) {
+      capacity = Math.max(1, Math.min(20, Math.floor(capacity) || 8));
+      const all = [...titles.keys()], filtered = all.filter((id) => !choices[id]);
+      if (anchorId && titles.has(anchorId)) anchor = anchorId;
+      let index = filtered.indexOf(anchor);
+      if (index < 0) {
+        const oldIndex = all.indexOf(anchor);
+        const next = all.slice(Math.max(0, oldIndex)).find((id) => !choices[id]);
+        index = next ? filtered.indexOf(next) : Math.max(0, filtered.length - capacity);
+      }
+      anchor = filtered[index] || null;
+      const mounted = new Set(mountedIds), ahead = Math.max(0, filtered.length - index - capacity);
+      return {
+        known: titles.size,
+        named: [...titles.values()].filter(Boolean).length,
+        filtered: filtered.length,
+        excluded: titles.size - filtered.length,
+        retainedUnmounted: all.filter((id) => !mounted.has(id)).length,
+        filteredUnmounted: filtered.filter((id) => !mounted.has(id)).length,
+        capacity,
+        anchor,
+        index,
+        page: filtered.slice(index, index + capacity),
+        previous: filtered.slice(Math.max(0, index - capacity), index),
+        next: filtered.slice(index + capacity, index + 2 * capacity),
+        ahead,
+        targetAhead: capacity * 2,
+        shortfall: Math.max(0, capacity * 2 - ahead),
+        exhausted: null,
+        truncated,
+        order: "first-observed",
+        presentation: "candidate-only; native paging unchanged"
+      };
+    }
+    return Object.freeze({ observe, project });
   }
 
   // src/recommendations/saved-choices-panel.js
@@ -22038,7 +22196,45 @@ ${CARD_ACTION_STYLES}
   }, warn = () => {
   } }) {
     const { document, location, MutationObserver, queueMicrotask } = environment;
-    const dom = createRecommendationDom(environment), entries = /* @__PURE__ */ new Map(), buttons = /* @__PURE__ */ new WeakMap();
+    const nativeDom = createRecommendationDom(environment), entries = /* @__PURE__ */ new Map(), buttons = /* @__PURE__ */ new WeakMap();
+    const inventories = /* @__PURE__ */ new Map();
+    let inventoryLimit = false;
+    function rowIdentity(row) {
+      return [
+        row.getAttribute("data-list-id") || row.id || row.getAttribute("data-uia") || "",
+        (row.querySelector("h2, .rowTitle")?.textContent || row.getAttribute("aria-label") || "").slice(0, 300)
+      ].join("|");
+    }
+    function retain(row, items) {
+      if (!active || !allowed() || !profile || readProfile() !== profile) return null;
+      const identity = rowIdentity(row);
+      let inventory = inventories.get(row);
+      if (inventory?.identity !== identity) {
+        inventories.delete(row);
+        inventory = null;
+      }
+      if (!inventory) {
+        if (inventories.size >= 40) {
+          inventoryLimit = true;
+          return null;
+        }
+        inventory = { identity, buffer: createRowBuffer() };
+        inventories.set(row, inventory);
+      }
+      inventory.buffer.observe(items);
+      return inventory.buffer;
+    }
+    const dom = { ...nativeDom, rowDiagnostics(row, selected) {
+      const facts = nativeDom.rowDiagnostics(row, selected);
+      if (!facts) return facts;
+      const inventory = inventories.get(row);
+      const buffer = inventory?.identity === rowIdentity(row) ? inventory.buffer : null;
+      return { ...facts, retained: buffer ? { ...buffer.project(selected, {
+        anchorId: facts.visibleIds[0],
+        mountedIds: facts.ids,
+        capacity: facts.pageCapacity || 8
+      }), capacitySource: facts.pageCapacity ? "geometry-estimate" : "trial-default" } : null };
+    } };
     const ownsKnowledge = !knowledge;
     knowledge ||= createKnowledge({ ...userscript, getValue: (...args) => userscript.getValue(...args), setValue: (...args) => userscript.setValue(...args), activeProfile: context.activeProfile, queueMicrotask });
     let unsubscribe = null;
@@ -22152,6 +22348,8 @@ ${CARD_ACTION_STYLES}
       epoch++;
       pending.clear();
       queued = false;
+      inventories.clear();
+      inventoryLimit = false;
       savedPanel.reset();
       if (next) try {
         const loaded = read(next);
@@ -22210,7 +22408,14 @@ ${CARD_ACTION_STYLES}
       if (!profile) return;
       if (previous !== profile) root = document;
       for (const entry of [...entries.values()]) if (!entry.lease.current()) release(entry);
-      for (const value of dom.scan(root)) {
+      for (const row of inventories.keys()) if (!row.isConnected) inventories.delete(row);
+      const discovered = dom.scan(root), byRow = /* @__PURE__ */ new Map();
+      for (const value of discovered) {
+        if (!byRow.has(value.row)) byRow.set(value.row, []);
+        byRow.get(value.row).push(value);
+      }
+      for (const [row, items] of byRow) retain(row, items);
+      for (const value of discovered) {
         decorate(value);
         if (value.title) try {
           knowledge.remember(value.id, { name: value.title });
@@ -22391,6 +22596,8 @@ ${CARD_ACTION_STYLES}
       document.removeEventListener("click", click, true);
       document.removeEventListener("pointerover", pointer, true);
       savedPanel.dispose();
+      inventories.clear();
+      inventoryLimit = false;
       for (const entry of [...entries.values()]) release(entry);
       style?.remove();
       style = null;
@@ -22403,6 +22610,7 @@ ${CARD_ACTION_STYLES}
       decorated: entries.size,
       hiddenCount: Object.keys(visibleChoices()).length,
       storageFailed: failed,
+      inventory: { rows: inventories.size, limitReached: inventoryLimit },
       refill: refill.diagnostics(),
       viewing: viewing.diagnostics(),
       rows: rowDiagnostics(),
@@ -22667,7 +22875,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.10.1";
+  var SCRIPT_VERSION = "1.10.2";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

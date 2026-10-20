@@ -659,3 +659,19 @@ test('validated caught-up controls accept a named choice while the optional fina
     assert.equal(knowledgeSnapshot(b.saved, 'A').choices['1'].status, 'complete');
     assert.equal(b.feature.diagnostics().viewing.failed, 0); b.feature.dispose();
 });
+
+
+test('live row inventories survive recycled native slots, filter saved choices and retire with the profile', () => {
+    const b = setup(), a = mount(b, '1'), old = mount(b, '2');
+    a.row.appendChild(old.host); old.row.remove(); b.feature.check();
+    old.host.remove(); a.card.setAttribute('href', '/title/3'); b.feature.check();
+    const retained = () => b.feature.diagnostics().rows.rows[0].retained;
+    assert.equal(retained().known, 3); assert.equal(retained().retainedUnmounted, 2);
+    b.click(a.host, 'Hide suggestion');
+    assert.equal(retained().filtered, 2); assert.equal(retained().excluded, 1);
+    assert.deepEqual(retained().page, ['1', '2']);
+    a.row.setAttribute('data-list-id', 'new-row'); b.feature.check();
+    assert.equal(retained().known, 1); assert.equal(retained().retainedUnmounted, 0);
+    b.select('B'); b.feature.check(); assert.equal(retained().known, 1);
+    b.feature.dispose(); assert.equal(b.feature.diagnostics().inventory.rows, 0);
+});

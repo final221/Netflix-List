@@ -1,13 +1,38 @@
 import { createRecommendationDom, RECOMMENDATION_ARROW_STYLES } from '../netflix/recommendation-dom.js';
 import { createCardActions, CARD_ACTION_STYLES } from '../card-actions.js';
 import { createRefill } from './refill.js';
+import { createRowBuffer } from './row-buffer.js';
 import { createSavedChoicesPanel, SAVED_CHOICES_PANEL_STYLES } from './saved-choices-panel.js';
 import { createNavigationDiagnostics } from './navigation.js';
 import { createBrowsingViewing, createKnowledge } from '../viewing/viewing.js';
 
 export function createRecommendations({ environment, context, userscript, tUi, viewingData, knowledge, log = () => {}, warn = () => {} }) {
     const { document, location, MutationObserver, queueMicrotask } = environment;
-    const dom = createRecommendationDom(environment), entries = new Map(), buttons = new WeakMap();
+    const nativeDom = createRecommendationDom(environment), entries = new Map(), buttons = new WeakMap();
+    const inventories = new Map(); let inventoryLimit = false;
+    function rowIdentity(row) {
+        return [row.getAttribute('data-list-id') || row.id || row.getAttribute('data-uia') || '',
+            (row.querySelector('h2, .rowTitle')?.textContent || row.getAttribute('aria-label') || '').slice(0, 300)].join('|');
+    }
+    function retain(row, items) {
+        if (!active || !allowed() || !profile || readProfile() !== profile) return null;
+        const identity = rowIdentity(row);
+        let inventory = inventories.get(row);
+        if (inventory?.identity !== identity) { inventories.delete(row); inventory = null; }
+        if (!inventory) {
+            if (inventories.size >= 40) { inventoryLimit = true; return null; }
+            inventory = { identity, buffer: createRowBuffer() }; inventories.set(row, inventory);
+        }
+        inventory.buffer.observe(items); return inventory.buffer;
+    }
+    const dom = { ...nativeDom, rowDiagnostics(row, selected) {
+        const facts = nativeDom.rowDiagnostics(row, selected);
+        if (!facts) return facts;
+        const inventory = inventories.get(row);
+        const buffer = inventory?.identity === rowIdentity(row) ? inventory.buffer : null;
+        return { ...facts, retained: buffer ? { ...buffer.project(selected, { anchorId: facts.visibleIds[0], mountedIds: facts.ids,
+            capacity: facts.pageCapacity || 8 }), capacitySource: facts.pageCapacity ? 'geometry-estimate' : 'trial-default' } : null };
+    } };
     const ownsKnowledge = !knowledge;
     knowledge ||= createKnowledge({ ...userscript, getValue: (...args) => userscript.getValue(...args), setValue: (...args) => userscript.setValue(...args), activeProfile: context.activeProfile, queueMicrotask });
     let unsubscribe = null;
@@ -64,6 +89,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         refill.dispose(); navigation.dispose(); viewing.dispose();
         for (const entry of [...entries.values()]) release(entry);
         profile = next; choices = {}; failed = false; epoch++; pending.clear(); queued = false;
+        inventories.clear(); inventoryLimit = false;
         savedPanel.reset();
         if (next) try { const loaded = read(next); if (readProfile() === next) choices = loaded.choices; else profile = null; }
         catch (error) { failed = true; warn('Recommendation choices unavailable', { reason: error.message }); }
@@ -111,7 +137,14 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         if (!profile) return;
         if (previous !== profile) root = document;
         for (const entry of [...entries.values()]) if (!entry.lease.current()) release(entry);
-        for (const value of dom.scan(root)) {
+        for (const row of inventories.keys()) if (!row.isConnected) inventories.delete(row);
+        const discovered = dom.scan(root), byRow = new Map();
+        for (const value of discovered) {
+            if (!byRow.has(value.row)) byRow.set(value.row, []);
+            byRow.get(value.row).push(value);
+        }
+        for (const [row, items] of byRow) retain(row, items);
+        for (const value of discovered) {
             decorate(value);
             if (value.title) try { knowledge.remember(value.id, { name: value.title }); } catch (_) {}
             const legacy = knowledge.legacy(value.id);
@@ -218,11 +251,11 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         if (scrollTimer !== null) environment.clearTimeout(scrollTimer); scrollTimer = null;
         active = false; epoch++; queued = false; pending.clear(); observer?.disconnect(); observer = null;
         document.removeEventListener('click', click, true); document.removeEventListener('pointerover', pointer, true);
-        savedPanel.dispose();
+        savedPanel.dispose(); inventories.clear(); inventoryLimit = false;
         for (const entry of [...entries.values()]) release(entry);
         style?.remove(); style = null; profile = null; choices = {}; failed = false;
     }
     return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(visibleChoices()).length,
-        storageFailed: failed, refill: refill.diagnostics(), viewing: viewing.diagnostics(),
+        storageFailed: failed, inventory: { rows: inventories.size, limitReached: inventoryLimit }, refill: refill.diagnostics(), viewing: viewing.diagnostics(),
         rows: rowDiagnostics(), navigation: navigation.snapshot() }) });
 }
