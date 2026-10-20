@@ -6,17 +6,7 @@ Historical originals at8ca0de7ea22f3f5b7a0bdeadb6b091bfb9161d46, logs/<version>.
 
 Historical1.4.64–1.4.70 source filenames, copiedAt/environment and SHA256: logs/knowledge.md at98d3c46 (summary revision, not runtime).
 
-## Session — 1.4.64
-
-441events;Windows/Firefox157/English/2560×1279/DPR1;runtime unknown.
-
-## Sessions — 1.4.67 and 1.4.69
-
-.67 compact659/48types;40groups/2sections omitted. .69 compact650/67groups/49names;no groups omitted/28examples omitted;later694events,same startup650/page65=340ms.
-
-## Session — 1.4.70
-
-Compact278/39names/no groups omitted/25examples omitted. Later detailed509events/46names;new initial MyList;init8282/native7521ms;500/72pages/not stale;two fallback warnings/no error.
+Historical1.4.64/.67/.69/.70 measurements retained at6405a0e:logs/knowledge.md (summary revision);Firefox157/2560x1279/DPR1. .67 omitted40groups/2sections;.69 omitted none;.70 fresh500/72pages/init8282ms/native7521ms,two fallback warnings/no error. Provenance routes above remain authoritative.
 
 ## Historical sessions — 1.9.1–1.9.10
 
@@ -62,3 +52,5 @@ Three compact exports2026-10-20, same Firefox158 environment;runtime ref unknown
 - 1.10.0-2026-10-20T19-22-02-853Z-57bae187.txt;21:22:02.846;SHA256 bff7ed6f8a77dbfb5ca7adbc9347cef7183987335aff1182a4c7b1e8073abef1.
 - 1.10.0-2026-10-20T19-22-11-477Z-d6f60262.txt;21:22:11.445;SHA256 3d79a27aff8a5ec4f845fb26414f11f6c1ee7ffedbbf652ce566c4b4c049601b.
 Browse→MyList→browse→MyList;one hide saved(hides4,browsing hiddenCount328→329),no watched/caught-up/reversal. Knowledge789titles/212completions/3missing names;161→165→373writes/0invalid/0notification failures/1listener/failure:false. MyList500titles/7GraphQLpages/init3360ms;final190completed/279unknown/loading:true,22requests succeeded/1inflight,496cached titles. Two missing-carousel-ID warnings recover via bootstrap/GraphQL;one cancelled export. One native arrow;stationary refill still reports bufferShortfall16/independentLoader:unverified. No omitted groups/sections;extra examples1/1/11 omitted. No cross-tab/reload/profile proof;final scan unfinished.
+
+Later same-startup export: logs/1.10.0-2026-10-20T19-26-58-969Z-3573a884.txt;copied2026-10-20T21:26:58.947+02:00;SHA256 2163bb5ae0e2418d6a5230e3b29526b7d599794ee169a7443a0397d42cb5be07. Browse390checked/248requests/0pending/7coverage failures;knowledge214completions/791titles/0storage or notification failures. Latest arrow:13to25mounted/12first-observed by1200ms;two GraphQL timings+3/+391ms,not isolated causality proof. Loader survey28components/truncated,includes theme/portal and row getRow/page setters,not an identified independent loader. MyList completed scan2299ms/23requests/190complete/279unknown;178unknown series finales lack watched and have negative bookmarks. No new watched/caught-up save. Earlier pending-scan limitation is superseded only for this visit.

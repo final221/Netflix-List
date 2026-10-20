@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.10.0
+// @version      1.10.1
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -9799,7 +9799,9 @@ ${CARD_ACTION_STYLES}
     const completion = createCompletion();
     const cancelled = () => new Error("BROWSING_VIEWING_RETIRED");
     data ||= createViewingData({ context, fetch: (...args) => environment.fetch(...args), createCancelledError: cancelled });
-    let generation = 0, profile = null, running = false, requests = 0, controller = null, timer = null, retryTimer = null, windowStart = 0, windowRequests = 0, cooldownUntil = 0;
+    const { titleBatch = 50, episodeBatch = 200, seasons = 40 } = data.limits || {};
+    let generation = 0, profile = null, running = false, requests = 0, controller = null, timer = null, retryTimer = null, windowStart = 0, windowRequests = 0, cooldownUntil = 0, phase = null;
+    const waitingSince = /* @__PURE__ */ new Map(), readiness = { count: 0, totalMs: 0, maxMs: 0 };
     const inFlight = /* @__PURE__ */ new Set(), types = /* @__PURE__ */ new Map(), coverage = /* @__PURE__ */ new Map(), pending = /* @__PURE__ */ new Map(), checked = /* @__PURE__ */ new Set(), attempts = /* @__PURE__ */ new Map(), failed = /* @__PURE__ */ new Set();
     function guard(owner = generation) {
       if (owner !== generation || !profile || context.activeProfile() !== profile || !isCurrent()) throw cancelled();
@@ -9821,6 +9823,11 @@ ${CARD_ACTION_STYLES}
       attempts.clear();
       failed.clear();
       inFlight.clear();
+      waitingSince.clear();
+      phase = null;
+      readiness.count = 0;
+      readiness.totalMs = 0;
+      readiness.maxMs = 0;
       pending.clear();
       checked.clear();
       types.clear();
@@ -9842,25 +9849,59 @@ ${CARD_ACTION_STYLES}
         if (typeHint === "movie" && !types.has(id)) {
           types.set(id, "movie");
           pending.delete(id);
+          waitingSince.delete(id);
           checked.add(id);
           attempts.delete(id);
           failed.delete(id);
           updated = true;
           if (knowledge.legacy(id)?.watched && !choices.choice(id)) choices.choose(id, { status: "complete", type: "movie", coverage: null, name: title || "" }, () => guard());
         }
-        if (!ready(id) && !failed.has(id) && !inFlight.has(id) && !pending.has(id) && pending.size < 500) pending.set(id, 0);
+        if (!ready(id) && !failed.has(id) && !inFlight.has(id) && !pending.has(id) && pending.size < 500) {
+          pending.set(id, 0);
+          if (!waitingSince.has(id)) waitingSince.set(id, now());
+        }
       }
       pump();
       return updated;
     }
-    async function request(read, owner) {
+    function publishReady(ids, owner) {
       guard(owner);
+      for (const id of ids) if (ready(id) && waitingSince.has(id)) {
+        const elapsed = Math.max(0, now() - waitingSince.get(id));
+        waitingSince.delete(id);
+        readiness.count++;
+        readiness.totalMs += elapsed;
+        readiness.maxMs = Math.max(readiness.maxMs, elapsed);
+      }
+      onChange();
+      guard(owner);
+    }
+    function seasonBatches(records) {
+      const batches = [];
+      let batch = [], size = 0;
+      for (const record of records) {
+        const cost = Number.isSafeInteger(record.seasonCount) && record.seasonCount > 0 ? Math.min(record.seasonCount, seasons) : seasons;
+        if (size + cost > episodeBatch) {
+          batches.push(batch);
+          batch = [];
+          size = 0;
+        }
+        batch.push(record);
+        size += cost;
+      }
+      if (batch.length) batches.push(batch);
+      return batches;
+    }
+    async function request(read, owner, kind) {
+      guard(owner);
+      if (windowRequests >= 198) throw new Error("BROWSING_VIEWING_BUDGET");
       requests++;
       windowRequests++;
       const access = data.beginRead();
       if (!access || access.profileGuid !== profile) throw new Error("VIEWING_STATUS_CONTEXT");
       const current = new environment.AbortController();
       controller = current;
+      phase = kind;
       const deadline = new Promise((_, reject) => {
         timer = environment.setTimeout(() => {
           current.abort();
@@ -9876,6 +9917,7 @@ ${CARD_ACTION_STYLES}
           environment.clearTimeout(timer);
           timer = null;
           controller = null;
+          phase = null;
         }
       }
     }
@@ -9905,7 +9947,7 @@ ${CARD_ACTION_STYLES}
       try {
         while (pending.size && windowRequests < 198 && now() >= cooldownUntil) {
           guard(owner);
-          const ids = [...pending].filter(([, due]) => due <= now()).slice(0, 5).map(([id]) => id);
+          const ids = [...pending].filter(([, due]) => due <= now()).slice(0, titleBatch).map(([id]) => id);
           if (!ids.length) break;
           ids.forEach((id) => {
             pending.delete(id);
@@ -9913,7 +9955,7 @@ ${CARD_ACTION_STYLES}
             attempts.set(id, (attempts.get(id) || 0) + 1);
           });
           try {
-            const records = await request((access, handle) => data.readTitles(ids, access, handle), owner), series = [];
+            const records = await request((access, handle) => data.readTitles(ids, access, handle), owner, "titles"), series = [];
             for (const id of ids) {
               const record = records.get(id), value = completion.recordType(record);
               if (value) types.set(id, value);
@@ -9921,13 +9963,17 @@ ${CARD_ACTION_STYLES}
               if (value === "movie") knowledge.remember(id, { type: value, status: completion.classifyVideo(record) }, () => guard(owner));
               if (value === "series") series.push(record);
             }
-            if (series.length) {
-              const plans = await request((access, handle) => data.readSeasons(series, access, handle), owner);
+            publishReady(ids, owner);
+            for (const batch of seasonBatches(series)) {
+              const plans = await request((access, handle) => data.readSeasons(batch, access, handle), owner, "seasons");
               for (const plan of plans) coverage.set(plan.videoId, plan.seasons.map((season) => [season.id, season.count]));
+              const expired = choices.reconcile((id) => coverage.get(id), batch.map((record) => record.videoId), () => guard(owner));
+              if (expired.size) log("Browsing viewing coverage reconciled", { changed: expired.size });
+              publishReady(batch.map((record) => record.videoId), owner);
               if (typeof data.readEpisodes === "function") {
                 const targets = plans.map((plan) => ({ plan, season: [...plan.seasons].reverse().find((season) => season.count > 0) })).filter((value) => value.season);
                 if (targets.length) {
-                  const episodes = await request((access, handle) => data.readEpisodes(targets.map(({ season }) => ({ seasonId: season.id, from: season.count - 1, to: season.count - 1 })), access, handle), owner);
+                  const episodes = await request((access, handle) => data.readEpisodes(targets.map(({ season }) => ({ seasonId: season.id, from: season.count - 1, to: season.count - 1 })), access, handle), owner, "finales");
                   for (const [index, { plan }] of targets.entries()) {
                     const episode = episodes[index]?.episodes?.[0];
                     if (episode?.id && completion.classifyVideo(episode.record) === "complete") knowledge.remember(
@@ -9938,13 +9984,11 @@ ${CARD_ACTION_STYLES}
                   }
                 }
               }
-              const expired = choices.reconcile((id) => coverage.get(id), ids, () => guard(owner));
-              if (expired.size) log("Browsing viewing coverage reconciled", { changed: expired.size });
             }
           } catch (error) {
             guard(owner);
             if (/VIEWING_STATUS_(CONTEXT|HTTP_(401|403|429))/.test(error.message)) cooldownUntil = now() + 6e4;
-            warn("Browsing viewing metadata batch unavailable", { reason: error.message, requests, count: ids.length });
+            if (error.message !== "BROWSING_VIEWING_BUDGET") warn("Browsing viewing metadata batch unavailable", { reason: error.message, requests, count: ids.length });
           }
           guard(owner);
           for (const id of ids) {
@@ -9953,8 +9997,13 @@ ${CARD_ACTION_STYLES}
               checked.add(id);
               attempts.delete(id);
               failed.delete(id);
-            } else if (attempts.get(id) >= 3) failed.add(id);
-            else pending.set(id, now() + 1e3 * attempts.get(id));
+            } else if (windowRequests >= 198) {
+              attempts.set(id, Math.max(0, attempts.get(id) - 1));
+              pending.set(id, now());
+            } else if (attempts.get(id) >= 3) {
+              failed.add(id);
+              waitingSince.delete(id);
+            } else pending.set(id, now() + 1e3 * attempts.get(id));
           }
           onChange();
           guard(owner);
@@ -9973,6 +10022,7 @@ ${CARD_ACTION_STYLES}
       failed.delete(id);
       attempts.delete(id);
       pending.set(id, 0);
+      waitingSince.set(id, now());
       if (retryTimer !== null) environment.clearTimeout(retryTimer);
       retryTimer = null;
       pump();
@@ -10010,7 +10060,29 @@ ${CARD_ACTION_STYLES}
       choice: (id) => choices.choice(id),
       ids: () => choices.ids().filter((id) => choices.complete(id)),
       presentation: () => choices.presentation(),
-      diagnostics: () => ({ knowledge: knowledge.diagnostics(), coverageAdjustments: data.coverageDiagnostics?.().filter((facts) => facts.reason === "episode-count-adjusted") || [], requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, failedTitles: [...failed].slice(0, 12).map((id) => ({ id, type: type(id) || "unknown", attempts: attempts.get(id) || 0, missing: type(id) === "series" ? "coverage" : "type", coverageFailure: data.coverageDiagnostic?.(id) || null })), failedTitlesTruncated: failed.size > 12, retrying: retryTimer !== null, windowRequests })
+      diagnostics: () => ({
+        phase,
+        readiness: {
+          count: readiness.count,
+          meanMs: readiness.count ? Math.round(readiness.totalMs / readiness.count) : 0,
+          maxMs: Math.round(readiness.maxMs),
+          waiting: waitingSince.size
+        },
+        budgetWaitMs: Math.max(0, Math.round((windowRequests >= 198 ? windowStart + 6e4 : 0) - now())),
+        cooldownWaitMs: Math.max(0, Math.round(cooldownUntil - now())),
+        knowledge: knowledge.diagnostics(),
+        coverageAdjustments: data.coverageDiagnostics?.().filter((facts) => facts.reason === "episode-count-adjusted") || [],
+        requests,
+        checked: checked.size,
+        pending: pending.size,
+        running,
+        unavailable: failed.size > 0,
+        failed: failed.size,
+        failedTitles: [...failed].slice(0, 12).map((id) => ({ id, type: type(id) || "unknown", attempts: attempts.get(id) || 0, missing: type(id) === "series" ? "coverage" : "type", coverageFailure: data.coverageDiagnostic?.(id) || null })),
+        failedTitlesTruncated: failed.size > 12,
+        retrying: retryTimer !== null,
+        windowRequests
+      })
     });
   }
 
@@ -21260,6 +21332,40 @@ ${CARD_ACTION_STYLES}
       const components = [];
       let truncated = false, shapeBudget = 360;
       const quotas = { props: 0, state: 0 };
+      const pagination = [];
+      let paginationTruncated = false;
+      function paginationFacts(root, depth, source) {
+        const queue = [[root, "", 0]], seen = /* @__PURE__ */ new Set();
+        let inspected = 0;
+        while (queue.length && inspected++ < 32) {
+          const [value, path, level] = queue.shift();
+          if (!value || typeof value !== "object" || seen.has(value)) continue;
+          seen.add(value);
+          const keys = Object.keys(value).filter((name) => /^[A-Za-z_0-9]{1,80}$/.test(name) && !/auth|token|cookie|credential|profile|account|session|theme|style|portal|toast/i.test(name));
+          for (const name of keys.slice(0, 24)) {
+            const descriptor = Object.getOwnPropertyDescriptor(value, name), child = descriptor?.value;
+            const next = path ? path + "." + name : name;
+            let fact = null;
+            if (/^(load(More|Next|Previous)?|fetch(More|Next|Query|Page)?|prefetch|paginate|refetch|getRow)$/i.test(name)) {
+              if (descriptor?.get) fact = { kind: "accessor" };
+              else if (typeof child === "function") {
+                const arity = Object.getOwnPropertyDescriptor(child, "length")?.value;
+                fact = { kind: "callback", ...Number.isSafeInteger(arity) && arity >= 0 && arity <= 100 ? { arity } : {} };
+              }
+            } else if (/^(hasNext(Page)?|hasMore|isLoading(Next)?|isFetching(NextPage)?|loading)$/i.test(name) && typeof child === "boolean")
+              fact = { kind: "flag", value: child };
+            else if (name === "name" && ["query", "mutation", "subscription"].includes(Object.getOwnPropertyDescriptor(value, "operationKind")?.value) && typeof child === "string" && /^[A-Za-z_][A-Za-z_0-9]{0,99}$/.test(child)) fact = { kind: "operation", operationName: child };
+            if (fact) {
+              if (pagination.length < 24) pagination.push({ depth, source, path: next, ...fact });
+              else paginationTruncated = true;
+            }
+            if (level < 5 && child && typeof child === "object" && (Array.isArray(value) && /^\d+$/.test(name) && Number(name) < 8 || /^(pagination|fragment|environment|relay|params|variables|data|value|current|ref|state|cache)$/i.test(name)))
+              queue.push([child, next, level + 1]);
+          }
+          paginationTruncated ||= keys.length > 24;
+        }
+        paginationTruncated ||= queue.length > 0;
+      }
       function shape(value, depth = 0) {
         if (!value || typeof value !== "object" || depth >= 3 || shapeBudget <= 0) return {};
         const keys = Object.keys(value).filter((key) => !/auth|token|cookie|credential|profile|account|session/i.test(key));
@@ -21308,6 +21414,7 @@ ${CARD_ACTION_STYLES}
           }
           for (const [source, value] of sources) {
             if (!value || typeof value !== "object") continue;
+            paginationFacts(value, depth, source);
             const keys = Object.keys(value), fields = Array.isArray(value) ? [{
               name: "stateArray",
               type: "array",
@@ -21347,7 +21454,7 @@ ${CARD_ACTION_STYLES}
           }
           if (depth === 23 && fiber.return) truncated = true;
         }
-        return { at: diagnosticTime(), components, truncated, control: controlFacts(control) };
+        return { at: diagnosticTime(), components, truncated, pagination, paginationTruncated, control: controlFacts(control) };
       } catch (_) {
         return { at: diagnosticTime(), unavailable: true, components };
       }
@@ -22560,7 +22667,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.10.0";
+  var SCRIPT_VERSION = "1.10.1";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

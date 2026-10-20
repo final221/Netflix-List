@@ -2,6 +2,8 @@
 
 ## Current implementation measurements
 
+Release **1.10.1**, 2026-10-20: **66 authored runtime modules, 18,026 readable physical lines**. Browsing readiness/transport batching and focused pagination discovery add 66 lines relative to 1.10.0; no module boundaries change. `viewing/browsing.js` is 165 lines; the native recommendation DOM adapter is 426 lines and retains DOM interpretation, leases and passive native-shape discovery together. Generated output is separately 22,682 lines. The following 1.10.0 table remains the shared-knowledge implementation checkpoint.
+
 Release **1.10.0**, 2026-10-20: **66 authored runtime modules, 17,960 readable physical lines**, compared with 64 modules / 17,720 lines in 1.9.28. Counts include comments and blanks. This adds shared, durable viewing knowledge and active-tab synchronization; it is not a code-reduction claim. The old choices owner is removed, while the legacy cache reader remains read-only.
 
 | Module under src/ | Lines | Responsibility |

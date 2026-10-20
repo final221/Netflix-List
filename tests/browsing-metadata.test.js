@@ -87,3 +87,59 @@ test('failed series export the season-validation reason and stop after three att
     assert.equal(reads, 3); assert.equal(b.viewing.diagnostics().pending, 0);
     assert.equal(b.viewing.diagnostics().failedTitles[0].coverageFailure.reason, 'season-length-missing'); b.viewing.dispose();
 });
+
+
+test('500 series become actionable within one request window while every transport batch respects its limits', async () => {
+    let titleReads = 0, seasonReads = 0;
+    const b = setup({
+        async readTitles(ids) {
+            titleReads++; assert.ok(ids.length <= 50);
+            return new Map(ids.map(videoId => [videoId, { videoId, type: 'show', seasonCount: 1 }]));
+        },
+        async readSeasons(records) {
+            seasonReads++; assert.ok(records.length <= 50);
+            return records.map(record => ({ videoId: record.videoId, seasons: [{ id: String(1000 + Number(record.videoId)), count: 3 }] }));
+        },
+        async readEpisodes(targets) { assert.ok(targets.length <= 200); return targets.map(() => ({ episodes: [] })); }
+    });
+    b.viewing.observe(Array.from({ length: 500 }, (_, i) => ({ id: String(i + 1) })));
+    for (let i = 0; i < 100; i++) await b.scheduler.flush();
+    assert.equal(b.viewing.ready('500'), true);
+    assert.equal(b.viewing.diagnostics().pending, 0);
+    assert.equal(b.viewing.diagnostics().budgetWaitMs, 0);
+    assert.ok(titleReads <= 10); assert.ok(seasonReads <= 10);
+    b.viewing.dispose(); assert.equal(b.scheduler.timers.size, 0);
+});
+
+test('missing season counts partition conservative metadata requests within the adapter ceiling', async () => {
+    let seasons = 0;
+    const b = setup({
+        async readTitles(ids) { return new Map(ids.map(videoId => [videoId, { videoId, type: 'show' }])); },
+        async readSeasons(records) {
+            assert.ok(records.length * 40 <= 200); seasons += records.length;
+            return records.map(record => ({ videoId: record.videoId, seasons: [{ id: record.videoId, count: 1 }] }));
+        }
+    });
+    b.viewing.observe(Array.from({ length: 26 }, (_, i) => ({ id: String(i + 1) })));
+    for (let i = 0; i < 15; i++) await b.scheduler.flush();
+    assert.equal(seasons, 26); assert.equal(b.viewing.ready('26'), true); b.viewing.dispose();
+});
+
+
+test('season partitions stop exactly at the request ceiling and resume missing coverage without spending a retry', async () => {
+    const b = setup({
+        async readTitles(ids) { return new Map(ids.map(videoId => [videoId, { videoId, type: 'show' }])); },
+        async readSeasons(records) { return records.map(record => ({ videoId: record.videoId, seasons: [{ id: record.videoId, count: 1 }] })); },
+        async readEpisodes(targets) { return targets.map(() => ({ episodes: [] })); }
+    });
+    b.viewing.observe(Array.from({ length: 500 }, (_, i) => ({ id: String(i + 1) })));
+    for (let i = 0; i < 120; i++) await b.scheduler.flush();
+    assert.equal(b.viewing.diagnostics().requests, 198);
+    assert.equal(b.viewing.diagnostics().failed, 0);
+    assert.ok(b.viewing.diagnostics().budgetWaitMs > 0);
+    assert.equal(b.viewing.ready('500'), false);
+    await b.scheduler.advance(60000);
+    for (let i = 0; i < 20; i++) await b.scheduler.flush();
+    assert.equal(b.viewing.ready('500'), true); assert.equal(b.viewing.diagnostics().pending, 0);
+    b.viewing.dispose(); assert.equal(b.scheduler.timers.size, 0);
+});

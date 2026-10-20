@@ -639,3 +639,23 @@ test('browsing acknowledges a completed finale with its coverage and preserves a
     assert.equal(fact(b.saved, 'A', '1', 'manual').status, 'main');
     b.feature.dispose();
 });
+
+
+test('validated caught-up controls accept a named choice while the optional finale lookup is still pending', async () => {
+    let rejectFinale;
+    const b = setup({ viewingData: { ...seriesMetadata(), readEpisodes() {
+        return new Promise((_, reject) => { rejectFinale = reject; });
+    } } });
+    const a = mount(b); a.card.removeAttribute('data-video-type'); a.card.setAttribute('aria-label', 'Example series');
+    b.feature.check(); await b.scheduler.flush();
+    const button = a.host.querySelector('button');
+    assert.equal(b.feature.diagnostics().viewing.phase, 'finales');
+    assert.equal(button.textContent, 'Mark caught up'); assert.equal(button.disabled, false);
+    b.click(a.host, 'Mark caught up');
+    assert.equal(a.host.style.getPropertyValue('display'), 'none');
+    assert.equal(knowledgeSnapshot(b.saved, 'A').choices['1'].status, 'complete');
+    assert.equal(fact(b.saved, 'A', '1', 'manual').name, 'Example series');
+    rejectFinale(Error('optional progress unavailable')); await b.scheduler.flush();
+    assert.equal(knowledgeSnapshot(b.saved, 'A').choices['1'].status, 'complete');
+    assert.equal(b.feature.diagnostics().viewing.failed, 0); b.feature.dispose();
+});

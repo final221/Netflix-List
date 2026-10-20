@@ -110,3 +110,24 @@ test('loader survey reads late hooks and nested pagination contexts without gett
     assert.equal(calls, 0); assert.match(text, /hookState:20/); assert.match(text, /loadNext/);
     assert.match(text, /CarouselPaginationQuery/); assert.doesNotMatch(text, /secret|authToken/);
 });
+
+
+test('focused pagination evidence survives exhausted general shapes and records flags and callback arity safely', () => {
+    let calls = 0;
+    const pagination = { hasNext: true, isLoadingNext: false, loadNext(count, options) { calls++; }, cursor: 'private-cursor' };
+    Object.defineProperty(pagination, 'fetchMore', { enumerable: true, get() { calls++; throw Error('getter'); } });
+    const relay = { pagination, fragment: { params: { name: 'LoadRowQuery', operationKind: 'query' } } };
+    let state = { memoizedState: [() => {}, [relay]], next: null };
+    for (let i = 0; i < 30; i++) state = { memoizedState: { data: Array.from({ length: 12 }, () => ({ theme: { private: 'private-theme' }, items: Array(20) })) }, next: state };
+    const control = { __reactFiber$test: { memoizedProps: {}, memoizedState: state, return: null } };
+    const facts = createRecommendationDom({ location }).navigationStart(control);
+    assert.equal(calls, 0); assert.equal(facts.truncated, true);
+    const callback = facts.pagination.find(f => f.path.endsWith('pagination.loadNext'));
+    assert.equal(callback.source, 'hookState:30'); assert.equal(callback.arity, 2);
+    assert.equal(facts.pagination.find(f => f.path.endsWith('pagination.hasNext')).value, true);
+    assert.equal(facts.pagination.find(f => f.path.endsWith('pagination.fetchMore')).kind, 'accessor');
+    assert.ok(facts.pagination.some(f => f.operationName === 'LoadRowQuery'));
+    assert.doesNotMatch(JSON.stringify(facts), /private-/);
+    pagination.pagination = pagination;
+    assert.doesNotThrow(() => createRecommendationDom({ location }).navigationStart(control));
+});
