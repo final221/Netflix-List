@@ -19,7 +19,7 @@ import { createMyListInteraction } from './my-list-interaction.js';
 
 // Page-session composition: admitted cross-feature transactions and lifecycle only.
 export function createMyListSession({ environment = globalThis, version, context: netflixContext, i18n, logger,
-    settings, userscript = {}, saveLogs, readLogHistory, nextSessionToken, onNavigation = () => {} }) {
+    settings, userscript = {}, knowledge, saveLogs, readLogHistory, nextSessionToken, onNavigation = () => {} }) {
     const { window, document, location, Element, HTMLElement, getComputedStyle, performance,
         setTimeout, clearTimeout, requestAnimationFrame, cancelAnimationFrame, MutationObserver, fetch,
         AbortController, queueMicrotask } = environment;
@@ -88,7 +88,7 @@ export function createMyListSession({ environment = globalThis, version, context
     });
     const viewingData = createViewingData({ context: netflixContext,
         fetch: (...args) => fetch(...args), createCancelledError: createRouteSessionCancelledError });
-    const viewing = createViewing({ activeProfile: () => netflixContext.activeProfile(), now: () => Date.now(), limits: viewingData.limits, data: viewingData, performanceNow: () => performance.now(),
+    const viewing = createViewing({ knowledge, activeProfile: () => netflixContext.activeProfile(), now: () => Date.now(), limits: viewingData.limits, data: viewingData, performanceNow: () => performance.now(),
         beginRequest: token => createRouteFetch(token), finishRequest: request => finishRouteFetch(request),
         setRequestTimeout: (request, delay) => sessionScope.setRequestTimeout(request, delay),
         isCancelled: isRouteSessionCancelledError, createCancelledError: createRouteSessionCancelledError,

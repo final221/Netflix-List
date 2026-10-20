@@ -12,7 +12,7 @@ export function createDisplayViewing(dependencies) {
         if (dependencies.netflixContext.activeProfile() !== dependencies.viewing.presentation(watch).profile) {
             syncWatchGroups(state); return;
         }
-        const result = dependencies.viewing.place(watch, String(item.videoId), { assertCurrent });
+        const result = dependencies.viewing.place(watch, String(item.videoId), { assertCurrent, name: item.ariaLabel });
         assertCurrent();
         const beforeWork = { ...dependencies.gridView.groupDiagnostics() };
         syncWatchGroups(state, result.changed, 'manual-choice');

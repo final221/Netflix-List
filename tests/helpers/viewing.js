@@ -1,4 +1,5 @@
-import { createViewing } from '../../src/viewing/viewing.js';
+import { storageClient } from './knowledge.js';
+import { createViewing, createKnowledge } from '../../src/viewing/viewing.js';
 import { createSessionScope } from '../../src/app/session-scope.js';
 
 // Normalized adapter fixtures supply facts; they never own viewing state.
@@ -24,17 +25,17 @@ export async function fixture() {
     // Typed title records carry identity just like P07.
     const readTitles = data.readTitles;
     data.readTitles = async ids => new Map([...(await readTitles(ids))].map(([id, record]) => [id, { ...record, videoId: id }]));
-    const viewing = createViewing({ activeProfile: () => profile, now: () => 1000, performanceNow: () => 0, data,
+    const knowledge = createKnowledge({ ...storageClient(storage, { read: key => readHook(key), write: key => writeHook(key) }), activeProfile: () => profile, now: () => 1000 });
+    const viewing = createViewing({ knowledge, activeProfile: () => profile, now: () => 1000, performanceNow: () => 0, data,
         beginRequest: scope.beginRequest, finishRequest: scope.finishRequest, setRequestTimeout: scope.setRequestTimeout,
         createCancelledError: scope.cancelledError, isCancelled: scope.isCancelled,
-        getValue(key, fallback) { readHook(key); return structuredClone(storage.get(key) ?? fallback); },
-        setValue(key, value) { writeHook(key); storage.set(key, structuredClone(value)); } });
+        ...storageClient(storage, { read: key => readHook(key), write: key => writeHook(key) }) });
     const config = { sessionToken: token, readItems: () => [{ videoId: '1' }, { videoId: '2' }, { videoId: '3' }],
         assertCurrent: () => scope.assertCurrent(token), onChange: change => changes.push(change) };
     const watch = viewing.createSession(config);
     await viewing.start(watch);
     // Isolate later action/cache evidence from the initial optional scan.
-    storage.clear(); changes.length = 0;
+    storage.clear(); knowledge.resync(); changes.length = 0;
     return { viewing, watch, storage, coverage, records, changes, config,
         refresh: () => viewing.refresh(watch), retire: () => scope.dispose(), profile(value) { profile = value; },
         onRead(value) { readHook = value; }, onWrite(value) { writeHook = value; } };

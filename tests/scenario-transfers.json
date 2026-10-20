@@ -3107,12 +3107,12 @@
     },
     {
       "line": 6621,
-      "title": "failed refresh reveals old completion results instead of hiding titles using stale status",
+      "title": "failed refresh retains acknowledged completion while exposing unavailable status for other titles",
       "disposition": "retained",
       "coverage": [
         {
           "file": "tests/viewing-integration.test.js",
-          "title": "failed refresh reveals old completion results instead of hiding titles using stale status"
+          "title": "failed refresh retains acknowledged completion while exposing unavailable status for other titles"
         }
       ]
     },
@@ -4022,12 +4022,12 @@
     },
     {
       "line": 8476,
-      "title": "fresh movies replace cache immediately and a newly unfinished finale returns a cached series to My List",
+      "title": "acknowledged films persist across progress resets and added episodes return a series to My List",
       "disposition": "retained",
       "coverage": [
         {
           "file": "tests/viewing-integration.test.js",
-          "title": "fresh movies replace cache immediately and a newly unfinished finale returns a cached series to My List"
+          "title": "acknowledged films persist across progress resets and added episodes return a series to My List"
         }
       ]
     },
@@ -4044,12 +4044,12 @@
     },
     {
       "line": 8515,
-      "title": "a failed verification reveals cached automatic titles but retains explicit manual watched choices",
+      "title": "a failed verification preserves acknowledged completion and explicit manual watched choices",
       "disposition": "retained",
       "coverage": [
         {
           "file": "tests/viewing-integration.test.js",
-          "title": "a failed verification reveals cached automatic titles but retains explicit manual watched choices"
+          "title": "a failed verification preserves acknowledged completion and explicit manual watched choices"
         }
       ]
     },
@@ -4088,12 +4088,12 @@
     },
     {
       "line": 8609,
-      "title": "a later startup failure preserves fresh movie results and drops only unverified cached titles",
+      "title": "a later startup failure preserves fresh and previously acknowledged completion",
       "disposition": "retained",
       "coverage": [
         {
           "file": "tests/viewing-integration.test.js",
-          "title": "a later startup failure preserves fresh movie results and drops only unverified cached titles"
+          "title": "a later startup failure preserves fresh and previously acknowledged completion"
         }
       ]
     },

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.9.28
+// @version      1.10.0
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -12,6 +12,9 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_download
+// @grant        GM_listValues
+// @grant        GM_addValueChangeListener
+// @grant        GM_removeValueChangeListener
 // @noframes
 // @namespace    local.netflix.mylist.grid
 // @updateURL    https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js
@@ -8558,154 +8561,551 @@ ${CARD_ACTION_STYLES}
     });
   }
 
-  // src/viewing/choices.js
-  function createChoices({
-    activeProfile,
-    getValue,
-    setValue,
-    limits = { seasons: 40, episodes: 500 },
-    storageKey = "legacyMyListForNetflix.viewingChoices.v1.",
-    initial = null
-  }) {
-    let profile = initial?.profile, choices = initial?.choices || /* @__PURE__ */ new Map(), failure = initial?.failure || false, generation = 0;
-    function validViewingCoverage(value) {
-      return Array.isArray(value) && value.length > 0 && value.length <= limits.seasons && value.every((pair) => Array.isArray(pair) && pair.length === 2 && /^\d+$/.test(pair[0]) && Number.isSafeInteger(pair[1]) && pair[1] >= 0 && pair[1] <= limits.episodes) && new Set(value.map((pair) => pair[0])).size === value.length && value.reduce((sum, pair) => sum + pair[1], 0) > 0 && value.reduce((sum, pair) => sum + pair[1], 0) <= limits.episodes;
-    }
-    function readManualViewingChoices(profile2) {
-      if (typeof getValue !== "function" || typeof setValue !== "function") throw new Error("storage-unavailable");
-      const choices2 = /* @__PURE__ */ new Map();
-      const stored = getValue(storageKey + encodeURIComponent(profile2), null);
-      if (stored == null) return choices2;
-      if (stored.version !== 1 || !stored.choices || typeof stored.choices !== "object" || Array.isArray(stored.choices) || Object.keys(stored.choices).length > 5e3) throw new Error("invalid-storage");
-      for (const [id, choice2] of Object.entries(stored.choices)) {
-        if (!/^\d+$/.test(id) || !choice2 || !["complete", "main"].includes(choice2.status) || !["movie", "series", "unknown"].includes(choice2.type) || choice2.coverage !== null && !validViewingCoverage(choice2.coverage)) continue;
-        choices2.set(id, {
-          status: choice2.status,
-          type: choice2.type,
-          coverage: choice2.coverage ? choice2.coverage.map((pair) => [...pair]) : null
-        });
-      }
-      return choices2;
-    }
-    function changedManualViewingIds(previous, next) {
-      const changed = /* @__PURE__ */ new Set();
-      for (const id of /* @__PURE__ */ new Set([...previous.keys(), ...next.keys()])) {
-        if (JSON.stringify(previous.get(id)) !== JSON.stringify(next.get(id))) changed.add(id);
-      }
-      return changed;
-    }
-    function guard(expected, epoch, assertCurrent) {
-      assertCurrent();
-      if (profile !== expected || generation !== epoch || activeProfile() !== expected) throw new Error("viewing-owner-replaced");
-    }
-    function sync(assertCurrent = () => {
-    }, onReset = () => {
-    }) {
-      assertCurrent();
-      const raw = activeProfile(), next = typeof raw === "string" && raw ? raw : null;
-      if (profile === next) return { changed: false, reset: false };
-      const reset = profile !== void 0;
-      profile = next;
-      choices = /* @__PURE__ */ new Map();
-      failure = false;
-      const epoch = ++generation;
-      if (reset) {
-        onReset();
-        assertCurrent();
-      }
-      if (next) try {
-        guard(next, epoch, assertCurrent);
-        const loaded = readManualViewingChoices(next);
-        guard(next, epoch, assertCurrent);
-        choices = loaded;
-      } catch (_) {
-        if (profile === next && generation === epoch) failure = true;
-      }
-      assertCurrent();
-      return { changed: true, reset };
-    }
-    function save(changes, conditional, assertCurrent) {
-      const expected = profile, epoch = ++generation;
+  // src/viewing/knowledge-migration.js
+  var KNOWLEDGE_PREFIX = "legacyMyListForNetflix.knowledge.v2.";
+  function validCoverage(value) {
+    return Array.isArray(value) && value.length > 0 && value.length <= 40 && value.every((pair) => Array.isArray(pair) && pair.length === 2 && /^\d+$/.test(pair[0]) && Number.isSafeInteger(pair[1]) && pair[1] >= 0 && pair[1] <= 500) && new Set(value.map((pair) => pair[0])).size === value.length && value.reduce((n, pair) => n + pair[1], 0) > 0 && value.reduce((n, pair) => n + pair[1], 0) <= 500;
+  }
+  function addedEpisodes(before, after) {
+    if (!validCoverage(before) || !validCoverage(after)) return false;
+    const previous = new Map(before);
+    return after.some(([id, count]) => count > 0 && (!previous.has(id) || count > previous.get(id)));
+  }
+  var titleName = (value) => typeof value === "string" ? value.trim().slice(0, 300) : "";
+  function validChoice(value) {
+    return value && ["main", "complete", "automatic"].includes(value.status) && ["movie", "series", "unknown"].includes(value.type) && (value.coverage === null || validCoverage(value.coverage));
+  }
+  function legacyFacts(profile, getValue, guard, { choicesKey, cacheKey } = {}) {
+    const suffix = encodeURIComponent(profile), facts = [];
+    const read = (key, optional = false) => {
+      guard();
+      let value;
       try {
-        if (!expected) throw new Error("storage-unavailable");
-        guard(expected, epoch, assertCurrent);
-        const latest = readManualViewingChoices(expected);
-        guard(expected, epoch, assertCurrent);
-        let applied = false;
-        for (const [id, choice2] of changes) {
-          if (conditional && JSON.stringify(latest.get(id)) !== JSON.stringify(choices.get(id))) continue;
-          if (choice2) latest.set(id, choice2);
-          else latest.delete(id);
-          applied = true;
-        }
-        if (latest.size > 5e3) throw new Error("storage-full");
-        guard(expected, epoch, assertCurrent);
-        if (applied) setValue(storageKey + encodeURIComponent(expected), { version: 1, choices: Object.fromEntries(latest) });
-        guard(expected, epoch, assertCurrent);
-        const changed = changedManualViewingIds(choices, latest);
-        choices = latest;
-        failure = false;
-        return { saved: true, changed };
+        value = getValue(key + suffix, null);
+      } catch (error) {
+        if (!optional) throw error;
+      }
+      guard();
+      return value;
+    };
+    const manual = read(choicesKey || "legacyMyListForNetflix.viewingChoices.v1.");
+    const recommendations = read("legacyMyListForNetflix.recommendationChoices.v1.");
+    const cache = read(cacheKey || "legacyMyListForNetflix.viewingCache.v1.", true);
+    const details = read("legacyMyListForNetflix.titleDetails.v1.", true);
+    function table(value, field) {
+      if (!value) return {};
+      if (value.version !== 1 || !value[field] || typeof value[field] !== "object" || Array.isArray(value[field]) || Object.keys(value[field]).length > 5e3) throw new Error("invalid-storage");
+      return value[field];
+    }
+    const names = recommendations?.titles && typeof recommendations.titles === "object" ? recommendations.titles : {};
+    for (const [id, value] of Object.entries(table(manual, "choices"))) if (/^\d+$/.test(id) && validChoice(value))
+      facts.push([id, "manual", { ...value, name: titleName(names[id]) }]);
+    for (const [id, value] of Object.entries(table(recommendations, "choices"))) if (/^\d+$/.test(id)) {
+      if (value === "hide") facts.push([id, "hidden", { hidden: true, name: titleName(names[id]) }]);
+      else if (value === "watched") facts.push([id, "legacy", { name: titleName(names[id]), watched: true }]);
+    }
+    if (cache?.version === 1 && cache.completionRatio === 0.9 && Number.isFinite(cache.savedAt) && cache.entries && !Array.isArray(cache.entries) && Object.keys(cache.entries).length <= 5e3) {
+      for (const [id, value] of Object.entries(cache.entries)) if (/^\d+$/.test(id) && Array.isArray(value) && value.length === 2 && ["movie", "series"].includes(value[0]) && value[1] === "complete")
+        facts.push([id, "completion", { type: value[0], coverage: null, observedAt: cache.savedAt, source: "legacy-cache", name: titleName(names[id]) }]);
+    }
+    for (const [id, value] of Object.entries(names).slice(0, 5e3)) if (/^\d+$/.test(id) && titleName(value))
+      facts.push([id, "label", { name: titleName(value) }]);
+    if (details?.version === 1 && details.entries && !Array.isArray(details.entries)) {
+      for (const [id, value] of Object.entries(details.entries).slice(0, 5e3)) {
+        const name = titleName(Array.isArray(value) ? value[1]?.title : "");
+        if (/^\d+$/.test(id) && name && !titleName(names[id])) facts.push([id, "label", { name }]);
+      }
+    }
+    return facts;
+  }
+
+  // src/viewing/knowledge-storage.js
+  function createKnowledgeStorage(options) {
+    const { getValue, setValue, listValues, addValueChangeListener, removeValueChangeListener } = options;
+    const known = /* @__PURE__ */ new Map(), migrated = /* @__PURE__ */ new Set(), listeners = /* @__PURE__ */ new Map(), deniedSubscriptions = /* @__PURE__ */ new Set();
+    const stats = { imports: 0, writes: 0, notificationFailures: 0, invalidRecords: 0 };
+    let sequence = 0;
+    const prefix = (profile) => KNOWLEDGE_PREFIX + encodeURIComponent(profile) + ".";
+    function requireStorage() {
+      if (typeof getValue !== "function" || typeof setValue !== "function") throw new Error("storage-unavailable");
+    }
+    function remember(profile, key) {
+      if (!known.has(profile)) known.set(profile, /* @__PURE__ */ new Set());
+      known.get(profile).add(key);
+    }
+    function signal(profile) {
+      try {
+        setValue(prefix(profile) + "signal", { sequence: ++sequence, nonce: Math.random().toString(36), at: Date.now() });
       } catch (_) {
-        const admitted = profile === expected && generation === epoch && activeProfile() === expected;
-        if (admitted) failure = true;
-        return { saved: false, changed: /* @__PURE__ */ new Set(), admitted };
+        stats.notificationFailures++;
       }
     }
-    function reconcile(coverageFor, ids = null, assertCurrent = () => {
+    function write(profile, id, kind, value, guard = () => {
+    }, onlyMissing = false) {
+      requireStorage();
+      const key = prefix(profile) + id + "." + kind;
+      guard();
+      const prior = getValue(key, null);
+      guard();
+      if (onlyMissing && prior !== null) {
+        remember(profile, key);
+        return false;
+      }
+      if (JSON.stringify(prior) === JSON.stringify(value)) {
+        remember(profile, key);
+        return false;
+      }
+      if (["metadata", "completion"].includes(kind) && validCoverage(value.coverage)) {
+        const identity = [...value.coverage].sort(([a], [b]) => a.localeCompare(b)).map((pair) => pair.join("-")).join("_");
+        const evidenceKey = prefix(profile) + id + "." + kind + "_" + identity;
+        guard();
+        const evidence = getValue(evidenceKey, null);
+        guard();
+        if (!evidence) {
+          setValue(evidenceKey, value);
+          guard();
+          stats.writes++;
+        }
+        remember(profile, evidenceKey);
+      }
+      setValue(key, value);
+      guard();
+      remember(profile, key);
+      stats.writes++;
+      return true;
+    }
+    function migrate(profile, guard) {
+      if (migrated.has(profile)) return;
+      requireStorage();
+      guard();
+      const marker = prefix(profile) + "migrated";
+      const done = getValue(marker, false);
+      guard();
+      if (done !== true && done !== false && done !== null) throw new Error("invalid-storage");
+      if (!done) {
+        const facts = legacyFacts(profile, getValue, guard, options);
+        for (const [id, kind, value] of facts) if (write(profile, id, kind, value, guard, true)) stats.imports++;
+        guard();
+        setValue(marker, true);
+        guard();
+      }
+      migrated.add(profile);
+    }
+    function read(profile, guard = () => {
     }) {
-      const changes = /* @__PURE__ */ new Map(), expected = profile;
-      for (const id of ids === null ? choices.keys() : ids) {
-        const choice2 = choices.get(id), coverage = coverageFor(id);
-        if (!choice2 || choice2.status !== "complete" || !coverage || !validViewingCoverage(coverage)) continue;
-        if (!choice2.coverage) changes.set(id, { ...choice2, type: "series", coverage: coverage.map((pair) => [...pair]) });
-        else {
-          const previous = new Map(choice2.coverage);
-          if (coverage.some(([season, count]) => count > 0 && (!previous.has(season) || count > previous.get(season)))) changes.set(id, null);
+      migrate(profile, guard);
+      guard();
+      const keys = typeof listValues === "function" ? listValues() : [...known.get(profile) || []];
+      guard();
+      const records = /* @__PURE__ */ new Map(), start = prefix(profile);
+      for (const key of keys) {
+        if (!key.startsWith(start)) continue;
+        const match = key.slice(start.length).match(/^(\d+)\.(manual|completion(?:_[0-9_-]+)?|metadata(?:_[0-9_-]+)?|label|hidden|legacy)$/);
+        if (!match) continue;
+        guard();
+        const value = getValue(key, null);
+        guard();
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          stats.invalidRecords++;
+          continue;
+        }
+        if (!records.has(match[1])) records.set(match[1], {});
+        const kind = match[2];
+        const valid = kind === "manual" ? validChoice(value) : kind.startsWith("completion") ? ["movie", "series"].includes(value.type) && Number.isFinite(value.observedAt) && (value.coverage === null || validCoverage(value.coverage)) : kind.startsWith("metadata") ? ["movie", "series"].includes(value.type) && (value.coverage === null || validCoverage(value.coverage)) : kind === "hidden" ? typeof value.hidden === "boolean" : kind === "legacy" ? value.watched === true : Boolean(titleName(value.name));
+        if (!valid) {
+          stats.invalidRecords++;
+          continue;
+        }
+        records.get(match[1])[kind] = value;
+        remember(profile, key);
+      }
+      return records;
+    }
+    function subscribe(profile, callback) {
+      if (typeof addValueChangeListener !== "function" || typeof removeValueChangeListener !== "function" || deniedSubscriptions.has(profile)) return null;
+      let handle;
+      try {
+        handle = addValueChangeListener(prefix(profile) + "signal", callback);
+      } catch (_) {
+        stats.notificationFailures++;
+        deniedSubscriptions.add(profile);
+        return null;
+      }
+      listeners.set(handle, true);
+      return () => {
+        if (!listeners.delete(handle)) return;
+        try {
+          removeValueChangeListener?.(handle);
+        } catch (_) {
+          stats.notificationFailures++;
+        }
+      };
+    }
+    function dispose() {
+      const retired = [...listeners.keys()];
+      listeners.clear();
+      for (const handle of retired) try {
+        removeValueChangeListener?.(handle);
+      } catch (_) {
+        stats.notificationFailures++;
+      }
+    }
+    return { read, write, signal, subscribe, dispose, signature(profile) {
+      requireStorage();
+      return JSON.stringify(getValue(prefix(profile) + "signal", null));
+    }, diagnostics: () => ({ ...stats, listeners: listeners.size }) };
+  }
+
+  // src/viewing/knowledge.js
+  function createKnowledge(options) {
+    const storage = createKnowledgeStorage(options), subscribers = /* @__PURE__ */ new Map();
+    const activeProfile = options.activeProfile, now = options.now || Date.now;
+    const enqueue = options.queueMicrotask || globalThis.queueMicrotask;
+    let profile = null, records = /* @__PURE__ */ new Map(), signature = null, revision = 0, release = null, queued = false, failure = false, notificationGeneration = 0;
+    const changed = /* @__PURE__ */ new Map();
+    function guard(expected, assertCurrent = () => {
+    }) {
+      assertCurrent();
+      if (!expected || activeProfile() !== expected || profile !== expected) throw new Error("viewing-owner-replaced");
+    }
+    function notify(ids = [], origin) {
+      ids.forEach((id) => {
+        if (!changed.has(id)) changed.set(id, /* @__PURE__ */ new Set());
+        changed.get(id).add(origin);
+      });
+      if (queued) return;
+      queued = true;
+      const expected = profile, generation = notificationGeneration;
+      enqueue(() => {
+        if (generation !== notificationGeneration) return;
+        queued = false;
+        const changes = new Map(changed);
+        changed.clear();
+        if (profile !== expected || activeProfile() !== expected) return;
+        for (const [subscriber, owner] of [...subscribers]) try {
+          const ids2 = [...changes].filter(([, origins]) => [...origins].some((origin2) => !owner || origin2 !== owner)).map(([id]) => id);
+          if (ids2.length) subscriber({ profile: expected, ids: ids2 });
+        } catch (_) {
+        }
+      });
+    }
+    function ensure(assertCurrent = () => {
+    }, force = false) {
+      assertCurrent();
+      const next = activeProfile();
+      if (typeof next !== "string" || !next) throw new Error("storage-unavailable");
+      const reset = profile !== next;
+      if (reset) {
+        const previousRelease = release;
+        notificationGeneration++;
+        queued = false;
+        changed.clear();
+        release = null;
+        profile = next;
+        records = /* @__PURE__ */ new Map();
+        signature = null;
+        revision++;
+        previousRelease?.();
+      }
+      const check = () => guard(next, assertCurrent);
+      if (!force && !reset && release && typeof options.addValueChangeListener === "function" && signature !== void 0) return records;
+      const current = storage.signature(next);
+      check();
+      if (reset || current !== signature) {
+        const loaded = storage.read(next, check);
+        check();
+        for (const value of loaded.values()) {
+          const metadata = Object.entries(value).filter(([kind]) => kind.startsWith("metadata")).map(([, fact]) => fact);
+          const coverage = /* @__PURE__ */ new Map();
+          for (const fact of metadata) for (const [id, count] of fact.coverage || []) coverage.set(id, Math.max(count, coverage.get(id) || 0));
+          if (coverage.size) value.metadata = {
+            ...value.metadata,
+            type: "series",
+            coverage: validCoverage([...coverage]) ? [...coverage] : value.metadata?.coverage || metadata.find((fact) => validCoverage(fact.coverage))?.coverage,
+            baseline: value.metadata?.baseline || metadata.find((fact) => fact.baseline)?.baseline || null
+          };
+          const completions = Object.entries(value).filter(([kind]) => kind.startsWith("completion")).map(([, fact]) => fact);
+          const verified = completions.filter((fact) => fact.type === "movie" || validCoverage(fact.coverage));
+          if (verified.length) value.completion = verified.reduce((best, fact) => fact.type === "series" && addedEpisodes(best.coverage, fact.coverage) || fact.observedAt > best.observedAt && !addedEpisodes(fact.coverage, best.coverage) ? fact : best);
+        }
+        records = loaded;
+        signature = storage.signature(next);
+        check();
+        revision++;
+        failure = false;
+      }
+      const subscriptionGeneration = notificationGeneration;
+      if (!release) release = storage.subscribe(next, (_key, _old, _new, remote) => {
+        if (remote === false || subscriptionGeneration !== notificationGeneration || activeProfile() !== next || profile !== next) return;
+        try {
+          const before = records;
+          signature = void 0;
+          ensure();
+          notify([.../* @__PURE__ */ new Set([...before.keys(), ...records.keys()])]);
+        } catch (_) {
+          failure = true;
+        }
+      });
+      return records;
+    }
+    function facts(id) {
+      ensure();
+      return records.get(String(id)) || {};
+    }
+    function effectiveManual(value) {
+      if (!validChoice(value.manual) || value.manual.status === "automatic") return null;
+      if (value.manual.status === "complete" && value.manual.type === "series" && addedEpisodes(value.manual.coverage || value.metadata?.baseline, value.metadata?.coverage)) return null;
+      return value.manual.type === "series" && !value.manual.coverage && value.metadata?.baseline ? { ...value.manual, coverage: value.metadata.baseline } : value.manual;
+    }
+    function completion(value) {
+      const entry = value.completion;
+      if (!entry || !["movie", "series"].includes(entry.type)) return false;
+      if (entry.type === "movie") return true;
+      return validCoverage(entry.coverage) && !addedEpisodes(entry.coverage, value.metadata?.coverage);
+    }
+    function mutate(id, kind, value, assertCurrent = () => {
+    }, origin) {
+      if (!/^\d+$/.test(String(id))) throw new Error("invalid-title");
+      ensure(assertCurrent);
+      const expected = profile;
+      if (!records.has(String(id)) && records.size >= 5e3) throw new Error("storage-full");
+      const check = () => guard(expected, assertCurrent);
+      const existing = records.get(String(id))?.[kind];
+      if (kind !== "manual" && JSON.stringify(existing) === JSON.stringify(value)) {
+        check();
+        return false;
+      }
+      const didWrite = storage.write(expected, String(id), kind, value, check);
+      check();
+      const previous = records.get(String(id)) || {};
+      records.set(String(id), { ...previous, [kind]: structuredCopy(value) });
+      if (didWrite) {
+        storage.signal(expected);
+        check();
+        signature = storage.signature(expected);
+        check();
+        notify([String(id)], origin);
+      }
+      return didWrite;
+    }
+    function remember(id, { type, coverage = null, name: name2 = "", status = "unknown", observedAt = now(), source = "netflix" }, assertCurrent = () => {
+    }, origin) {
+      if (!/^\d+$/.test(String(id))) return;
+      ensure(assertCurrent);
+      if (titleName(name2)) mutate(id, "label", { name: titleName(name2) }, assertCurrent, origin);
+      if (type === "movie" || type === "series" && validCoverage(coverage)) {
+        const prior = records.get(String(id))?.metadata, manualBefore = records.get(String(id))?.manual;
+        const combined = new Map(prior?.coverage || []);
+        for (const [season, count] of coverage || []) combined.set(season, Math.max(count, combined.get(season) || 0));
+        const retainedCoverage = type === "series" ? validCoverage([...combined]) ? [...combined] : coverage : null;
+        const metadata = { type, coverage: retainedCoverage, baseline: prior?.baseline || retainedCoverage };
+        try {
+          mutate(id, "metadata", metadata, assertCurrent, origin);
+        } catch (error) {
+          guard(profile, assertCurrent);
+          if (records.get(String(id))?.manual !== manualBefore) return;
+          records.set(String(id), { ...records.get(String(id)), metadata });
+          failure = true;
+          throw error;
         }
       }
-      if (!changes.size) return /* @__PURE__ */ new Set();
-      const result = save(changes, true, assertCurrent);
-      if (result.saved) return result.changed;
-      assertCurrent();
-      if (!result.admitted || profile !== expected || activeProfile() !== expected) return /* @__PURE__ */ new Set();
-      for (const [id, choice2] of changes) {
-        if (choice2) choices.set(id, choice2);
-        else choices.delete(id);
+      if (status === "complete" && (type === "movie" || type === "series" && validCoverage(coverage))) {
+        const prior = records.get(String(id))?.completion;
+        if (prior?.type === "series" && addedEpisodes(coverage, prior.coverage)) return;
+        mutate(id, "completion", { type, coverage: type === "series" ? coverage : null, name: titleName(name2) || prior?.name || "", observedAt, source }, assertCurrent, origin);
       }
-      return new Set(changes.keys());
     }
-    function choice(id) {
-      const value = choices.get(id);
-      return value ? Object.freeze({ ...value, coverage: value.coverage ? Object.freeze(value.coverage.map((pair) => Object.freeze([...pair]))) : null }) : null;
+    function createView(initialProfile, origin) {
+      let viewProfile = initialProfile, viewRevision = -1, viewFailure = false, alive = true;
+      const current = () => alive && Boolean(viewProfile) && activeProfile() === viewProfile;
+      function sync(assertCurrent = () => {
+      }, onReset = () => {
+      }) {
+        assertCurrent();
+        const next = activeProfile(), reset = viewProfile !== void 0 && next !== viewProfile;
+        viewProfile = next;
+        if (reset) {
+          onReset();
+          assertCurrent();
+        }
+        const before = viewRevision;
+        try {
+          ensure(assertCurrent, before === -1);
+          if (before === -1 || reset) viewFailure = false;
+        } catch (error) {
+          assertCurrent();
+          if (activeProfile() === next) viewFailure = true;
+        }
+        assertCurrent();
+        viewRevision = revision;
+        return { changed: reset || before !== revision, reset };
+      }
+      function value(id) {
+        if (!current()) return {};
+        try {
+          return facts(id);
+        } catch (_) {
+          viewFailure = true;
+          return {};
+        }
+      }
+      function choice(id) {
+        const manual = effectiveManual(value(id));
+        if (!manual) return null;
+        const copied = structuredCopy(manual);
+        if (copied.coverage) copied.coverage = Object.freeze(copied.coverage.map((pair) => Object.freeze(pair)));
+        return Object.freeze(copied);
+      }
+      function choose(id, input, assertCurrent = () => {
+      }) {
+        const expected = viewProfile;
+        const check = () => {
+          assertCurrent();
+          if (!current() || viewProfile !== expected) throw new Error("viewing-owner-replaced");
+        };
+        try {
+          check();
+          ensure(check);
+          const prior = value(id).manual;
+          const next = input ? { ...input, name: titleName(input.name) || titleName(prior?.name) || name(id) } : {
+            status: "automatic",
+            type: prior?.type || "unknown",
+            coverage: null,
+            name: name(id),
+            previous: prior?.status === "automatic" ? prior.previous : prior || null
+          };
+          if (!validChoice(next)) throw new Error("invalid-choice");
+          mutate(id, "manual", next, check, origin);
+          check();
+          viewFailure = false;
+          failure = false;
+          return { saved: true, changed: /* @__PURE__ */ new Set([String(id)]) };
+        } catch (_) {
+          const admitted = current() && viewProfile === expected;
+          if (admitted) viewFailure = true;
+          return { saved: false, changed: /* @__PURE__ */ new Set(), admitted };
+        }
+      }
+      function reconcile(coverageFor, ids = null, assertCurrent = () => {
+      }) {
+        const changed2 = /* @__PURE__ */ new Set();
+        for (const id of ids === null ? allIds() : ids) {
+          const before = choice(id), coverage = coverageFor(id);
+          if (!validCoverage(coverage)) continue;
+          try {
+            remember(id, { type: "series", coverage }, assertCurrent, origin);
+          } catch (_) {
+            viewFailure = true;
+            failure = true;
+            continue;
+          }
+          const after = choice(id);
+          if (JSON.stringify(before) !== JSON.stringify(after)) changed2.add(id);
+        }
+        return changed2;
+      }
+      function allIds() {
+        if (!current()) return [];
+        try {
+          return [...ensure().keys()];
+        } catch (_) {
+          return [];
+        }
+      }
+      return {
+        sync,
+        choose,
+        reconcile,
+        choice,
+        ids: allIds,
+        has: (id) => Boolean(choice(id)),
+        status: (id) => choice(id)?.status,
+        type: (id) => {
+          const entry = value(id);
+          return choice(id)?.type || entry.metadata?.type || entry.completion?.type;
+        },
+        complete: (id) => {
+          const entry = value(id), manual = effectiveManual(entry);
+          return manual ? manual.status === "complete" : completion(entry);
+        },
+        automatic: (id) => completion(value(id)),
+        unverified: (id) => {
+          const entry = value(id);
+          return !effectiveManual(entry) && !completion(entry) && (entry.completion?.type === "series" && !validCoverage(entry.completion.coverage) || !entry.manual && entry.legacy?.watched === true);
+        },
+        retire() {
+          alive = false;
+          viewProfile = void 0;
+        },
+        fork: (nextOrigin) => createView(viewProfile, nextOrigin),
+        presentation: () => Object.freeze({ profile: viewProfile, manualFailure: viewFailure || failure, disabled: !current() || viewFailure || failure })
+      };
+    }
+    function name(id) {
+      const entry = facts(id);
+      return titleName(entry.label?.name) || titleName(entry.manual?.name) || titleName(entry.hidden?.name) || titleName(entry.completion?.name);
+    }
+    function hidden() {
+      return Object.fromEntries([...ensure()].filter(([, entry]) => entry.hidden?.hidden).map(([id]) => [id, "hide"]));
+    }
+    function setHidden(id, hidden2, label = "", assertCurrent = () => {
+    }) {
+      mutate(id, "hidden", { hidden: Boolean(hidden2), name: titleName(label) || name(id) }, assertCurrent);
+    }
+    function resync() {
+      try {
+        signature = void 0;
+        const before = records;
+        ensure();
+        notify([.../* @__PURE__ */ new Set([...before.keys(), ...records.keys()])]);
+      } catch (_) {
+        failure = true;
+      }
+    }
+    function dispose() {
+      notificationGeneration++;
+      queued = false;
+      changed.clear();
+      release = null;
+      subscribers.clear();
+      profile = null;
+      records = /* @__PURE__ */ new Map();
+      signature = null;
+      storage.dispose();
     }
     return Object.freeze({
-      sync,
-      save,
-      reconcile,
-      choice,
-      retire() {
-        generation++;
-        profile = void 0;
-        choices = /* @__PURE__ */ new Map();
-        failure = false;
+      view: (origin) => createView(void 0, origin),
+      remember,
+      name,
+      hidden,
+      setHidden,
+      resync,
+      dispose,
+      subscribe(callback, origin) {
+        subscribers.set(callback, origin);
+        return () => subscribers.delete(callback);
       },
-      fork() {
-        return createChoices({
-          activeProfile,
-          getValue,
-          setValue,
-          limits,
-          storageKey,
-          initial: { profile, failure, choices: new Map([...choices.keys()].map((id) => [id, choice(id)])) }
-        });
+      legacy(id) {
+        try {
+          const value = facts(id);
+          return value.manual ? null : value.legacy;
+        } catch (_) {
+          return null;
+        }
       },
-      has: (id) => choices.has(id),
-      status: (id) => choices.get(id)?.status,
-      type: (id) => choices.get(id)?.type,
-      ids: () => Object.freeze([...choices.keys()]),
-      presentation: () => Object.freeze({ profile, manualFailure: failure, disabled: !profile || failure })
+      diagnostics: () => ({
+        ...storage.diagnostics(),
+        titles: records.size,
+        subscribers: subscribers.size,
+        failure,
+        rememberedCompletions: [...records.values()].filter((value) => value.completion).length,
+        unverifiedSeries: [...records.values()].filter((value) => value.completion?.type === "series" && !validCoverage(value.completion.coverage)).length,
+        missingNames: [...records.values()].filter((value) => (value.manual || value.completion || value.hidden?.hidden) && ![value.label, value.manual, value.completion, value.hidden].some((fact) => titleName(fact?.name))).length
+      })
     });
+  }
+  function structuredCopy(value) {
+    return JSON.parse(JSON.stringify(value));
   }
 
   // src/viewing/cache.js
@@ -8739,28 +9139,7 @@ ${CARD_ACTION_STYLES}
       }
       return cached;
     }
-    function write({ items, profile, results, types, assertCurrent = () => {
-    } }) {
-      if (typeof setValue !== "function") return false;
-      try {
-        assertCurrent();
-        if (!profile || activeProfile() !== profile) return false;
-        const entries = {};
-        for (const item of items || []) {
-          const id = String(item.videoId), type = types.get(id);
-          if (/^\d+$/.test(id) && ["movie", "series"].includes(type)) entries[id] = [type, results.get(id) || "unknown"];
-        }
-        if (Object.keys(entries).length > 5e3) return false;
-        assertCurrent();
-        if (activeProfile() !== profile) return false;
-        setValue(storageKey + encodeURIComponent(profile), { version: 1, completionRatio, savedAt: now(), entries });
-        assertCurrent();
-        return activeProfile() === profile;
-      } catch (_) {
-        return false;
-      }
-    }
-    return Object.freeze({ read, write });
+    return Object.freeze({ read });
   }
 
   // src/viewing/scan.js
@@ -8966,6 +9345,7 @@ ${CARD_ACTION_STYLES}
       job.watch.requests = job.requests;
       job.watch.passes = job.passes;
       job.watch.publications++;
+      viewing.remember(job.watch, readItems(), changedIds, () => assertViewingJob(job));
       publish(changedIds, "scan-batch", job);
     }
     async function collectViewingStatuses(job) {
@@ -9307,8 +9687,6 @@ ${CARD_ACTION_STYLES}
         viewing.clearCache(watch);
         publish([...unresolved], "scan-complete");
         if (!owns(job)) return;
-        viewing.writeCache({ items: readItems(), profile: context.profileGuid, results: job.results, types: job.types, assertCurrent: () => assertViewingJob(job) });
-        if (!owns(job) || !isCurrent()) return;
         log("viewingStatusCompleted", {
           ...readPresentation(),
           requests: watch.requests,
@@ -9316,7 +9694,7 @@ ${CARD_ACTION_STYLES}
           failure: watch.failure,
           publications: watch.publications,
           series: { ...job.seriesStats, pending: job.seriesStats.eligible - job.seriesStats.checked - job.seriesStats.unplanned },
-          recheck: structuredCopy(job.recheckStats),
+          recheck: structuredCopy2(job.recheckStats),
           network: collectViewingNetworkDiagnostics(job.network),
           work: readWork()
         });
@@ -9354,7 +9732,7 @@ ${CARD_ACTION_STYLES}
       ownedRequests.clear();
       for (const request of requests) cleanup(() => finishRequest(request));
     }
-    function structuredCopy(value) {
+    function structuredCopy2(value) {
       return value === void 0 ? void 0 : JSON.parse(JSON.stringify(value));
     }
     function diagnostics() {
@@ -9383,7 +9761,7 @@ ${CARD_ACTION_STYLES}
           automaticStatus: viewing.automatic(watch, id),
           cachedStatus: !watch.results.has(id) && Boolean(viewing.cachedStatus(watch, id)),
           manualChoice: viewing.manualStatus(watch, id) || null,
-          ...structuredCopy(watch.seriesDetails.get(id) || { reason: watch.loading ? "checking" : "series-metadata-unavailable-or-unprocessed" })
+          ...structuredCopy2(watch.seriesDetails.get(id) || { reason: watch.loading ? "checking" : "series-metadata-unavailable-or-unprocessed" })
         };
       });
     }
@@ -9409,16 +9787,15 @@ ${CARD_ACTION_STYLES}
     isCurrent,
     onChange,
     data,
+    knowledge,
     log = () => {
     },
     warn = () => {
     }
   }) {
-    const choices = createChoices({
-      activeProfile: () => context.activeProfile(),
-      getValue: (...args) => userscript.getValue(...args),
-      setValue: (...args) => userscript.setValue(...args)
-    });
+    const ownsKnowledge = !knowledge;
+    knowledge ||= createKnowledge({ activeProfile: () => context.activeProfile(), ...userscript, getValue: (...args) => userscript.getValue(...args), setValue: (...args) => userscript.setValue(...args) });
+    let choices = knowledge.view();
     const completion = createCompletion();
     const cancelled = () => new Error("BROWSING_VIEWING_RETIRED");
     data ||= createViewingData({ context, fetch: (...args) => environment.fetch(...args), createCancelledError: cancelled });
@@ -9449,17 +9826,19 @@ ${CARD_ACTION_STYLES}
       types.clear();
       coverage.clear();
       choices.retire();
+      if (ownsKnowledge) knowledge.dispose();
     }
     function reset() {
       dispose();
       profile = context.activeProfile();
+      choices = knowledge.view();
       choices.sync(() => guard());
     }
     function observe(items) {
       if (!profile) return false;
       let updated = false;
-      const savedSeries = choices.ids().filter((id) => choices.status(id) === "complete" && choices.type(id) !== "movie").map((id) => ({ id }));
-      for (const { id, typeHint } of [...items, ...savedSeries]) {
+      const savedSeries = choices.ids().filter((id) => (choices.status(id) === "complete" || choices.type(id) === "series" || knowledge.legacy(id)?.watched) && choices.type(id) !== "movie").map((id) => ({ id }));
+      for (const { id, typeHint, title } of [...items, ...savedSeries]) {
         if (typeHint === "movie" && !types.has(id)) {
           types.set(id, "movie");
           pending.delete(id);
@@ -9467,6 +9846,7 @@ ${CARD_ACTION_STYLES}
           attempts.delete(id);
           failed.delete(id);
           updated = true;
+          if (knowledge.legacy(id)?.watched && !choices.choice(id)) choices.choose(id, { status: "complete", type: "movie", coverage: null, name: title || "" }, () => guard());
         }
         if (!ready(id) && !failed.has(id) && !inFlight.has(id) && !pending.has(id) && pending.size < 500) pending.set(id, 0);
       }
@@ -9537,11 +9917,27 @@ ${CARD_ACTION_STYLES}
             for (const id of ids) {
               const record = records.get(id), value = completion.recordType(record);
               if (value) types.set(id, value);
+              if (value === "movie" && knowledge.legacy(id)?.watched && !choices.choice(id)) choices.choose(id, { status: "complete", type: "movie", coverage: null }, () => guard(owner));
+              if (value === "movie") knowledge.remember(id, { type: value, status: completion.classifyVideo(record) }, () => guard(owner));
               if (value === "series") series.push(record);
             }
             if (series.length) {
               const plans = await request((access, handle) => data.readSeasons(series, access, handle), owner);
               for (const plan of plans) coverage.set(plan.videoId, plan.seasons.map((season) => [season.id, season.count]));
+              if (typeof data.readEpisodes === "function") {
+                const targets = plans.map((plan) => ({ plan, season: [...plan.seasons].reverse().find((season) => season.count > 0) })).filter((value) => value.season);
+                if (targets.length) {
+                  const episodes = await request((access, handle) => data.readEpisodes(targets.map(({ season }) => ({ seasonId: season.id, from: season.count - 1, to: season.count - 1 })), access, handle), owner);
+                  for (const [index, { plan }] of targets.entries()) {
+                    const episode = episodes[index]?.episodes?.[0];
+                    if (episode?.id && completion.classifyVideo(episode.record) === "complete") knowledge.remember(
+                      plan.videoId,
+                      { type: "series", coverage: coverage.get(plan.videoId), status: "complete" },
+                      () => guard(owner)
+                    );
+                  }
+                }
+              }
               const expired = choices.reconcile((id) => coverage.get(id), ids, () => guard(owner));
               if (expired.size) log("Browsing viewing coverage reconciled", { changed: expired.size });
             }
@@ -9589,14 +9985,14 @@ ${CARD_ACTION_STYLES}
     function ready(id) {
       return type(id) === "movie" || type(id) === "series" && coverage.has(id);
     }
-    function mark(id) {
+    function mark(id, name = "") {
       guard();
       if (!ready(id)) return { saved: false };
-      return choices.save(/* @__PURE__ */ new Map([[id, { status: "complete", type: type(id), coverage: coverage.get(id) || null }]]), false, () => guard());
+      return choices.choose(id, { status: "complete", type: type(id), coverage: coverage.get(id) || null, name }, () => guard());
     }
     function restore(id) {
       guard();
-      return choices.save(/* @__PURE__ */ new Map([[id, { status: "main", type: type(id) || "unknown", coverage: null }]]), false, () => guard());
+      return choices.choose(id, { status: "main", type: type(id) || "unknown", coverage: null }, () => guard());
     }
     return Object.freeze({
       reset,
@@ -9608,20 +10004,23 @@ ${CARD_ACTION_STYLES}
       restore,
       retry,
       unavailable: (id) => failed.has(id),
-      complete: (id) => choices.status(id) === "complete",
-      choice: choices.choice,
-      ids: () => choices.ids().filter((id) => choices.status(id) === "complete"),
-      presentation: choices.presentation,
-      diagnostics: () => ({ coverageAdjustments: data.coverageDiagnostics?.().filter((facts) => facts.reason === "episode-count-adjusted") || [], requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, failedTitles: [...failed].slice(0, 12).map((id) => ({ id, type: type(id) || "unknown", attempts: attempts.get(id) || 0, missing: type(id) === "series" ? "coverage" : "type", coverageFailure: data.coverageDiagnostic?.(id) || null })), failedTitlesTruncated: failed.size > 12, retrying: retryTimer !== null, windowRequests })
+      complete: (id) => choices.complete(id),
+      savedIds: () => choices.ids().filter((id) => choices.complete(id) || choices.unverified(id)),
+      unverified: (id) => choices.unverified(id),
+      choice: (id) => choices.choice(id),
+      ids: () => choices.ids().filter((id) => choices.complete(id)),
+      presentation: () => choices.presentation(),
+      diagnostics: () => ({ knowledge: knowledge.diagnostics(), coverageAdjustments: data.coverageDiagnostics?.().filter((facts) => facts.reason === "episode-count-adjusted") || [], requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, failedTitles: [...failed].slice(0, 12).map((id) => ({ id, type: type(id) || "unknown", attempts: attempts.get(id) || 0, missing: type(id) === "series" ? "coverage" : "type", coverageFailure: data.coverageDiagnostic?.(id) || null })), failedTitlesTruncated: failed.size > 12, retrying: retryTimer !== null, windowRequests })
     });
   }
 
   // src/viewing/viewing.js
   function createPolicy(options) {
     const completion = createCompletion(), cache = createCache(options), owners = /* @__PURE__ */ new WeakMap();
+    const knowledge = options.knowledge;
     function owner(watch) {
       if (!owners.has(watch)) owners.set(watch, {
-        choices: createChoices({ ...options, storageKey: options.choicesKey }),
+        choices: knowledge.view(watch),
         cached: { results: /* @__PURE__ */ new Map(), types: /* @__PURE__ */ new Map() },
         cacheGeneration: 0
       });
@@ -9630,7 +10029,17 @@ ${CARD_ACTION_STYLES}
     function initialize(watch, items, profile, assertCurrent = () => {
     }) {
       const current = owner(watch), epoch = ++current.cacheGeneration;
+      current.choices.sync(assertCurrent);
+      assertCurrent();
+      const admitted = current.choices.presentation();
+      if (admitted.disabled || admitted.profile !== profile || options.activeProfile() !== profile) return 0;
       const cached = cache.read(items, profile, assertCurrent);
+      for (const item of items) {
+        const id = String(item.videoId), type = current.choices.type(id);
+        if (type && type !== "unknown") cached.types.set(id, type);
+        if (current.choices.automatic(id)) cached.results.set(id, "complete");
+        else if (cached.types.get(id) === "series" && cached.results.get(id) === "complete") cached.results.delete(id);
+      }
       assertCurrent();
       if (current.cacheGeneration !== epoch || options.activeProfile() !== profile) return 0;
       current.cached = cached;
@@ -9655,7 +10064,7 @@ ${CARD_ACTION_STYLES}
       return Boolean(profile) && options.activeProfile() === profile;
     }
     function automatic(watch, id) {
-      return isProfileCurrent(watch) ? watch.results.get(id) || owner(watch).cached.results.get(id) || "unknown" : "unknown";
+      return isProfileCurrent(watch) ? owner(watch).choices.automatic(id) ? "complete" : watch.results.get(id) || owner(watch).cached.results.get(id) || "unknown" : "unknown";
     }
     function titleType(watch, id) {
       return isProfileCurrent(watch) ? watch.types.get(id) || owner(watch).cached.types.get(id) || owner(watch).choices.type(id) : void 0;
@@ -9664,13 +10073,13 @@ ${CARD_ACTION_STYLES}
       if (!isProfileCurrent(watch)) return Object.freeze({ status: "unknown", type: void 0, manual: false });
       const current = owner(watch), manual = current.choices.status(id);
       return Object.freeze({
-        status: manual ? manual === "complete" ? "complete" : "in-progress" : watch.results.get(id) || current.cached.results.get(id) || "unknown",
+        status: manual ? manual === "complete" ? "complete" : "in-progress" : current.choices.automatic(id) ? "complete" : watch.results.get(id) || current.cached.results.get(id) || "unknown",
         type: watch.types.get(id) || current.cached.types.get(id) || current.choices.type(id),
         manual: Boolean(manual)
       });
     }
     function place(watch, id, { assertCurrent = () => {
-    } } = {}) {
+    }, name = "" } = {}) {
       const current = owner(watch), before = current.choices.presentation();
       assertCurrent();
       if (!before.profile || options.activeProfile() !== before.profile) return Object.freeze({ saved: false, changed: /* @__PURE__ */ new Set() });
@@ -9680,9 +10089,10 @@ ${CARD_ACTION_STYLES}
       const choice = restoreAutomatic ? null : {
         status,
         type: titleType(watch, id) || "unknown",
-        coverage: coverage ? coverage.map((pair) => [...pair]) : null
+        coverage: coverage ? coverage.map((pair) => [...pair]) : null,
+        name
       };
-      const result = current.choices.save(/* @__PURE__ */ new Map([[id, choice]]), false, assertCurrent);
+      const result = current.choices.choose(id, choice, assertCurrent);
       return Object.freeze({
         ...result,
         action: "toggle",
@@ -9707,12 +10117,12 @@ ${CARD_ACTION_STYLES}
       fork(from, to) {
         const current = owner(from);
         owners.set(to, {
-          choices: current.choices.fork(),
+          choices: current.choices.fork(to),
           cached: { results: new Map(current.cached.results), types: new Map(current.cached.types) },
           cacheGeneration: 0
         });
       },
-      choiceIds: (watch) => isProfileCurrent(watch) ? owner(watch).choices.ids() : Object.freeze([]),
+      choiceIds: (watch) => isProfileCurrent(watch) ? owner(watch).choices.ids().filter((id) => owner(watch).choices.has(id)) : Object.freeze([]),
       hasChoice: (watch, id) => isProfileCurrent(watch) && owner(watch).choices.has(id),
       manualStatus: (watch, id) => isProfileCurrent(watch) ? owner(watch).choices.status(id) : void 0,
       choice: (watch, id) => isProfileCurrent(watch) ? owner(watch).choices.choice(id) : null,
@@ -9723,7 +10133,23 @@ ${CARD_ACTION_STYLES}
       reconcileCoverage: (watch, ids = null, assertCurrent = () => {
       }) => owner(watch).choices.reconcile((id) => watch.seriesCoverage.get(id), ids, assertCurrent),
       clearCache,
-      writeCache: cache.write,
+      remember(watch, items, ids, assertCurrent) {
+        const selected = new Set(ids), byId = new Map(items.map((item) => [String(item.videoId), item]));
+        for (const id of selected) {
+          const item = byId.get(String(id));
+          try {
+            knowledge.remember(id, {
+              status: watch.results.get(id),
+              type: watch.types.get(id),
+              coverage: watch.seriesCoverage.get(id) || null,
+              name: item?.ariaLabel || ""
+            }, assertCurrent, watch);
+          } catch (error) {
+            assertCurrent();
+            options.warn?.("Viewing knowledge unavailable", { reason: error.message });
+          }
+        }
+      },
       invalidateCache(watch, id, { type = false } = {}) {
         const current = owner(watch);
         current.cacheGeneration++;
@@ -9743,7 +10169,10 @@ ${CARD_ACTION_STYLES}
     });
   }
   function createViewing(options) {
-    const policy = createPolicy(options), sessions = /* @__PURE__ */ new WeakMap();
+    const ownsKnowledge = !options.knowledge;
+    let sessionCount = 0;
+    const knowledge = options.knowledge || createKnowledge({ ...options, cacheKey: options.storageKey });
+    const policy = createPolicy({ ...options, knowledge }), sessions = /* @__PURE__ */ new WeakMap();
     function resolve(session) {
       const owned = sessions.get(session);
       if (!owned) throw new Error("VIEWING_SESSION_INVALID");
@@ -9781,7 +10210,16 @@ ${CARD_ACTION_STYLES}
         viewing: policy,
         scanLimits: typeof options.scanLimits === "function" ? options.scanLimits() : options.scanLimits
       });
-      sessions.set(session, { watch, scan });
+      const unsubscribe = knowledge.subscribe((change) => {
+        if (change.profile !== options.activeProfile()) return;
+        try {
+          scan.guard();
+          config.onChange?.({ ids: change.ids, reason: "knowledge" });
+        } catch (_) {
+        }
+      }, watch);
+      sessions.set(session, { watch, scan, unsubscribe, disposed: false });
+      sessionCount++;
       return session;
     }
     function read(session, operation, ...args) {
@@ -9795,10 +10233,16 @@ ${CARD_ACTION_STYLES}
       refresh: (session) => resolve(session).scan.refresh(),
       settled: (session) => resolve(session).scan.settled(),
       dispose(session) {
-        if (sessions.has(session)) resolve(session).scan.dispose();
+        if (!sessions.has(session)) return;
+        const owned = resolve(session);
+        if (owned.disposed) return;
+        owned.disposed = true;
+        owned.unsubscribe();
+        owned.scan.dispose();
+        if (--sessionCount === 0 && ownsKnowledge) knowledge.dispose();
       },
       reconcile: (session, ids = null) => resolve(session).scan.reconcile(ids),
-      diagnostics: (session) => resolve(session).scan.diagnostics(),
+      diagnostics: (session) => Object.freeze({ ...resolve(session).scan.diagnostics(), knowledge: knowledge.diagnostics() }),
       seriesDiagnostics: (session) => resolve(session).scan.seriesDiagnostics(),
       freshStatus: (session, id) => resolve(session).scan.freshStatus(id),
       freshType: (session, id) => resolve(session).scan.freshType(id),
@@ -9812,14 +10256,14 @@ ${CARD_ACTION_STYLES}
         return Object.freeze({ ...read(session, "presentation"), loading: resolve(session).scan.diagnostics().loading });
       },
       place(session, id, { assertCurrent = () => {
-      } } = {}) {
+      }, name = "" } = {}) {
         const { scan, watch } = resolve(session);
         const guard = () => {
           scan.guard();
           assertCurrent();
           scan.guard();
         };
-        return policy.place(watch, id, { assertCurrent: guard });
+        return policy.place(watch, id, { assertCurrent: guard, name });
       }
     });
   }
@@ -15636,7 +16080,7 @@ ${CARD_ACTION_STYLES}
         syncWatchGroups(state);
         return;
       }
-      const result = dependencies.viewing.place(watch, String(item.videoId), { assertCurrent });
+      const result = dependencies.viewing.place(watch, String(item.videoId), { assertCurrent, name: item.ariaLabel });
       assertCurrent();
       const beforeWork = { ...dependencies.gridView.groupDiagnostics() };
       syncWatchGroups(state, result.changed, "manual-choice");
@@ -17987,6 +18431,7 @@ ${CARD_ACTION_STYLES}
     logger,
     settings,
     userscript = {},
+    knowledge,
     saveLogs,
     readLogHistory,
     nextSessionToken,
@@ -18197,6 +18642,7 @@ ${CARD_ACTION_STYLES}
       createCancelledError: createRouteSessionCancelledError
     });
     const viewing = createViewing({
+      knowledge,
       activeProfile: () => netflixContext.activeProfile(),
       now: () => Date.now(),
       limits: viewingData.limits,
@@ -21199,12 +21645,15 @@ ${CARD_ACTION_STYLES}
         const heading = document.createElement("h3");
         heading.textContent = tUi(key);
         nodes.push(heading);
-        for (const { id, reason } of selected) {
+        for (const { id, reason, unverified } of selected) {
           const row = document.createElement("div");
           row.className = "tm-rec-saved-row";
           const name = document.createElement("a");
           name.textContent = readTitle(id) || `#${id}`;
           name.setAttribute("href", `/title/${id}`);
+          if (unverified) {
+            name.textContent += " (" + tUi("unknownViewingStatus", { count: 1 }) + ")";
+          }
           const remove = document.createElement("button");
           remove.type = "button";
           remove.textContent = "\xD7";
@@ -21478,14 +21927,16 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/recommendations/recommendations.js
-  function createRecommendations({ environment, context, userscript, tUi, viewingData, log = () => {
+  function createRecommendations({ environment, context, userscript, tUi, viewingData, knowledge, log = () => {
   }, warn = () => {
   } }) {
     const { document, location, MutationObserver, queueMicrotask } = environment;
     const dom = createRecommendationDom(environment), entries = /* @__PURE__ */ new Map(), buttons = /* @__PURE__ */ new WeakMap();
-    const key = "legacyMyListForNetflix.recommendationChoices.v1.";
+    const ownsKnowledge = !knowledge;
+    knowledge ||= createKnowledge({ ...userscript, getValue: (...args) => userscript.getValue(...args), setValue: (...args) => userscript.setValue(...args), activeProfile: context.activeProfile, queueMicrotask });
+    let unsubscribe = null;
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
-    let titles = {}, scrollTimer = null;
+    let scrollTimer = null;
     const pending = /* @__PURE__ */ new Set();
     const allowed = () => location.origin === "https://www.netflix.com" && (location.pathname === "/browse" || location.pathname.startsWith("/browse/") && location.pathname !== "/browse/my-list" || location.pathname === "/search");
     const readProfile = () => {
@@ -21496,6 +21947,7 @@ ${CARD_ACTION_STYLES}
       environment,
       context,
       userscript,
+      knowledge,
       data: viewingData,
       isCurrent: () => active && allowed() && Boolean(profile) && readProfile() === profile,
       onChange: viewingChanged,
@@ -21510,11 +21962,11 @@ ${CARD_ACTION_STYLES}
         epoch,
         failed,
         records: [
-          ...viewing.ids().map((id) => ({ id, reason: "viewing", type: viewing.type(id) })),
+          ...viewing.savedIds().map((id) => ({ id, reason: "viewing", type: viewing.type(id), unverified: viewing.unverified(id) })),
           ...Object.keys(choices).map((id) => ({ id, reason: choices[id], type: "unknown" }))
         ]
       }),
-      readTitle: (id) => titles[id] || [...entries.values()].find((entry) => entry.id === id && entry.title)?.title
+      readTitle: (id) => knowledge.name(id) || [...entries.values()].find((entry) => entry.id === id && entry.title)?.title
     });
     function visibleChoices() {
       return { ...Object.fromEntries(viewing.ids().map((id) => [id, "watched"])), ...choices };
@@ -21522,27 +21974,12 @@ ${CARD_ACTION_STYLES}
     function viewingChanged() {
       if (!active || !profile || readProfile() !== profile || !allowed()) return;
       try {
-        const p = profile, owner = epoch, latest = read(p);
-        let migrated = 0;
-        for (const [id, reason] of Object.entries(latest.choices)) {
-          const type = viewing.type(id);
-          if (reason !== "watched" || !["movie", "series"].includes(type)) continue;
-          if (type === "movie" && !viewing.choice(id) && !viewing.mark(id).saved) continue;
-          delete latest.choices[id];
-          migrated++;
-        }
-        if (readProfile() !== p || epoch !== owner) return;
-        if (migrated) userscript.setValue(key + encodeURIComponent(p), { version: 1, ...latest });
-        if (readProfile() !== p || epoch !== owner) {
-          check();
-          return;
-        }
-        ({ choices, titles } = latest);
+        const latest = read(profile);
+        choices = latest.choices;
         for (const entry of entries.values()) paint(entry);
         viewing.observe([...entries.values()]);
         savedPanel.paint();
         updateRefill();
-        if (migrated) log("Legacy browsing viewing choices migrated", { count: migrated });
       } catch (error) {
         warn("Browsing viewing migration unavailable", { reason: error.message });
       }
@@ -21587,13 +22024,8 @@ ${CARD_ACTION_STYLES}
       }, 250);
     }
     function read(p) {
-      if (typeof userscript.getValue !== "function" || typeof userscript.setValue !== "function") throw new Error("storage-unavailable");
-      const value = userscript.getValue(key + encodeURIComponent(p), null);
-      if (value === null) return { choices: {}, titles: {} };
-      if (value?.version !== 1 || !value.choices || typeof value.choices !== "object" || Array.isArray(value.choices) || Object.keys(value.choices).length > 5e3) throw new Error("invalid-storage");
-      const choices2 = Object.fromEntries(Object.entries(value.choices).filter(([id, reason]) => /^\d+$/.test(id) && ["watched", "hide"].includes(reason)));
-      const titles2 = Object.fromEntries(Object.entries(value.titles || {}).slice(0, 5e3).filter(([id, title]) => /^\d+$/.test(id) && typeof title === "string").map(([id, title]) => [id, title.slice(0, 300)]));
-      return { choices: choices2, titles: titles2 };
+      if (readProfile() !== p) throw new Error("profile-changed");
+      return { choices: knowledge.hidden() };
     }
     function release(entry) {
       entry.controls.remove();
@@ -21609,7 +22041,6 @@ ${CARD_ACTION_STYLES}
       for (const entry of [...entries.values()]) release(entry);
       profile = next;
       choices = {};
-      titles = {};
       failed = false;
       epoch++;
       pending.clear();
@@ -21617,7 +22048,7 @@ ${CARD_ACTION_STYLES}
       savedPanel.reset();
       if (next) try {
         const loaded = read(next);
-        if (readProfile() === next) ({ choices, titles } = loaded);
+        if (readProfile() === next) choices = loaded.choices;
         else profile = null;
       } catch (error) {
         failed = true;
@@ -21672,7 +22103,15 @@ ${CARD_ACTION_STYLES}
       if (!profile) return;
       if (previous !== profile) root = document;
       for (const entry of [...entries.values()]) if (!entry.lease.current()) release(entry);
-      for (const value of dom.scan(root)) decorate(value);
+      for (const value of dom.scan(root)) {
+        decorate(value);
+        if (value.title) try {
+          knowledge.remember(value.id, { name: value.title });
+        } catch (_) {
+        }
+        const legacy = knowledge.legacy(value.id);
+        if (legacy?.watched && value.typeHint === "movie" && !viewing.choice(value.id)) viewing.mark(value.id, value.title);
+      }
       if (viewing.observe([...entries.values()])) viewingChanged();
       for (const entry of entries.values()) paint(entry);
       if (!style) {
@@ -21726,7 +22165,7 @@ ${CARD_ACTION_STYLES}
         return;
       }
       try {
-        const p = profile, owner = epoch, latest = read(p);
+        const p = profile, owner = epoch;
         const id = input.entry?.id || input.id;
         const actionBefore = navigation.beforeAction(input.entry?.row);
         const diagnosticAction = input.action === "watched" && viewing.type(id) === "series" ? "caught-up" : input.action;
@@ -21737,31 +22176,22 @@ ${CARD_ACTION_STYLES}
             paint(input.entry);
             return;
           }
-          if (!viewing.mark(id).saved) {
+          if (!viewing.mark(id, input.entry?.title || "").saved) {
             paint(input.entry);
             return;
           }
-          delete latest.choices[id];
         } else if (input.action === "undo") {
           if (input.reason === "viewing" && !viewing.restore(id).saved) {
             savedPanel.paint();
             return;
           }
-          if (input.reason !== "viewing") delete latest.choices[id];
-          if (!viewing.ids().includes(id) && !latest.choices[id]) delete latest.titles[id];
-        } else latest.choices[id] = input.action;
-        if (input.entry?.title) latest.titles[id] = input.entry.title;
-        if (Object.keys(latest.choices).length > 5e3) throw new Error("storage-full");
-        if (readProfile() !== p || epoch !== owner) {
-          scan();
-          return;
-        }
-        userscript.setValue(key + encodeURIComponent(p), { version: 1, ...latest });
+          if (input.reason !== "viewing") knowledge.setHidden(id, false);
+        } else knowledge.setHidden(id, true, input.entry?.title || "");
         if (readProfile() !== p || epoch !== owner || !active || !allowed()) {
           check();
           return;
         }
-        ({ choices, titles } = latest);
+        choices = read(p).choices;
         for (const entry of entries.values()) paint(entry);
         savedPanel.paint();
         updateRefill(input.action !== "undo" ? input.entry : null);
@@ -21823,6 +22253,9 @@ ${CARD_ACTION_STYLES}
       if (!active) {
         active = true;
         epoch++;
+        unsubscribe = knowledge.subscribe(() => {
+          if (active && allowed()) viewingChanged();
+        });
         environment.window?.addEventListener("scroll", scroll, { passive: true });
         document.addEventListener("click", click, true);
         document.addEventListener("pointerover", pointer, true);
@@ -21832,9 +22265,12 @@ ${CARD_ACTION_STYLES}
       observe();
     }
     function dispose() {
+      unsubscribe?.();
+      unsubscribe = null;
       refill.dispose();
       navigation.dispose();
       viewing.dispose();
+      if (ownsKnowledge) knowledge.dispose();
       environment.window?.removeEventListener("scroll", scroll);
       environment.window?.removeEventListener("resize", resize);
       if (scrollTimer !== null) environment.clearTimeout(scrollTimer);
@@ -21853,7 +22289,6 @@ ${CARD_ACTION_STYLES}
       style = null;
       profile = null;
       choices = {};
-      titles = {};
       failed = false;
     }
     return Object.freeze({ check, dispose, diagnostics: () => ({
@@ -21878,6 +22313,9 @@ ${CARD_ACTION_STYLES}
       unregisterMenu: environment.GM_unregisterMenuCommand,
       getValue: environment.GM_getValue,
       setValue: environment.GM_setValue,
+      listValues: environment.GM_listValues,
+      addValueChangeListener: environment.GM_addValueChangeListener,
+      removeValueChangeListener: environment.GM_removeValueChangeListener,
       download: environment.GM_download,
       downloadMode: () => environment.GM_info?.downloadMode
     }
@@ -21927,7 +22365,9 @@ ${CARD_ACTION_STYLES}
         throw error;
       }
     }
-    const recommendations = createRecommendations({ environment, context, userscript, tUi: i18n.tUi, log: logger.log, warn: logger.warn });
+    const knowledge = createKnowledge({ ...userscript, activeProfile: context.activeProfile, now: Date.now, queueMicrotask });
+    const focus = () => knowledge.resync();
+    const recommendations = createRecommendations({ environment, context, userscript, knowledge, tUi: i18n.tUi, log: logger.log, warn: logger.warn });
     const logControl = createLogControl({
       document,
       tLog: i18n.tLog,
@@ -22005,6 +22445,7 @@ ${CARD_ACTION_STYLES}
         logger,
         settings,
         userscript,
+        knowledge,
         saveLogs: saver.save,
         readLogHistory: () => logHistory,
         nextSessionToken: () => ++sessionEpoch,
@@ -22064,6 +22505,7 @@ ${CARD_ACTION_STYLES}
       });
       settings.start();
       installHooks();
+      window.addEventListener("focus", focus);
       logger.log(i18n.tLog("scriptStarted"), {
         version,
         url: location.href,
@@ -22095,6 +22537,8 @@ ${CARD_ACTION_STYLES}
           try {
             logControl.dispose();
           } finally {
+            knowledge.dispose();
+            window.removeEventListener("focus", focus);
             saver.dispose();
             for (const release of hooks.splice(0).reverse()) release();
           }
@@ -22108,19 +22552,23 @@ ${CARD_ACTION_STYLES}
         currentSession: session?.diagnostics() || null,
         recommendations: recommendations.diagnostics(),
         logSave: saver.diagnostics(),
-        retainedPages: logHistory.length
+        retainedPages: logHistory.length,
+        knowledge: knowledge.diagnostics()
       });
     }
     return Object.freeze({ start, dispose, diagnostics });
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.9.28";
+  var SCRIPT_VERSION = "1.10.0";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
     getValue: typeof GM_getValue === "function" ? (...args) => GM_getValue(...args) : void 0,
     setValue: typeof GM_setValue === "function" ? (...args) => GM_setValue(...args) : void 0,
+    listValues: typeof GM_listValues === "function" ? () => GM_listValues() : void 0,
+    addValueChangeListener: typeof GM_addValueChangeListener === "function" ? (...args) => GM_addValueChangeListener(...args) : void 0,
+    removeValueChangeListener: typeof GM_removeValueChangeListener === "function" ? (...args) => GM_removeValueChangeListener(...args) : void 0,
     download: typeof GM_download === "function" ? (...args) => GM_download(...args) : void 0,
     downloadMode: () => typeof GM_info === "object" ? GM_info.downloadMode : void 0
   } }).start();

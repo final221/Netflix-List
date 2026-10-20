@@ -1,3 +1,4 @@
+import { knowledgeSnapshot, fact } from './helpers/knowledge.js';
 import { createReport } from '../src/diagnostics/report.js';
 import { createLogger } from '../src/diagnostics/logger.js';
 import { Element } from './helpers/dom.js';
@@ -244,7 +245,7 @@ test('viewing overlap publishes a later title batch promptly and preserves nativ
     pending[2].release();
     await e.c.viewing.settled(e.state.watchStatus);
     assert.deepEqual(completedViewingIds(e), Array.from({ length: 150 }, (_, index) => String(index + 1)));
-    assert.equal(e.storageCalls.cacheWrites, 1);
+    assert.equal(e.storageCalls.cacheWrites, 0);
     assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
@@ -322,7 +323,7 @@ test('viewing overlap keeps series dependencies ordered and drains valid partial
     assert.equal(network.succeeded, 5);
     assert.equal(network.peakInFlight, 2);
     assert.equal(e.requests.length, 6);
-    assert.equal(e.storageCalls.cacheWrites, 1);
+    assert.equal(e.storageCalls.cacheWrites, 0);
     assert.equal(e.c.sessionScope.requestCount(), 0);
     assert.equal(e.timers.size, 0);
 });
@@ -750,15 +751,15 @@ test('viewing collection stops at its elapsed-time budget without hiding unverif
     assert.equal(e.timers.size, 0);
 });
 
-test('failed refresh reveals old completion results instead of hiding titles using stale status', async () => {
+test('failed refresh retains acknowledged completion while exposing unavailable status for other titles', async () => {
     const e = await viewingEnvironment();
     await e.start();
     assert.equal(completedViewingIds(e).length, 2);
     e.c.fetch = async () => ({ ok: false, status: 503 });
     await e.c.refreshViewingStatus(e.state);
-    assert.equal(completedViewingIds(e).length, 0);
-    assert.equal(mainViewingIds(e).length, 7);
-    assert.equal(e.c.gridView.presentation().unknownCount, 7);
+    assert.equal(completedViewingIds(e).length, 2);
+    assert.equal(mainViewingIds(e).length, 5);
+    assert.equal(e.c.gridView.presentation().unknownCount, 5);
     assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).failure, 'VIEWING_STATUS_HTTP_503');
 });
 
@@ -1082,10 +1083,10 @@ test('a missing-count series requires validated season coverage and a usable com
     assert.equal(request.paths[0][3].to, 39);
     e.fixtures().episodes.videos[401] = viewingVideo('episode', false, 20);
     await e.c.refreshViewingStatus(e.state);
-    assert.ok(!completedViewingIds(e).includes('4'));
+    assert.ok(completedViewingIds(e).includes('4'), 'an acknowledged completion survives a later progress reset');
     delete e.fixtures().episodes.seasons[40].episodes[1];
     await e.c.refreshViewingStatus(e.state);
-    assert.ok(!completedViewingIds(e).includes('4'), 'a missing latest reference cannot establish completion');
+    assert.ok(completedViewingIds(e).includes('4'), 'a missing latest reference cannot erase acknowledged completion');
 });
 
 test('count recovery never replaces invalid or contradictory totals supplied by Netflix', async () => {
@@ -1709,7 +1710,7 @@ test('a manual series correction expires for an added episode and the change is 
     await e.c.refreshViewingStatus(e.state);
     assert.ok(mainViewingIds(e).includes('5'));
     assert.equal(Boolean(e.c.viewing.choice(e.state.watchStatus, '5')), false);
-    assert.equal(Object.hasOwn(e.storage.get('test.viewingChoices.active-profile').choices, '5'), false);
+    assert.equal(Object.hasOwn(knowledgeSnapshot(e.storage, 'active-profile').choices, '5'), false);
 });
 
 test('manual series corrections detect a new season without relying on a larger total count', async () => {
@@ -1758,9 +1759,9 @@ test('a correction made before season metadata arrives captures its first reliab
     await release();
     await e.c.viewing.settled(e.state.watchStatus);
     assert.deepEqual(structuredClone(e.c.viewing.choice(e.state.watchStatus, '5').coverage), [['50', 2]]);
-    assert.equal(e.storageCalls.writes, 2);
+    assert.equal(e.storageCalls.writes, 1);
     for (let i = 0; i < 10; i++) e.c.syncWatchGroups(e.state);
-    assert.equal(e.storageCalls.writes, 2, 'stable synchronization performs no repeated writes');
+    assert.equal(e.storageCalls.writes, 1, 'baseline metadata does not rewrite the manual decision');
 });
 
 test('profile switching isolates manual choices and stale controls cannot write to the new profile', async () => {
@@ -1779,7 +1780,7 @@ test('profile switching isolates manual choices and stale controls cannot write 
     await e.c.refreshViewingStatus(e.state);
     assert.ok(completedViewingIds(e).includes('2'));
     assert.ok(mainViewingIds(e).includes('3'));
-    assert.deepEqual(Object.keys(e.storage.get('test.viewingChoices.second-profile').choices), ['3']);
+    assert.deepEqual(Object.keys(knowledgeSnapshot(e.storage, 'second-profile').choices), ['3']);
 });
 
 test('storage read/write failures surface without pretending a correction was remembered', async () => {
@@ -1822,11 +1823,12 @@ test('saving from an older tab preserves unrelated corrections already saved by 
     await second.start();
     clickManualViewing(first, '2');
     clickManualViewing(second, '3');
-    assert.deepEqual(Object.keys(first.storage.get('test.viewingChoices.active-profile').choices), ['2', '3']);
+    assert.deepEqual(Object.keys(knowledgeSnapshot(first.storage, 'active-profile').choices), ['2', '3']);
+    await first.flush(); await second.flush();
     assert.ok(completedViewingIds(second).includes('2'));
     clickViewingFilter(first, 'main', 'series');
     clickManualViewing(first, '5');
-    assert.deepEqual(Object.keys(first.storage.get('test.viewingChoices.active-profile').choices), ['2', '3', '5']);
+    assert.deepEqual(Object.keys(knowledgeSnapshot(first.storage, 'active-profile').choices), ['2', '3', '5']);
 });
 
 test('stable manual card synchronization performs no storage calls, allocations or attribute writes', async () => {
@@ -1854,7 +1856,7 @@ test('new episodes are revealed in the current grid even if saving manual expiry
     e.fixtures().episodes.videos[502] = viewingVideo('episode', false, 0);
     let attempts = 0;
     e.c.GM_setValue = key => {
-        if (key.startsWith('test.viewingChoices.')) attempts++;
+        if (key.includes('.5.metadata')) attempts++;
         throw new Error('storage failure');
     };
     await e.c.refreshViewingStatus(e.state);
@@ -1901,7 +1903,7 @@ test('late automatic baseline capture preserves an override cleared by the move 
     await e.c.viewing.settled(e.state.watchStatus);
     assert.equal(Boolean(e.c.viewing.choice(e.state.watchStatus, '5')), false);
     assert.ok(mainViewingIds(e).includes('5'));
-    assert.equal(Object.hasOwn(e.storage.get('test.viewingChoices.active-profile').choices, '5'), false);
+    assert.equal(Object.hasOwn(knowledgeSnapshot(e.storage, 'active-profile').choices, '5'), false);
 });
 
 test('marking titles into the collapsed watched section preserves the viewport while handing off focus', async () => {
@@ -1971,12 +1973,12 @@ test('confirmed movies publish after the first title batch while later title res
     assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).publications, 1);
     assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).requests, 2, 'the pending independent peer has already reserved its request');
     assert.equal(mainViewingIds(e).length, 70);
-    assert.equal(e.storageCalls.cacheWrites, 0, 'batch publication does not write storage');
+    assert.equal(e.storageCalls.cacheWrites, 0, 'batch publication never rewrites the legacy snapshot');
     await gate.release();
     await e.c.viewing.settled(e.state.watchStatus);
     assert.equal(completedViewingIds(e).length, 120);
     assert.equal(e.requests.length, 3);
-    assert.equal(e.storageCalls.cacheWrites, 1);
+    assert.equal(e.storageCalls.cacheWrites, 0);
 });
 
 test('500 long series use 500 finale records and 30 bounded requests instead of downloading older progress', async () => {
@@ -2008,7 +2010,7 @@ test('a recent same-profile cache groups titles before the first response and re
     assert.deepEqual(completedViewingIds(next), ['1', '4']);
     assert.deepEqual(filteredViewingIds(next), ['2', '3']);
     assert.equal(viewingUi(next).details.open, false);
-    assert.equal(next.c.viewing.diagnostics(next.state.watchStatus).cachedTitles, 6);
+    assert.equal(next.c.viewing.diagnostics(next.state.watchStatus).cachedTitles, 5);
     const row = next.c.collectViewingSeriesDiagnostics(next.state)[0];
     assert.equal(row.automaticStatus, 'complete');
     assert.equal(row.cachedStatus, true);
@@ -2021,7 +2023,7 @@ test('a recent same-profile cache groups titles before the first response and re
     assert.deepEqual(completedViewingIds(next), ['1', '4']);
     assert.equal(next.c.viewing.diagnostics(next.state.watchStatus).cachedCount, 0);
     assert.equal(next.c.collectViewingSeriesDiagnostics(next.state)[0].cachedStatus, false);
-    assert.equal(next.storageCalls.cacheWrites, 1);
+    assert.equal(next.storageCalls.cacheWrites, 0);
     assert.equal(next.requests.length, first.requests.length, 'startup reuse adds no requests and still revalidates');
     const calls = { ...next.storageCalls };
     for (let index = 0; index < 10; index++) next.c.syncWatchGroups(next.state);
@@ -2030,7 +2032,7 @@ test('a recent same-profile cache groups titles before the first response and re
     assert.equal(next.requests.length, 3);
 });
 
-test('fresh movies replace cache immediately and a newly unfinished finale returns a cached series to My List', async () => {
+test('acknowledged films persist across progress resets and added episodes return a series to My List', async () => {
     const first = await viewingEnvironment();
     await first.start();
     const next = await viewingEnvironment(7, null, first.storage);
@@ -2041,14 +2043,14 @@ test('fresh movies replace cache immediately and a newly unfinished finale retur
     assert.deepEqual(completedViewingIds(next), ['1', '4']);
     for (let attempt = 0; attempt < 10 && !gate.release; attempt++) await next.flush();
     assert.equal(typeof gate.release, 'function');
-    assert.deepEqual(completedViewingIds(next), ['4'], 'show-level progress does not prematurely remove a cached finale result');
+    assert.deepEqual(completedViewingIds(next), ['1', '4'], 'acknowledged completion survives progress resets until an explicit correction or added episodes');
     assert.equal(next.c.viewing.freshStatus(next.state.watchStatus, '1'), 'not-started');
     await gate.release();
     await next.c.viewing.settled(next.state.watchStatus);
-    assert.deepEqual(completedViewingIds(next), []);
+    assert.deepEqual(completedViewingIds(next), ['1']);
     assert.ok(mainViewingIds(next).includes('4'));
     assert.equal(next.c.collectViewingSeriesDiagnostics(next.state)[0].latestEpisode.episode, 3);
-    assert.equal(next.storage.get('test.viewingCache.active-profile').entries[4][1], 'in-progress');
+    assert.deepEqual(fact(next.storage, 'active-profile', '4', 'completion').coverage, [['40', 2]]);
 });
 
 test('manual main-list choices outweigh initial cached completion and never enter the automatic cache', async () => {
@@ -2065,11 +2067,11 @@ test('manual main-list choices outweigh initial cached completion and never ente
     await gate.release();
     await next.c.viewing.settled(next.state.watchStatus);
     assert.ok(mainViewingIds(next).includes('1'));
-    assert.equal(next.storage.get('test.viewingCache.active-profile').entries[1][1], 'complete');
-    assert.equal(next.storage.get('test.viewingChoices.active-profile').choices[1].status, 'main');
+    assert.equal(fact(next.storage, 'active-profile', '1', 'completion') ? 'complete' : 'unknown', 'complete');
+    assert.equal(knowledgeSnapshot(next.storage, 'active-profile').choices[1].status, 'main');
 });
 
-test('a failed verification reveals cached automatic titles but retains explicit manual watched choices', async () => {
+test('a failed verification preserves acknowledged completion and explicit manual watched choices', async () => {
     const first = await viewingEnvironment();
     await first.start();
     clickManualViewing(first, '2');
@@ -2078,11 +2080,12 @@ test('a failed verification reveals cached automatic titles but retains explicit
     next.c.initializeWatchGroups(next.state, 1);
     assert.deepEqual(completedViewingIds(next), ['1', '2', '4']);
     await next.c.viewing.settled(next.state.watchStatus);
-    assert.deepEqual(completedViewingIds(next), ['2']);
+    assert.deepEqual(completedViewingIds(next), ['1', '2', '4']);
     assert.equal(next.c.viewing.diagnostics(next.state.watchStatus).cachedCount, 0);
     assert.equal(next.c.viewing.diagnostics(next.state.watchStatus).failure, 'VIEWING_STATUS_HTTP_503');
-    assert.deepEqual(Object.keys(next.storage.get('test.viewingCache.active-profile').entries), []);
-    assert.equal(next.storage.get('test.viewingChoices.active-profile').choices[2].status, 'complete');
+    assert.ok(fact(next.storage, 'active-profile', '1', 'completion'));
+    assert.ok(fact(next.storage, 'active-profile', '4', 'completion'));
+    assert.equal(knowledgeSnapshot(next.storage, 'active-profile').choices[2].status, 'complete');
 });
 
 test('startup cache validates age, schema, cutoff and membership without trusting malformed entries', async () => {
@@ -2122,7 +2125,7 @@ test('optional cache storage errors preserve fresh grouping and working manual c
         assert.equal(e.c.viewing.presentation(e.state.watchStatus).manualFailure, false);
         clickManualViewing(e, '2');
         assert.ok(completedViewingIds(e).includes('2'));
-        assert.equal(e.storage.get('test.viewingChoices.active-profile').choices[2].status, 'complete');
+        assert.equal(knowledgeSnapshot(e.storage, 'active-profile').choices[2].status, 'complete');
     }
 });
 
@@ -2138,8 +2141,8 @@ test('cache reuse is isolated by the active profile and a cancelled response can
     await other.flush();
     await otherGate.release();
     await other.c.viewing.settled(other.state.watchStatus);
-    assert.equal(other.storageCalls.cacheWrites, 1);
-    assert.ok(other.storage.has('test.viewingCache.other-profile'));
+    assert.equal(other.storageCalls.cacheWrites, 0);
+    assert.ok(fact(other.storage, 'other-profile', '1', 'completion'));
     for (const mode of ['profile', 'route']) {
         const next = await viewingEnvironment(7, null, first.storage);
         const gate = holdViewingResponse(next);
@@ -2164,7 +2167,7 @@ test('cache reuse is isolated by the active profile and a cancelled response can
     }
 });
 
-test('a later startup failure preserves fresh movie results and drops only unverified cached titles', async () => {
+test('a later startup failure preserves fresh and previously acknowledged completion', async () => {
     const first = await viewingEnvironment(60);
     first.c.fetch = async (url, options) => {
         const paths = new URLSearchParams(options.body).getAll('path').map(value => JSON.parse(value));
@@ -2187,10 +2190,10 @@ test('a later startup failure preserves fresh movie results and drops only unver
     next.c.initializeWatchGroups(next.state, 1);
     assert.equal(completedViewingIds(next).length, 60);
     await next.c.viewing.settled(next.state.watchStatus);
-    assert.equal(completedViewingIds(next).length, 50);
-    assert.deepEqual(mainViewingIds(next), Array.from({ length: 10 }, (_, index) => String(index + 51)));
-    assert.equal(Object.keys(next.storage.get('test.viewingCache.active-profile').entries).length, 50);
-    assert.equal(next.storageCalls.cacheWrites, 1);
+    assert.equal(completedViewingIds(next).length, 60);
+    assert.deepEqual(mainViewingIds(next), []);
+    assert.equal([...next.storage.keys()].filter(key => key.endsWith('.completion')).length, 60);
+    assert.equal(next.storageCalls.cacheWrites, 0);
     assert.equal(next.c.viewing.diagnostics(next.state.watchStatus).failure, 'VIEWING_STATUS_HTTP_503');
 });
 
@@ -2203,12 +2206,12 @@ test('refresh keeps the current series grouping until its new finale result arri
     for (let attempt = 0; attempt < 10 && !gate.release; attempt++) await e.flush();
     assert.equal(typeof gate.release, 'function');
     assert.deepEqual(completedViewingIds(e), ['1', '4']);
-    assert.equal(e.storageCalls.cacheReads, 1);
-    assert.equal(e.storageCalls.cacheWrites, 1);
+    assert.equal(e.storageCalls.cacheReads, 2);
+    assert.equal(e.storageCalls.cacheWrites, 0);
     await gate.release();
     await promise;
     assert.deepEqual(completedViewingIds(e), ['1']);
-    assert.equal(e.storageCalls.cacheWrites, 2);
+    assert.equal(e.storageCalls.cacheWrites, 0);
     assert.equal(e.c.viewing.diagnostics(e.state.watchStatus).cachedCount, 0);
 });
 

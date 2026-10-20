@@ -1,3 +1,4 @@
+import { storageClient } from './knowledge.js';
 import { publishGrid } from './card-material.js';
 import { createGrid } from '../../src/grid/grid.js';
 import { createViewing } from '../../src/viewing/viewing.js';
@@ -45,10 +46,11 @@ export async function viewingEnvironment(count = 7, _existing = null, storage = 
         geometry:{left:10,width:600,columns:6},assertCurrent(){}});
     const state=c.sourceState={items,totalCount:count,grid:c.gridView.root,cloneMap:new Map(items.map(item=>['v:'+item.videoId,c.gridView.getCard(item).node]))};
     Object.defineProperty(state,'cloneMap',{get:()=>new Map(state.items.map(item=>['v:'+item.videoId,c.gridView.getCard(item)?.node]))});
-    const requests=[],storageCalls={reads:0,writes:0,cacheReads:0,cacheWrites:0};let cacheTime=Date.now(),fixtures;
+    const storageApi=storageClient(storage);
+    const requests=[],storageCalls={reads:0,writes:0,cacheReads:0,cacheWrites:0,knowledgeWrites:0};let cacheTime=Date.now(),fixtures;
     c.Date={now:()=>cacheTime};
-    c.GM_getValue=(key,fallback)=>{storageCalls[key.startsWith('test.viewingCache.')?'cacheReads':'reads']++;return structuredClone(storage.get(key)??fallback);};
-    c.GM_setValue=(key,value)=>{storageCalls[key.startsWith('test.viewingCache.')?'cacheWrites':'writes']++;storage.set(key,structuredClone(value));};
+    c.GM_getValue=(key,fallback)=>{storageCalls[key.startsWith('test.viewingCache.')?'cacheReads':'reads']++;return storageApi.getValue(key,fallback);};
+    c.GM_setValue=(key,value)=>{if(key.startsWith('test.viewingCache.'))storageCalls.cacheWrites++;else if(key.endsWith('.manual'))storageCalls.writes++;else storageCalls.knowledgeWrites++;storageApi.setValue(key,value);};
     c.fetch=async(url,options)=>{const paths=new URLSearchParams(options.body).getAll('path').map(JSON.parse);requests.push({url,options,paths});
         const graph=paths[0][0]==='seasons'||(Array.isArray(paths[0][2])&&!paths[0][2].includes('seasonCount'))?fixtures.episodes:paths[0][2]==='seasonList'?fixtures.seasons:fixtures.titles;
         return {ok:true,status:200,json:async()=>({jsonGraph:graph})};};
@@ -58,7 +60,7 @@ export async function viewingEnvironment(count = 7, _existing = null, storage = 
         beginRequest:c.sessionScope.beginRequest,finishRequest:c.sessionScope.finishRequest,setRequestTimeout:c.sessionScope.setRequestTimeout,
         isCancelled:c.sessionScope.isCancelled,createCancelledError:c.sessionScope.cancelledError,log:c.log,warn:c.warn,
         scanLimits:()=>({concurrency:c.VIEWING_REQUEST_CONCURRENCY,requests:c.VIEWING_MAX_REQUESTS,passes:c.VIEWING_MAX_PASSES,timeout:c.VIEWING_TIMEOUT_MS,episodeBatch:c.VIEWING_EPISODE_BATCH_SIZE}),
-        getValue:(...args)=>c.GM_getValue(...args),setValue:(...args)=>c.GM_setValue(...args)});
+        ...storageApi,getValue:(...args)=>c.GM_getValue(...args),setValue:(...args)=>c.GM_setValue(...args)});
     function sync(changedIds=null,reason='reconcile') {
         if(!state.watchStatus)return;
         const watch=state.watchStatus,ids=c.viewing.reconcile(watch,changedIds);

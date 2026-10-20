@@ -1,12 +1,13 @@
-import { createChoices } from './choices.js';
+import { createKnowledge } from './knowledge.js';
 import { createCompletion } from './completion.js';
 import { createViewingData } from '../netflix/viewing-data.js';
 
 // Browsing shares manual viewing policy/storage; metadata transport stays in viewing-data.
-export function createBrowsingViewing({ environment, context, userscript, isCurrent, onChange, data,
+export function createBrowsingViewing({ environment, context, userscript, isCurrent, onChange, data, knowledge,
     log = () => {}, warn = () => {} }) {
-    const choices = createChoices({ activeProfile: () => context.activeProfile(),
-        getValue: (...args) => userscript.getValue(...args), setValue: (...args) => userscript.setValue(...args) });
+    const ownsKnowledge = !knowledge;
+    knowledge ||= createKnowledge({ activeProfile: () => context.activeProfile(), ...userscript, getValue: (...args) => userscript.getValue(...args), setValue: (...args) => userscript.setValue(...args) });
+    let choices = knowledge.view();
     const completion = createCompletion();
     const cancelled = () => new Error('BROWSING_VIEWING_RETIRED');
     data ||= createViewingData({ context, fetch: (...args) => environment.fetch(...args), createCancelledError: cancelled });
@@ -22,16 +23,19 @@ export function createBrowsingViewing({ environment, context, userscript, isCurr
         profile = null; running = false; requests = 0; windowRequests = 0; windowStart = now(); cooldownUntil = 0;
         attempts.clear(); failed.clear(); inFlight.clear();
         pending.clear(); checked.clear(); types.clear(); coverage.clear(); choices.retire();
+        if (ownsKnowledge) knowledge.dispose();
     }
     function reset() {
-        dispose(); profile = context.activeProfile(); choices.sync(() => guard());
+        dispose(); profile = context.activeProfile(); choices = knowledge.view(); choices.sync(() => guard());
     }
     function observe(items) {
         if (!profile) return false;
         let updated = false;
-        const savedSeries = choices.ids().filter(id => choices.status(id) === 'complete' && choices.type(id) !== 'movie').map(id => ({ id }));
-        for (const { id, typeHint } of [...items, ...savedSeries]) {
-            if (typeHint === 'movie' && !types.has(id)) { types.set(id, 'movie'); pending.delete(id); checked.add(id); attempts.delete(id); failed.delete(id); updated = true; }
+        const savedSeries = choices.ids().filter(id => (choices.status(id) === 'complete' || choices.type(id) === 'series' || knowledge.legacy(id)?.watched) && choices.type(id) !== 'movie').map(id => ({ id }));
+        for (const { id, typeHint, title } of [...items, ...savedSeries]) {
+            if (typeHint === 'movie' && !types.has(id)) { types.set(id, 'movie'); pending.delete(id); checked.add(id); attempts.delete(id); failed.delete(id); updated = true;
+                if (knowledge.legacy(id)?.watched && !choices.choice(id)) choices.choose(id, { status: 'complete', type: 'movie', coverage: null, name: title || '' }, () => guard());
+            }
             if (!ready(id) && !failed.has(id) && !inFlight.has(id) && !pending.has(id) && pending.size < 500) pending.set(id, 0);
         }
         pump();
@@ -69,11 +73,25 @@ export function createBrowsingViewing({ environment, context, userscript, isCurr
                     for (const id of ids) {
                         const record = records.get(id), value = completion.recordType(record);
                         if (value) types.set(id, value);
+                        if (value === 'movie' && knowledge.legacy(id)?.watched && !choices.choice(id)) choices.choose(id, { status: 'complete', type: 'movie', coverage: null }, () => guard(owner));
+                        if (value === 'movie') knowledge.remember(id, { type: value, status: completion.classifyVideo(record) }, () => guard(owner));
                         if (value === 'series') series.push(record);
                     }
                     if (series.length) {
                         const plans = await request((access, handle) => data.readSeasons(series, access, handle), owner);
                         for (const plan of plans) coverage.set(plan.videoId, plan.seasons.map(season => [season.id, season.count]));
+                        if (typeof data.readEpisodes === 'function') {
+                            const targets = plans.map(plan => ({ plan, season: [...plan.seasons].reverse().find(season => season.count > 0) })).filter(value => value.season);
+                            if (targets.length) {
+                                const episodes = await request((access, handle) => data.readEpisodes(targets.map(({ season }) =>
+                                    ({ seasonId: season.id, from: season.count - 1, to: season.count - 1 })), access, handle), owner);
+                                for (const [index, { plan }] of targets.entries()) {
+                                    const episode = episodes[index]?.episodes?.[0];
+                                    if (episode?.id && completion.classifyVideo(episode.record) === 'complete') knowledge.remember(plan.videoId,
+                                        { type: 'series', coverage: coverage.get(plan.videoId), status: 'complete' }, () => guard(owner));
+                                }
+                            }
+                        }
                         const expired = choices.reconcile(id => coverage.get(id), ids, () => guard(owner));
                         if (expired.size) log('Browsing viewing coverage reconciled', { changed: expired.size });
                     }
@@ -102,16 +120,17 @@ export function createBrowsingViewing({ environment, context, userscript, isCurr
     }
     function type(id) { return types.get(id) || choices.type(id); }
     function ready(id) { return type(id) === 'movie' || type(id) === 'series' && coverage.has(id); }
-    function mark(id) {
+    function mark(id, name = '') {
         guard(); if (!ready(id)) return { saved: false };
-        return choices.save(new Map([[id, { status: 'complete', type: type(id), coverage: coverage.get(id) || null }]]), false, () => guard());
+        return choices.choose(id, { status: 'complete', type: type(id), coverage: coverage.get(id) || null, name }, () => guard());
     }
     function restore(id) {
-        guard(); return choices.save(new Map([[id, { status: 'main', type: type(id) || 'unknown', coverage: null }]]), false, () => guard());
+        guard(); return choices.choose(id, { status: 'main', type: type(id) || 'unknown', coverage: null }, () => guard());
     }
     return Object.freeze({ reset, dispose, observe, type, ready, mark, restore, retry,
         unavailable: id => failed.has(id),
-        complete: id => choices.status(id) === 'complete',
-        choice: choices.choice, ids: () => choices.ids().filter(id => choices.status(id) === 'complete'),
-        presentation: choices.presentation, diagnostics: () => ({ coverageAdjustments: data.coverageDiagnostics?.().filter(facts => facts.reason === 'episode-count-adjusted') || [], requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, failedTitles: [...failed].slice(0, 12).map(id => ({ id, type: type(id) || 'unknown', attempts: attempts.get(id) || 0, missing: type(id) === 'series' ? 'coverage' : 'type', coverageFailure: data.coverageDiagnostic?.(id) || null })), failedTitlesTruncated: failed.size > 12, retrying: retryTimer !== null, windowRequests }) });
+        complete: id => choices.complete(id),
+        savedIds: () => choices.ids().filter(id => choices.complete(id) || choices.unverified(id)),
+        unverified: id => choices.unverified(id), choice: id => choices.choice(id), ids: () => choices.ids().filter(id => choices.complete(id)),
+        presentation: () => choices.presentation(), diagnostics: () => ({ knowledge: knowledge.diagnostics(), coverageAdjustments: data.coverageDiagnostics?.().filter(facts => facts.reason === 'episode-count-adjusted') || [], requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, failedTitles: [...failed].slice(0, 12).map(id => ({ id, type: type(id) || 'unknown', attempts: attempts.get(id) || 0, missing: type(id) === 'series' ? 'coverage' : 'type', coverageFailure: data.coverageDiagnostic?.(id) || null })), failedTitlesTruncated: failed.size > 12, retrying: retryTimer !== null, windowRequests }) });
 }

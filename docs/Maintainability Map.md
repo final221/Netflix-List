@@ -1,6 +1,27 @@
 # Maintainability Map
 
-## Current refactor measurements
+## Current implementation measurements
+
+Release **1.10.0**, 2026-10-20: **66 authored runtime modules, 17,960 readable physical lines**, compared with 64 modules / 17,720 lines in 1.9.28. Counts include comments and blanks. This adds shared, durable viewing knowledge and active-tab synchronization; it is not a code-reduction claim. The old choices owner is removed, while the legacy cache reader remains read-only.
+
+| Module under src/ | Lines | Responsibility |
+| --- | ---: | --- |
+| `viewing/knowledge.js` | 185 | Shared semantic authority, subscriptions and admitted session handles. |
+| `viewing/knowledge-storage.js` | 79 | Per-title/fact persistence, retained episode evidence and exact listener lifecycle. |
+| `viewing/knowledge-migration.js` | 60 | Validated, repeatable legacy import without source deletion. |
+| `viewing/viewing.js` | 159 | My List scan/session facade and knowledge composition. |
+| `viewing/browsing.js` | 136 | Bounded browsing title/season/finale checks and knowledge commands. |
+| `viewing/scan.js` | 482 | Admitted automatic observations, existing request budgets and cancellation. |
+| `viewing/cache.js` | 30 | Read-only legacy freshness adapter. |
+| `app/application.js` | 132 | Application lifetime, shared knowledge construction and focus recovery. |
+| `app/my-list-session.js` | 454 | Route composition, borrowing knowledge from application. |
+| `app/my-list-display/viewing.js` | 89 | My List actions capture names while retaining grid/route admission. |
+| `recommendations/recommendations.js` | 228 | Browsing controls and saved-choice commands, without a second persistence owner. |
+| `recommendations/saved-choices-panel.js` | 75 | Saved rows, pending-history presentation and focus/Escape lifetime. |
+
+New source estimates were 250–350 lines for knowledge, 180–280 for storage and 150–230 for migration. The implemented modules are smaller because they reuse the existing completion/data adapters and retain the compact read-only legacy-cache reader. Generated output is measured separately: **22127 → 22575 lines**. Tests and build tooling are excluded from authored runtime totals. Architecture owns continuing boundaries; findings records preservation evidence and remaining Firefox validation.
+
+## Previous discovery refactor measurements (1.9.28)
 
 Release **1.9.28**, 2026-10-12: **64 authored runtime modules, 17,720 readable physical lines**, compared with 63 modules / 17,702 lines in 1.9.27. Counts include comments and blanks, excluding a final empty line. Discovery owns a complete independent observer/frame lifecycle; the public carousel operations and session policies remain unchanged.
 

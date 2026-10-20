@@ -26,22 +26,5 @@ export function createCache({ activeProfile, now, getValue, setValue,
         } catch (_) { /* Optional reuse cannot block publication. */ }
         return cached;
     }
-    function write({ items, profile, results, types, assertCurrent = () => {} }) {
-        if (typeof setValue !== 'function') return false;
-        try {
-            assertCurrent();
-            if (!profile || activeProfile() !== profile) return false;
-            const entries = {};
-            for (const item of items || []) {
-                const id = String(item.videoId), type = types.get(id);
-                if (/^\d+$/.test(id) && ['movie', 'series'].includes(type)) entries[id] = [type, results.get(id) || 'unknown'];
-            }
-            if (Object.keys(entries).length > 5000) return false;
-            assertCurrent();
-            if (activeProfile() !== profile) return false;
-            setValue(storageKey + encodeURIComponent(profile), { version: 1, completionRatio, savedAt: now(), entries });
-            assertCurrent(); return activeProfile() === profile;
-        } catch (_) { return false; }
-    }
-    return Object.freeze({ read, write });
+    return Object.freeze({ read });
 }

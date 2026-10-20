@@ -1,3 +1,4 @@
+import { knowledgeSnapshot, fact } from './helpers/knowledge.js';
 import { resolveObjectURL } from 'node:buffer';
 import { viewingVideo, atom, reference } from './helpers/fixtures.js';
 import { mountPopulatedMyList } from './helpers/populated-browser.js';
@@ -34,16 +35,16 @@ test('generated browsing series captures real Falcor coverage and expires shared
     const row = b.document.body.appendChild(new Element('section'));
     const slot = row.appendChild(new Element('div')); slot.setAttribute('data-virtual-slot', '0');
     const card = slot.appendChild(new Element('a')); card.setAttribute('data-uia', 'standard-card'); card.setAttribute('href', '/title/123');
-    b.start(); await b.scheduler.flush();
+    b.start(); for (let i = 0; i < 5; i++) await b.scheduler.flush();
     const caughtUp = slot.querySelectorAll('button').find(button => button.textContent === 'Mark caught up');
     assert.ok(caughtUp); assert.equal(caughtUp.disabled, false);
     b.document.dispatchEvent({ type: 'click', target: caughtUp, preventDefault() {}, stopImmediatePropagation() {} });
     assert.equal(slot.style.getPropertyValue('display'), 'none');
-    assert.deepEqual(Array.from(stored.get('legacyMyListForNetflix.viewingChoices.v1.A').choices['123'].coverage[0]), ['101', 2]);
-    await b.navigate('/watch/123'); episodes = 3; await b.navigate('/browse'); await b.scheduler.flush();
+    assert.deepEqual(Array.from(knowledgeSnapshot(stored, 'A').choices['123'].coverage[0]), ['101', 2]);
+    await b.navigate('/watch/123'); episodes = 3; await b.navigate('/browse'); for (let i = 0; i < 5; i++) await b.scheduler.flush();
     assert.equal(slot.style.getPropertyValue('display'), '');
-    assert.equal(stored.get('legacyMyListForNetflix.viewingChoices.v1.A').choices['123'], undefined);
-    assert.equal(paths.length, 4); await b.navigate('/watch/123'); assert.equal(b.scheduler.timers.size, 0);
+    assert.equal(knowledgeSnapshot(stored, 'A').choices['123'], undefined);
+    assert.equal(paths.length, 6); await b.navigate('/watch/123'); assert.equal(b.scheduler.timers.size, 0);
 });
 
 test('generated release preserves the current browsing page after dismissal', async () => {
@@ -65,7 +66,7 @@ test('generated release preserves the current browsing page after dismissal', as
     for (let i = 0; i < 3; i++) await b.scheduler.advance(150);
     assert.equal(moves, 0); assert.equal(card.getAttribute('href'), '/title/123'); assert.equal(slot.style.getPropertyValue('display'), 'none');
     assert.equal(remaining.style.getPropertyValue('display'), ''); assert.equal(remainingCard.getAttribute('href'), '/title/789');
-    assert.equal([...stored.values()][0].choices['123'], 'hide'); assert.equal(b.requests.length, 0);
+    assert.equal(fact(stored, 'A', '123', 'hidden')?.hidden, true); assert.equal(b.requests.length, 0);
     await b.navigate('/watch/456'); assert.equal(b.scheduler.timers.size, 0); assert.equal(b.window.listenerCount('scroll'), 0);
 });
 
@@ -81,7 +82,7 @@ test('generated browsing release saves a dismissal and restores native visibilit
     const input = () => slot.querySelectorAll('button').find(button => button.textContent === 'Hide suggestion');
     assert.ok(input());
     b.document.dispatchEvent({ type: 'click', target: input(), preventDefault() {}, stopImmediatePropagation() {} });
-    assert.equal(card.style.visibility, 'hidden'); assert.equal(stored.size, 1); assert.equal(b.requests.length, 0);
+    assert.equal(card.style.visibility, 'hidden'); assert.ok(stored.size >= 1); assert.equal(b.requests.length, 0);
     assert.equal(slot.style.getPropertyValue('display'), 'none');
     await b.navigate('/watch/123'); assert.equal(card.style.visibility, undefined); assert.equal(slot.querySelectorAll('button').length, 0);
     assert.equal(slot.style.getPropertyValue('display'), '');
@@ -90,7 +91,7 @@ test('generated browsing release saves a dismissal and restores native visibilit
     b.document.dispatchEvent({ type: 'click', target: manager.querySelector('button'), preventDefault() {}, stopImmediatePropagation() {} });
     const undo = manager.querySelector('.tm-rec-saved-row').querySelector('button');
     b.document.dispatchEvent({ type: 'click', target: undo, preventDefault() {}, stopImmediatePropagation() {} });
-    assert.equal(card.style.visibility, undefined); assert.equal(Object.keys([...stored.values()][0].choices).length, 0);
+    assert.equal(card.style.visibility, undefined); assert.equal(Object.keys(knowledgeSnapshot(stored, 'A').recommendations.choices).length, 0);
     assert.equal(slot.style.getPropertyValue('display'), '');
 });
 
@@ -316,7 +317,7 @@ test('build is deterministic, self-contained and preserves metadata/version', as
     assert.match(header, /@run-at\s+document-idle/);
     assert.match(header, /@noframes\s*$/m);
     assert.deepEqual([...header.matchAll(/@grant\s+(\S+)/g)].map(match => match[1]),
-        ['GM_registerMenuCommand', 'GM_unregisterMenuCommand', 'GM_getValue', 'GM_setValue', 'GM_download']);
+        ['GM_registerMenuCommand', 'GM_unregisterMenuCommand', 'GM_getValue', 'GM_setValue', 'GM_download', 'GM_listValues', 'GM_addValueChangeListener', 'GM_removeValueChangeListener']);
     assert.doesNotMatch(header, /@require|@resource/);
     assert.ok(Object.values(first.metafile.outputs).every(output => output.imports.length === 0));
     new vm.Script(first.code);

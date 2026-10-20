@@ -6,11 +6,13 @@ import { createLogger } from '../diagnostics/logger.js';
 import { createReport } from '../diagnostics/report.js';
 import { createLogSaver } from '../diagnostics/save.js';
 import { createLogControl } from '../diagnostics/control.js';
+import { createKnowledge } from '../viewing/viewing.js';
 import { createRecommendations } from '../recommendations/recommendations.js';
 
 export function createApplication({ environment = globalThis, version = '', createSession = createMyListSession,
     userscript = { registerMenu: environment.GM_registerMenuCommand, unregisterMenu: environment.GM_unregisterMenuCommand,
-        getValue: environment.GM_getValue, setValue: environment.GM_setValue, download: environment.GM_download, downloadMode: () => environment.GM_info?.downloadMode } } = {}) {
+        getValue: environment.GM_getValue, setValue: environment.GM_setValue, listValues: environment.GM_listValues,
+        addValueChangeListener: environment.GM_addValueChangeListener, removeValueChangeListener: environment.GM_removeValueChangeListener, download: environment.GM_download, downloadMode: () => environment.GM_info?.downloadMode } } = {}) {
     const { window, document, location, history, navigator, Element, queueMicrotask } = environment;
     const context = createNetflixContext({ window, document, navigator, location });
     const i18n = createI18n({ readLanguage: context.getNetflixLanguage });
@@ -29,7 +31,9 @@ export function createApplication({ environment = globalThis, version = '', crea
         try { const file = await browsingReport.copy(options); logger.log(i18n.tLog('copyLogsCompleted'), { file }); return file; }
         catch (error) { logger.warn(i18n.tLog('copyLogsFailed'), error); throw error; }
     }
-    const recommendations = createRecommendations({ environment, context, userscript, tUi: i18n.tUi, log: logger.log, warn: logger.warn });
+    const knowledge = createKnowledge({ ...userscript, activeProfile: context.activeProfile, now: Date.now, queueMicrotask });
+    const focus = () => knowledge.resync();
+    const recommendations = createRecommendations({ environment, context, userscript, knowledge, tUi: i18n.tUi, log: logger.log, warn: logger.warn });
     const logControl = createLogControl({ document, tLog: i18n.tLog, setTimeout: environment.setTimeout, clearTimeout: environment.clearTimeout, queueMicrotask,
         copyLogs: options => session ? session.copyLogs(options) : copyBrowsingLogs(options) });
     function isTargetPage() { return location.origin === 'https://www.netflix.com' && location.pathname === '/browse/my-list'; }
@@ -70,7 +74,7 @@ export function createApplication({ environment = globalThis, version = '', crea
         if (session) { session.check(); return; }
         const owner = revision;
         let next;
-        next = createSession({ environment, version, context, i18n, logger, settings, userscript, saveLogs: saver.save, readLogHistory: () => logHistory,
+        next = createSession({ environment, version, context, i18n, logger, settings, userscript, knowledge, saveLogs: saver.save, readLogHistory: () => logHistory,
             nextSessionToken: () => ++sessionEpoch,
             onNavigation: reason => { if (active && revision === owner && session === next) routeChanged(reason); } });
         session = next;
@@ -103,7 +107,7 @@ export function createApplication({ environment = globalThis, version = '', crea
                 session?.preferencesChanged(preferences);
                 logger.log(i18n.tLog('originalMyListVisibilityChanged'), { enabled: preferences.viewOriginalMyList });
             } });
-        settings.start(); installHooks();
+        settings.start(); installHooks(); window.addEventListener('focus', focus);
         logger.log(i18n.tLog('scriptStarted'), { version, url: location.href, userAgent: navigator.userAgent,
             browserLanguage: navigator.language || '', htmlLanguage: context.getHtmlLanguage(), netflixLanguage: context.getNetflixLanguage(),
             displayLanguage: i18n.getUiLocale(), logLanguage: i18n.getLogLocale(),
@@ -117,12 +121,12 @@ export function createApplication({ environment = globalThis, version = '', crea
         finally {
             try { settings?.dispose(); } finally {
                 try { logControl.dispose(); } finally {
-                    saver.dispose(); for (const release of hooks.splice(0).reverse()) release();
+                    knowledge.dispose(); window.removeEventListener('focus', focus); saver.dispose(); for (const release of hooks.splice(0).reverse()) release();
                 }
             }
         }
     }
     function diagnostics() { return Object.freeze({ active, routeChangeSequence,
-        currentSession: session?.diagnostics() || null, recommendations: recommendations.diagnostics(), logSave: saver.diagnostics(), retainedPages: logHistory.length }); }
+        currentSession: session?.diagnostics() || null, recommendations: recommendations.diagnostics(), logSave: saver.diagnostics(), retainedPages: logHistory.length, knowledge: knowledge.diagnostics() }); }
     return Object.freeze({ start, dispose, diagnostics });
 }

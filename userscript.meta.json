@@ -13,7 +13,10 @@
     "GM_unregisterMenuCommand",
     "GM_getValue",
     "GM_setValue",
-    "GM_download"
+    "GM_download",
+    "GM_listValues",
+    "GM_addValueChangeListener",
+    "GM_removeValueChangeListener"
   ],
   "noframes": true,
   "namespace": "local.netflix.mylist.grid",

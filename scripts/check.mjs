@@ -127,7 +127,7 @@ function checkInstallation(metadata) {
     assert.equal(metadata.downloadURL, releaseURL, 'Metadata downloadURL must use the published dist artifact');
     assert.deepEqual(metadata.match, ['https://www.netflix.com/*'], 'Metadata match must preserve the Netflix scope');
     assert.deepEqual(metadata.grant,
-        ['GM_registerMenuCommand', 'GM_unregisterMenuCommand', 'GM_getValue', 'GM_setValue', 'GM_download'],
+        ['GM_registerMenuCommand', 'GM_unregisterMenuCommand', 'GM_getValue', 'GM_setValue', 'GM_download', 'GM_listValues', 'GM_addValueChangeListener', 'GM_removeValueChangeListener'],
         'Metadata grants must match the explicit installed permissions');
     assert.equal(metadata.connect, undefined, 'Log saving needs no network connection permission');
     assert.equal(metadata['run-at'], 'document-idle', 'Metadata run-at must remain document-idle');

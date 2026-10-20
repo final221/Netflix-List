@@ -1,3 +1,4 @@
+import { knowledgeSnapshot, fact } from './helpers/knowledge.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sessionBrowser } from './helpers/session-browser.js';
@@ -429,12 +430,12 @@ test('real session manual placement persists per profile, restores automation, a
     e.window.scrollY=320;const node=e.grid().querySelector('[data-tm-item-video-id="1"]');e.document.activeElement=node.querySelector('button');
     const requests=e.requests.length;action(e,'1');await e.scheduler.flush();assert.deepEqual(groupIds(e).watched,['1']);
     assert.equal(e.window.scrollY,320);assert.equal(e.document.activeElement,e.grid().querySelector('summary'));assert.equal(e.requests.length,requests);
-    const key='legacyMyListForNetflix.viewingChoices.v1.profile-a';assert.equal(e.storage.get(key).choices['1'].status,'complete');
+    const key='legacyMyListForNetflix.viewingChoices.v1.profile-a';assert.equal(knowledgeSnapshot(e.storage, 'profile-a').choices['1'].status,'complete');
     refresh(e);await e.drain(()=>finished(e)===2);assert.deepEqual(groupIds(e).watched,['1']);
     e.models.userInfo.userGuid='profile-b';refresh(e);await e.drain(()=>finished(e)===3);assert.deepEqual(groupIds(e).watched,[]);
     e.models.userInfo.userGuid='profile-a';refresh(e);await e.drain(()=>finished(e)===4);assert.deepEqual(groupIds(e).watched,['1']);
     const details=e.grid().querySelector('details');details.open=true;details.dispatchEvent({type:'toggle'});
-    action(e,'1');await e.scheduler.flush();assert.deepEqual(groupIds(e).watched,[]);assert.equal(e.storage.get(key).choices['1'],undefined);
+    action(e,'1');await e.scheduler.flush();assert.deepEqual(groupIds(e).watched,[]);assert.equal(knowledgeSnapshot(e.storage, 'profile-a').choices['1'],undefined);
     assert.equal(e.window.scrollY,320);e.dispose();
 });
 

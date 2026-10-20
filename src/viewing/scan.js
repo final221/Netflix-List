@@ -149,6 +149,7 @@ export function createScan({ watch, viewing, data: viewingData, activeProfile, p
         job.watch.requests = job.requests;
         job.watch.passes = job.passes;
         job.watch.publications++;
+        viewing.remember(job.watch, readItems(), changedIds, () => assertViewingJob(job));
         publish(changedIds, 'scan-batch', job);
     }
 
@@ -435,8 +436,6 @@ export function createScan({ watch, viewing, data: viewingData, activeProfile, p
             const unresolved = viewing.cachedIds(watch); viewing.clearCache(watch);
             publish([...unresolved], 'scan-complete');
             if (!owns(job)) return;
-            viewing.writeCache({ items: readItems(), profile: context.profileGuid, results: job.results, types: job.types, assertCurrent: () => assertViewingJob(job) });
-            if (!owns(job) || !isCurrent()) return;
             log('viewingStatusCompleted', { ...readPresentation(), requests: watch.requests, passes: watch.passes,
                 failure: watch.failure, publications: watch.publications,
                 series: { ...job.seriesStats, pending: job.seriesStats.eligible - job.seriesStats.checked - job.seriesStats.unplanned },

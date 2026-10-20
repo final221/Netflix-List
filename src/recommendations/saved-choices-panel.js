@@ -24,11 +24,12 @@ export function createSavedChoicesPanel({ document, tUi, readPresentation, readT
             if (!selected.length) continue;
             const heading = document.createElement('h3');
             heading.textContent = tUi(key); nodes.push(heading);
-            for (const { id, reason } of selected) {
+            for (const { id, reason, unverified } of selected) {
                 const row = document.createElement('div'); row.className = 'tm-rec-saved-row';
                 const name = document.createElement('a');
                 name.textContent = readTitle(id) || `#${id}`;
                 name.setAttribute('href', `/title/${id}`);
+                if (unverified) { name.textContent += ' (' + tUi('unknownViewingStatus', { count: 1 }) + ')'; }
                 const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '\u00d7';
                 remove.setAttribute('aria-label', `${tUi('undoRecommendation')}: ${name.textContent}`); remove.title = tUi('undoRecommendation');
                 buttons.set(remove, { action: 'undo', id, reason, profile, epoch }); row.appendChild(name); row.appendChild(remove); nodes.push(row);

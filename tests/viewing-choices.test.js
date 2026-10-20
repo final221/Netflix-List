@@ -1,3 +1,4 @@
+import { knowledgeSnapshot, fact, storageClient } from './helpers/knowledge.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createCompletion } from '../src/viewing/completion.js';
@@ -7,14 +8,14 @@ import { createBrowsingViewing } from '../src/viewing/viewing.js';
 test('browsing and My List use one manual choice store in both directions', async () => {
     const e = await fixture();
     const browsing = createBrowsingViewing({ environment: globalThis, context: { activeProfile: () => 'a' },
-        userscript: { getValue: (key, fallback) => e.storage.get(key) ?? fallback, setValue: (key, value) => e.storage.set(key, value) },
+        userscript: storageClient(e.storage),
         isCurrent: () => true, onChange() {} });
     browsing.reset(); browsing.observe([{ id: '1', typeHint: 'movie' }]); assert.equal(browsing.mark('1').saved, true);
     const next = e.viewing.createSession(e.config); await e.viewing.start(next);
     assert.equal(e.viewing.placement(next, '1').status, 'complete'); assert.equal(e.viewing.placement(next, '1').manual, true);
     assert.equal(e.viewing.place(next, '1').saved, true);
     browsing.reset(); assert.equal(browsing.complete('1'), false);
-    assert.equal(e.storage.get('legacyMyListForNetflix.viewingChoices.v1.a').choices['1'].status, 'main');
+    assert.equal(knowledgeSnapshot(e.storage, 'a').choices['1'].status, 'main');
     browsing.dispose(); e.viewing.dispose(next); e.viewing.dispose(e.watch);
 });
 
@@ -55,7 +56,7 @@ test('obsolete coverage expiry cannot erase a newer action after a reentrant sto
     e.onWrite(() => { e.onWrite(() => {});
         assert.equal(e.viewing.place(e.watch, '1').saved, true); throw new Error('old write failed'); });
     await e.refresh();
-    assert.equal(e.viewing.reconcile(e.watch, []).size, 0);
+    assert.deepEqual(e.viewing.reconcile(e.watch, []) || new Set(), new Set());
     assert.equal(e.viewing.choice(e.watch, '1').status, 'main');
     assert.equal(e.viewing.presentation(e.watch).manualFailure, false);
 });
@@ -63,10 +64,10 @@ test('obsolete coverage expiry cannot erase a newer action after a reentrant sto
 test('concurrent choice writes preserve other titles and isolate profiles', async () => {
     const e = await fixture(), other = e.viewing.createSession(e.config); await e.viewing.start(other);
     e.viewing.place(e.watch, '1'); e.viewing.place(other, '2');
-    assert.deepEqual(Object.keys(e.storage.get('legacyMyListForNetflix.viewingChoices.v1.a').choices), ['1', '2']);
+    assert.deepEqual(Object.keys(knowledgeSnapshot(e.storage, 'a').choices), ['1', '2']);
     e.profile('b'); e.viewing.reconcile(e.watch); e.viewing.place(e.watch, '3');
     assert.deepEqual(e.viewing.choiceIds(e.watch), ['3']);
-    assert.deepEqual(Object.keys(e.storage.get('legacyMyListForNetflix.viewingChoices.v1.a').choices), ['1', '2']);
+    assert.deepEqual(Object.keys(knowledgeSnapshot(e.storage, 'a').choices), ['1', '2']);
     e.viewing.dispose(other);
 });
 

@@ -1,3 +1,4 @@
+import { storageClient } from './knowledge.js';
 import { resolveObjectURL } from 'node:buffer';
 import assert from 'node:assert/strict';
 import { createApplication } from '../../src/app/application.js';
@@ -7,11 +8,11 @@ import { mountPopulatedMyList } from './populated-browser.js';
 import { carouselPayload, pageBootstrapHtml, viewingVideo } from './fixtures.js';
 
 // Browser, native DOM, React inputs and wire responses only. No substitute owners.
-export function sessionBrowser({ count = 6, columns = 6, viewing = false, logical = false } = {}) {
+export function sessionBrowser({ count = 6, columns = 6, viewing = false, logical = false, storage: suppliedStorage } = {}) {
     const b = createBrowser({ pathname: '/browse/my-list' });
     let source = mountPopulatedMyList(b, { count });
     let ids = Array.from({ length: count }, (_, i) => String(i + 1)), page = 0, width = 600, pointerId = null;
-    const events = [], moves = [], requests = [], savedReports = [], storage = new Map();
+    const events = [], moves = [], requests = [], savedReports = [], storage = suppliedStorage || new Map();
     const models = { userInfo: { userGuid: 'profile-a', authURL: 'test-auth' },
         services: viewing ? { memberapi: '/api/shakti/test' } : {} };
     let videos = Object.fromEntries(ids.map(id => [id, viewingVideo('movie', false, 20)]));
@@ -24,9 +25,10 @@ export function sessionBrowser({ count = 6, columns = 6, viewing = false, logica
         observe(target, options) { this.target = target; this.options = options; super.observe(); }
     };
     class NativeEvent { constructor(type, facts) { this.type = type; Object.assign(this, facts); } }
+    const api = storageClient(storage);
     Object.assign(b.context, { Node: Element, URLSearchParams, PointerEvent: NativeEvent, MouseEvent: NativeEvent,
-        GM_getValue: (key, fallback) => storage.get(key) ?? fallback,
-        GM_setValue: (key, value) => storage.set(key, value) });
+        GM_listValues: api.listValues, GM_addValueChangeListener: api.addValueChangeListener, GM_removeValueChangeListener: api.removeValueChangeListener,
+        GM_getValue: api.getValue, GM_setValue: api.setValue });
     function browserNode(node) {
         const matches = node.matches.bind(node), clone = node.cloneNode.bind(node);
         node.matches = selector => selector === ':hover' ? node.getAttribute('data-tm-item-video-id') === pointerId : matches(selector);
