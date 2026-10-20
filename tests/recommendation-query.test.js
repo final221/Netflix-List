@@ -107,3 +107,26 @@ test('repeated server cursors are diagnosed without extra requests or invented e
     assert.equal(await binding.load(new AbortController().signal, () => {}), false);
     assert.equal(f.state.requests.length, 1); assert.equal(binding.state({}, '1').hasNextPage, true);
 });
+
+
+test('cache field ordering does not reject equivalent pages after lookahead', async () => {
+    const f = queryFixture(['1', '2'], { hasNextPage: true, totalCount: 4 });
+    const { binding } = findRecommendationQuery(f.card(), ['1', '2']);
+    f.state.onWrite = data => { const value = data.node.entities.pageInfo;
+        data.node.entities.pageInfo = { __typename: 'PageInfo', endCursor: value.endCursor, hasNextPage: value.hasNextPage }; };
+    binding.publish({ 1: 'hide' }, () => {});
+    f.state.pages.push(Promise.resolve({ data: f.page(['3', '4'], false, 4, 'c2') }));
+    await binding.load(new AbortController().signal, () => {}); binding.publish({ 1: 'hide' }, () => {});
+    assert.equal(binding.current(), true); assert.deepEqual(ids(f.state.data), ['2', '3', '4']);
+    assert.equal(binding.state({}, '1').projection.matches, true);
+    assert.equal(binding.restore(() => {}), true);
+});
+
+test('real cache rejection retains a bounded comparison without private IDs or cursors', () => {
+    const f = queryFixture(), { binding } = findRecommendationQuery(f.card(), ['1', '2']);
+    f.state.rejectWrites = true;
+    assert.throws(() => binding.publish({ 1: 'hide' }, () => {}), /projection-rejected/);
+    const facts = binding.state({}, '1'); assert.equal(facts.projection.edgeOrder, false);
+    assert.equal(facts.projection.expectedEdges, 2); assert.equal(facts.projection.observedEdges, 3);
+    assert.doesNotMatch(JSON.stringify(facts.projection), /private/);
+});

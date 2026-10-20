@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.2
+// @version      1.11.3
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -6850,6 +6850,7 @@ ${CARD_ACTION_STYLES}
       }
     }
     function compact(value, depth = 0, key = "") {
+      if (key === "nativeRows" && value && Array.isArray(value.rows) && value.rows.length <= 4) return value;
       if (key === "navigation" && value && typeof value === "object" && Array.isArray(value.recent) && Array.isArray(value.movements)) return value;
       if (typeof value === "string") return value.length > 400 && !DIAGNOSTIC_FIELD.test(key) ? value.slice(0, 400) + " [truncated; original characters: " + value.length + "]" : value;
       if (!value || typeof value !== "object") return value;
@@ -21240,7 +21241,11 @@ ${CARD_ACTION_STYLES}
       if (own(query, "definitions")?.some((d) => d?.kind === "OperationDefinition" && d.name?.value === "CarouselPage")) probe.namedQuery++;
       if (!carouselQuery(query)) return;
       probe.operation++;
-      if (typeof own(variables, "rowId") !== "string") return;
+      if (typeof own(variables, "rowId") !== "string") {
+        const type = (value2) => value2 === null ? "null" : typeof value2;
+        probe.rowIdTypes = { options: type(own(own(options, "variables"), "rowId")), result: type(own(own(value, "variables"), "rowId")) };
+        return;
+      }
       probe.variables++;
       const data = own(value, "data"), client = own(value, "client") || own(observable, "client") || own(own(observable, "queryManager"), "client"), cache = own(client, "cache");
       const read = method(cache, "readQuery"), write = method(cache, "writeQuery");
@@ -21303,11 +21308,12 @@ ${CARD_ACTION_STYLES}
   }
   function createBinding(native) {
     const { query, observable, read, write, queryRead } = native, rowId = native.variables.rowId, identity = variableKey(native.variables);
-    let options = native.options, optionsRefreshes = 0, loadStop = null, lastLoad = null;
+    let options = native.options, optionsRefreshes = 0, loadStop = null, lastLoad = null, projection = null;
     const edges = /* @__PURE__ */ new Map(), cursors = /* @__PURE__ */ new Set();
     let server = null, last = null, disabled = false, pendingServer = false;
     const key = (edge) => videoId(edge) || "cursor:" + edge.cursor;
-    const signature = (data) => JSON.stringify([connection(data)?.edges?.map(key), connection(data)?.totalCount, connection(data)?.pageInfo]);
+    const pageKey = (info) => variableKey(info && Object.fromEntries(Object.keys(info).filter((key2) => key2 !== "__typename").map((key2) => [key2, own(info, key2)])));
+    const signature = (data) => JSON.stringify([connection(data)?.edges?.map(key), connection(data)?.totalCount, pageKey(connection(data)?.pageInfo)]);
     function ownership() {
       const next = own(observable, "options"), variables = own(next, "variables");
       return {
@@ -21359,7 +21365,20 @@ ${CARD_ACTION_STYLES}
       assertCurrent();
       const observed = read(input);
       assertCurrent();
-      if (signature(observed) !== last) {
+      const expected = connection(output), actual = connection(observed);
+      projection = {
+        matches: signature(observed) === last,
+        edgeOrder: JSON.stringify(expected.edges.map(key)) === JSON.stringify(actual?.edges?.map(key)),
+        totalCount: expected.totalCount === actual?.totalCount,
+        pageInfo: pageKey(expected.pageInfo) === pageKey(actual?.pageInfo),
+        expectedEdges: expected.edges.length,
+        observedEdges: actual?.edges?.length ?? null,
+        expectedTotal: expected.totalCount,
+        observedTotal: actual?.totalCount ?? null,
+        cursor: expected.pageInfo.endCursor === actual?.pageInfo?.endCursor,
+        pageFlag: expected.pageInfo.hasNextPage === actual?.pageInfo?.hasNextPage
+      };
+      if (!projection.matches) {
         write({ ...input, data: original, overwrite: true });
         disabled = true;
         throw Error("cache-projection-rejected");
@@ -21437,6 +21456,7 @@ ${CARD_ACTION_STYLES}
           serverTotal: server.totalCount,
           optionsRefreshes,
           ownership: ownership(),
+          projection: projection && { ...projection },
           loadStop,
           lastLoad: lastLoad && { ...lastLoad }
         };
@@ -22135,9 +22155,10 @@ ${CARD_ACTION_STYLES}
 
   // src/recommendations/native-rows.js
   function createNativeRows({ environment, dom, admitted, canRestore = admitted, readChoices }) {
-    const rows = /* @__PURE__ */ new Map(), requests = [], stats = { attempts: 0, activated: 0, writes: 0, loads: 0, restored: 0, failures: 0, automatic: 0, stops: {} };
+    const rows = /* @__PURE__ */ new Map(), requests = [], stats = { attempts: 0, activated: 0, writes: 0, loads: 0, restored: 0, failures: 0, automatic: 0, automaticSuppressed: 0, blockedRetries: 0, stops: {} };
     let generation = 0, visibility = null;
     const observed = /* @__PURE__ */ new Map();
+    let backoff = /* @__PURE__ */ new WeakMap();
     const now = () => environment.performance?.now() ?? Date.now();
     const identity = (row) => [row.id, row.getAttribute("data-list-id"), row.querySelector("h2, .rowTitle")?.textContent].join("|");
     function guard(job) {
@@ -22179,7 +22200,8 @@ ${CARD_ACTION_STYLES}
           check();
           job.probe = found.probe;
           if (!found.binding) {
-            job.reason = found.reason;
+            job.reason = found.probe?.namedQuery && !found.probe.variables ? "waiting-row-query" : found.reason;
+            if (job.source === "visible") job.lookups = 0;
             return;
           }
           job.binding = found.binding;
@@ -22268,6 +22290,7 @@ ${CARD_ACTION_STYLES}
           guard(job);
           if (job.binding) job.summary = job.binding.state(readChoices(), job.anchor);
           stats.stops[job.reason] = (stats.stops[job.reason] || 0) + 1;
+          if (!job.binding || job.failed) backoff.set(job.row, { identity: job.identity, at: now() });
         } catch (_) {
         }
         if (job.dirty || job.resumeAt) try {
@@ -22283,10 +22306,19 @@ ${CARD_ACTION_STYLES}
     }
     function interact(row, source = "interaction") {
       if (!row || !admitted()) return;
+      const prior = backoff.get(row);
+      if (source === "visible" && prior?.identity === identity(row) && now() - prior.at < 6e4) {
+        stats.automaticSuppressed++;
+        return;
+      }
       let job = rows.get(row);
       if (job && identity(row) !== job.identity) {
         retire(job);
         job = null;
+      }
+      if (job?.failed && job.binding?.state(readChoices()).ownership.disabled) {
+        stats.blockedRetries++;
+        return;
       }
       if (!job) {
         if (rows.size >= 4) retire(rows.values().next().value);
@@ -22361,6 +22393,7 @@ ${CARD_ACTION_STYLES}
       visibility?.disconnect();
       visibility = null;
       observed.clear();
+      backoff = /* @__PURE__ */ new WeakMap();
       for (const job of rows.values()) retire(job);
       generation++;
       rows.clear();
@@ -23460,7 +23493,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.2";
+  var SCRIPT_VERSION = "1.11.3";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

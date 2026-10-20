@@ -27,7 +27,8 @@ export function createReport({ logger, version, readEnvironment, writeText,
         }
     }
     function compact(value, depth = 0, key = '') {
-        // Navigation already enforces retention limits; preserve order and geometry at every nesting depth.
+        // These providers already bound their records; retain every outcome and nested geometry.
+        if (key === 'nativeRows' && value && Array.isArray(value.rows) && value.rows.length <= 4) return value;
         if (key === 'navigation' && value && typeof value === 'object' && Array.isArray(value.recent) && Array.isArray(value.movements)) return value;
         if (typeof value === 'string') return value.length > 400 && !DIAGNOSTIC_FIELD.test(key)
             ? value.slice(0, 400) + ' [truncated; original characters: ' + value.length + ']' : value;

@@ -46,7 +46,11 @@ export function findRecommendationQuery(card, mountedIds, { paginationOnly = fal
         if (observable) probe.results++;
         if (own(query, 'definitions')?.some(d => d?.kind === 'OperationDefinition' && d.name?.value === 'CarouselPage')) probe.namedQuery++;
         if (!carouselQuery(query)) return; probe.operation++;
-        if (typeof own(variables, 'rowId') !== 'string') return; probe.variables++;
+        if (typeof own(variables, 'rowId') !== 'string') {
+            const type = value => value === null ? 'null' : typeof value;
+            probe.rowIdTypes = { options: type(own(own(options, 'variables'), 'rowId')), result: type(own(own(value, 'variables'), 'rowId')) };
+            return;
+        } probe.variables++;
         const data = own(value, 'data'), client = own(value, 'client') || own(observable, 'client') || own(own(observable, 'queryManager'), 'client'), cache = own(client, 'cache');
         const read = method(cache, 'readQuery'), write = method(cache, 'writeQuery');
         if (!read || !write) return; probe.cacheApi++;
@@ -95,10 +99,11 @@ function variableKey(variables) {
 }
 function createBinding(native) {
     const { query, observable, read, write, queryRead } = native, rowId = native.variables.rowId, identity = variableKey(native.variables);
-    let options = native.options, optionsRefreshes = 0, loadStop = null, lastLoad = null;
+    let options = native.options, optionsRefreshes = 0, loadStop = null, lastLoad = null, projection = null;
     const edges = new Map(), cursors = new Set(); let server = null, last = null, disabled = false, pendingServer = false;
     const key = edge => videoId(edge) || 'cursor:' + edge.cursor;
-    const signature = data => JSON.stringify([connection(data)?.edges?.map(key), connection(data)?.totalCount, connection(data)?.pageInfo]);
+    const pageKey = info => variableKey(info && Object.fromEntries(Object.keys(info).filter(key => key !== '__typename').map(key => [key, own(info, key)])));
+    const signature = data => JSON.stringify([connection(data)?.edges?.map(key), connection(data)?.totalCount, pageKey(connection(data)?.pageInfo)]);
     function ownership() {
         const next = own(observable, 'options'), variables = own(next, 'variables');
         return { disabled, optionsChanged: next !== options, queryChanged: own(next, 'query') !== query,
@@ -130,7 +135,12 @@ function createBinding(native) {
         const original = data; last = signature(output);
         assertCurrent(); write({ ...input, data: output, overwrite: true }); assertCurrent();
         const observed = read(input); assertCurrent();
-        if (signature(observed) !== last) {
+        const expected = connection(output), actual = connection(observed);
+        projection = { matches: signature(observed) === last, edgeOrder: JSON.stringify(expected.edges.map(key)) === JSON.stringify(actual?.edges?.map(key)),
+            totalCount: expected.totalCount === actual?.totalCount, pageInfo: pageKey(expected.pageInfo) === pageKey(actual?.pageInfo),
+            expectedEdges: expected.edges.length, observedEdges: actual?.edges?.length ?? null, expectedTotal: expected.totalCount, observedTotal: actual?.totalCount ?? null,
+            cursor: expected.pageInfo.endCursor === actual?.pageInfo?.endCursor, pageFlag: expected.pageInfo.hasNextPage === actual?.pageInfo?.hasNextPage };
+        if (!projection.matches) {
             write({ ...input, data: original, overwrite: true }); disabled = true; throw Error('cache-projection-rejected');
         }
         const index = selected.findIndex(edge => videoId(edge) === anchor);
@@ -170,6 +180,6 @@ function createBinding(native) {
             const ids = [...edges.values()].map(videoId).filter(id => id && !choices[id]);
             return { known: edges.size, filtered: ids.length, anchorIndex: Math.max(0, ids.indexOf(anchor)),
                 hasNextPage: server.pageInfo.hasNextPage, canLoad: Boolean(queryRead), overlap: native.overlap,
-                serverTotal: server.totalCount, optionsRefreshes, ownership: ownership(), loadStop, lastLoad: lastLoad && { ...lastLoad } };
+                serverTotal: server.totalCount, optionsRefreshes, ownership: ownership(), projection: projection && { ...projection }, loadStop, lastLoad: lastLoad && { ...lastLoad } };
         } });
 }

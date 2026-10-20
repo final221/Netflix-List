@@ -123,3 +123,35 @@ test('meeting the buffer target on the last allowed read reports ready rather th
     assert.equal(b.state.requests.length, 6); assert.equal(b.owner.diagnostics().rows[0].reason, 'buffer-ready');
     b.owner.dispose();
 });
+
+
+test('disabled cache bindings retain the rejection reason without retrying them as owner changes', async () => {
+    const b = fixture(); b.state.rejectWrites = true;
+    b.owner.interact(b.row); await b.scheduler.advance(200);
+    assert.equal(b.owner.diagnostics().rows[0].reason, 'cache-projection-rejected');
+    b.owner.interact(b.row); await b.scheduler.advance(200);
+    assert.equal(b.owner.diagnostics().failures, 1); assert.equal(b.owner.diagnostics().blockedRetries, 1);
+    assert.equal(b.owner.diagnostics().rows[0].reason, 'cache-projection-rejected');
+    b.row.id = 'replacement'; b.state.rejectWrites = false;
+    b.owner.interact(b.row); await b.scheduler.advance(200);
+    assert.equal(b.owner.diagnostics().writes, 1); assert.equal(b.owner.diagnostics().activated, 2);
+    b.owner.dispose();
+});
+
+test('unsupported visible rows back off after eviction while manual navigation may rediscover them', async () => {
+    const b = fixture(); for (const card of b.row.querySelectorAll('a')) delete card.__reactFiber$queryTest;
+    b.owner.interact(b.row, 'visible'); await b.scheduler.advance(200);
+    b.owner.refresh(); await b.scheduler.advance(200); assert.equal(b.owner.diagnostics().attempts, 1);
+    for (let index = 0; index < 4; index++) {
+        const row = b.document.body.appendChild(new Element('section'));
+        for (const id of ['1', '2']) {
+            const host = row.appendChild(new Element('div')); host.setAttribute('data-virtual-slot', id);
+            const card = host.appendChild(new Element('a')); card.setAttribute('data-uia', 'standard-card'); card.setAttribute('href', '/title/' + id);
+        }
+        b.owner.interact(row, 'visible'); await b.scheduler.advance(200);
+    }
+    b.owner.interact(b.row, 'visible'); await b.scheduler.advance(200);
+    assert.equal(b.owner.diagnostics().automaticSuppressed, 1); assert.equal(b.owner.diagnostics().attempts, 5);
+    b.owner.interact(b.row); await b.scheduler.advance(200); assert.equal(b.owner.diagnostics().attempts, 6);
+    b.owner.dispose();
+});

@@ -375,3 +375,15 @@ test('compact logs preserve bounded navigation order, four-coordinate rectangles
     const snapshot = JSON.parse(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
     assert.deepEqual(snapshot.recommendations.navigation, navigation);
 });
+
+
+test('normal exports retain all four bounded native loading outcomes and projection comparisons', async () => {
+    const { logger } = loggerFixture(); let text;
+    const nativeRows = { loads: 2, rows: Array.from({ length: 4 }, (_, index) => ({ reason: 'cache-projection-rejected',
+        projection: { expectedEdges: index + 1, observedEdges: index + 2, edgeOrder: false } })) };
+    const report = createReport({ logger, version: 'test', readEnvironment: () => ({}), writeText: value => { text = value; },
+        readRuntime: () => ({ recommendations: { nativeRows } }), readSeriesViewing: () => [], readThumbnails: () => ({}), readNativePopup: () => ({}) });
+    await report.copy();
+    const snapshot = JSON.parse(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+    assert.deepEqual(snapshot.recommendations.nativeRows, nativeRows);
+});

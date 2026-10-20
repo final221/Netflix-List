@@ -1,7 +1,7 @@
 // Deferred work for visible or interacted rows. Native cache/query operations stay in the adapter.
 export function createNativeRows({ environment, dom, admitted, canRestore = admitted, readChoices }) {
-    const rows = new Map(), requests = [], stats = { attempts: 0, activated: 0, writes: 0, loads: 0, restored: 0, failures: 0, automatic: 0, stops: {} };
-    let generation = 0, visibility = null; const observed = new Map();
+    const rows = new Map(), requests = [], stats = { attempts: 0, activated: 0, writes: 0, loads: 0, restored: 0, failures: 0, automatic: 0, automaticSuppressed: 0, blockedRetries: 0, stops: {} };
+    let generation = 0, visibility = null; const observed = new Map(); let backoff = new WeakMap();
     const now = () => environment.performance?.now() ?? Date.now();
     const identity = row => [row.id, row.getAttribute('data-list-id'), row.querySelector('h2, .rowTitle')?.textContent].join('|');
     function guard(job) { if (job.generation !== generation || rows.get(job.row) !== job || !job.row.isConnected || identity(job.row) !== job.identity || !admitted()) throw Error('native-row-retired'); }
@@ -26,7 +26,8 @@ export function createNativeRows({ environment, dom, admitted, canRestore = admi
                 job.lookups--;
                 const found = dom.queryBinding(values[0].card, values.map(value => value.id)); check();
                 job.probe = found.probe;
-                if (!found.binding) { job.reason = found.reason; return; }
+                if (!found.binding) { job.reason = found.probe?.namedQuery && !found.probe.variables ? 'waiting-row-query' : found.reason;
+                    if (job.source === 'visible') job.lookups = 0; return; }
                 job.binding = found.binding; job.pagination = found.pagination; stats.activated++;
             }
             job.pagination = dom.queryPage?.(values[0].card) || job.pagination;
@@ -66,7 +67,8 @@ export function createNativeRows({ environment, dom, admitted, canRestore = admi
         } finally {
             job.running = false;
             try { guard(job); if (job.binding) job.summary = job.binding.state(readChoices(), job.anchor);
-                stats.stops[job.reason] = (stats.stops[job.reason] || 0) + 1; } catch (_) {}
+                stats.stops[job.reason] = (stats.stops[job.reason] || 0) + 1;
+                if (!job.binding || job.failed) backoff.set(job.row, { identity: job.identity, at: now() }); } catch (_) {}
             if (job.dirty || job.resumeAt) try { guard(job); schedule(job, Math.max(200, (job.resumeAt || 0) - now())); } catch (_) {}
         }
     }
@@ -76,8 +78,11 @@ export function createNativeRows({ environment, dom, admitted, canRestore = admi
     }
     function interact(row, source = 'interaction') {
         if (!row || !admitted()) return;
+        const prior = backoff.get(row);
+        if (source === 'visible' && prior?.identity === identity(row) && now() - prior.at < 60000) { stats.automaticSuppressed++; return; }
         let job = rows.get(row);
         if (job && identity(row) !== job.identity) { retire(job); job = null; }
+        if (job?.failed && job.binding?.state(readChoices()).ownership.disabled) { stats.blockedRetries++; return; }
         if (!job) {
             if (rows.size >= 4) retire(rows.values().next().value);
             job = { row, identity: identity(row), generation, timer: null, deadline: null, controller: null, binding: null, pagination: null,
@@ -111,7 +116,7 @@ export function createNativeRows({ environment, dom, admitted, canRestore = admi
         for (const row of collection) if (!observed.has(row) && observed.size < 80) { observed.set(row, identity(row)); visibility.observe(row); }
     }
     function dispose() {
-        visibility?.disconnect(); visibility = null; observed.clear();
+        visibility?.disconnect(); visibility = null; observed.clear(); backoff = new WeakMap();
         for (const job of rows.values()) retire(job);
         generation++; rows.clear(); requests.length = 0;
     }
