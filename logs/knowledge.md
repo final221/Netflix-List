@@ -71,8 +71,8 @@ Same startup/five exports/five arrows/six dismissals. Arrow BUTTON56×64/rgb37/o
 
 ## Session — 1.9.12
 
-Four detailed captures, Windows/Firefox157/2560×1279/DPR1;2026-10-11 UTC+02;runtime ref unknown. Uncommitted source filenames/copiedAt/SHA256 retained in logs/knowledge.md at d9dcc9b (summary revision, not runtime).
-Same visit:0→7arrows/6watched actions/89→162movements/no drops or diagnostic failures. Actual arrow[2460,568,56,238]/right2516 vs viewport2560;opaque rgb37. Parent0×0 at[2488,704];next parent2560×279. All vertical hit samples inside. Seven arrows:0→8→8first-observed IDs at200/1200/5000ms (first closed before next arrow);not proof of fresh ranking or isolated arrow causality. GraphQL timings present/0GraphQL wrapper captures. Final284checked/132requests/3series coverage failures after3attempts/0pending. One cancelled download followed by successful exports. Compact mode untested by these captures;no horizontal hit tests or timed action outcomes.
+Four detailed exports, Windows/Firefox157/2560×1279/DPR1;2026-10-11 UTC+02;runtime unknown. Uncommitted sources/copiedAt/SHA256 atd9dcc9b;full measurements at567ac12:logs/knowledge.md (summary refs).
+Same visit:7arrows/6watched actions;arrow56×238/right2516 vs2560,opaque rgb37;vertical hits inside. First-observed IDs after arrows, not ranking/causality proof. Final284checked/132requests/3coverage failures/0pending. GraphQL timings/0wrapper captures;one cancelled export followed by successes. Compact/horizontal hits/timed action outcomes untested.
 
 ## Session — 1.9.13
 
@@ -81,12 +81,7 @@ Same visit/baseline+2next arrows;no saved actions. Row6:13→25→26mounted;firs
 
 ## Session — 1.9.14
 
-Five detailed exports, Windows/Firefox157/2560×1279/DPR1;2026-10-11 UTC+02;runtime ref unknown. Uncommitted logs/ sources:
-- 1.9.14-2026-10-11T00-02-41-771Z-935bebb5.txt; 2026-10-11T02:02:41.769+02:00; SHA256 64344e92e51cea8d383a1e387799c1c87ead855dc181d48c75913a573fdb83e3.
-- 1.9.14-2026-10-11T00-02-59-769Z-83123b9e.txt; 2026-10-11T02:02:59.766+02:00; SHA256 e0bb51048fd468543f6d2097e9b5e8ac45f165589db87b67ca2c25f38a4090e1.
-- 1.9.14-2026-10-11T00-03-12-129Z-560fc701.txt; 2026-10-11T02:03:12.126+02:00; SHA256 bf6bfe71fe564bc20177f7c2fa4e2e50bda2b655e71377523ece06ea422ffc27.
-- 1.9.14-2026-10-11T00-03-39-403Z-598583a1.txt; 2026-10-11T02:03:39.393+02:00; SHA256 ee04689537e6cd1291942b108bd9273494348aaec35a18de19550ca734beafda.
-- 1.9.14-2026-10-11T00-03-45-634Z-0f8dbb30.txt; 2026-10-11T02:03:45.621+02:00; SHA256 86895f8d0c8ed51f4d76700d0ce49722b4f8f361dfb9c1f717494bb76a6e7621.
+Five detailed exports, Windows/Firefox157/2560×1279/DPR1;2026-10-11 UTC+02;runtime ref unknown. Original uncommitted filenames/copiedAt/SHA256 retained in logs/knowledge.md at567ac12 (summary revision, not runtime).
 Baseline+10arrows/no saved actions/warnings;174→200checked/76→93requests/0pending. Three failures after3attempts:episode-count-mismatch/headline26/partial season sum27;declared seasons2,2,3;full sums and independent list lengths unrecorded. Probe2response hooks/8text reads/0fetch GraphQL;4paired connections+entity responses. Movie row reports150/14items/hasNext:true twice;period row36/14/true then36/9/false, followed by6arrows/no responses and novel counts2,0,0,0,0,0. Returned entity IDs intersect clicked row12/14,6/14,12/14,6/9;time-window association, not causal proof. Compact, caught-up correction and independent preloading untested.
 
 ## Evidence limits
@@ -94,3 +89,8 @@ Baseline+10arrows/no saved actions/warnings;174→200checked/76→93requests/0pe
 Chat2026-10-10, environment unconfirmed/no captures:1.5.0 previews cover buttons;1.6.0/.1 panel/collapse work;1.8.0 needs arrows;1.8.1 auto-scroll disrupts browsing.
 
 No-warning captures do not certify mapping repair. Resize/lifecycle/Undo/timers/popup remain unverified; successful requests can yield unknown metadata. No captures:1.4.59–.63/.65–.66/.68/1.4.71–1.9.0.
+
+## Session — 1.10.0
+
+One compact browse capture, copied2026-10-20T19:46:08.396+02:00;Windows/Firefox158/en/2560×1279/DPR1;runtime ref unknown. Source logs/1.10.0-2026-10-20T17-46-08-397Z-92a9a334.txt;SHA256 1e04faa8e2baa9d83237be6f5b179b57948a6e6452455ce1db1dc4463be55356.
+Five entries;no omitted groups/sections. Knowledge701titles/212completion records/154writes/1listener/0invalid records/0notification failures/failure:false/3missing names/0unverified series. Browsing325checked/201requests/0pending/4failed. Three sampled series report episode-count-mismatch:81171925(27vs28),81663323(28vs29),82719204(16vs17),each3attempts;fourth omitted. One cancelled log download;later export supplied. No manual actions, My List session or retained prior pages;no cross-tab/reload/profile-switch proof. Private storage export comparison belongs in findings, not this capture record.
