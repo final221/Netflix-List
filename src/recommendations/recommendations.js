@@ -36,7 +36,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     } };
     const ownsKnowledge = !knowledge;
     knowledge ||= createKnowledge({ ...userscript, getValue: (...args) => userscript.getValue(...args), setValue: (...args) => userscript.setValue(...args), activeProfile: context.activeProfile, queueMicrotask });
-    let unsubscribe = null;
+    let unsubscribe = null, viewingDisabled = null, selectedIds = null, selectedHides = null, selectedChoices = {};
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
     let scrollTimer = null;
     const pending = new Set();
@@ -51,16 +51,25 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         isCurrent: () => active && allowed() && Boolean(profile) && readProfile() === profile, onChange: viewingChanged, log, warn });
     const savedPanel = createSavedChoicesPanel({ document, tUi,
         readPresentation: () => ({ profile, epoch, failed,
-            records: [...viewing.savedIds().map(id => ({ id, reason: 'viewing', type: viewing.type(id), unverified: viewing.unverified(id) })),
+            records: [...viewing.savedRecords().map(record => ({ ...record, reason: 'viewing' })),
                 ...Object.keys(choices).map(id => ({ id, reason: choices[id], type: 'unknown' }))] }),
         readTitle: id => knowledge.name(id) || [...entries.values()].find(entry => entry.id === id && entry.title)?.title });
-    function visibleChoices() { return { ...Object.fromEntries(viewing.ids().map(id => [id, 'watched'])), ...choices }; }
-    function viewingChanged() {
+    function visibleChoices() {
+        const ids = viewing.ids();
+        if (ids !== selectedIds || choices !== selectedHides) {
+            selectedIds = ids; selectedHides = choices;
+            selectedChoices = { ...Object.fromEntries(ids.map(id => [id, 'watched'])), ...choices };
+        }
+        return selectedChoices;
+    }
+    function viewingChanged(ids = null) {
         if (!active || !profile || readProfile() !== profile || !allowed()) return;
         try {
             const latest = read(profile);
             choices = latest.choices;
-            for (const entry of entries.values()) paint(entry);
+            const disabled = viewing.presentation().disabled, selected = ids && new Set(ids);
+            const all = !selected || viewingDisabled !== disabled; viewingDisabled = disabled;
+            for (const entry of entries.values()) if (all || selected.has(entry.id)) paint(entry);
             // Refill the bounded metadata queue from mounted cards as slots become available.
             viewing.observe([...entries.values()]);
             savedPanel.paint(); updateRefill(); nativeRows.refresh();
@@ -96,7 +105,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         if (next === profile) return;
         nativeRows.dispose(); refill.dispose(); navigation.dispose(); viewing.dispose();
         for (const entry of [...entries.values()]) release(entry);
-        profile = next; choices = {}; failed = false; epoch++; pending.clear(); queued = false;
+        profile = next; choices = {}; failed = false; viewingDisabled = null; epoch++; pending.clear(); queued = false;
         inventories.clear(); inventoryLimit = false;
         savedPanel.reset();
         if (next) try { const loaded = read(next); if (readProfile() === next) choices = loaded.choices; else profile = null; }
@@ -160,7 +169,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             const legacy = knowledge.legacy(value.id);
             if (legacy?.watched && value.typeHint === 'movie' && !viewing.choice(value.id)) viewing.mark(value.id, value.title);
         }
-        if (viewing.observe([...entries.values()])) viewingChanged();
+        if (viewing.observe([...entries.values()])) viewingChanged(discovered.map(value => value.id));
         for (const value of discovered) { const entry = entries.get(value.host); if (entry) paint(entry); }
         if (!style) {
             style = document.createElement('style');
@@ -251,7 +260,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     function check() {
         if (!allowed()) { dispose(); return; }
         if (!active) { active = true; epoch++;
-            unsubscribe = knowledge.subscribe(() => { if (active && allowed()) viewingChanged(); });
+            unsubscribe = knowledge.subscribe(change => { if (active && allowed()) viewingChanged(change.ids); });
             environment.window?.addEventListener('scroll', scroll, { passive: true });
             document.addEventListener('click', click, true); document.addEventListener('pointerover', pointer, true); savedPanel.start(); }
         scan(); observe();
@@ -267,7 +276,8 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         document.removeEventListener('click', click, true); document.removeEventListener('pointerover', pointer, true);
         savedPanel.dispose(); inventories.clear(); inventoryLimit = false;
         for (const entry of [...entries.values()]) release(entry);
-        style?.remove(); style = null; profile = null; choices = {}; failed = false;
+        style?.remove(); style = null; profile = null; choices = {}; failed = false; viewingDisabled = null;
+        selectedIds = selectedHides = null; selectedChoices = {};
     }
     return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(visibleChoices()).length,
         storageFailed: failed, work: { ...work }, layout: dom.layoutDiagnostics(), nativeRows: nativeRows.diagnostics(), inventory: { rows: inventories.size, limitReached: inventoryLimit }, refill: refill.diagnostics(), viewing: viewing.diagnostics(),

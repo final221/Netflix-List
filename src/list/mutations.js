@@ -4,7 +4,7 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
     isBlocked = () => false, applyMutation = null,
     readParent = () => null, canApply = () => false, assertSession = () => {}, isCancelled = () => false,
     createError = (code, message) => Object.assign(new Error(message), { code }),
-    hasMember, refreshNative, observeNative,
+    hasMember, refreshNative, observeNative, readNativeMembership = () => null, readProfile = () => null,
     captureNative, hasMaterial, assertNative,
     readMembership, prepareRecords, readLayout, readVisible, sample = operation => operation(),
     hasCard, retireCard, canInsertCard, insertCard, readPage, writePage, updateCard,
@@ -17,7 +17,8 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
     let pending = new Map(), sequence = 0;
     let publicationGeneration = 0;
     let deferralEpoch = 0, disposedToken = null, cleanupFailures = 0;
-    const undoWork = { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 };
+    const undoWork = { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0,
+        removalWaits: 0, removalsConfirmed: 0, removalsUnconfirmed: 0 };
     function recordCounter(name, amount) { undoWork[name] += amount; onCounter(name, amount); }
     function cleanup(operation) { try { operation(); } catch (_) { cleanupFailures++; } }
     const isAdmitted = token => token !== disposedToken && isSessionActive(token);
@@ -52,12 +53,13 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
     const phases = new WeakMap();
     const readPending = videoId => pending.get(String(videoId)) || null;
     const isMutationCurrent = intent => Boolean(intent && readPending(intent.videoId) === intent &&
-        isAdmitted(phases.get(intent)?.token));
+        isAdmitted(phases.get(intent)?.token) && phases.get(intent)?.profile === readProfile());
     function releaseIntent(intent, oldEntries = entries) {
-        const phase = phases.get(intent), oldTimer = phase.timer, observer = phase.observer;
-        phase.timer = null; phase.observer = null;
+        const phase = phases.get(intent), oldTimer = phase.timer, observer = phase.observer, confirmation = phase.confirmation;
+        phase.timer = null; phase.observer = null; phase.confirmation = null;
         if (oldTimer) cleanup(() => clearTimeout(oldTimer.id));
         cleanup(() => observer?.disconnect());
+        cleanup(() => confirmation?.release());
         const next = readPending(intent.videoId);
         const transferred = next?.fallbackItem === intent.fallbackItem && next?.correlationId === intent.correlationId;
         if (intent.correlationId && entries.get(intent.videoId)?.correlationId !== intent.correlationId &&
@@ -79,7 +81,8 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         const token = readSession(), seq = ++sequence, videoId = String(descriptor.videoId);
         if (!isAdmitted(token)) return null;
         const previous = readPending(videoId);
-        const phase = { token, timer: null, observer: null, deferred: Boolean(descriptor.deferredWhileBusy) };
+        const phase = { token, profile: readProfile(), timer: null, observer: null, confirmation: null, nativeBefore: null,
+            deferred: Boolean(descriptor.deferredWhileBusy) };
         const intent = Object.freeze({ seq, videoId, action: descriptor.action,
             uia: descriptor.uia || '', uiaAction: descriptor.uiaAction || 'unknown', source: descriptor.source || 'user-click',
             detectedAt: Number.isFinite(descriptor.detectedAt) ? descriptor.detectedAt : now(),
@@ -107,6 +110,8 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
             const videoId = intent.videoId;
             let live = call(refreshNative) || call(observeNative);
             if (intent.action === 'remove') {
+                if (!call(hasMember, videoId)) { disposeMutation(videoId, intent); return true; }
+                if (!phases.get(intent).confirmed) return false;
                 const changed = call(remove, videoId, reason, { assertCurrent: guard });
                 if (!changed && !call(hasMember, videoId)) { disposeMutation(videoId, intent); return true; }
                 if (!changed) return false;
@@ -138,8 +143,21 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         }
     }
     function reconcileMutation(intent, reason = 'event') {
-        if (!isMutationCurrent(intent)) return false;
+        if (!isMutationCurrent(intent)) {
+            if (intent && readPending(intent.videoId) === intent) disposeMutation(intent.videoId, intent);
+            return false;
+        }
         const phase = phases.get(intent);
+        // Observe accepted native input even while presentation is deferred. The
+        // exact toggle may disappear before initialization/resize releases its ticket.
+        if (intent.action === 'remove' && !phase.confirmed) {
+            const toggle = phase.confirmation?.read();
+            if (!isMutationCurrent(intent)) return false;
+            const membership = phase.nativeBefore === true ? readNativeMembership(intent.videoId) : null;
+            if (!isMutationCurrent(intent)) return false;
+            phase.confirmed = toggle === false || membership === false;
+            if (phase.confirmed) undoWork.removalsConfirmed++; else undoWork.removalWaits++;
+        }
         if (isDeferred() || isBlocked()) { phase.deferred = true; return false; }
         if (!isMutationCurrent(intent)) return false;
         phase.deferred = false;
@@ -152,11 +170,13 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         if (old) clearTimeout(old.id);
         if (!isMutationCurrent(intent) || phase.timer !== owner) return;
         owner.id = setTimeout(() => {
-            if (!isMutationCurrent(intent) || phase.timer !== owner) return;
+            if (phase.timer !== owner) return;
+            if (!isMutationCurrent(intent)) { disposeMutation(intent.videoId, intent); return; }
             phase.timer = null;
             const applied = reconcileMutation(intent, 'observer-timeout');
             if (applied || !isMutationCurrent(intent)) return;
             if (isDeferred()) { phase.deferred = true; return; }
+            if (intent.action === 'remove') undoWork.removalsUnconfirmed++;
             onTimeout({ seq: intent.seq, videoId: intent.videoId, action: intent.action, timeoutMs: mutationTimeout });
             disposeMutation(intent.videoId, intent);
         }, mutationTimeout);
@@ -194,9 +214,9 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
                 fallbackItem: entry.item, correlationId: entry.correlationId, preferredIndex: entry.index, undo: true };
         }
         if (!descriptor || !admitted()) return null;
-        return queueMutation(descriptor);
+        return queueMutation(descriptor, facts.confirmation);
     }
-    function queueMutation(descriptor) {
+    function queueMutation(descriptor, confirmation = null) {
         if (!descriptor?.videoId) return null;
         const token = readSession(), owner = sequence, parent = readParent();
         const fallbackItem = descriptor.action === 'add' ? (descriptor.fallbackItem || findFallback(String(descriptor.videoId))) : null;
@@ -206,6 +226,9 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         if (!intent) return null;
         const phase = phases.get(intent);
         try {
+            phase.confirmation = confirmation;
+            phase.nativeBefore = readNativeMembership(intent.videoId);
+            if (!isMutationCurrent(intent)) { disposeMutation(intent.videoId, intent); return null; }
             const observer = observeChanges(() => reconcileMutation(intent, 'mutation-observer'));
             if (!isMutationCurrent(intent)) { try { observer?.disconnect(); } catch (_) {} return null; }
             phase.observer = observer; scheduleMutationTimeout(intent);

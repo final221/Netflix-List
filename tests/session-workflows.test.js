@@ -8,6 +8,50 @@ import { viewingVideo, atom, reference, carouselPayload } from './helpers/fixtur
 const ids = parent => parent.children.filter(node => node.getAttribute('data-tm-item-video-id') !== null).map(node => node.getAttribute('data-tm-item-video-id'));
 const groupIds = e => ({ main: ids(e.grid()), watched: ids(e.grid().querySelector('[data-tm-watch-grid]')) });
 
+test('an unconfirmed native removal preserves My List and a delayed accepted removal still converges', async () => {
+    const e = sessionBrowser(); await e.start();
+    e.click('3'); await e.scheduler.flush(); await e.scheduler.advance(2000);
+    assert.deepEqual(e.cardIds(), e.ids, 'a rejected/no-op native action cannot remove the custom card');
+    e.click('3'); await e.scheduler.flush();
+    assert.ok(e.cardIds().includes('3'), 'delayed removal waits for native membership evidence');
+    e.setIds(['1', '2', '4', '5', '6']); await e.scheduler.flush();
+    assert.deepEqual(e.cardIds(), e.ids);
+    e.dispose();
+});
+
+test('a partial native cache and a changed virtual page cannot confirm removal', async () => {
+    const e = sessionBrowser({ count: 12 }); await e.start();
+    e.click('3'); e.setPage(1);
+    const entities = e.window.netflix.reactContext.models.graphql.data.list.entities;
+    entities.edges = entities.edges.slice(6); entities.pageInfo.hasNextPage = true;
+    await e.scheduler.flush(); await e.scheduler.advance(2000);
+    assert.equal(e.cardIds().length, 12); assert.ok(e.cardIds().includes('3'));
+    e.dispose();
+});
+
+test('a profile change retires pending removal confirmation without changing the accepted grid', async () => {
+    const e = sessionBrowser(); await e.start();
+    e.click('3'); e.models.userInfo.userGuid = 'profile-b';
+    await e.scheduler.flush(); await e.scheduler.advance(2000);
+    assert.ok(e.cardIds().includes('3')); assert.equal((await e.snapshot()).pendingMyListMutations.length, 0);
+    e.dispose();
+});
+
+test('delayed browse mounting keeps discovery attached for later native source replacement', async () => {
+    const e = sessionBrowser(), host = e.source.section.parentElement, container = host.parentElement;
+    host.remove(); e.app.start();
+    await e.scheduler.advance(50); await e.scheduler.flush();
+    container.appendChild(host);
+    await e.drain(() => e.app.diagnostics().currentSession?.completed);
+    const previous = e.grid();
+    e.replaceSource();
+    for (let i = 0; i < 120; i++) { await e.scheduler.advance(25); await e.scheduler.frame(); }
+    assert.ok(e.grid()?.isConnected, 'replacement remains discoverable after delayed initial mounting');
+    assert.notEqual(e.grid(), previous);
+    assert.deepEqual(e.cardIds(), ['1', '2', '3', '4', '5', '6']);
+    e.dispose();
+});
+
 test('real session cleanup failure cannot retain active hover or prevent a replacement visit', async () => {
     const e = sessionBrowser(); await e.start();
     const root = e.grid();
@@ -133,7 +177,7 @@ test('real session ready hover reuses the prepared grid card and reports readine
 
 test('real session last removal adopts delayed native empty content and repopulates on first addition', async () => {
     const e = sessionBrowser({ count:1 }); await e.start();
-    const root = e.grid(); e.click('1'); await e.scheduler.flush();
+    const root = e.grid(); e.click('1', { nativeAction: 'add' }); await e.scheduler.flush();
     await e.drain(() => e.cardIds().length === 0);
     assert.equal(root.getAttribute('data-tm-empty'), 'true');
     // Native can retain its last card before replacing the carousel with an empty row.
@@ -210,7 +254,7 @@ test('real session initialization defers a native click until accepted membershi
     e.context.console.log = (...args) => {
         log(...args);
         if (!queued && args[1] === 'Collection page stabilized') {
-            queued = true; e.click('3');
+            queued = true; e.click('3', { nativeAction: 'add' });
             assert.equal(e.app.diagnostics().currentSession.running, true);
             assert.deepEqual(e.cardIds(), [], 'no partial grid is exposed during collection');
         }
@@ -236,7 +280,7 @@ test('real session collection replacement retries without publishing partial mem
     assert.ok(e.logs.some(row => row[1] === 'Native collection discarded after source replacement'));
     assert.equal(e.app.diagnostics().currentSession.running, false);
     assert.deepEqual(e.cardIds(), ['1','2','3','4','5','6','7','8','9','10','11','12']);
-    e.click('3'); await e.drain(() => !e.cardIds().includes('3'));
+    e.click('3', { nativeAction: 'add' }); await e.drain(() => !e.cardIds().includes('3'));
     assert.deepEqual(e.cardIds(), ['1','2','4','5','6','7','8','9','10','11','12']);
     e.dispose();
     assert.equal(e.scheduler.timers.size, 0); assert.equal(e.scheduler.frames.size, 0);
@@ -261,7 +305,7 @@ test('real session source replacement during grid staging restarts with a comple
     assert.equal(replaced, true);
     assert.ok(e.logs.some(row => row[1] === 'Grid construction discarded after native source replacement'));
     assert.deepEqual(e.cardIds(), ['1','2','3','4','5','6','7','8','9','10','11','12']);
-    e.click('3'); await e.drain(() => !e.cardIds().includes('3'));
+    e.click('3', { nativeAction: 'add' }); await e.drain(() => !e.cardIds().includes('3'));
     assert.deepEqual(e.cardIds(), ['1','2','4','5','6','7','8','9','10','11','12']);
     e.dispose(); assert.equal(e.scheduler.timers.size, 0); assert.equal(e.scheduler.frames.size, 0);
 });
@@ -270,7 +314,7 @@ test('real session responsive transaction defers membership then releases its ex
     const e=sessionBrowser({count:12});await e.start();
     e.resize(3,300);await e.scheduler.advance(140);
     assert.ok(e.logs.some(row=>row.includes('Responsive refresh started')));
-    e.click('3');await e.scheduler.flush();assert.ok(e.cardIds().includes('3'));
+    e.click('3', { nativeAction: 'add' });await e.scheduler.flush();assert.ok(e.cardIds().includes('3'));
     await e.drain(()=>!e.cardIds().includes('3'));
     assert.deepEqual(e.cardIds(),['1','2','4','5','6','7','8','9','10','11','12']);
     assert.ok(e.logs.some(row=>row.includes('Responsive refresh completed')));e.dispose();

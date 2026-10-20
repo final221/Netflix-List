@@ -11,6 +11,91 @@ function setup(storage = new Map()) {
 }
 const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 
+test('remote bursts reload storage once and publish only changed titles', async () => {
+    const prefix = 'legacyMyListForNetflix.knowledge.v2.A.', storage = new Map([[prefix + 'migrated', true]]);
+    for (let id = 1; id <= 1000; id++) storage.set(prefix + id + '.label', { name: 'Old ' + id });
+    const writer = setup(storage), api = storageClient(storage);
+    let reads = 0, enumerations = 0;
+    const reader = createKnowledge({ ...api, activeProfile: () => 'A',
+        getValue(key, fallback) { reads++; return api.getValue(key, fallback); },
+        listValues() { enumerations++; return api.listValues(); } });
+    const view = reader.view(); view.sync(); reads = enumerations = 0;
+    const deliveries = []; reader.subscribe(change => deliveries.push(change.ids));
+    for (let id = 1; id <= 50; id++) writer.knowledge.remember(String(id), { name: 'New ' + id });
+    await settle();
+    assert.equal(enumerations, 1); assert.ok(reads <= 1010, 'one bounded reload, not one per signal');
+    assert.deepEqual(deliveries, [Array.from({ length: 50 }, (_, i) => String(i + 1))]);
+    assert.equal(reader.name('50'), 'New 50'); assert.equal(reader.name('51'), 'Old 51');
+    reader.resync(); await settle(); assert.equal(deliveries.length, 1, 'unchanged focus recovery does not repaint');
+    assert.ok(reader.diagnostics().coalescedInvalidations >= 49);
+    writer.knowledge.dispose(); reader.dispose();
+});
+
+test('loading retained evidence does not notify unchanged series after an unrelated remote update', async () => {
+    const storage = new Map(), first = setup(storage);
+    first.knowledge.remember('1', { type: 'series', coverage: [['10', 2]], status: 'complete' });
+    await settle();
+    const second = setup(storage), deliveries = []; first.knowledge.subscribe(change => deliveries.push(change.ids));
+    second.knowledge.remember('2', { name: 'Other title' }); await settle();
+    assert.deepEqual(deliveries, [['2']]);
+    assert.equal(first.view.complete('1'), true);
+    first.knowledge.dispose(); second.knowledge.dispose();
+});
+
+test('queued remote reload cannot read or notify after profile replacement or disposal', async () => {
+    for (const dispose of [false, true]) {
+        const storage = new Map(), writer = setup(storage), api = storageClient(storage), pending = [];
+        let profile = 'A', reads = 0, delivered = 0;
+        const reader = createKnowledge({ ...api, activeProfile: () => profile, queueMicrotask: fn => pending.push(fn),
+            getValue(key, fallback) { reads++; return api.getValue(key, fallback); } });
+        reader.view().sync(); reader.subscribe(() => delivered++);
+        writer.knowledge.remember('1', { name: 'Remote' }); await settle();
+        assert.equal(pending.length, 1);
+        if (dispose) reader.dispose(); else profile = 'B';
+        reads = 0; pending.shift()();
+        assert.equal(reads, 0); assert.equal(delivered, 0);
+        reader.dispose(); writer.knowledge.dispose();
+    }
+});
+
+test('incidental title history cannot block new decisions, hides or acknowledged completion', () => {
+    const prefix = 'legacyMyListForNetflix.knowledge.v2.A.', storage = new Map([[prefix + 'migrated', true]]);
+    for (let id = 1; id <= 5000; id++) storage.set(prefix + id + '.label', { name: 'Encountered ' + id });
+    let e = setup(storage);
+    e.knowledge.remember('6001', { name: 'Incidental', type: 'movie' });
+    assert.equal(fact(storage, 'A', '6001', 'label'), undefined, 'new incidental retention stops at its bound');
+    assert.equal(e.view.choose('6001', { status: 'complete', type: 'movie', coverage: null, name: 'Chosen' }).saved, true);
+    e.knowledge.setHidden('6002', true, 'Hidden');
+    e.knowledge.remember('6003', { type: 'series', coverage: [['60', 2]], status: 'complete', name: 'Acknowledged' });
+    assert.equal(e.view.presentation().disabled, false); assert.equal(e.view.complete('6003'), true);
+    e.knowledge.remember('6003', { type: 'series', coverage: [['60', 3]] });
+    assert.equal(e.view.complete('6003'), false, 'retained series can still expire after an expansion');
+    e.knowledge.dispose(); e = setup(storage);
+    assert.equal(e.view.complete('6001'), true); assert.equal(e.knowledge.name('6001'), 'Chosen');
+    assert.deepEqual(e.knowledge.hidden(), { 6002: 'hide' }); assert.equal(e.view.complete('6003'), false);
+    assert.equal(e.view.choose('6001', { status: 'main', type: 'movie', coverage: null }).saved, true);
+    e.knowledge.setHidden('6002', false); assert.deepEqual(e.knowledge.hidden(), {});
+    assert.equal(fact(storage, 'A', '1', 'label').name, 'Encountered 1', 'existing names are preserved');
+    e.profile('B'); assert.equal(e.view.complete('6001'), false); assert.deepEqual(e.knowledge.hidden(), {});
+    assert.equal(e.view.choose('6001', { status: 'complete', type: 'movie', coverage: null }).saved, true);
+    e.profile('A'); assert.equal(e.view.complete('6001'), false); e.knowledge.dispose();
+});
+
+test('semantic summaries are immutable, reused for unchanged facts and invalidated by choices and expansion', () => {
+    const e = setup(); e.knowledge.remember('1', { type: 'movie', status: 'complete' });
+    e.view.choose('2', { type: 'series', status: 'complete', coverage: [['20', 2]] });
+    const first = e.view.summary();
+    assert.equal(e.view.summary(), first); assert.deepEqual(first.completeIds, ['1', '2']);
+    assert.deepEqual(first.seriesIds, ['2']); assert.equal(first.saved.length, 2);
+    assert.throws(() => first.completeIds.push('3'), TypeError);
+    assert.throws(() => { first.saved[0].type = 'unknown'; }, TypeError);
+    e.knowledge.remember('2', { type: 'series', coverage: [['20', 3]] });
+    assert.deepEqual(e.view.summary().completeIds, ['1']); assert.deepEqual(first.completeIds, ['1', '2']);
+    e.view.choose('1', { type: 'movie', status: 'main', coverage: null });
+    assert.deepEqual(e.view.summary().completeIds, []);
+    e.profile('B'); assert.deepEqual(e.view.summary().saved, []); e.knowledge.dispose();
+});
+
 test('legacy import preserves decisions, labels, hides, stale completion and both profile sources', () => {
     const manual = { version: 1, choices: { 1: {status:'complete',type:'series',coverage:[['10',2]]}, 2: {status:'main',type:'movie',coverage:null} } };
     const cache = {version:1,completionRatio:.9,savedAt:0,entries:{3:['movie','complete'],4:['series','complete'],5:['movie','unknown']}};

@@ -128,6 +128,7 @@ export function createMyListSession({ environment = globalThis, version, context
 
     const listMutations = display.createMutations({ now: () => performance.now(),
         readSession: () => sessionScope.token, isSessionActive: isRouteSessionActive, setTimeout, clearTimeout,
+        readProfile: netflixContext.activeProfile, readNativeMembership: id => listData.readMembership(id),
         ttl: UNDO_ENTRY_TTL_MS, hasRetained: (id, item) => gridView.hasRetained(id, item),
         releaseRetained: id => gridView.releaseRetained(id), mutationTimeout: DELTA_MUTATION_TIMEOUT_MS,
         isBlocked: () => initialization.isNativeBlocked(sessionScope.token),
@@ -142,7 +143,8 @@ export function createMyListSession({ environment = globalThis, version, context
             catch (error) { observer.disconnect(); throw error; }
             return observer;
         },
-        onTimeout: detail => warn(tLog('differentialUpdateTimedOutWaitingForAUsableCardSnapshot'), detail),
+        onTimeout: detail => warn(detail.action === 'remove' ? 'My List removal was not confirmed by Netflix'
+            : tLog('differentialUpdateTimedOutWaitingForAUsableCardSnapshot'), detail),
         onQueued: intent => log(tLog('myListMutationQueued'), { seq: intent.seq, videoId: intent.videoId, action: intent.action,
             uiaAction: intent.uiaAction, uia: intent.uia, syncMode: 'event-driven', undo: intent.undo,
             preferredIndex: intent.preferredIndex, hasFallbackSnapshot: Boolean(gridView.materialFor(intent.fallbackItem, intent.correlationId)) }),
@@ -395,7 +397,8 @@ export function createMyListSession({ environment = globalThis, version, context
         if (!isTargetPage() || !display.captureSource()) return;
         listMutations.observeClick(() => {
             const membership = netflixDom.describeMembershipClick(event, { activeVideoId: hover.intent().videoId });
-            return { membership, toastAction: !membership && netflixDom.describeToastActionClick(event) };
+            return { membership, confirmation: membership ? netflixDom.captureMembershipToggle(membership) : null,
+                toastAction: !membership && netflixDom.describeToastActionClick(event) };
         });
     }
 

@@ -8,6 +8,8 @@ Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released u
 
 For copies installed from the former root location, open the released-userscript link once and confirm the update in Tampermonkey. The script name/namespace is unchanged; this release specifies the new URLs for future updates.
 
+Version **1.11.6** requires native confirmation before removing a My List card, repairs discovery when Netflix mounts late, coalesces cross-tab storage reloads and reduces browsing work for large viewing histories. Encountered title names no longer block new saved choices at the incidental-history limit. CopyLogs includes confirmation/reload counters. Reload all Netflix tabs; live compatibility remains to be checked. A second assessment identifies separate pending fixes for toast Undo confirmation and recommendation-cache rollback; see [findings](docs/findings.md#current-assessment-follow-up).
+
 Version **1.11.5** restores the arrow field to the actual card-and-button bounds, excluding unused row spacing. The fixed row reservation, layout stabilization and loading/performance improvements remain. Reload to check the sizing; normal CopyLogs includes the measured content extent.
 
 Version **1.11.4** stabilizes browsing control space and arrow height during card replacement. Local scans avoid unrelated arrow measurements/repaints, and metadata updates reuse native page-context discovery. Loading/filtering behavior is preserved. Normal CopyLogs now records arrow alignment, row gaps and layout-work counters. The 1.11.3 capture confirms15native loads/20verified publications/0loading failures; live layout and smoothness still need validation. Reload and try loading/paging between rows, saving normal CopyLogs if alignment moves again.

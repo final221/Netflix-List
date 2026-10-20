@@ -26,7 +26,7 @@ export function createDiscovery({ document, scope, MutationObserver, requestAnim
         const isAlreadyWatchingDiscovery = !host && targetDocumentDiscoveryActive && !targetObservedBrowseHost;
         if (isAlreadyWatchingDiscovery) return false;
 
-        if (host === targetObservedBrowseHost &&
+        if (host && host === targetObservedBrowseHost &&
             section === targetObservedMyListSection &&
             sameAncestors &&
             !targetDocumentDiscoveryActive) {

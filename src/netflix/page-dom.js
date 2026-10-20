@@ -115,6 +115,18 @@ export function createNetflixPageDom({ document, Element, location, readGraphqlI
         return buttons.length === 1 && buttons[0] === button;
     }
 
+    function captureMembershipToggle(facts) {
+        let button = facts?.button;
+        const id = facts?.videoId, initial = facts?.uiaAction;
+        return Object.freeze({ read() {
+            try {
+                if (!button?.isConnected || !id || initial !== 'remove') return null;
+                const current = describeMembershipClick({ target: button });
+                return current?.videoId === id && current.uiaAction === 'add' ? false : null;
+            } catch (_) { return null; }
+        }, release() { button = null; } });
+    }
+
     const netflixDom = Object.freeze({
         selectors: NETFLIX_DOM_SELECTORS,
 
@@ -306,5 +318,5 @@ export function createNetflixPageDom({ document, Element, location, readGraphqlI
         return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
     }
     return Object.freeze({ ...netflixDom, findMyListSection, readMyListAnchor, nativeCardIdentity, videoIdFromHref,
-        decodeTrackingContext, describeMembershipClick, describeToastActionClick, readHeadingTypography, readSyntheticPlacement, readEmptyContent, readEmptyShell, readRowGap, normalizeTitle });
+        decodeTrackingContext, describeMembershipClick, captureMembershipToggle, describeToastActionClick, readHeadingTypography, readSyntheticPlacement, readEmptyContent, readEmptyShell, readRowGap, normalizeTitle });
 }

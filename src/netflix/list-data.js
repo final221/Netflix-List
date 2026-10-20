@@ -533,6 +533,21 @@ export function createListData({ context, pageDom, location, fetch, performance,
     }
 
     const pageFacts = Object.freeze({
+        readMembership(videoId) {
+            try {
+                const entry = findMyListGraphqlEntry(), entities = entry?.value?.entities;
+                if (!entities || !Array.isArray(entities.edges)) return null;
+                const count = listCount(entities.totalCount), ids = new Set();
+                for (const edge of entities.edges) {
+                    const reference = String(edge?.node?.__ref || '').match(/(?:standardBoxshot_Video:|Video:)(\d+)/);
+                    const id = reference?.[1] || videoIdFromGraphqlNode(edge?.node);
+                    if (id) ids.add(id);
+                }
+                if (ids.has(String(videoId))) return true;
+                return count !== null && ids.size === count && entities.edges.length === count &&
+                    entities.pageInfo?.hasNextPage !== true ? false : null;
+            } catch (_) { return null; }
+        },
         isAvailable() {
             return Boolean(graphqlData());
         },

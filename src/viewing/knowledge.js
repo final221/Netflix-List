@@ -6,7 +6,10 @@ export function createKnowledge(options) {
     const storage = createKnowledgeStorage(options), subscribers = new Map();
     const activeProfile = options.activeProfile, now = options.now || Date.now;
     const enqueue = options.queueMicrotask || globalThis.queueMicrotask;
-    let profile = null, records = new Map(), signature = null, revision = 0, release = null, queued = false, failure = false, notificationGeneration = 0;
+    let profile = null, records = new Map(), signature = null, revision = 0, release = null, queued = false, failure = false, notificationGeneration = 0, reload = null;
+    const work = { storageReloads: 0, remoteInvalidations: 0, coalescedInvalidations: 0, incidentalSkipped: 0 };
+    const emptySummary = Object.freeze({ completeIds: Object.freeze([]), saved: Object.freeze([]), seriesIds: Object.freeze([]), hidden: Object.freeze({}) });
+    let summaryCache = null;
     const changed = new Map();
     function guard(expected, assertCurrent = () => {}) {
         assertCurrent(); if (!expected || activeProfile() !== expected || profile !== expected) throw new Error('viewing-owner-replaced');
@@ -30,15 +33,15 @@ export function createKnowledge(options) {
         const reset = profile !== next;
         if (reset) {
             const previousRelease = release;
-            notificationGeneration++; queued = false; changed.clear(); release = null;
-            profile = next; records = new Map(); signature = null; revision++;
+            notificationGeneration++; queued = false; changed.clear(); release = null; reload = null;
+            profile = next; records = new Map(); signature = null; revision++; summaryCache = null;
             previousRelease?.();
         }
         const check = () => guard(next, assertCurrent);
         if (!force && !reset && release && typeof options.addValueChangeListener === 'function' && signature !== undefined) return records;
         const current = storage.signature(next); check();
         if (reset || current !== signature) {
-            const loaded = storage.read(next, check); check();
+            const loaded = storage.read(next, check); check(); work.storageReloads++;
             for (const value of loaded.values()) {
                 const metadata = Object.entries(value).filter(([kind]) => kind.startsWith('metadata')).map(([, fact]) => fact);
                 const coverage = new Map();
@@ -50,12 +53,20 @@ export function createKnowledge(options) {
                 if (verified.length) value.completion = verified.reduce((best, fact) =>
                     fact.type === 'series' && addedEpisodes(best.coverage, fact.coverage) || fact.observedAt > best.observedAt && !addedEpisodes(fact.coverage, best.coverage) ? fact : best);
             }
-            records = loaded; signature = storage.signature(next); check(); revision++; failure = false;
+            records = loaded; signature = storage.signature(next); check(); revision++; failure = false; summaryCache = null;
         }
         const subscriptionGeneration = notificationGeneration;
         if (!release) release = storage.subscribe(next, (_key, _old, _new, remote) => {
             if (remote === false || subscriptionGeneration !== notificationGeneration || activeProfile() !== next || profile !== next) return;
-            try { const before = records; signature = undefined; ensure(); notify([...new Set([...before.keys(), ...records.keys()])]); } catch (_) { failure = true; }
+            work.remoteInvalidations++;
+            if (reload) { work.coalescedInvalidations++; return; }
+            const owner = { profile: next, generation: subscriptionGeneration }; reload = owner;
+            enqueue(() => {
+                if (reload !== owner) return;
+                reload = null;
+                if (owner.generation !== notificationGeneration || profile !== next || activeProfile() !== next) return;
+                try { reloadChanges(); } catch (_) { failure = true; }
+            });
         });
         return records;
     }
@@ -72,10 +83,33 @@ export function createKnowledge(options) {
         if (entry.type === 'movie') return true;
         return validCoverage(entry.coverage) && !addedEpisodes(entry.coverage, value.metadata?.coverage);
     }
+    function unverified(value) {
+        return !effectiveManual(value) && !completion(value) &&
+            Boolean(value.completion?.type === 'series' && !validCoverage(value.completion.coverage) || !value.manual && value.legacy?.watched === true);
+    }
+    function summary() {
+        ensure();
+        if (summaryCache) return summaryCache;
+        const completeIds = [], saved = [], seriesIds = [], hidden = {};
+        for (const [id, value] of records) {
+            const manual = effectiveManual(value), type = manual?.type || value.metadata?.type || value.completion?.type;
+            const complete = manual ? manual.status === 'complete' : completion(value), pending = unverified(value);
+            if (complete) completeIds.push(id);
+            if (complete || pending) saved.push(Object.freeze({ id, type: type || 'unknown', unverified: pending }));
+            if ((manual?.status === 'complete' || type === 'series' || !value.manual && value.legacy?.watched) && type !== 'movie') seriesIds.push(id);
+            if (value.hidden?.hidden) hidden[id] = 'hide';
+        }
+        summaryCache = Object.freeze({ completeIds: Object.freeze(completeIds), saved: Object.freeze(saved),
+            seriesIds: Object.freeze(seriesIds), hidden: Object.freeze(hidden) });
+        return summaryCache;
+    }
     function mutate(id, kind, value, assertCurrent = () => {}, origin) {
         if (!/^\d+$/.test(String(id))) throw new Error('invalid-title');
         ensure(assertCurrent); const expected = profile;
-        if (!records.has(String(id)) && records.size >= 5000) throw new Error('storage-full');
+        // Encountered names/metadata must never consume admission for a user decision.
+        if (!records.has(String(id)) && records.size >= 5000 && ['label', 'metadata'].includes(kind)) {
+            work.incidentalSkipped++; return false;
+        }
         const check = () => guard(expected, assertCurrent);
         const existing = records.get(String(id))?.[kind];
         if (kind !== 'manual' && JSON.stringify(existing) === JSON.stringify(value)) { check(); return false; }
@@ -83,6 +117,7 @@ export function createKnowledge(options) {
         check();
         const previous = records.get(String(id)) || {};
         records.set(String(id), { ...previous, [kind]: structuredCopy(value) });
+        summaryCache = null;
         if (didWrite) { storage.signal(expected); check(); signature = storage.signature(expected); check(); notify([String(id)], origin); }
         return didWrite;
     }
@@ -98,7 +133,7 @@ export function createKnowledge(options) {
             const metadata = { type, coverage: retainedCoverage, baseline: prior?.baseline || retainedCoverage };
             try { mutate(id, 'metadata', metadata, assertCurrent, origin); }
             catch (error) { guard(profile, assertCurrent); if (records.get(String(id))?.manual !== manualBefore) return;
-                records.set(String(id), { ...records.get(String(id)), metadata }); failure = true; throw error; }
+                records.set(String(id), { ...records.get(String(id)), metadata }); summaryCache = null; failure = true; throw error; }
         }
         if (status === 'complete' && (type === 'movie' || type === 'series' && validCoverage(coverage))) {
             const prior = records.get(String(id))?.completion;
@@ -159,24 +194,34 @@ export function createKnowledge(options) {
                 const entry = value(id); return choice(id)?.type || entry.metadata?.type || entry.completion?.type; },
             complete: id => { const entry = value(id), manual = effectiveManual(entry); return manual ? manual.status === 'complete' : completion(entry); },
             automatic: id => completion(value(id)),
-            unverified: id => { const entry = value(id); return !effectiveManual(entry) && !completion(entry) &&
-                (entry.completion?.type === 'series' && !validCoverage(entry.completion.coverage) || !entry.manual && entry.legacy?.watched === true); },
+            unverified: id => unverified(value(id)),
+            summary() { if (!current()) return emptySummary; try { return summary(); } catch (_) { viewFailure = true; return emptySummary; } },
             retire() { alive = false; viewProfile = undefined; }, fork: nextOrigin => createView(viewProfile, nextOrigin),
             presentation: () => Object.freeze({ profile: viewProfile, manualFailure: viewFailure || failure, disabled: !current() || viewFailure || failure }) };
     }
     function name(id) { const entry = facts(id); return titleName(entry.label?.name) || titleName(entry.manual?.name) || titleName(entry.hidden?.name) || titleName(entry.completion?.name); }
-    function hidden() { return Object.fromEntries([...ensure()].filter(([, entry]) => entry.hidden?.hidden).map(([id]) => [id, 'hide'])); }
+    function hidden() { return { ...summary().hidden }; }
     function setHidden(id, hidden, label = '', assertCurrent = () => {}) { mutate(id, 'hidden', { hidden: Boolean(hidden), name: titleName(label) || name(id) }, assertCurrent); }
-    function resync() { try { signature = undefined; const before = records; ensure(); notify([...new Set([...before.keys(), ...records.keys()])]); } catch (_) { failure = true; } }
+    function reloadChanges() {
+        const before = records; signature = undefined; ensure();
+        // Evidence keys fold into these effective facts; loading their storage
+        // representation alone is not a change to the title's semantic state.
+        const projection = value => JSON.stringify(value && ['manual', 'completion', 'metadata', 'label', 'hidden', 'legacy']
+            .map(kind => value[kind] ?? null));
+        const ids = [...new Set([...before.keys(), ...records.keys()])]
+            .filter(id => projection(before.get(id)) !== projection(records.get(id)));
+        notify(ids);
+    }
+    function resync() { reload = null; try { reloadChanges(); } catch (_) { failure = true; } }
     function dispose() {
-        notificationGeneration++; queued = false; changed.clear(); release = null;
-        subscribers.clear(); profile = null; records = new Map(); signature = null;
+        notificationGeneration++; queued = false; changed.clear(); release = null; reload = null;
+        subscribers.clear(); profile = null; records = new Map(); signature = null; summaryCache = null;
         storage.dispose();
     }
     return Object.freeze({ view: origin => createView(undefined, origin), remember, name, hidden, setHidden, resync, dispose,
         subscribe(callback, origin) { subscribers.set(callback, origin); return () => subscribers.delete(callback); },
         legacy(id) { try { const value = facts(id); return value.manual ? null : value.legacy; } catch (_) { return null; } },
-        diagnostics: () => ({ ...storage.diagnostics(), titles: records.size, subscribers: subscribers.size, failure,
+        diagnostics: () => ({ ...storage.diagnostics(), ...work, titles: records.size, subscribers: subscribers.size, failure,
             rememberedCompletions: [...records.values()].filter(value => value.completion).length,
             unverifiedSeries: [...records.values()].filter(value => value.completion?.type === 'series' && !validCoverage(value.completion.coverage)).length,
             missingNames: [...records.values()].filter(value => (value.manual || value.completion || value.hidden?.hidden) &&

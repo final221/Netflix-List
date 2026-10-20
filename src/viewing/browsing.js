@@ -34,7 +34,7 @@ export function createBrowsingViewing({ environment, context, userscript, isCurr
     function observe(items) {
         if (!profile) return false;
         let updated = false;
-        const savedSeries = choices.ids().filter(id => (choices.status(id) === 'complete' || choices.type(id) === 'series' || knowledge.legacy(id)?.watched) && choices.type(id) !== 'movie').map(id => ({ id }));
+        const savedSeries = choices.summary().seriesIds.map(id => ({ id }));
         for (const { id, typeHint, title } of [...items, ...savedSeries]) {
             if (typeHint === 'movie' && !types.has(id)) { types.set(id, 'movie'); pending.delete(id); waitingSince.delete(id); checked.add(id); attempts.delete(id); failed.delete(id); updated = true;
                 if (knowledge.legacy(id)?.watched && !choices.choice(id)) choices.choose(id, { status: 'complete', type: 'movie', coverage: null, name: title || '' }, () => guard());
@@ -50,7 +50,7 @@ export function createBrowsingViewing({ environment, context, userscript, isCurr
             const elapsed = Math.max(0, now() - waitingSince.get(id)); waitingSince.delete(id);
             readiness.count++; readiness.totalMs += elapsed; readiness.maxMs = Math.max(readiness.maxMs, elapsed);
         }
-        onChange(); guard(owner);
+        onChange(ids); guard(owner);
     }
     function seasonBatches(records) {
         const batches = []; let batch = [], size = 0;
@@ -133,7 +133,7 @@ export function createBrowsingViewing({ environment, context, userscript, isCurr
                     else if (attempts.get(id) >= 3) { failed.add(id); waitingSince.delete(id); }
                     else pending.set(id, now() + 1000 * attempts.get(id));
                 }
-                onChange(); guard(owner);
+                onChange(ids); guard(owner);
             }
         } catch (_) { /* Retired owners cannot schedule retries or publish. */ }
         finally { if (owner === generation) { running = false; pump(); } }
@@ -142,7 +142,7 @@ export function createBrowsingViewing({ environment, context, userscript, isCurr
         guard(); if (ready(id) || inFlight.has(id)) return false;
         failed.delete(id); attempts.delete(id); pending.set(id, 0); waitingSince.set(id, now());
         if (retryTimer !== null) environment.clearTimeout(retryTimer); retryTimer = null;
-        pump(); onChange(); return true;
+        pump(); onChange([id]); return true;
     }
     function type(id) { return types.get(id) || choices.type(id); }
     function ready(id) { return type(id) === 'movie' || type(id) === 'series' && coverage.has(id); }
@@ -156,8 +156,8 @@ export function createBrowsingViewing({ environment, context, userscript, isCurr
     return Object.freeze({ reset, dispose, observe, type, ready, mark, restore, retry,
         unavailable: id => failed.has(id),
         complete: id => choices.complete(id),
-        savedIds: () => choices.ids().filter(id => choices.complete(id) || choices.unverified(id)),
-        unverified: id => choices.unverified(id), choice: id => choices.choice(id), ids: () => choices.ids().filter(id => choices.complete(id)),
+        savedIds: () => choices.summary().saved.map(record => record.id), savedRecords: () => choices.summary().saved,
+        unverified: id => choices.unverified(id), choice: id => choices.choice(id), ids: () => choices.summary().completeIds,
         presentation: () => choices.presentation(), diagnostics: () => ({ phase, readiness: { count: readiness.count,
             meanMs: readiness.count ? Math.round(readiness.totalMs / readiness.count) : 0, maxMs: Math.round(readiness.maxMs), waiting: waitingSince.size },
             budgetWaitMs: Math.max(0, Math.round((windowRequests >= 198 ? windowStart + 60000 : 0) - now())),

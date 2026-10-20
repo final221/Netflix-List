@@ -2,7 +2,50 @@
 
 Updated: 2026-10-21
 
-This file records the code-review findings and the agreed follow-up plan for My List for Netflix. It is a working record; the user authorizes necessary investigation and implementation steps toward stationary recommendation refill without repeated per-step approval; unrelated work remains outside that goal. Current release and remaining work come first. Historical checkpoints follow; later completion records supersede earlier pending-work statements.
+This file records the code-review findings and agreed follow-up work for My List for Netflix. The user selected all five findings from the 1.11.5 assessment; release 1.11.6 completes that selection. Necessary investigation and implementation toward stationary recommendation refill also remain authorized. Newly assessed issues below are follow-up recommendations unless separately selected. Current release and remaining work come first; later completion records supersede historical pending-work statements.
+
+## Current assessment follow-up
+
+The second assessment, requested after A1-A5 were selected, reviewed their implementation and preservation checks plus related membership, knowledge, native-query/cache, lifecycle and release paths. It found these two additional pre-existing behavioral issues. They remain **unselected and unchanged**; completion of A1-A5 does not imply the whole script is free of defects.
+
+| Priority | Remaining finding | Evidence and next correction |
+| --- | --- | --- |
+| **P2 / A7** | **Rejected recommendation projections can overwrite newer native cache content.** `src/netflix/recommendation-query.js:publish()` writes its original data back unconditionally after a failed readback comparison. | With the public query/cache fixture initially holding IDs 1,2,3, let the cache write callback publish native IDs 1,2,3,4. Projection verification rejects the intervening change and its second write restores 1,2,3, losing 4. The query module is unchanged from 1.11.5. Make rollback conditional on exact write ownership, preserving intervening native content; cover rejected/partial projections, reentrant native writes, variable replacement and normal restoration. Prioritize this before extending loading integration. |
+| **P2 / A6** | **Toast Undo still publishes an unconfirmed addition.** The add branch in `src/list/mutations.js` can publish retained material before Netflix accepts the restoration. | In the real-session fixture, remove 3 with native confirmation, then click the toast Undo without changing native membership. Native remains 1,2,4,5,6 while the custom grid becomes 1,2,3,4,5,6. The unchanged add behavior is also encoded in the existing retained-Undo scenario. Require title-specific addition confirmation while preserving retained material, exact correlation, original insertion position and accepted-but-not-yet-mounted Undo. A1 intentionally covers removal acceptance only. |
+
+These are offline counterexamples, not observed Firefox failures. A7 uses `tests/helpers/recommendation-query.js:queryFixture` and a one-time `state.onWrite` replacement; A6 uses `tests/helpers/session-browser.js` and the existing toast-button DOM input shape. No failing permanent tests were committed for unselected work. No additional supported defect was established in the other paths examined in this second round; this does not certify every native interleaving.
+
+Remaining live validation: reload 1.11.6 on Windows/Firefox and check confirmed/delayed removals, late mount/source replacement, storage bursts and saved-choice actions with multiple tabs/profiles. Existing arrow sizing/centering, stationary refill, Next/Previous/wrap, added-episode expiry and hover/resize/Undo position checks also remain open. A missing confirmation preserves the accepted grid and expires through the existing 1.8-second observer deadline; CopyLogs distinguishes confirmation waits, accepted removals and unconfirmed expiries. It adds no verification network request or automatic native navigation. Use [logs/knowledge.md](../logs/knowledge.md) for version-specific live observations; no new capture was supplied in this run.
+
+## Selected assessment corrections - completed in 1.11.6
+
+The user selected **A1-A5** on 2026-10-21. Implementation stays on main in the normal checkout and preserves existing native cards/hover/loading/layout, profile-scoped decisions, ratings/history and Save As diagnostics. Metadata/internal and package/lock versions agree at **1.11.6**.
+
+| Selected item | Implemented outcome | Verification |
+| --- | --- | --- |
+| **A1** | Removal waits for a matching connected native toggle's remove-to-add transition or a present-to-absent transition in a complete unique native-cache membership snapshot. Partial windows and cache failures remain unknown. Exact pending intents retain observed confirmation across initialization/resize deferral, reject profile replacement and release their toggle lease on retirement. | Real-session regressions reject no-op/delayed/partial-window false removals and retire profile-obsolete intent resources. Native-adapter cases cover recycled/disconnected/released toggle identity, duplicate/incomplete/empty cache shapes and unavailable cache reads. Existing successful removal, last-item/native-empty adoption, deferred input, source replacement and Undo-correlation scenarios pass. Five older fixtures now supply an explicit accepted native action instead of treating an unchanged click as success. |
+| **A2** | Discovery's unchanged-binding shortcut requires an attached host. Activation before the host exists starts document observation, then narrows normally. | The previously failing delayed-host-then-source-replacement real-session regression passes. Existing observer targeting/coalescing/retirement and session/carousel suites pass. |
+| **A3** | Remote signals coalesce before enumeration under an exact profile/generation ticket. Reload/focus reconciliation compares effective per-title facts, excluding the storage representation of retained evidence, and delivers changed IDs only. Reload/coalescing counters are copied diagnostics. | The same 50-name/1,000-title burst changes **50 enumerations / 50,100 reads to 1 enumeration / 1,002 reads**. Regression checks cover unchanged resync, queued profile/disposal retirement and unchanged series after loading retained evidence. Competing manual decisions, missed notifications and episode-evidence preservation remain passing. |
+| **A4** | Shared knowledge owns a frozen semantic summary reused until facts change. Browsing reads saved-series candidates/completions from that summary; recommendations reuses exclusion projections and repaints changed mounted IDs, with full repaint on global availability changes. | The same 40-card unchanged scan changes **9,208 to 208 active-profile reads with 1,000 saved films**; with zero saved films it remains 208. A single remote title change paints one affected card rather than both mounted cards. Summary identity/immutability, choice/expansion/profile invalidation, streaming beyond 500 titles, metadata retry and finite loading tests pass. Operation counts do not establish frame duration. |
+| **A5** | New incidental label/metadata-only retention stops at 5,000 titles without reporting storage failure. Explicit manual/hide/reversal facts and acknowledged completions remain admissible subject to real storage availability. Existing decisions, names, episode evidence and legacy keys are not evicted. | At5,000 label-only records, new Mark/Hide actions and saved-panel restoration work. Knowledge tests preserve reload, explicit reversal, both profiles and later episode expansion. Skipped incidental observations have a copied counter; actual storage-error behavior remains covered. |
+
+Final verification: **761 offline tests pass** (14 added), reproducible build/dependency/version checks pass, generated userscript syntax passes, and the reviewed diff has no whitespace errors. Source is **70 modules / 18,686 readable physical lines** (+108), including styles/catalogs; generated output is separately **23,758 lines** (+161). This adds safeguards and semantic caching while reducing repeated work; it is not a source-reduction claim. No new dependency, owner or folder is introduced. Architecture documents the confirmation, invalidation, summary and retention contracts; the maintainability map records current counts.
+
+The requested **review-artifact** skill was applied to the assessment/correction proposal and completion claims, alongside behavioral code review. All seven criteria apply to this proposal:
+
+| Criterion | Scoped review result |
+| --- | --- |
+| Purpose and approach | Reproduced reliability/work problems support the local corrections. |
+| Requirement coverage | All five selected outcomes and their preservation constraints have passing checks. |
+| Operational validity | Accepted, unknown, deferred, failed and retired offline paths are covered; live paths remain unverified. |
+| Ownership | Existing native/list/knowledge/browsing capabilities retain their state and resource lifetimes. |
+| Necessity and burden | Additions are limited to local receipts, one invalidation ticket, semantic projections and cheap counters. |
+| Communication | Selected completion, additional findings and live limits remain separate. |
+| Accuracy and verification | Executed checks and operation counts are distinguished from unperformed live testing. |
+
+The scoped correction report is ready; a clean whole-script verdict is withheld because A6/A7 and live validation remain. No broader structural refactor is selected. Changed interfaces expose semantic operations/copied facts rather than mutable state or new caller sequencing. The readability review covers these current findings, selected outcomes and seven criteria: each table has a distinct comparison purpose and accounts for every item in its stated scope.
+
+Context reviewed and retained unchanged: existing preferences already require capability preservation, bounded diagnostics, autonomous selected work and explicit assessment limits. Findings, counts and remaining checks are run-specific and belong here. The private untracked backup remains untouched.
 
 ## Whole-script assessment - 1.11.5
 

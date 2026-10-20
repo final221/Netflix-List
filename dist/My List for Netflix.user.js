@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.5
+// @version      1.11.6
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -2829,6 +2829,21 @@
       const buttons = [...toast.querySelectorAll("button")];
       return buttons.length === 1 && buttons[0] === button;
     }
+    function captureMembershipToggle(facts) {
+      let button = facts?.button;
+      const id = facts?.videoId, initial = facts?.uiaAction;
+      return Object.freeze({ read() {
+        try {
+          if (!button?.isConnected || !id || initial !== "remove") return null;
+          const current = describeMembershipClick({ target: button });
+          return current?.videoId === id && current.uiaAction === "add" ? false : null;
+        } catch (_) {
+          return null;
+        }
+      }, release() {
+        button = null;
+      } });
+    }
     const netflixDom = Object.freeze({
       selectors: NETFLIX_DOM_SELECTORS,
       sectionVideoIds(section, cardLimit = Infinity) {
@@ -2996,6 +3011,7 @@
       videoIdFromHref,
       decodeTrackingContext,
       describeMembershipClick,
+      captureMembershipToggle,
       describeToastActionClick,
       readHeadingTypography,
       readSyntheticPlacement,
@@ -5545,6 +5561,8 @@ ${CARD_ACTION_STYLES}
     hasMember,
     refreshNative,
     observeNative,
+    readNativeMembership = () => null,
+    readProfile = () => null,
     captureNative,
     hasMaterial,
     assertNative,
@@ -5587,7 +5605,17 @@ ${CARD_ACTION_STYLES}
     let pending = /* @__PURE__ */ new Map(), sequence = 0;
     let publicationGeneration = 0;
     let deferralEpoch = 0, disposedToken = null, cleanupFailures = 0;
-    const undoWork = { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0 };
+    const undoWork = {
+      remembered: 0,
+      expired: 0,
+      consumed: 0,
+      cleared: 0,
+      schedules: 0,
+      expiryCallbacks: 0,
+      removalWaits: 0,
+      removalsConfirmed: 0,
+      removalsUnconfirmed: 0
+    };
     function recordCounter(name, amount) {
       undoWork[name] += amount;
       onCounter(name, amount);
@@ -5643,13 +5671,15 @@ ${CARD_ACTION_STYLES}
     }
     const phases = /* @__PURE__ */ new WeakMap();
     const readPending = (videoId2) => pending.get(String(videoId2)) || null;
-    const isMutationCurrent = (intent) => Boolean(intent && readPending(intent.videoId) === intent && isAdmitted(phases.get(intent)?.token));
+    const isMutationCurrent = (intent) => Boolean(intent && readPending(intent.videoId) === intent && isAdmitted(phases.get(intent)?.token) && phases.get(intent)?.profile === readProfile());
     function releaseIntent(intent, oldEntries = entries) {
-      const phase = phases.get(intent), oldTimer = phase.timer, observer = phase.observer;
+      const phase = phases.get(intent), oldTimer = phase.timer, observer = phase.observer, confirmation = phase.confirmation;
       phase.timer = null;
       phase.observer = null;
+      phase.confirmation = null;
       if (oldTimer) cleanup(() => clearTimeout(oldTimer.id));
       cleanup(() => observer?.disconnect());
+      cleanup(() => confirmation?.release());
       const next = readPending(intent.videoId);
       const transferred = next?.fallbackItem === intent.fallbackItem && next?.correlationId === intent.correlationId;
       if (intent.correlationId && entries.get(intent.videoId)?.correlationId !== intent.correlationId && oldEntries.get(intent.videoId)?.correlationId !== intent.correlationId && !transferred) {
@@ -5673,7 +5703,15 @@ ${CARD_ACTION_STYLES}
       const token = readSession(), seq = ++sequence, videoId2 = String(descriptor.videoId);
       if (!isAdmitted(token)) return null;
       const previous = readPending(videoId2);
-      const phase = { token, timer: null, observer: null, deferred: Boolean(descriptor.deferredWhileBusy) };
+      const phase = {
+        token,
+        profile: readProfile(),
+        timer: null,
+        observer: null,
+        confirmation: null,
+        nativeBefore: null,
+        deferred: Boolean(descriptor.deferredWhileBusy)
+      };
       const intent = Object.freeze({
         seq,
         videoId: videoId2,
@@ -5716,6 +5754,11 @@ ${CARD_ACTION_STYLES}
         const videoId2 = intent.videoId;
         let live = call(refreshNative) || call(observeNative);
         if (intent.action === "remove") {
+          if (!call(hasMember, videoId2)) {
+            disposeMutation(videoId2, intent);
+            return true;
+          }
+          if (!phases.get(intent).confirmed) return false;
           const changed2 = call(remove, videoId2, reason, { assertCurrent: guard });
           if (!changed2 && !call(hasMember, videoId2)) {
             disposeMutation(videoId2, intent);
@@ -5751,8 +5794,20 @@ ${CARD_ACTION_STYLES}
       }
     }
     function reconcileMutation(intent, reason = "event") {
-      if (!isMutationCurrent(intent)) return false;
+      if (!isMutationCurrent(intent)) {
+        if (intent && readPending(intent.videoId) === intent) disposeMutation(intent.videoId, intent);
+        return false;
+      }
       const phase = phases.get(intent);
+      if (intent.action === "remove" && !phase.confirmed) {
+        const toggle = phase.confirmation?.read();
+        if (!isMutationCurrent(intent)) return false;
+        const membership = phase.nativeBefore === true ? readNativeMembership(intent.videoId) : null;
+        if (!isMutationCurrent(intent)) return false;
+        phase.confirmed = toggle === false || membership === false;
+        if (phase.confirmed) undoWork.removalsConfirmed++;
+        else undoWork.removalWaits++;
+      }
       if (isDeferred() || isBlocked()) {
         phase.deferred = true;
         return false;
@@ -5769,7 +5824,11 @@ ${CARD_ACTION_STYLES}
       if (old) clearTimeout(old.id);
       if (!isMutationCurrent(intent) || phase.timer !== owner) return;
       owner.id = setTimeout(() => {
-        if (!isMutationCurrent(intent) || phase.timer !== owner) return;
+        if (phase.timer !== owner) return;
+        if (!isMutationCurrent(intent)) {
+          disposeMutation(intent.videoId, intent);
+          return;
+        }
         phase.timer = null;
         const applied = reconcileMutation(intent, "observer-timeout");
         if (applied || !isMutationCurrent(intent)) return;
@@ -5777,6 +5836,7 @@ ${CARD_ACTION_STYLES}
           phase.deferred = true;
           return;
         }
+        if (intent.action === "remove") undoWork.removalsUnconfirmed++;
         onTimeout({ seq: intent.seq, videoId: intent.videoId, action: intent.action, timeoutMs: mutationTimeout });
         disposeMutation(intent.videoId, intent);
       }, mutationTimeout);
@@ -5821,9 +5881,9 @@ ${CARD_ACTION_STYLES}
         };
       }
       if (!descriptor || !admitted()) return null;
-      return queueMutation(descriptor);
+      return queueMutation(descriptor, facts.confirmation);
     }
-    function queueMutation(descriptor) {
+    function queueMutation(descriptor, confirmation = null) {
       if (!descriptor?.videoId) return null;
       const token = readSession(), owner = sequence, parent = readParent();
       const fallbackItem = descriptor.action === "add" ? descriptor.fallbackItem || findFallback(String(descriptor.videoId)) : null;
@@ -5836,6 +5896,12 @@ ${CARD_ACTION_STYLES}
       if (!intent) return null;
       const phase = phases.get(intent);
       try {
+        phase.confirmation = confirmation;
+        phase.nativeBefore = readNativeMembership(intent.videoId);
+        if (!isMutationCurrent(intent)) {
+          disposeMutation(intent.videoId, intent);
+          return null;
+        }
         const observer = observeChanges(() => reconcileMutation(intent, "mutation-observer"));
         if (!isMutationCurrent(intent)) {
           try {
@@ -8101,6 +8167,22 @@ ${CARD_ACTION_STYLES}
       }
     }
     const pageFacts = Object.freeze({
+      readMembership(videoId2) {
+        try {
+          const entry = findMyListGraphqlEntry(), entities = entry?.value?.entities;
+          if (!entities || !Array.isArray(entities.edges)) return null;
+          const count = listCount(entities.totalCount), ids = /* @__PURE__ */ new Set();
+          for (const edge of entities.edges) {
+            const reference = String(edge?.node?.__ref || "").match(/(?:standardBoxshot_Video:|Video:)(\d+)/);
+            const id = reference?.[1] || videoIdFromGraphqlNode(edge?.node);
+            if (id) ids.add(id);
+          }
+          if (ids.has(String(videoId2))) return true;
+          return count !== null && ids.size === count && entities.edges.length === count && entities.pageInfo?.hasNextPage !== true ? false : null;
+        } catch (_) {
+          return null;
+        }
+      },
       isAvailable() {
         return Boolean(graphqlData());
       },
@@ -8766,7 +8848,10 @@ ${CARD_ACTION_STYLES}
     const storage = createKnowledgeStorage(options), subscribers = /* @__PURE__ */ new Map();
     const activeProfile = options.activeProfile, now = options.now || Date.now;
     const enqueue = options.queueMicrotask || globalThis.queueMicrotask;
-    let profile = null, records = /* @__PURE__ */ new Map(), signature = null, revision = 0, release = null, queued = false, failure = false, notificationGeneration = 0;
+    let profile = null, records = /* @__PURE__ */ new Map(), signature = null, revision = 0, release = null, queued = false, failure = false, notificationGeneration = 0, reload = null;
+    const work = { storageReloads: 0, remoteInvalidations: 0, coalescedInvalidations: 0, incidentalSkipped: 0 };
+    const emptySummary = Object.freeze({ completeIds: Object.freeze([]), saved: Object.freeze([]), seriesIds: Object.freeze([]), hidden: Object.freeze({}) });
+    let summaryCache = null;
     const changed = /* @__PURE__ */ new Map();
     function guard(expected, assertCurrent = () => {
     }) {
@@ -8806,10 +8891,12 @@ ${CARD_ACTION_STYLES}
         queued = false;
         changed.clear();
         release = null;
+        reload = null;
         profile = next;
         records = /* @__PURE__ */ new Map();
         signature = null;
         revision++;
+        summaryCache = null;
         previousRelease?.();
       }
       const check = () => guard(next, assertCurrent);
@@ -8819,6 +8906,7 @@ ${CARD_ACTION_STYLES}
       if (reset || current !== signature) {
         const loaded = storage.read(next, check);
         check();
+        work.storageReloads++;
         for (const value of loaded.values()) {
           const metadata = Object.entries(value).filter(([kind]) => kind.startsWith("metadata")).map(([, fact]) => fact);
           const coverage = /* @__PURE__ */ new Map();
@@ -8838,18 +8926,28 @@ ${CARD_ACTION_STYLES}
         check();
         revision++;
         failure = false;
+        summaryCache = null;
       }
       const subscriptionGeneration = notificationGeneration;
       if (!release) release = storage.subscribe(next, (_key, _old, _new, remote) => {
         if (remote === false || subscriptionGeneration !== notificationGeneration || activeProfile() !== next || profile !== next) return;
-        try {
-          const before = records;
-          signature = void 0;
-          ensure();
-          notify([.../* @__PURE__ */ new Set([...before.keys(), ...records.keys()])]);
-        } catch (_) {
-          failure = true;
+        work.remoteInvalidations++;
+        if (reload) {
+          work.coalescedInvalidations++;
+          return;
         }
+        const owner = { profile: next, generation: subscriptionGeneration };
+        reload = owner;
+        enqueue(() => {
+          if (reload !== owner) return;
+          reload = null;
+          if (owner.generation !== notificationGeneration || profile !== next || activeProfile() !== next) return;
+          try {
+            reloadChanges();
+          } catch (_) {
+            failure = true;
+          }
+        });
       });
       return records;
     }
@@ -8868,12 +8966,38 @@ ${CARD_ACTION_STYLES}
       if (entry.type === "movie") return true;
       return validCoverage(entry.coverage) && !addedEpisodes(entry.coverage, value.metadata?.coverage);
     }
+    function unverified(value) {
+      return !effectiveManual(value) && !completion(value) && Boolean(value.completion?.type === "series" && !validCoverage(value.completion.coverage) || !value.manual && value.legacy?.watched === true);
+    }
+    function summary() {
+      ensure();
+      if (summaryCache) return summaryCache;
+      const completeIds = [], saved = [], seriesIds = [], hidden2 = {};
+      for (const [id, value] of records) {
+        const manual = effectiveManual(value), type = manual?.type || value.metadata?.type || value.completion?.type;
+        const complete = manual ? manual.status === "complete" : completion(value), pending = unverified(value);
+        if (complete) completeIds.push(id);
+        if (complete || pending) saved.push(Object.freeze({ id, type: type || "unknown", unverified: pending }));
+        if ((manual?.status === "complete" || type === "series" || !value.manual && value.legacy?.watched) && type !== "movie") seriesIds.push(id);
+        if (value.hidden?.hidden) hidden2[id] = "hide";
+      }
+      summaryCache = Object.freeze({
+        completeIds: Object.freeze(completeIds),
+        saved: Object.freeze(saved),
+        seriesIds: Object.freeze(seriesIds),
+        hidden: Object.freeze(hidden2)
+      });
+      return summaryCache;
+    }
     function mutate(id, kind, value, assertCurrent = () => {
     }, origin) {
       if (!/^\d+$/.test(String(id))) throw new Error("invalid-title");
       ensure(assertCurrent);
       const expected = profile;
-      if (!records.has(String(id)) && records.size >= 5e3) throw new Error("storage-full");
+      if (!records.has(String(id)) && records.size >= 5e3 && ["label", "metadata"].includes(kind)) {
+        work.incidentalSkipped++;
+        return false;
+      }
       const check = () => guard(expected, assertCurrent);
       const existing = records.get(String(id))?.[kind];
       if (kind !== "manual" && JSON.stringify(existing) === JSON.stringify(value)) {
@@ -8884,6 +9008,7 @@ ${CARD_ACTION_STYLES}
       check();
       const previous = records.get(String(id)) || {};
       records.set(String(id), { ...previous, [kind]: structuredCopy(value) });
+      summaryCache = null;
       if (didWrite) {
         storage.signal(expected);
         check();
@@ -8910,6 +9035,7 @@ ${CARD_ACTION_STYLES}
           guard(profile, assertCurrent);
           if (records.get(String(id))?.manual !== manualBefore) return;
           records.set(String(id), { ...records.get(String(id)), metadata });
+          summaryCache = null;
           failure = true;
           throw error;
         }
@@ -9034,9 +9160,15 @@ ${CARD_ACTION_STYLES}
           return manual ? manual.status === "complete" : completion(entry);
         },
         automatic: (id) => completion(value(id)),
-        unverified: (id) => {
-          const entry = value(id);
-          return !effectiveManual(entry) && !completion(entry) && (entry.completion?.type === "series" && !validCoverage(entry.completion.coverage) || !entry.manual && entry.legacy?.watched === true);
+        unverified: (id) => unverified(value(id)),
+        summary() {
+          if (!current()) return emptySummary;
+          try {
+            return summary();
+          } catch (_) {
+            viewFailure = true;
+            return emptySummary;
+          }
         },
         retire() {
           alive = false;
@@ -9051,18 +9183,24 @@ ${CARD_ACTION_STYLES}
       return titleName(entry.label?.name) || titleName(entry.manual?.name) || titleName(entry.hidden?.name) || titleName(entry.completion?.name);
     }
     function hidden() {
-      return Object.fromEntries([...ensure()].filter(([, entry]) => entry.hidden?.hidden).map(([id]) => [id, "hide"]));
+      return { ...summary().hidden };
     }
     function setHidden(id, hidden2, label = "", assertCurrent = () => {
     }) {
       mutate(id, "hidden", { hidden: Boolean(hidden2), name: titleName(label) || name(id) }, assertCurrent);
     }
+    function reloadChanges() {
+      const before = records;
+      signature = void 0;
+      ensure();
+      const projection = (value) => JSON.stringify(value && ["manual", "completion", "metadata", "label", "hidden", "legacy"].map((kind) => value[kind] ?? null));
+      const ids = [.../* @__PURE__ */ new Set([...before.keys(), ...records.keys()])].filter((id) => projection(before.get(id)) !== projection(records.get(id)));
+      notify(ids);
+    }
     function resync() {
+      reload = null;
       try {
-        signature = void 0;
-        const before = records;
-        ensure();
-        notify([.../* @__PURE__ */ new Set([...before.keys(), ...records.keys()])]);
+        reloadChanges();
       } catch (_) {
         failure = true;
       }
@@ -9072,10 +9210,12 @@ ${CARD_ACTION_STYLES}
       queued = false;
       changed.clear();
       release = null;
+      reload = null;
       subscribers.clear();
       profile = null;
       records = /* @__PURE__ */ new Map();
       signature = null;
+      summaryCache = null;
       storage.dispose();
     }
     return Object.freeze({
@@ -9100,6 +9240,7 @@ ${CARD_ACTION_STYLES}
       },
       diagnostics: () => ({
         ...storage.diagnostics(),
+        ...work,
         titles: records.size,
         subscribers: subscribers.size,
         failure,
@@ -9849,7 +9990,7 @@ ${CARD_ACTION_STYLES}
     function observe(items) {
       if (!profile) return false;
       let updated = false;
-      const savedSeries = choices.ids().filter((id) => (choices.status(id) === "complete" || choices.type(id) === "series" || knowledge.legacy(id)?.watched) && choices.type(id) !== "movie").map((id) => ({ id }));
+      const savedSeries = choices.summary().seriesIds.map((id) => ({ id }));
       for (const { id, typeHint, title } of [...items, ...savedSeries]) {
         if (typeHint === "movie" && !types.has(id)) {
           types.set(id, "movie");
@@ -9878,7 +10019,7 @@ ${CARD_ACTION_STYLES}
         readiness.totalMs += elapsed;
         readiness.maxMs = Math.max(readiness.maxMs, elapsed);
       }
-      onChange();
+      onChange(ids);
       guard(owner);
     }
     function seasonBatches(records) {
@@ -10010,7 +10151,7 @@ ${CARD_ACTION_STYLES}
               waitingSince.delete(id);
             } else pending.set(id, now() + 1e3 * attempts.get(id));
           }
-          onChange();
+          onChange(ids);
           guard(owner);
         }
       } catch (_) {
@@ -10031,7 +10172,7 @@ ${CARD_ACTION_STYLES}
       if (retryTimer !== null) environment.clearTimeout(retryTimer);
       retryTimer = null;
       pump();
-      onChange();
+      onChange([id]);
       return true;
     }
     function type(id) {
@@ -10060,10 +10201,11 @@ ${CARD_ACTION_STYLES}
       retry,
       unavailable: (id) => failed.has(id),
       complete: (id) => choices.complete(id),
-      savedIds: () => choices.ids().filter((id) => choices.complete(id) || choices.unverified(id)),
+      savedIds: () => choices.summary().saved.map((record) => record.id),
+      savedRecords: () => choices.summary().saved,
       unverified: (id) => choices.unverified(id),
       choice: (id) => choices.choice(id),
-      ids: () => choices.ids().filter((id) => choices.complete(id)),
+      ids: () => choices.summary().completeIds,
       presentation: () => choices.presentation(),
       diagnostics: () => ({
         phase,
@@ -10884,7 +11026,7 @@ ${CARD_ACTION_STYLES}
       const sameAncestors = ancestors.length === targetObservedAncestors.length && ancestors.every((ancestor, index) => ancestor === targetObservedAncestors[index]);
       const isAlreadyWatchingDiscovery = !host && targetDocumentDiscoveryActive && !targetObservedBrowseHost;
       if (isAlreadyWatchingDiscovery) return false;
-      if (host === targetObservedBrowseHost && section === targetObservedMyListSection && sameAncestors && !targetDocumentDiscoveryActive) {
+      if (host && host === targetObservedBrowseHost && section === targetObservedMyListSection && sameAncestors && !targetDocumentDiscoveryActive) {
         return false;
       }
       targetDocumentObserver.disconnect();
@@ -18804,6 +18946,8 @@ ${CARD_ACTION_STYLES}
       isSessionActive: isRouteSessionActive,
       setTimeout,
       clearTimeout,
+      readProfile: netflixContext.activeProfile,
+      readNativeMembership: (id) => listData.readMembership(id),
       ttl: UNDO_ENTRY_TTL_MS,
       hasRetained: (id, item) => gridView.hasRetained(id, item),
       releaseRetained: (id) => gridView.releaseRetained(id),
@@ -18830,7 +18974,7 @@ ${CARD_ACTION_STYLES}
         }
         return observer;
       },
-      onTimeout: (detail) => warn(tLog("differentialUpdateTimedOutWaitingForAUsableCardSnapshot"), detail),
+      onTimeout: (detail) => warn(detail.action === "remove" ? "My List removal was not confirmed by Netflix" : tLog("differentialUpdateTimedOutWaitingForAUsableCardSnapshot"), detail),
       onQueued: (intent) => log(tLog("myListMutationQueued"), {
         seq: intent.seq,
         videoId: intent.videoId,
@@ -19194,7 +19338,11 @@ ${CARD_ACTION_STYLES}
       if (!isTargetPage() || !display.captureSource()) return;
       listMutations.observeClick(() => {
         const membership = netflixDom.describeMembershipClick(event, { activeVideoId: hover.intent().videoId });
-        return { membership, toastAction: !membership && netflixDom.describeToastActionClick(event) };
+        return {
+          membership,
+          confirmation: membership ? netflixDom.captureMembershipToggle(membership) : null,
+          toastAction: !membership && netflixDom.describeToastActionClick(event)
+        };
       });
     }
     function handleRelevantTargetDocumentMutation(sessionToken) {
@@ -22901,7 +23049,7 @@ ${CARD_ACTION_STYLES}
     } };
     const ownsKnowledge = !knowledge;
     knowledge ||= createKnowledge({ ...userscript, getValue: (...args) => userscript.getValue(...args), setValue: (...args) => userscript.setValue(...args), activeProfile: context.activeProfile, queueMicrotask });
-    let unsubscribe = null;
+    let unsubscribe = null, viewingDisabled = null, selectedIds = null, selectedHides = null, selectedChoices = {};
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
     let scrollTimer = null;
     const pending = /* @__PURE__ */ new Set();
@@ -22943,21 +23091,30 @@ ${CARD_ACTION_STYLES}
         epoch,
         failed,
         records: [
-          ...viewing.savedIds().map((id) => ({ id, reason: "viewing", type: viewing.type(id), unverified: viewing.unverified(id) })),
+          ...viewing.savedRecords().map((record) => ({ ...record, reason: "viewing" })),
           ...Object.keys(choices).map((id) => ({ id, reason: choices[id], type: "unknown" }))
         ]
       }),
       readTitle: (id) => knowledge.name(id) || [...entries.values()].find((entry) => entry.id === id && entry.title)?.title
     });
     function visibleChoices() {
-      return { ...Object.fromEntries(viewing.ids().map((id) => [id, "watched"])), ...choices };
+      const ids = viewing.ids();
+      if (ids !== selectedIds || choices !== selectedHides) {
+        selectedIds = ids;
+        selectedHides = choices;
+        selectedChoices = { ...Object.fromEntries(ids.map((id) => [id, "watched"])), ...choices };
+      }
+      return selectedChoices;
     }
-    function viewingChanged() {
+    function viewingChanged(ids = null) {
       if (!active || !profile || readProfile() !== profile || !allowed()) return;
       try {
         const latest = read(profile);
         choices = latest.choices;
-        for (const entry of entries.values()) paint(entry);
+        const disabled = viewing.presentation().disabled, selected = ids && new Set(ids);
+        const all = !selected || viewingDisabled !== disabled;
+        viewingDisabled = disabled;
+        for (const entry of entries.values()) if (all || selected.has(entry.id)) paint(entry);
         viewing.observe([...entries.values()]);
         savedPanel.paint();
         updateRefill();
@@ -23031,6 +23188,7 @@ ${CARD_ACTION_STYLES}
       profile = next;
       choices = {};
       failed = false;
+      viewingDisabled = null;
       epoch++;
       pending.clear();
       queued = false;
@@ -23121,7 +23279,7 @@ ${CARD_ACTION_STYLES}
         const legacy = knowledge.legacy(value.id);
         if (legacy?.watched && value.typeHint === "movie" && !viewing.choice(value.id)) viewing.mark(value.id, value.title);
       }
-      if (viewing.observe([...entries.values()])) viewingChanged();
+      if (viewing.observe([...entries.values()])) viewingChanged(discovered.map((value) => value.id));
       for (const value of discovered) {
         const entry = entries.get(value.host);
         if (entry) paint(entry);
@@ -23268,8 +23426,8 @@ ${CARD_ACTION_STYLES}
       if (!active) {
         active = true;
         epoch++;
-        unsubscribe = knowledge.subscribe(() => {
-          if (active && allowed()) viewingChanged();
+        unsubscribe = knowledge.subscribe((change) => {
+          if (active && allowed()) viewingChanged(change.ids);
         });
         environment.window?.addEventListener("scroll", scroll, { passive: true });
         document.addEventListener("click", click, true);
@@ -23308,6 +23466,9 @@ ${CARD_ACTION_STYLES}
       profile = null;
       choices = {};
       failed = false;
+      viewingDisabled = null;
+      selectedIds = selectedHides = null;
+      selectedChoices = {};
     }
     return Object.freeze({ check, dispose, diagnostics: () => ({
       active,
@@ -23582,7 +23743,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.5";
+  var SCRIPT_VERSION = "1.11.6";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

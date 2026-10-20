@@ -183,6 +183,20 @@ test('membership decoding returns UI identity facts while the caller owns curren
     assert.equal(e.dom.describeMembershipClick({ target: {} }), null);
 });
 
+test('membership toggle receipts require the same connected title and an observed action transition', () => {
+    const e = environment(), tracker = e.document.body.appendChild(new Element('div'));
+    tracker.className = 'ptrack-content';
+    const identity = id => tracker.setAttribute('data-ui-tracking-context', JSON.stringify({ video_id: id }));
+    identity('1'); const button = tracker.appendChild(new Element('button'));
+    button.setAttribute('data-uia', 'remove-from-my-list-with-undo');
+    const receipt = e.dom.captureMembershipToggle(e.dom.describeMembershipClick({ target: button }));
+    assert.equal(receipt.read(), null);
+    button.setAttribute('data-uia', 'add-to-my-list'); assert.equal(receipt.read(), false);
+    identity('2'); assert.equal(receipt.read(), null, 'a recycled button cannot confirm another title');
+    identity('1'); tracker.remove(); assert.equal(receipt.read(), null);
+    e.document.body.appendChild(tracker); receipt.release(); assert.equal(receipt.read(), null);
+});
+
 test('toast action decoding accepts one button in a Netflix toast without localized text or list decisions', () => {
     // The shared DOM fixture does not implement descendant selectors.
     class DescendantElement extends Element {
@@ -300,6 +314,21 @@ function dataEnvironment(count = 4, overrides = {}) {
     return { ...e, scheduler, adapter, graph, requests, responses, logs, warnings, scope, inspection,
         page, collect, setToken: value => { while (scope.token < value) scope.begin(); }, assertCurrent };
 }
+
+test('membership absence requires a complete unique native cache rather than a virtual window', () => {
+    const e = dataEnvironment(4), entities = e.graph.MyList.entities;
+    assert.equal(e.adapter.readMembership('1'), true); assert.equal(e.adapter.readMembership('3'), null);
+    entities.edges = [1, 2, 4].map(id => carouselEdge(id));
+    assert.equal(e.adapter.readMembership('3'), null);
+    entities.totalCount = 3; assert.equal(e.adapter.readMembership('3'), false);
+    entities.edges = [carouselEdge(1), carouselEdge(1), carouselEdge(4)];
+    assert.equal(e.adapter.readMembership('3'), null, 'duplicates do not prove completeness');
+    entities.edges = []; entities.totalCount = 0; assert.equal(e.adapter.readMembership('3'), false);
+    Object.defineProperty(entities, 'edges', { get() { throw Error('native cache unavailable'); } });
+    assert.equal(e.adapter.readMembership('3'), null);
+    assert.equal(e.requests.length, 0, 'confirmation is a passive read');
+    e.scope.dispose();
+});
 
 test('live row identity overrides stale listener and cached rows while compact diagnostics retain the decision', async () => {
     for (const cached of [false, true]) {

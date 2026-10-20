@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { sessionBrowser } from './helpers/session-browser.js';
 import { createRecommendations } from '../src/recommendations/recommendations.js';
 import { createApplication } from '../src/app/application.js';
+import { createKnowledge } from '../src/viewing/knowledge.js';
 import { createI18n } from '../src/i18n/i18n.js';
 import { UI_MESSAGES } from '../src/i18n/ui-messages.js';
 import { createBrowser } from './helpers/browser.js';
@@ -26,7 +27,7 @@ function setup(options = {}) {
     if (options.PerformanceObserver) b.context.PerformanceObserver = options.PerformanceObserver;
     const userscript = { ...storageClient(saved), ...options };
     const tUi = createI18n({ readLanguage: () => 'en' }).tUi;
-    const feature = createRecommendations({ environment: b.context, context: { activeProfile: () => profile }, userscript, tUi, viewingData: options.viewingData, log: options.log });
+    const feature = createRecommendations({ environment: b.context, context: { activeProfile: () => { options.onProfileRead?.(); return profile; } }, userscript, tUi, viewingData: options.viewingData, log: options.log });
     return { ...b, saved, userscript, feature, select: value => { profile = value; },
         click(host, label) { const button = host.querySelectorAll('button').find(node => node.textContent === label);
             assert.ok(button, label); this.document.dispatchEvent({ type: 'click', target: button, preventDefault() {}, stopImmediatePropagation() {} }); },
@@ -115,6 +116,46 @@ function seriesMetadata(readCoverage = () => [['101', 2]]) {
         async readSeasons(records) { return records.map(record => ({ videoId: record.videoId,
             seasons: readCoverage().map(([id, count]) => ({ id, count })) })); } };
 }
+
+test('unchanged browsing scans do not repeatedly resolve every saved film against page context', async () => {
+    const counts = [];
+    for (const saved of [0, 1000]) {
+        const prefix = 'legacyMyListForNetflix.knowledge.v2.A.', storage = new Map([[prefix + 'migrated', true]]);
+        for (let id = 10000; id < 10000 + saved; id++) storage.set(prefix + id + '.completion', { type: 'movie', coverage: null, observedAt: 1 });
+        let reads = 0;
+        const b = setup({ storage, onProfileRead: () => reads++ });
+        for (let id = 1; id <= 40; id++) mount(b, String(id));
+        b.feature.check(); await b.scheduler.flush();
+        reads = 0; b.feature.check(); counts.push(reads); b.feature.dispose();
+    }
+    assert.ok(counts[1] <= counts[0] + 20, 'unchanged page work does not grow with saved-film history: ' + counts);
+});
+
+test('remote knowledge changes repaint only affected mounted recommendation cards', async () => {
+    const b = setup(), first = mount(b, '1'), second = mount(b, '2');
+    b.feature.check(); await b.scheduler.flush();
+    const writer = createKnowledge({ ...storageClient(b.saved), activeProfile: () => 'A' }); writer.view().sync();
+    const before = b.feature.diagnostics().work.paintCalls;
+    writer.remember('1', { type: 'movie', status: 'complete' }); await b.scheduler.flush();
+    assert.equal(first.host.style.getPropertyValue('display'), 'none');
+    assert.equal(second.host.style.getPropertyValue('display'), '');
+    assert.equal(b.feature.diagnostics().work.paintCalls - before, 1);
+    writer.dispose(); b.feature.dispose();
+});
+
+test('full incidental name history keeps browsing choices and panel restoration usable', async () => {
+    const prefix = 'legacyMyListForNetflix.knowledge.v2.A.', storage = new Map([[prefix + 'migrated', true]]);
+    for (let id = 1; id <= 5000; id++) storage.set(prefix + id + '.label', { name: 'Encountered ' + id });
+    const b = setup({ storage }), first = mount(b, '6001'), second = mount(b, '6002');
+    b.feature.check(); await b.scheduler.flush();
+    b.click(first.host, 'Mark watched'); b.click(second.host, 'Hide suggestion');
+    assert.equal(first.host.style.getPropertyValue('display'), 'none');
+    assert.equal(second.host.style.getPropertyValue('display'), 'none');
+    assert.equal(b.feature.diagnostics().storageFailed, false);
+    b.restore('6001'); b.restore('6002');
+    assert.equal(first.host.style.getPropertyValue('display'), ''); assert.equal(second.host.style.getPropertyValue('display'), '');
+    b.feature.dispose();
+});
 
 test('series Mark caught up and movie Mark watched share My List storage, with separate panel groups', async () => {
     const b = setup({ viewingData: seriesMetadata() }), series = mount(b), movie = mount(b, '2'), hidden = mount(b, '3');

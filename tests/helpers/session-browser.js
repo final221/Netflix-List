@@ -99,11 +99,15 @@ export function sessionBrowser({ count = 6, columns = 6, viewing = false, logica
         assert.fail('Workflow did not settle: ' + JSON.stringify(b.logs.map(row => [row[1], row[2]?.code, row[2]?.error?.message])));
     }
     const cardIds = () => grid()?.querySelectorAll('[data-tm-item-video-id]').map(node => node.getAttribute('data-tm-item-video-id')) || [];
-    const click = id => {
+    const click = (id, { nativeAction = null } = {}) => {
         const tracker = b.document.body.appendChild(new Element()); tracker.className = 'ptrack-content';
         tracker.setAttribute('data-ui-tracking-context', encodeURIComponent(JSON.stringify({ appView: 'addToMyListButton', video_id: id })));
         const button = tracker.appendChild(new Element('button')); button.setAttribute('data-uia', 'remove-from-my-list-with-undo');
-        b.document.dispatchEvent({ type: 'click', target: button }); tracker.remove();
+        b.document.dispatchEvent({ type: 'click', target: button });
+        if (nativeAction) {
+            button.setAttribute('data-uia', nativeAction + '-to-my-list');
+            b.context.queueMicrotask(() => tracker.remove());
+        } else tracker.remove();
     };
     const over = id => {
         pointerId = String(id); const node = grid().querySelector(`[data-tm-item-video-id="${id}"]`);
