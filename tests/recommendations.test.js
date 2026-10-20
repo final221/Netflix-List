@@ -559,10 +559,10 @@ test('arrow height uses card geometry rather than a percentage of its short pare
     arrow.offsetParent = { getBoundingClientRect: () => ({ top: 180 }), clientTop: 2, scrollTop: 0 };
     a.card.getBoundingClientRect = () => ({ left: 0, top: 100, width: 250, height: 140 });
     b.feature.check();
-    assert.equal(arrow.style.getPropertyValue('height'), '212px');
+    assert.equal(arrow.style.getPropertyValue('height'), '140px');
     assert.equal(arrow.style.getPropertyValue('top'), '-82px');
     a.card.getBoundingClientRect = () => ({ left: 0, top: 80, width: 200, height: 112 }); b.feature.check();
-    assert.equal(arrow.style.getPropertyValue('height'), '184px');
+    assert.equal(arrow.style.getPropertyValue('height'), '112px');
     assert.equal(arrow.style.getPropertyValue('top'), '-102px');
     b.feature.dispose(); assert.equal(arrow.style.getPropertyValue('height'), '64px');
     assert.equal(arrow.style.getPropertyValue('top'), '0px'); assert.equal(arrow.style.getPropertyValue('bottom'), '');
@@ -576,7 +576,7 @@ test('arrow retirement preserves a newer native height override', () => {
 });
 
 
-test('arrow edge strip covers viewport margin and fixed action space, restoring horizontal leases', () => {
+test('arrow edge strip covers viewport margin and ends at measured actions, restoring horizontal leases', () => {
     const b = setup(), a = mount(b), arrow = nextControl(b, a.row, () => {});
     b.window.innerWidth = 2560;
     arrow.offsetParent = { getBoundingClientRect: () => ({ left: 2488, top: 704 }), clientTop: 0 };
@@ -587,7 +587,7 @@ test('arrow edge strip covers viewport margin and fixed action space, restoring 
     actions.getBoundingClientRect = () => ({ top: 738, height: 28 }); b.feature.check();
     assert.equal(arrow.style.getPropertyValue('width'), '100px');
     assert.equal(arrow.style.getPropertyValue('left'), '-28px');
-    assert.equal(arrow.style.getPropertyValue('height'), '238px');
+    assert.equal(arrow.style.getPropertyValue('height'), '198px');
     b.window.innerWidth = 1920; b.feature.check();
     assert.equal(arrow.style.getPropertyValue('width'), '100px');
     assert.equal(arrow.style.getPropertyValue('left'), '-668px');
@@ -799,15 +799,17 @@ test('a local card mutation does not remeasure arrows in an unrelated row', asyn
 });
 
 
-test('arrow span ignores changing action-label bounds and diagnostics report alignment', () => {
-    const b = setup(), a = mount(b), arrow = nextControl(b, a.row, () => {}); let actionReads = 0;
+test('arrow span ends at actual buttons without consuming the reserved row gap', () => {
+    const b = setup(), a = mount(b), arrow = nextControl(b, a.row, () => {});
     a.card.getBoundingClientRect = () => ({ left: 0, top: 100, width: 250, height: 178 });
-    arrow.getBoundingClientRect = () => ({ left: 1200, top: 100, width: 80, height: 250 });
+    arrow.getBoundingClientRect = () => ({ left: 1200, top: 100, width: 80, height: 212 });
     b.feature.check();
-    a.host.querySelector('.tm-rec-controls').getBoundingClientRect = () => { actionReads++; return { top: 278, height: 400 }; };
-    b.feature.check(); assert.equal(actionReads, 0); assert.equal(arrow.style.getPropertyValue('height'), '250px');
+    a.host.querySelector('.tm-rec-controls').getBoundingClientRect = () => ({ top: 278, height: 34 });
+    b.feature.check(); assert.equal(arrow.style.getPropertyValue('height'), '212px');
+    assert.equal(a.row.style.getPropertyValue('padding-bottom'), '72px');
     const layout = b.feature.diagnostics().rows.rows[0].layout;
-    assert.equal(layout.reservedSpace, 72); assert.equal(layout.arrows[0].topDelta, 0); assert.equal(layout.arrows[0].heightDelta, 0);
+    assert.equal(layout.reservedSpace, 72); assert.equal(layout.contentHeight, 212);
+    assert.equal(layout.arrows[0].topDelta, 0); assert.equal(layout.arrows[0].heightDelta, 0);
     b.feature.dispose();
 });
 

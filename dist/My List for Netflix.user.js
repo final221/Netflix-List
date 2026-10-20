@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.4
+// @version      1.11.5
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -21467,7 +21467,7 @@ ${CARD_ACTION_STYLES}
   // src/netflix/recommendation-dom.js
   var ACTION_SPACE = 72;
   var RECOMMENDATION_ARROW_STYLES = `
-.tm-rec-controls{position:absolute;top:100%;left:0;right:0;height:66px;box-sizing:border-box;align-content:flex-start}
+.tm-rec-controls{position:absolute;top:100%;left:0;right:0;box-sizing:border-box;align-content:flex-start}
 .tm-rec-controls>button{max-width:100%;min-width:0;box-sizing:border-box;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev){
     width:56px!important;min-width:56px!important;min-height:64px!important;height:100%!important;max-height:none!important;max-width:none!important;box-sizing:border-box!important;
@@ -21566,6 +21566,10 @@ ${CARD_ACTION_STYLES}
         if (--resource.users === 0) retire(resource);
       };
     }
+    function actionSpan(item, card) {
+      const actions = item.host.querySelector(".tm-rec-controls")?.getBoundingClientRect();
+      return Math.round(Math.max(card.height, actions?.height > 1 ? actions.top + actions.height - card.top : 0));
+    }
     function updateArrows(row) {
       try {
         const resource = arrowRows.get(row);
@@ -21577,20 +21581,21 @@ ${CARD_ACTION_STYLES}
           resource.controls.delete(control);
         }
         if (!controls.length) return false;
-        let card;
+        let card, height;
         for (const item of scan(row)) {
           if (item.row !== row) continue;
           const rect = item.card.getBoundingClientRect();
           layoutWork.arrowCards++;
           if (rect.width > 1 && rect.height > 1) {
             card = rect;
+            height = actionSpan(item, rect);
             break;
           }
         }
         if (!card) return false;
         for (const control of controls) {
           const parent = control.offsetParent || row, rect = parent.getBoundingClientRect();
-          const height = Math.round(card.height + ACTION_SPACE), top = Math.round(card.top - rect.top - (parent.clientTop || 0) + (parent.scrollTop || 0));
+          const top = Math.round(card.top - rect.top - (parent.clientTop || 0) + (parent.scrollTop || 0));
           const box = control.getBoundingClientRect(), previous = resource.controls.get(control);
           const viewport = document.documentElement?.clientWidth || environment.window?.innerWidth || environment.innerWidth;
           const next = control.matches('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext');
@@ -22064,10 +22069,12 @@ ${CARD_ACTION_STYLES}
       const rect = sample.state.scroller === row ? sample.bounds : row.getBoundingClientRect();
       const item = sample.items.find((item2) => item2.id === sample.cardPositions[0]?.id);
       const card = item && (item.card === item.host ? sample.cardPositions[0].rect : item.card.getBoundingClientRect());
+      const contentHeight = card ? actionSpan(item, card) : null;
       const next = row.nextElementSibling?.getBoundingClientRect();
       return {
         row: pack(rect),
         reservedSpace: ACTION_SPACE,
+        contentHeight,
         paddingBottom: sample.state.scroller.style.getPropertyValue("padding-bottom"),
         nextGap: next ? Math.round(next.top - rect.top - rect.height) : null,
         arrows: [...row.querySelectorAll(arrowSelector)].slice(0, 4).map((control) => {
@@ -22076,7 +22083,7 @@ ${CARD_ACTION_STYLES}
             direction: control.matches('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext') ? "next" : "previous",
             rect: pack(box),
             topDelta: card ? Math.round(box.top - card.top) : null,
-            heightDelta: card ? Math.round(box.height - card.height - ACTION_SPACE) : null
+            heightDelta: card ? Math.round(box.height - contentHeight) : null
           };
         })
       };
@@ -23575,7 +23582,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.4";
+  var SCRIPT_VERSION = "1.11.5";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
