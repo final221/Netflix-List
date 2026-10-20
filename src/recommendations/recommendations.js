@@ -26,8 +26,8 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         }
         inventory.buffer.observe(items); return inventory.buffer;
     }
-    const dom = { ...nativeDom, rowDiagnostics(row, selected) {
-        const facts = nativeDom.rowDiagnostics(row, selected);
+    const dom = { ...nativeDom, rowDiagnostics(row, selected, options) {
+        const facts = nativeDom.rowDiagnostics(row, selected, options);
         if (!facts) return facts;
         const inventory = inventories.get(row);
         const buffer = inventory?.identity === rowIdentity(row) ? inventory.buffer : null;
@@ -136,14 +136,17 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         }
         entries.set(value.host, entry); value.host.appendChild(controls); paint(entry);
     }
-    function scan(root = document) {
+    function scan(root = document) { return dom.batch(() => scanRows(root)); }
+    function scanRows(root) {
         if (!active || !allowed()) return;
         const previous = profile; syncProfile();
         savedPanel.mount();
         if (!profile) return;
         if (previous !== profile) root = document;
         const scanStart = now(); work.scans++;
-        for (const entry of [...entries.values()]) if (!entry.lease.current()) release(entry);
+        const changedRows = new Set(), affected = root.closest?.('section, .lolomoRow');
+        if (affected) changedRows.add(affected);
+        for (const entry of [...entries.values()]) if (!entry.lease.current()) { changedRows.add(entry.row); release(entry); }
         for (const row of inventories.keys()) if (!row.isConnected) inventories.delete(row);
         const discovered = dom.scan(root), byRow = new Map(); work.scannedCards += discovered.length;
         for (const value of discovered) {
@@ -158,7 +161,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             if (legacy?.watched && value.typeHint === 'movie' && !viewing.choice(value.id)) viewing.mark(value.id, value.title);
         }
         if (viewing.observe([...entries.values()])) viewingChanged();
-        for (const entry of entries.values()) paint(entry);
+        for (const value of discovered) { const entry = entries.get(value.host); if (entry) paint(entry); }
         if (!style) {
             style = document.createElement('style');
             style.textContent = CARD_ACTION_STYLES + RECOMMENDATION_ARROW_STYLES + '\n.tm-rec-controls{opacity:1;pointer-events:auto}';
@@ -166,7 +169,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             document.head.appendChild(style);
             environment.window?.addEventListener('resize', resize);
         }
-        for (const row of new Set([...entries.values()].map(entry => entry.row))) dom.updateArrows(row);
+        for (const row of new Set([...byRow.keys(), ...changedRows])) dom.updateArrows(row);
         updateRefill(); nativeRows.observe(new Set([...entries.values()].map(entry => entry.row))); nativeRows.refresh(); work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
     }
     function schedule(root) {
@@ -267,6 +270,6 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         style?.remove(); style = null; profile = null; choices = {}; failed = false;
     }
     return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(visibleChoices()).length,
-        storageFailed: failed, work: { ...work }, nativeRows: nativeRows.diagnostics(), inventory: { rows: inventories.size, limitReached: inventoryLimit }, refill: refill.diagnostics(), viewing: viewing.diagnostics(),
+        storageFailed: failed, work: { ...work }, layout: dom.layoutDiagnostics(), nativeRows: nativeRows.diagnostics(), inventory: { rows: inventories.size, limitReached: inventoryLimit }, refill: refill.diagnostics(), viewing: viewing.diagnostics(),
         rows: rowDiagnostics(), navigation: navigation.snapshot() }) });
 }

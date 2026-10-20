@@ -559,10 +559,10 @@ test('arrow height uses card geometry rather than a percentage of its short pare
     arrow.offsetParent = { getBoundingClientRect: () => ({ top: 180 }), clientTop: 2, scrollTop: 0 };
     a.card.getBoundingClientRect = () => ({ left: 0, top: 100, width: 250, height: 140 });
     b.feature.check();
-    assert.equal(arrow.style.getPropertyValue('height'), '140px');
+    assert.equal(arrow.style.getPropertyValue('height'), '212px');
     assert.equal(arrow.style.getPropertyValue('top'), '-82px');
     a.card.getBoundingClientRect = () => ({ left: 0, top: 80, width: 200, height: 112 }); b.feature.check();
-    assert.equal(arrow.style.getPropertyValue('height'), '112px');
+    assert.equal(arrow.style.getPropertyValue('height'), '184px');
     assert.equal(arrow.style.getPropertyValue('top'), '-102px');
     b.feature.dispose(); assert.equal(arrow.style.getPropertyValue('height'), '64px');
     assert.equal(arrow.style.getPropertyValue('top'), '0px'); assert.equal(arrow.style.getPropertyValue('bottom'), '');
@@ -576,7 +576,7 @@ test('arrow retirement preserves a newer native height override', () => {
 });
 
 
-test('arrow edge strip covers viewport margin and ends at measured actions, restoring horizontal leases', () => {
+test('arrow edge strip covers viewport margin and fixed action space, restoring horizontal leases', () => {
     const b = setup(), a = mount(b), arrow = nextControl(b, a.row, () => {});
     b.window.innerWidth = 2560;
     arrow.offsetParent = { getBoundingClientRect: () => ({ left: 2488, top: 704 }), clientTop: 0 };
@@ -587,7 +587,7 @@ test('arrow edge strip covers viewport margin and ends at measured actions, rest
     actions.getBoundingClientRect = () => ({ top: 738, height: 28 }); b.feature.check();
     assert.equal(arrow.style.getPropertyValue('width'), '100px');
     assert.equal(arrow.style.getPropertyValue('left'), '-28px');
-    assert.equal(arrow.style.getPropertyValue('height'), '198px');
+    assert.equal(arrow.style.getPropertyValue('height'), '238px');
     b.window.innerWidth = 1920; b.feature.check();
     assert.equal(arrow.style.getPropertyValue('width'), '100px');
     assert.equal(arrow.style.getPropertyValue('left'), '-668px');
@@ -774,4 +774,47 @@ test('original-page compaction is wired through visibility before any native arr
     assert.equal(b.feature.diagnostics().nativeRows.automatic, 1);
     assert.equal(a.row.querySelectorAll('.tm-rec-controls').length, 3);
     b.feature.dispose(); assert.equal(observed.size, 0);
+});
+
+
+test('card replacement preserves the row reservation without removing and reapplying padding', async () => {
+    const b = setup(), a = mount(b), writes = [], originalSet = a.row.style.setProperty.bind(a.row.style), originalRemove = a.row.style.removeProperty.bind(a.row.style);
+    a.row.style.setProperty = (name, value, priority) => { if (name === 'padding-bottom') writes.push(value); originalSet(name, value, priority); };
+    a.row.style.removeProperty = name => { if (name === 'padding-bottom') writes.push('removed'); originalRemove(name); };
+    nextControl(b, a.row, () => {});
+    b.feature.check(); assert.deepEqual(writes, ['72px']); const arrowWrites = b.feature.diagnostics().layout.arrowWrites;
+    a.host.remove(); const incoming = mount(b, '2'); a.row.appendChild(incoming.host); incoming.row.remove();
+    b.mutate(a.row, { addedNodes: [incoming.host], removedNodes: [a.host] }); await b.scheduler.flush(); assert.deepEqual(writes, ['72px']);
+    assert.equal(b.feature.diagnostics().layout.arrowWrites, arrowWrites);
+    b.feature.dispose(); assert.deepEqual(writes, ['72px', 'removed']);
+});
+
+test('a local card mutation does not remeasure arrows in an unrelated row', async () => {
+    const b = setup(), a = mount(b), other = mount(b, '2'); nextControl(b, a.row, () => {}); nextControl(b, other.row, () => {});
+    b.feature.check(); const paints = b.feature.diagnostics().work.paintCalls; let unrelatedReads = 0;
+    other.card.getBoundingClientRect = () => { unrelatedReads++; return { left: 0, top: 0, width: 100, height: 100 }; };
+    b.mutate(a.card, { type: 'attributes' }); await b.scheduler.flush(); assert.equal(unrelatedReads, 0);
+    assert.equal(b.feature.diagnostics().work.paintCalls - paints, 1);
+    b.feature.dispose();
+});
+
+
+test('arrow span ignores changing action-label bounds and diagnostics report alignment', () => {
+    const b = setup(), a = mount(b), arrow = nextControl(b, a.row, () => {}); let actionReads = 0;
+    a.card.getBoundingClientRect = () => ({ left: 0, top: 100, width: 250, height: 178 });
+    arrow.getBoundingClientRect = () => ({ left: 1200, top: 100, width: 80, height: 250 });
+    b.feature.check();
+    a.host.querySelector('.tm-rec-controls').getBoundingClientRect = () => { actionReads++; return { top: 278, height: 400 }; };
+    b.feature.check(); assert.equal(actionReads, 0); assert.equal(arrow.style.getPropertyValue('height'), '250px');
+    const layout = b.feature.diagnostics().rows.rows[0].layout;
+    assert.equal(layout.reservedSpace, 72); assert.equal(layout.arrows[0].topDelta, 0); assert.equal(layout.arrows[0].heightDelta, 0);
+    b.feature.dispose();
+});
+
+test('native arrow replacement in an otherwise unchanged row receives its geometry lease', async () => {
+    const b = setup(), a = mount(b); const holder = a.row.appendChild(new Element('div'));
+    b.feature.check(); const arrow = nextControl(b, holder, () => {});
+    b.mutate(holder, { addedNodes: [arrow] }); await b.scheduler.flush();
+    assert.notEqual(arrow.style.getPropertyValue('height'), ''); b.feature.dispose();
+    assert.equal(arrow.style.getPropertyValue('height'), '');
 });

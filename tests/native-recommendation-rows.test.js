@@ -155,3 +155,12 @@ test('unsupported visible rows back off after eviction while manual navigation m
     b.owner.interact(b.row); await b.scheduler.advance(200); assert.equal(b.owner.diagnostics().attempts, 6);
     b.owner.dispose();
 });
+
+
+test('metadata refreshes reuse pagination discovery while a new interaction samples it again', async () => {
+    const b = fixture(); b.owner.interact(b.row); await b.scheduler.advance(200);
+    for (let i = 0; i < 3; i++) { b.owner.refresh(); await b.scheduler.advance(200); }
+    assert.equal(b.owner.diagnostics().pageLookups, 0);
+    b.owner.interact(b.row); await b.scheduler.advance(200); assert.equal(b.owner.diagnostics().pageLookups, 1);
+    b.owner.dispose();
+});

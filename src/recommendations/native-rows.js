@@ -1,6 +1,6 @@
 // Deferred work for visible or interacted rows. Native cache/query operations stay in the adapter.
 export function createNativeRows({ environment, dom, admitted, canRestore = admitted, readChoices }) {
-    const rows = new Map(), requests = [], stats = { attempts: 0, activated: 0, writes: 0, loads: 0, restored: 0, failures: 0, automatic: 0, automaticSuppressed: 0, blockedRetries: 0, stops: {} };
+    const rows = new Map(), requests = [], stats = { attempts: 0, activated: 0, writes: 0, loads: 0, restored: 0, failures: 0, automatic: 0, automaticSuppressed: 0, blockedRetries: 0, pageLookups: 0, stops: {} };
     let generation = 0, visibility = null; const observed = new Map(); let backoff = new WeakMap();
     const now = () => environment.performance?.now() ?? Date.now();
     const identity = row => [row.id, row.getAttribute('data-list-id'), row.querySelector('h2, .rowTitle')?.textContent].join('|');
@@ -28,10 +28,10 @@ export function createNativeRows({ environment, dom, admitted, canRestore = admi
                 job.probe = found.probe;
                 if (!found.binding) { job.reason = found.probe?.namedQuery && !found.probe.variables ? 'waiting-row-query' : found.reason;
                     if (job.source === 'visible') job.lookups = 0; return; }
-                job.binding = found.binding; job.pagination = found.pagination; stats.activated++;
+                job.binding = found.binding; job.pagination = found.pagination; job.pageLookup = false; stats.activated++;
             }
-            job.pagination = dom.queryPage?.(values[0].card) || job.pagination;
-            const selected = readChoices(), snapshot = dom.rowDiagnostics(job.row, selected); check();
+            if (job.pageLookup) { stats.pageLookups++; job.pagination = dom.queryPage?.(values[0].card) || job.pagination; job.pageLookup = false; }
+            const selected = readChoices(), snapshot = dom.rowDiagnostics(job.row, selected, { layout: false }); check();
             const anchor = snapshot?.visibleIds[0], capacity = snapshot?.pageCapacity || job.capacity || 8; job.capacity = capacity; job.anchor = anchor; job.resumeAt = 0;
             if (job.binding.publish(selected, check, anchor, capacity, job.pagination)) stats.writes++;
             job.reason = 'active';
@@ -73,7 +73,7 @@ export function createNativeRows({ environment, dom, admitted, canRestore = admi
         }
     }
     function presentation(row) {
-        const snapshot = dom.rowDiagnostics(row, readChoices());
+        const snapshot = dom.rowDiagnostics(row, readChoices(), { layout: false });
         return snapshot ? { visible: snapshot.visible, capacity: snapshot.pageCapacity, hidden: snapshot.hidden, mounted: snapshot.mounted, pageIndex: snapshot.pageIndex } : null;
     }
     function interact(row, source = 'interaction') {
@@ -89,7 +89,7 @@ export function createNativeRows({ environment, dom, admitted, canRestore = admi
                 credit: 0, lookups: 0, intent: 0, dirty: false, failed: false, reason: 'pending', running: false }; rows.set(row, job);
         }
         environment.clearTimeout(job.timer); job.timer = null;
-        job.intent++; job.source = source; if (source === 'visible') stats.automatic++; job.credit = 6; job.lookups = 3; job.failed = false;
+        job.intent++; job.pageLookup = true; job.source = source; if (source === 'visible') stats.automatic++; job.credit = 6; job.lookups = 3; job.failed = false;
         job.controller?.abort(); schedule(job);
     }
     function retire(job) {

@@ -4,7 +4,10 @@ import { createLoaderSurvey } from './recommendation-loader.js';
 import { findRecommendationQuery } from './recommendation-query.js';
 
 
+const ACTION_SPACE = 72;
 export const RECOMMENDATION_ARROW_STYLES = `
+.tm-rec-controls{position:absolute;top:100%;left:0;right:0;height:66px;box-sizing:border-box;align-content:flex-start}
+.tm-rec-controls>button{max-width:100%;min-width:0;box-sizing:border-box;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 :is(section,.lolomoRow):has(.tm-rec-controls) :is([data-uia="carousel-hawkins-right-button"],[data-uia="carousel-right-button"],[data-uia="carousel-hawkins-left-button"],[data-uia="carousel-left-button"],.handleNext,.handlePrev){
     width:56px!important;min-width:56px!important;min-height:64px!important;height:100%!important;max-height:none!important;max-width:none!important;box-sizing:border-box!important;
     position:absolute!important;top:0!important;bottom:0!important;transform:none!important;
@@ -26,6 +29,18 @@ export function createRecommendationDom(environment) {
     const { document, location, getComputedStyle, performance, PerformanceObserver } = environment;
     const selector = 'a[data-uia="standard-card"][href], .title-card';
     const scrollerLeases = new WeakMap(), arrowRows = new WeakMap();
+    const layoutWork = { batches: 0, spaceWrites: 0, spaceRestores: 0, arrowRows: 0, arrowCards: 0, arrowWrites: 0, retirementErrors: 0 };
+    let batchDepth = 0; const retirements = new Set();
+    function batch(operation) {
+        batchDepth++; layoutWork.batches++;
+        try { return operation(); }
+        finally { if (--batchDepth === 0) {
+            const pending = [...retirements]; retirements.clear();
+            for (const retire of pending) try { retire(); } catch (_) { layoutWork.retirementErrors++; }
+        } }
+    }
+    const retire = resource => { if (batchDepth) retirements.add(resource.retire); else resource.retire(); };
+
     function styleLease(node, name, value, priority = '') {
         const previous = node.style.getPropertyValue(name), previousPriority = node.style.getPropertyPriority(name);
         node.style.setProperty(name, value, priority);
@@ -38,47 +53,51 @@ export function createRecommendationDom(environment) {
         let resource = scrollerLeases.get(scroller);
         if (!resource) {
             const padding = Number.parseFloat(getComputedStyle?.(scroller).paddingBottom) || 0;
-            resource = { users: 0, restore: styleLease(scroller, 'padding-bottom', `${padding + 72}px`, 'important') };
-            scrollerLeases.set(scroller, resource);
+            resource = { users: 0, restore: styleLease(scroller, 'padding-bottom', `${padding + ACTION_SPACE}px`, 'important') };
+            resource.retire = () => { if (!resource.users && scrollerLeases.get(scroller) === resource) { resource.restore(); scrollerLeases.delete(scroller); layoutWork.spaceRestores++; } };
+            scrollerLeases.set(scroller, resource); layoutWork.spaceWrites++;
         }
         resource.users++; let released = false;
         return () => {
             if (released) return; released = true;
-            if (--resource.users === 0) { resource.restore(); scrollerLeases.delete(scroller); }
+            if (--resource.users === 0) retire(resource);
         };
     }
     const arrowSelector = '[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], [data-uia="carousel-hawkins-left-button"], [data-uia="carousel-left-button"], .handleNext, .handlePrev';
     function reserveArrows(row) {
         let resource = arrowRows.get(row);
-        if (!resource) { resource = { users: 0, controls: new Map() }; arrowRows.set(row, resource); }
+        if (!resource) {
+            resource = { users: 0, controls: new Map() };
+            resource.retire = () => { if (!resource.users && arrowRows.get(row) === resource) {
+                for (const value of resource.controls.values()) value.restore.forEach(release => release());
+                resource.controls.clear(); arrowRows.delete(row);
+            } };
+            arrowRows.set(row, resource);
+        }
         resource.users++; let released = false;
         return () => {
             if (released) return; released = true;
-            if (--resource.users === 0) {
-                for (const value of resource.controls.values()) value.restore.forEach(release => release());
-                resource.controls.clear(); arrowRows.delete(row);
-            }
+            if (--resource.users === 0) retire(resource);
         };
     }
     function updateArrows(row) {
         try {
-            const resource = arrowRows.get(row); if (!resource) return false;
+            const resource = arrowRows.get(row); if (!resource) return false; layoutWork.arrowRows++;
             const controls = [...row.querySelectorAll(arrowSelector)];
             for (const [control, value] of resource.controls) if (!controls.includes(control)) {
                 value.restore.forEach(release => release()); resource.controls.delete(control);
             }
-            let card, bottom;
+            if (!controls.length) return false;
+            let card;
             for (const item of scan(row)) {
                 if (item.row !== row) continue;
-                const rect = item.card.getBoundingClientRect();
-                if (rect.width > 1 && rect.height > 1) { card = rect;
-                    const actions = item.host.querySelector('.tm-rec-controls')?.getBoundingClientRect();
-                    bottom = Math.max(rect.top + rect.height, actions?.height > 1 ? actions.top + actions.height : rect.top + rect.height); break; }
+                const rect = item.card.getBoundingClientRect(); layoutWork.arrowCards++;
+                if (rect.width > 1 && rect.height > 1) { card = rect; break; }
             }
             if (!card) return false;
             for (const control of controls) {
                 const parent = control.offsetParent || row, rect = parent.getBoundingClientRect();
-                const height = Math.round(bottom - card.top), top = Math.round(card.top - rect.top - (parent.clientTop || 0) + (parent.scrollTop || 0));
+                const height = Math.round(card.height + ACTION_SPACE), top = Math.round(card.top - rect.top - (parent.clientTop || 0) + (parent.scrollTop || 0));
                 const box = control.getBoundingClientRect(), previous = resource.controls.get(control);
                 const viewport = document.documentElement?.clientWidth || environment.window?.innerWidth || environment.innerWidth;
                 const next = control.matches('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext');
@@ -92,7 +111,7 @@ export function createRecommendationDom(environment) {
                 if (previous?.signature === signature && properties.every(([name, value]) => control.style.getPropertyValue(name) === value)) continue;
                 previous?.restore.forEach(release => release());
                 const value = { signature, edgeWidth: Number.parseFloat(properties.find(([name]) => name === 'width')?.[1]) || previous?.edgeWidth, restore: [] }; resource.controls.set(control, value);
-                for (const [name, applied] of properties) value.restore.push(styleLease(control, name, applied, 'important'));
+                for (const [name, applied] of properties) { value.restore.push(styleLease(control, name, applied, 'important')); layoutWork.arrowWrites++; }
             }
             return true;
         } catch (_) { return false; }
@@ -406,7 +425,20 @@ export function createRecommendationDom(environment) {
                 limitation: 'Completed entries only; absent entries do not prove cached data, and zero transfer does not prove cache use.' };
         } catch (_) { return { unavailable: true }; }
     }
-    function rowDiagnostics(row, choices) {
+    function layoutFacts(row, sample) {
+        const pack = rect => [rect.left, rect.top, rect.width, rect.height].map(value => Math.round(value || 0));
+        const rect = sample.state.scroller === row ? sample.bounds : row.getBoundingClientRect();
+        const item = sample.items.find(item => item.id === sample.cardPositions[0]?.id);
+        const card = item && (item.card === item.host ? sample.cardPositions[0].rect : item.card.getBoundingClientRect());
+        const next = row.nextElementSibling?.getBoundingClientRect();
+        return { row: pack(rect), reservedSpace: ACTION_SPACE, paddingBottom: sample.state.scroller.style.getPropertyValue('padding-bottom'),
+            nextGap: next ? Math.round(next.top - rect.top - rect.height) : null,
+            arrows: [...row.querySelectorAll(arrowSelector)].slice(0, 4).map(control => { const box = control.getBoundingClientRect();
+                return { direction: control.matches('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext') ? 'next' : 'previous',
+                    rect: pack(box), topDelta: card ? Math.round(box.top - card.top) : null,
+                    heightDelta: card ? Math.round(box.height - card.height - ACTION_SPACE) : null }; }) };
+    }
+    function rowDiagnostics(row, choices, { layout = true } = {}) {
         try {
             const sample = sampleRow(row, choices);
             if (!sample) return null;
@@ -415,7 +447,7 @@ export function createRecommendationDom(environment) {
             const track = state.scroller.querySelector('.sliderContent, .slider-content') || state.scroller;
             return { rowId: (row.getAttribute('data-list-id') || row.getAttribute('data-uia') || row.id || '').slice(0, 160),
                 label: (row.querySelector('h2, .rowTitle')?.textContent || row.getAttribute('aria-label') || '').trim().slice(0, 160),
-                mounted: state.mounted, visible: state.remaining, offscreen: state.offscreen,
+                mounted: state.mounted, visible: state.remaining, offscreen: state.offscreen, ...(layout ? { layout: layoutFacts(row, sample) } : {}),
                 pageCapacity: cardPositions[0]?.rect.width > 1 ? Math.max(1, Math.min(20,
                     Math.floor((bounds.width || bounds.right - bounds.left) / cardPositions[0].rect.width) || 1)) : null,
                 hidden: items.length - unhidden,
@@ -431,6 +463,6 @@ export function createRecommendationDom(environment) {
                 loading: loadingFacts(row, sample.firstCard) };
         } catch (_) { return null; }
     }
-    return Object.freeze({ scan, lease, updateArrows, describe, refillState, loadingFacts, navigationTarget, rowDiagnostics,
+    return Object.freeze({ scan, lease, updateArrows, batch, layoutDiagnostics: () => ({ ...layoutWork }), describe, refillState, loadingFacts, navigationTarget, rowDiagnostics,
         navigationStart, navigationRequests, observeRequests, queryBinding: (card, ids) => findRecommendationQuery(queryRoots(card), ids), queryPage: card => findRecommendationQuery(queryRoots(card), [], { paginationOnly: true }).pagination });
 }
