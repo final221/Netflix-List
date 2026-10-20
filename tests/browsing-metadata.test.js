@@ -143,3 +143,18 @@ test('season partitions stop exactly at the request ceiling and resume missing c
     assert.equal(b.viewing.ready('500'), true); assert.equal(b.viewing.diagnostics().pending, 0);
     b.viewing.dispose(); assert.equal(b.scheduler.timers.size, 0);
 });
+
+
+test('manual-only season plans enable caught-up choices without inferring automatic finale completion', async () => {
+    let finaleReads = 0;
+    const b = setup({ async readTitles() { return new Map([['1', { videoId: '1', type: 'show' }]]); },
+        async readSeasons(records, access, handle, options) {
+            assert.equal(options.allowManual, true);
+            return [{ videoId: '1', seasons: [{ id: '10', count: 27 }], manualOnly: true }];
+        }, async readEpisodes() { finaleReads++; return [{ episodes: [{ id: '100', record: { type: 'episode', watched: true } }] }]; } });
+    b.viewing.observe([{ id: '1' }]); await b.scheduler.flush();
+    assert.equal(b.viewing.ready('1'), true); assert.equal(b.viewing.complete('1'), false); assert.equal(finaleReads, 0);
+    assert.equal(b.viewing.mark('1', 'Named series').saved, true);
+    assert.equal(b.viewing.complete('1'), true); assert.deepEqual(b.viewing.choice('1').coverage, [['10', 27]]);
+    b.viewing.dispose();
+});

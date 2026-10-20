@@ -114,13 +114,13 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         property(entry.watched, 'hidden', Boolean(reason)); property(entry.hide, 'hidden', Boolean(reason));
         const type = viewing.type(entry.id), facts = viewing.presentation();
         const unavailable = viewing.unavailable(entry.id), ready = viewing.ready(entry.id);
-        const label = tUi(unavailable ? 'refreshViewingStatus' : type === 'series' ? 'markCaughtUp' : type === 'movie' ? 'markWatched' : 'checkingViewingStatus');
+        const label = tUi(type === 'series' ? 'markCaughtUp' : type === 'movie' ? 'markWatched' : unavailable ? 'viewingDetailsUnavailable' : 'checkingViewingStatus');
         property(entry.hide, 'disabled', !profile || failed);
         property(entry.hide, 'title', failed || !profile ? tUi('viewingChoiceStorageFailed') : entry.hide.textContent);
         property(entry.watched, 'textContent', label); attribute(entry.watched, 'aria-label', label);
-        property(entry.watched, 'disabled', Boolean(!profile || failed || !ready && !unavailable || facts.disabled));
+        property(entry.watched, 'disabled', Boolean(!profile || failed || !ready || facts.disabled));
         property(entry.watched, 'title', !profile || failed || facts.manualFailure ? tUi('viewingChoiceStorageFailed')
-            : !ready ? tUi(unavailable ? 'refreshViewingStatus' : 'checkingViewingStatus') : label);
+            : !ready ? tUi(unavailable ? 'viewingDetailsUnavailable' : 'checkingViewingStatus') : label);
     }
     function decorate(value) {
         const existing = entries.get(value.host);
@@ -200,7 +200,6 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             const diagnosticAction = input.action === 'watched' && viewing.type(id) === 'series' ? 'caught-up' : input.action;
             navigation.movement('action-attempt', input.entry?.card, { action: diagnosticAction, id });
             if (input.action === 'watched') {
-                if (!viewing.ready(id) && viewing.unavailable(id)) { viewing.retry(id); paint(input.entry); return; }
                 if (!viewing.mark(id, input.entry?.title || '').saved) { paint(input.entry); return; }
             } else if (input.action === 'undo') {
                 if (input.reason === 'viewing' && !viewing.restore(id).saved) { savedPanel.paint(); return; }

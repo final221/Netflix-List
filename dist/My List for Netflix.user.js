@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.0
+// @version      1.11.1
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -8352,7 +8352,7 @@ ${CARD_ACTION_STYLES}
       const path = Array.isArray(value) ? value : value?.$type === "ref" ? value.value : null;
       return Array.isArray(path) && path.length === 2 && path[0] === kind && /^\d+$/.test(String(path[1])) ? String(path[1]) : "";
     }
-    function viewingSeasonPlan(graph, record, reject) {
+    function viewingSeasonPlan(graph, record, reject, allowManual = false) {
       const count = record.seasonCount ?? viewingCount(readViewingGraph(graph, ["videos", record.videoId, "seasonList", "length"]));
       const expected = record.episodeCount;
       const facts = { seasonCount: Number.isFinite(count) ? count : null, episodeCount: Number.isFinite(expected) ? expected : null };
@@ -8382,12 +8382,16 @@ ${CARD_ACTION_STYLES}
         seen.add(id);
         total += length;
         if (total > VIEWING_MAX_EPISODES) return fail("episode-total-limit", { total });
-        if (expected !== null && total > expected && !verified) return fail("episode-count-mismatch", { total });
+        if (expected !== null && total > expected && !verified && !allowManual) return fail("episode-count-mismatch", { total });
         seasons.push({ id, count: length });
       }
       if (!total) return fail("season-list-empty");
       if (expected !== null && total !== expected) {
-        if (!verified) return fail("episode-count-mismatch", { total });
+        if (!verified) {
+          if (!allowManual) return fail("episode-count-mismatch", { total });
+          reject({ reason: "manual-season-coverage", ...facts, total });
+          return { videoId: record.videoId, expected: total, seasons, manualOnly: true };
+        }
         reject({ reason: "episode-count-adjusted", ...facts, total, verifiedSeasonCount: verifiedCount });
       }
       return { videoId: record.videoId, expected: total, seasons };
@@ -8404,7 +8408,7 @@ ${CARD_ACTION_STYLES}
       ]], access, owner);
       return new Map(ids.map((id) => [String(id), viewingVideoRecord(graph, id)]));
     }
-    async function readSeasons(records, access, owner) {
+    async function readSeasons(records, access, owner, { allowManual = false } = {}) {
       requireBatch(records, limits.titleBatch);
       for (const record of records) coverageFacts.delete(record.videoId);
       let requested = 0;
@@ -8425,7 +8429,7 @@ ${CARD_ACTION_STYLES}
       const graph = await requestGraph(paths, access, owner);
       return records.map((record) => {
         coverageFacts.delete(record.videoId);
-        const plan = viewingSeasonPlan(graph, record, (facts) => coverageFacts.set(record.videoId, facts));
+        const plan = viewingSeasonPlan(graph, record, (facts) => coverageFacts.set(record.videoId, facts), allowManual);
         while (coverageFacts.size > 24) coverageFacts.delete(coverageFacts.keys().next().value);
         return plan;
       }).filter(Boolean);
@@ -9965,13 +9969,13 @@ ${CARD_ACTION_STYLES}
             }
             publishReady(ids, owner);
             for (const batch of seasonBatches(series)) {
-              const plans = await request((access, handle) => data.readSeasons(batch, access, handle), owner, "seasons");
+              const plans = await request((access, handle) => data.readSeasons(batch, access, handle, { allowManual: true }), owner, "seasons");
               for (const plan of plans) coverage.set(plan.videoId, plan.seasons.map((season) => [season.id, season.count]));
               const expired = choices.reconcile((id) => coverage.get(id), batch.map((record) => record.videoId), () => guard(owner));
               if (expired.size) log("Browsing viewing coverage reconciled", { changed: expired.size });
               publishReady(batch.map((record) => record.videoId), owner);
               if (typeof data.readEpisodes === "function") {
-                const targets = plans.map((plan) => ({ plan, season: [...plan.seasons].reverse().find((season) => season.count > 0) })).filter((value) => value.season);
+                const targets = plans.filter((plan) => !plan.manualOnly).map((plan) => ({ plan, season: [...plan.seasons].reverse().find((season) => season.count > 0) })).filter((value) => value.season);
                 if (targets.length) {
                   const episodes = await request((access, handle) => data.readEpisodes(targets.map(({ season }) => ({ seasonId: season.id, from: season.count - 1, to: season.count - 1 })), access, handle), owner, "finales");
                   for (const [index, { plan }] of targets.entries()) {
@@ -10071,7 +10075,7 @@ ${CARD_ACTION_STYLES}
         budgetWaitMs: Math.max(0, Math.round((windowRequests >= 198 ? windowStart + 6e4 : 0) - now())),
         cooldownWaitMs: Math.max(0, Math.round(cooldownUntil - now())),
         knowledge: knowledge.diagnostics(),
-        coverageAdjustments: data.coverageDiagnostics?.().filter((facts) => facts.reason === "episode-count-adjusted") || [],
+        coverageAdjustments: data.coverageDiagnostics?.().filter((facts) => ["episode-count-adjusted", "manual-season-coverage"].includes(facts.reason)) || [],
         requests,
         checked: checked.size,
         pending: pending.size,
@@ -20399,6 +20403,40 @@ ${CARD_ACTION_STYLES}
       UI_MESSAGES[locale][key] = values[index];
     });
   }
+  var VIEWING_DETAILS_UNAVAILABLE = {
+    "da": "Visningsoplysninger er ikke tilg\xE6ngelige",
+    "de": "Wiedergabedetails nicht verf\xFCgbar",
+    "en": "Viewing details unavailable",
+    "es": "Detalles de visualizaci\xF3n no disponibles",
+    "fil": "Hindi available ang mga detalye ng panonood",
+    "fr": "D\xE9tails de visionnage indisponibles",
+    "hr": "Podaci o gledanju nisu dostupni",
+    "id": "Detail tontonan tidak tersedia",
+    "it": "Dettagli di visione non disponibili",
+    "hu": "A megtekint\xE9si adatok nem \xE9rhet\u0151k el",
+    "ms": "Butiran tontonan tidak tersedia",
+    "nl": "Kijkgegevens niet beschikbaar",
+    "nb": "Visningsdetaljer er ikke tilgjengelige",
+    "pl": "Szczeg\xF3\u0142y ogl\u0105dania s\u0105 niedost\u0119pne",
+    "pt": "Detalhes de visualiza\xE7\xE3o indispon\xEDveis",
+    "ro": "Detaliile vizion\u0103rii nu sunt disponibile",
+    "fi": "Katselutietoja ei ole saatavilla",
+    "sv": "Visningsinformation \xE4r inte tillg\xE4nglig",
+    "vi": "Kh\xF4ng c\xF3 th\xF4ng tin xem",
+    "tr": "\u0130zleme ayr\u0131nt\u0131lar\u0131 kullan\u0131lam\u0131yor",
+    "cs": "Podrobnosti o sledov\xE1n\xED nejsou dostupn\xE9",
+    "el": "\u039F\u03B9 \u03BB\u03B5\u03C0\u03C4\u03BF\u03BC\u03AD\u03C1\u03B5\u03B9\u03B5\u03C2 \u03C0\u03C1\u03BF\u03B2\u03BF\u03BB\u03AE\u03C2 \u03B4\u03B5\u03BD \u03B5\u03AF\u03BD\u03B1\u03B9 \u03B4\u03B9\u03B1\u03B8\u03AD\u03C3\u03B9\u03BC\u03B5\u03C2",
+    "ru": "\u0421\u0432\u0435\u0434\u0435\u043D\u0438\u044F \u043E \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0435 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B",
+    "uk": "\u0412\u0456\u0434\u043E\u043C\u043E\u0441\u0442\u0456 \u043F\u0440\u043E \u043F\u0435\u0440\u0435\u0433\u043B\u044F\u0434 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0456",
+    "he": "\u05E4\u05E8\u05D8\u05D9 \u05D4\u05E6\u05E4\u05D9\u05D9\u05D4 \u05D0\u05D9\u05E0\u05DD \u05D6\u05DE\u05D9\u05E0\u05D9\u05DD",
+    "ar": "\u062A\u0641\u0627\u0635\u064A\u0644 \u0627\u0644\u0645\u0634\u0627\u0647\u062F\u0629 \u063A\u064A\u0631 \u0645\u062A\u0627\u062D\u0629",
+    "hi": "\u0926\u0947\u0916\u0928\u0947 \u0915\u0940 \u091C\u093E\u0928\u0915\u093E\u0930\u0940 \u0909\u092A\u0932\u092C\u094D\u0927 \u0928\u0939\u0940\u0902 \u0939\u0948",
+    "th": "\u0E44\u0E21\u0E48\u0E21\u0E35\u0E23\u0E32\u0E22\u0E25\u0E30\u0E40\u0E2D\u0E35\u0E22\u0E14\u0E01\u0E32\u0E23\u0E23\u0E31\u0E1A\u0E0A\u0E21",
+    "zh": "\u89C2\u770B\u8BE6\u60C5\u4E0D\u53EF\u7528",
+    "ja": "\u8996\u8074\u8A73\u7D30\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093",
+    "ko": "\uC2DC\uCCAD \uC138\uBD80 \uC815\uBCF4\uB97C \uC0AC\uC6A9\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4"
+  };
+  for (const [locale, text] of Object.entries(VIEWING_DETAILS_UNAVAILABLE)) UI_MESSAGES[locale].viewingDetailsUnavailable = text;
   var NETFLIX_PRIMARY_UI_LOCALES = new Set(Object.keys(UI_MESSAGES));
 
   // src/i18n/log-messages.js
@@ -21175,13 +21213,18 @@ ${CARD_ACTION_STYLES}
     return operations.length === 1 && operation.operation === "query" && operation.name?.value === "CarouselPage" && Array.isArray(variables) && ["rowId", "carouselAfterCursor", "carouselPageSize"].every((name) => variables.some((v) => v?.variable?.name?.value === name));
   }
   function findRecommendationQuery(card, mountedIds, { paginationOnly = false } = {}) {
-    const mounted = new Set(mountedIds), found = /* @__PURE__ */ new Map();
+    const mounted = new Set(mountedIds), found = /* @__PURE__ */ new Map(), fibers = /* @__PURE__ */ new Set();
     let pagination = null;
-    const key = Object.getOwnPropertyNames(card || {}).find((name) => name.startsWith("__reactFiber$") || name.startsWith("__reactInternalInstance$"));
-    let fiber = key && own(card, key);
-    const fibers = /* @__PURE__ */ new Set();
+    const probe = { fibers: 0, hooks: 0, results: 0, namedQuery: 0, operation: 0, variables: 0, cacheApi: 0, connection: 0, maxOverlap: 0, mounted: mounted.size };
+    const seen = /* @__PURE__ */ new WeakSet();
+    let inspected = 0;
     function inspect(value, depth = 0) {
-      if (!value || typeof value !== "object" || depth > 2) return;
+      if (!value || typeof value !== "object" || depth > 5 || seen.has(value)) return;
+      if (inspected++ >= 2048) {
+        probe.truncated = true;
+        return;
+      }
+      seen.add(value);
       if (Array.isArray(value)) {
         for (let i = 0; i < Math.min(value.length, 4); i++) inspect(own(value, String(i)), depth + 1);
         return;
@@ -21189,37 +21232,51 @@ ${CARD_ACTION_STYLES}
       const index = own(value, "pageIndex"), count = own(value, "pageCount"), setter = own(value, "setPageIndex");
       if (!pagination && Number.isSafeInteger(index) && index >= 0 && Number.isSafeInteger(count) && count > index && typeof setter === "function")
         pagination = { index, set: setter.bind(value) };
-      if (paginationOnly) {
-        inspect(own(value, "value"), depth + 1);
-        return;
-      }
+      for (const key of ["value", "current", "ref", "state"]) inspect(own(value, key), depth + 1);
+      if (paginationOnly) return;
       const observable = own(value, "observable"), options = own(observable, "options");
       const query = own(options, "query"), variables = own(options, "variables") || own(value, "variables");
-      if (!carouselQuery(query) || typeof own(variables, "rowId") !== "string") {
-        inspect(own(value, "value"), depth + 1);
+      if (observable) probe.results++;
+      if (own(query, "definitions")?.some((d) => d?.kind === "OperationDefinition" && d.name?.value === "CarouselPage")) probe.namedQuery++;
+      if (!carouselQuery(query)) return;
+      probe.operation++;
+      if (typeof own(variables, "rowId") !== "string") return;
+      probe.variables++;
+      const data = own(value, "data"), client = own(value, "client") || own(observable, "client") || own(own(observable, "queryManager"), "client"), cache = own(client, "cache");
+      const read = method(cache, "readQuery"), write = method(cache, "writeQuery");
+      if (!read || !write) return;
+      probe.cacheApi++;
+      if (!valid(data)) {
+        const value2 = connection(data);
+        probe.rejectedConnection = { edges: Array.isArray(value2?.edges) ? value2.edges.length : null, totalType: typeof value2?.totalCount, pageFlagType: typeof value2?.pageInfo?.hasNextPage };
         return;
       }
-      const data = own(value, "data"), client = own(value, "client"), cache = own(client, "cache");
-      const read = method(cache, "readQuery"), write = method(cache, "writeQuery");
-      if (!read || !write || !valid(data)) return;
+      probe.connection++;
       const ids = new Set(connection(data).edges.map(videoId).filter(Boolean));
       const overlap = [...mounted].filter((id) => ids.has(id)).length;
+      probe.maxOverlap = Math.max(probe.maxOverlap, overlap);
       if (mounted.size < 2 || overlap < Math.max(2, Math.ceil(mounted.size * 0.85))) return;
       found.set(observable, { observable, options, query, variables, data, read, write, queryRead: method(client, "query"), overlap });
     }
-    for (let depth = 0; fiber && depth < 24 && !fibers.has(fiber) && !(paginationOnly && pagination); depth++, fiber = own(fiber, "return")) {
-      fibers.add(fiber);
-      inspect(own(fiber, "memoizedProps"));
-      let hook = own(fiber, "memoizedState");
-      const hooks = /* @__PURE__ */ new Set();
-      for (let i = 0; hook && i < 48 && !hooks.has(hook) && !(paginationOnly && pagination); i++, hook = own(hook, "next")) {
-        hooks.add(hook);
-        inspect(own(hook, "memoizedState"));
+    for (const root of Array.isArray(card) ? card.slice(0, 3) : [card]) {
+      const key = Object.getOwnPropertyNames(root || {}).find((name) => name.startsWith("__reactFiber$") || name.startsWith("__reactInternalInstance$"));
+      let fiber = key && own(root, key);
+      for (let depth = 0; fiber && depth < 32 && fibers.size < 64 && !fibers.has(fiber) && !(paginationOnly && pagination); depth++, fiber = own(fiber, "return")) {
+        fibers.add(fiber);
+        probe.fibers++;
+        inspect(own(fiber, "memoizedProps"));
+        let hook = own(fiber, "memoizedState");
+        const hooks = /* @__PURE__ */ new Set();
+        for (let i = 0; hook && i < 48 && !hooks.has(hook) && !(paginationOnly && pagination); i++, hook = own(hook, "next")) {
+          hooks.add(hook);
+          probe.hooks++;
+          inspect(own(hook, "memoizedState"));
+        }
       }
     }
     if (paginationOnly) return { pagination };
-    if (found.size !== 1) return { reason: found.size ? "ambiguous-query" : "no-matching-query" };
-    return { binding: createBinding([...found.values()][0]), pagination };
+    if (found.size !== 1) return { reason: found.size ? "ambiguous-query" : "no-matching-query", probe };
+    return { binding: createBinding([...found.values()][0]), pagination, probe };
   }
   function createBinding(native) {
     const { query, options, observable, read, write, queryRead } = native, rowId = native.variables.rowId;
@@ -21597,6 +21654,7 @@ ${CARD_ACTION_STYLES}
       }
       return result;
     }
+    const queryRoots = (card) => [card, ...card.closest?.("section, .lolomoRow")?.querySelectorAll(arrowSelector) || []].slice(0, 3);
     function navigationTarget(target) {
       const next = target?.closest?.('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext');
       const previous = next ? null : target?.closest?.('[data-uia="carousel-hawkins-left-button"], [data-uia="carousel-left-button"], .handlePrev');
@@ -21934,8 +21992,8 @@ ${CARD_ACTION_STYLES}
       navigationStart,
       navigationRequests,
       observeRequests,
-      queryBinding: findRecommendationQuery,
-      queryPage: (card) => findRecommendationQuery(card, [], { paginationOnly: true }).pagination
+      queryBinding: (card, ids) => findRecommendationQuery(queryRoots(card), ids),
+      queryPage: (card) => findRecommendationQuery(queryRoots(card), [], { paginationOnly: true }).pagination
     });
   }
 
@@ -22056,6 +22114,7 @@ ${CARD_ACTION_STYLES}
           job.lookups--;
           const found = dom.queryBinding(values[0].card, values.map((value) => value.id));
           check();
+          job.probe = found.probe;
           if (!found.binding) {
             job.reason = found.reason;
             return;
@@ -22128,6 +22187,10 @@ ${CARD_ACTION_STYLES}
         }
       }
     }
+    function presentation(row) {
+      const snapshot = dom.rowDiagnostics(row, readChoices());
+      return snapshot ? { visible: snapshot.visible, capacity: snapshot.pageCapacity, hidden: snapshot.hidden, mounted: snapshot.mounted, pageIndex: snapshot.pageIndex } : null;
+    }
     function interact(row) {
       if (!row || !admitted()) return;
       let job = rows.get(row);
@@ -22136,7 +22199,7 @@ ${CARD_ACTION_STYLES}
         job = null;
       }
       if (!job) {
-        if (rows.size >= 4) return;
+        if (rows.size >= 4) retire(rows.values().next().value);
         job = {
           row,
           identity: identity(row),
@@ -22192,6 +22255,8 @@ ${CARD_ACTION_STYLES}
       reason: job.reason,
       running: job.running,
       pageContext: Boolean(job.pagination),
+      probe: job.probe,
+      presentation: presentation(job.row),
       ...job.summary
     })) }) });
   }
@@ -22768,13 +22833,13 @@ ${CARD_ACTION_STYLES}
       property(entry.hide, "hidden", Boolean(reason));
       const type = viewing.type(entry.id), facts = viewing.presentation();
       const unavailable = viewing.unavailable(entry.id), ready = viewing.ready(entry.id);
-      const label = tUi(unavailable ? "refreshViewingStatus" : type === "series" ? "markCaughtUp" : type === "movie" ? "markWatched" : "checkingViewingStatus");
+      const label = tUi(type === "series" ? "markCaughtUp" : type === "movie" ? "markWatched" : unavailable ? "viewingDetailsUnavailable" : "checkingViewingStatus");
       property(entry.hide, "disabled", !profile || failed);
       property(entry.hide, "title", failed || !profile ? tUi("viewingChoiceStorageFailed") : entry.hide.textContent);
       property(entry.watched, "textContent", label);
       attribute(entry.watched, "aria-label", label);
-      property(entry.watched, "disabled", Boolean(!profile || failed || !ready && !unavailable || facts.disabled));
-      property(entry.watched, "title", !profile || failed || facts.manualFailure ? tUi("viewingChoiceStorageFailed") : !ready ? tUi(unavailable ? "refreshViewingStatus" : "checkingViewingStatus") : label);
+      property(entry.watched, "disabled", Boolean(!profile || failed || !ready || facts.disabled));
+      property(entry.watched, "title", !profile || failed || facts.manualFailure ? tUi("viewingChoiceStorageFailed") : !ready ? tUi(unavailable ? "viewingDetailsUnavailable" : "checkingViewingStatus") : label);
     }
     function decorate(value) {
       const existing = entries.get(value.host);
@@ -22885,11 +22950,6 @@ ${CARD_ACTION_STYLES}
         const diagnosticAction = input.action === "watched" && viewing.type(id) === "series" ? "caught-up" : input.action;
         navigation.movement("action-attempt", input.entry?.card, { action: diagnosticAction, id });
         if (input.action === "watched") {
-          if (!viewing.ready(id) && viewing.unavailable(id)) {
-            viewing.retry(id);
-            paint(input.entry);
-            return;
-          }
           if (!viewing.mark(id, input.entry?.title || "").saved) {
             paint(input.entry);
             return;
@@ -23282,7 +23342,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.0";
+  var SCRIPT_VERSION = "1.11.1";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

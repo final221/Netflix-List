@@ -1,12 +1,8 @@
 # Distilled live-log evidence
 
-## Historical sessions — 1.4.52–1.4.58
+## Historical sessions — 1.4.52–1.4.70
 
-Historical originals at8ca0de7ea22f3f5b7a0bdeadb6b091bfb9161d46, logs/<version>.txt;dates/environment/measurements at98e1266. .53 routeSessionToken ReferenceError;.54 mapping changed;.67/.69 fallback500;.70 cached9/live500 mismatch. Lifecycle/Undo/popup unverified.
-
-Historical1.4.64–1.4.70 source filenames, copiedAt/environment and SHA256: logs/knowledge.md at98d3c46 (summary revision, not runtime).
-
-Historical1.4.64/.67/.69/.70 measurements retained at6405a0e:logs/knowledge.md (summary revision);Firefox157/2560x1279/DPR1. .67 omitted40groups/2sections;.69 omitted none;.70 fresh500/72pages/init8282ms/native7521ms,two fallback warnings/no error. Provenance routes above remain authoritative.
+Full provenance/measurements atdf6dd8c:logs/knowledge.md(summary,not runtime). Signatures:.53 routeSessionToken ReferenceError;.54 mapping changed;.67/.69 fallback500;.70 cached9/live500 mismatch,fresh500/72pages/init8282ms/native7521ms. Lifecycle/Undo/popup remain unverified. .67 omitted40groups/2sections; .69 none.
 
 ## Historical sessions — 1.9.1–1.9.10
 
@@ -45,3 +41,8 @@ Loader hook43 matches CarouselPage(query),rowId/carouselAfterCursor/carouselPage
 
 Source logs/1.10.3-2026-10-20T20-16-10-955Z-ecbde325.txt;SHA256 885c9e65e8660cadc06f8ae5e72f6b985539ce2419a39cf50dd8c97f8e81997e;copied2026-10-20T22:16:10.936+02:00;Windows/Firefox158/en/1920x919/DPR1;runtime ref unknown. Compact236439bytes/18entries/0omitted groups or sections/1extra example omitted. User reports stutters improved,lists still incoherent;no frame timing proof.
 15Next arrows/0navigation failures/no saved actions. At1200ms(or before-next),visible5,7,7,7,2,0,0,3,3,6,7,7,7,4,2;empty samples retain30/32eligible IDs. Inventory reaches110known/61filtered on this row;all-row inventory40/limit:true. No normal-arrow deep query survey. Work214scans/11625cards/max60ms/124159paints/3573controlWrites;57viewing requests/0pending. Timing and counts do not isolate remaining frame cost or establish full wrap behavior.
+
+## Session - 1.11.0
+
+Source logs/1.11.0-2026-10-20T21-47-52-572Z-7c6294a9.txt;SHA256 7b1f71157dedbb449bb9a8c3261dece4288a52506122f779bcb78d92ed23cda9;copied2026-10-20T23:47:52.536+02:00;Windows/Firefox158/en/1920x919/DPR1;runtime ref unknown. Compact490586bytes/24entries/0omitted groups or sections/2extra examples omitted.17arrows/0navigation failures/one timed sample pending. At1200ms visible5,6,5,7,7,5,2,3,2,1,0,1,5,5,6,4,3;empty page retains38eligible IDs. No saved actions.
+Final nativeRows41attempts/0activated,writes,loads,failures;one row reason no-matching-query/pageContext:false. Two retained browse snapshots also show0activation/12attempts;one prior sample omits nativeRows. Readiness464/mean3086ms/max5688ms/53requests/0pending/7failed;three sampled series reject episode-count mismatch(27vs28,28vs29,16vs17). Work249scans/13577cards/max58ms/120303paints/2794writes. User reports empty/sparse pages and unexpected Refresh viewing status controls. No accepted-cache rendering, precise rejection stage or frame-time result is established.

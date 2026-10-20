@@ -175,16 +175,16 @@ test('missing series metadata preserves existing coverage and disables new caugh
     assert.deepEqual(knowledgeSnapshot(b.saved, 'A').choices['9'].coverage, [['101', 2]]);
 });
 
-test('an exhausted metadata lookup offers status refresh and restores the normal watched action after recovery', async () => {
+test('an exhausted metadata lookup shows unavailable and a new visit recovers the watched action', async () => {
     let available = false;
     const b = setup({ viewingData: { ...seriesMetadata(), async readTitles(ids) {
         return available ? new Map(ids.map(id => [id, { videoId: id, type: 'movie' }])) : new Map();
     } } }), a = mount(b); a.card.removeAttribute('data-video-type');
     b.feature.check(); await b.scheduler.flush(); await b.scheduler.advance(1000); await b.scheduler.advance(2000);
-    const button = a.host.querySelector('button'); assert.equal(button.disabled, false);
-    const label = button.textContent; assert.notEqual(label, 'Checking viewing status...');
-    available = true; b.click(a.host, label); await b.scheduler.flush();
-    assert.equal(button.textContent, 'Mark watched'); assert.equal(button.disabled, false);
+    let button = a.host.querySelector('button'); assert.equal(button.disabled, true);
+    assert.equal(button.textContent, 'Viewing details unavailable');
+    available = true; b.feature.dispose(); b.feature.check(); await b.scheduler.flush();
+    button = a.host.querySelector('button'); assert.equal(button.textContent, 'Mark watched'); assert.equal(button.disabled, false);
     b.click(a.host, 'Mark watched'); assert.equal(a.host.style.getPropertyValue('display'), 'none'); b.feature.dispose();
 });
 
@@ -736,4 +736,16 @@ test('matched native query filtering feeds complete candidate pages through the 
     assert.equal(a.row.querySelectorAll('.tm-rec-controls').length, 3);
     b.feature.dispose(); await b.scheduler.flush();
     assert.equal(native.state.data.node.entities.edges.length, 12); assert.equal(b.scheduler.timers.size, 0);
+});
+
+
+test('failed known-series metadata keeps the caught-up action label without substituting refresh', async () => {
+    const b = setup({ viewingData: { beginRead: () => ({ profileGuid: 'A' }),
+        async readTitles() { return new Map([['1', { videoId: '1', type: 'show' }]]); }, async readSeasons() { return []; } } });
+    const a = mount(b); a.card.removeAttribute('data-video-type'); b.feature.check(); await b.scheduler.flush();
+    await b.scheduler.advance(1000); await b.scheduler.advance(2000);
+    const button = a.host.querySelectorAll('button').find(node => node.textContent === 'Mark caught up');
+    assert.ok(button); assert.equal(button.disabled, true); assert.match(button.title, /unavailable/i);
+    assert.equal(a.host.querySelectorAll('button').some(node => /refresh/i.test(node.textContent)), false);
+    b.feature.dispose();
 });

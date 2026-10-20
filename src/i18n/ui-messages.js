@@ -966,4 +966,39 @@ for (const [locale, values] of Object.entries(RECOMMENDATION_PANEL_MESSAGES)) {
     ['closeRecommendationPanel', 'noRecommendationChoices'].forEach((key, index) => { UI_MESSAGES[locale][key] = values[index]; });
 }
 
+const VIEWING_DETAILS_UNAVAILABLE = {
+    "da": "Visningsoplysninger er ikke tilg\u00e6ngelige",
+    "de": "Wiedergabedetails nicht verf\u00fcgbar",
+    "en": "Viewing details unavailable",
+    "es": "Detalles de visualizaci\u00f3n no disponibles",
+    "fil": "Hindi available ang mga detalye ng panonood",
+    "fr": "D\u00e9tails de visionnage indisponibles",
+    "hr": "Podaci o gledanju nisu dostupni",
+    "id": "Detail tontonan tidak tersedia",
+    "it": "Dettagli di visione non disponibili",
+    "hu": "A megtekint\u00e9si adatok nem \u00e9rhet\u0151k el",
+    "ms": "Butiran tontonan tidak tersedia",
+    "nl": "Kijkgegevens niet beschikbaar",
+    "nb": "Visningsdetaljer er ikke tilgjengelige",
+    "pl": "Szczeg\u00f3\u0142y ogl\u0105dania s\u0105 niedost\u0119pne",
+    "pt": "Detalhes de visualiza\u00e7\u00e3o indispon\u00edveis",
+    "ro": "Detaliile vizion\u0103rii nu sunt disponibile",
+    "fi": "Katselutietoja ei ole saatavilla",
+    "sv": "Visningsinformation \u00e4r inte tillg\u00e4nglig",
+    "vi": "Kh\u00f4ng c\u00f3 th\u00f4ng tin xem",
+    "tr": "\u0130zleme ayr\u0131nt\u0131lar\u0131 kullan\u0131lam\u0131yor",
+    "cs": "Podrobnosti o sledov\u00e1n\u00ed nejsou dostupn\u00e9",
+    "el": "\u039f\u03b9 \u03bb\u03b5\u03c0\u03c4\u03bf\u03bc\u03ad\u03c1\u03b5\u03b9\u03b5\u03c2 \u03c0\u03c1\u03bf\u03b2\u03bf\u03bb\u03ae\u03c2 \u03b4\u03b5\u03bd \u03b5\u03af\u03bd\u03b1\u03b9 \u03b4\u03b9\u03b1\u03b8\u03ad\u03c3\u03b9\u03bc\u03b5\u03c2",
+    "ru": "\u0421\u0432\u0435\u0434\u0435\u043d\u0438\u044f \u043e \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u044b",
+    "uk": "\u0412\u0456\u0434\u043e\u043c\u043e\u0441\u0442\u0456 \u043f\u0440\u043e \u043f\u0435\u0440\u0435\u0433\u043b\u044f\u0434 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0456",
+    "he": "\u05e4\u05e8\u05d8\u05d9 \u05d4\u05e6\u05e4\u05d9\u05d9\u05d4 \u05d0\u05d9\u05e0\u05dd \u05d6\u05de\u05d9\u05e0\u05d9\u05dd",
+    "ar": "\u062a\u0641\u0627\u0635\u064a\u0644 \u0627\u0644\u0645\u0634\u0627\u0647\u062f\u0629 \u063a\u064a\u0631 \u0645\u062a\u0627\u062d\u0629",
+    "hi": "\u0926\u0947\u0916\u0928\u0947 \u0915\u0940 \u091c\u093e\u0928\u0915\u093e\u0930\u0940 \u0909\u092a\u0932\u092c\u094d\u0927 \u0928\u0939\u0940\u0902 \u0939\u0948",
+    "th": "\u0e44\u0e21\u0e48\u0e21\u0e35\u0e23\u0e32\u0e22\u0e25\u0e30\u0e40\u0e2d\u0e35\u0e22\u0e14\u0e01\u0e32\u0e23\u0e23\u0e31\u0e1a\u0e0a\u0e21",
+    "zh": "\u89c2\u770b\u8be6\u60c5\u4e0d\u53ef\u7528",
+    "ja": "\u8996\u8074\u8a73\u7d30\u3092\u53d6\u5f97\u3067\u304d\u307e\u305b\u3093",
+    "ko": "\uc2dc\uccad \uc138\ubd80 \uc815\ubcf4\ub97c \uc0ac\uc6a9\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4"
+};
+for (const [locale, text] of Object.entries(VIEWING_DETAILS_UNAVAILABLE)) UI_MESSAGES[locale].viewingDetailsUnavailable = text;
+
 export const NETFLIX_PRIMARY_UI_LOCALES = new Set(Object.keys(UI_MESSAGES));

@@ -160,7 +160,7 @@ export function createViewingData({ context, fetch, createCancelledError }) {
     }
 
 
-    function viewingSeasonPlan(graph, record, reject) {
+    function viewingSeasonPlan(graph, record, reject, allowManual = false) {
         const count = record.seasonCount ?? viewingCount(readViewingGraph(graph, ['videos', record.videoId, 'seasonList', 'length']));
         const expected = record.episodeCount;
         const facts = { seasonCount: Number.isFinite(count) ? count : null, episodeCount: Number.isFinite(expected) ? expected : null };
@@ -185,12 +185,16 @@ export function createViewingData({ context, fetch, createCancelledError }) {
             if (!Number.isSafeInteger(length) || length > VIEWING_MAX_EPISODES) return fail('season-length-invalid', { index });
             seen.add(id); total += length;
             if (total > VIEWING_MAX_EPISODES) return fail('episode-total-limit', { total });
-            if (expected !== null && total > expected && !verified) return fail('episode-count-mismatch', { total });
+            if (expected !== null && total > expected && !verified && !allowManual) return fail('episode-count-mismatch', { total });
             seasons.push({ id, count: length });
         }
         if (!total) return fail('season-list-empty');
         if (expected !== null && total !== expected) {
-            if (!verified) return fail('episode-count-mismatch', { total });
+            if (!verified) {
+                if (!allowManual) return fail('episode-count-mismatch', { total });
+                reject({ reason: 'manual-season-coverage', ...facts, total });
+                return { videoId: record.videoId, expected: total, seasons, manualOnly: true };
+            }
             reject({ reason: 'episode-count-adjusted', ...facts, total, verifiedSeasonCount: verifiedCount });
         }
         return { videoId: record.videoId, expected: total, seasons };
@@ -208,7 +212,7 @@ export function createViewingData({ context, fetch, createCancelledError }) {
         return new Map(ids.map(id => [String(id), viewingVideoRecord(graph, id)]));
     }
 
-    async function readSeasons(records, access, owner) {
+    async function readSeasons(records, access, owner, { allowManual = false } = {}) {
         requireBatch(records, limits.titleBatch);
         for (const record of records) coverageFacts.delete(record.videoId);
         let requested = 0;
@@ -225,7 +229,7 @@ export function createViewingData({ context, fetch, createCancelledError }) {
         const graph = await requestGraph(paths, access, owner);
         return records.map(record => {
             coverageFacts.delete(record.videoId);
-            const plan = viewingSeasonPlan(graph, record, facts => coverageFacts.set(record.videoId, facts));
+            const plan = viewingSeasonPlan(graph, record, facts => coverageFacts.set(record.videoId, facts), allowManual);
             while (coverageFacts.size > 24) coverageFacts.delete(coverageFacts.keys().next().value);
             return plan;
         }).filter(Boolean);

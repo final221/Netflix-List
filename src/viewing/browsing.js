@@ -102,13 +102,13 @@ export function createBrowsingViewing({ environment, context, userscript, isCurr
                     }
                     publishReady(ids, owner);
                     for (const batch of seasonBatches(series)) {
-                        const plans = await request((access, handle) => data.readSeasons(batch, access, handle), owner, 'seasons');
+                        const plans = await request((access, handle) => data.readSeasons(batch, access, handle, { allowManual: true }), owner, 'seasons');
                         for (const plan of plans) coverage.set(plan.videoId, plan.seasons.map(season => [season.id, season.count]));
                         const expired = choices.reconcile(id => coverage.get(id), batch.map(record => record.videoId), () => guard(owner));
                         if (expired.size) log('Browsing viewing coverage reconciled', { changed: expired.size });
                         publishReady(batch.map(record => record.videoId), owner);
                         if (typeof data.readEpisodes === 'function') {
-                            const targets = plans.map(plan => ({ plan, season: [...plan.seasons].reverse().find(season => season.count > 0) })).filter(value => value.season);
+                            const targets = plans.filter(plan => !plan.manualOnly).map(plan => ({ plan, season: [...plan.seasons].reverse().find(season => season.count > 0) })).filter(value => value.season);
                             if (targets.length) {
                                 const episodes = await request((access, handle) => data.readEpisodes(targets.map(({ season }) =>
                                     ({ seasonId: season.id, from: season.count - 1, to: season.count - 1 })), access, handle), owner, 'finales');
@@ -161,5 +161,5 @@ export function createBrowsingViewing({ environment, context, userscript, isCurr
         presentation: () => choices.presentation(), diagnostics: () => ({ phase, readiness: { count: readiness.count,
             meanMs: readiness.count ? Math.round(readiness.totalMs / readiness.count) : 0, maxMs: Math.round(readiness.maxMs), waiting: waitingSince.size },
             budgetWaitMs: Math.max(0, Math.round((windowRequests >= 198 ? windowStart + 60000 : 0) - now())),
-            cooldownWaitMs: Math.max(0, Math.round(cooldownUntil - now())), knowledge: knowledge.diagnostics(), coverageAdjustments: data.coverageDiagnostics?.().filter(facts => facts.reason === 'episode-count-adjusted') || [], requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, failedTitles: [...failed].slice(0, 12).map(id => ({ id, type: type(id) || 'unknown', attempts: attempts.get(id) || 0, missing: type(id) === 'series' ? 'coverage' : 'type', coverageFailure: data.coverageDiagnostic?.(id) || null })), failedTitlesTruncated: failed.size > 12, retrying: retryTimer !== null, windowRequests }) });
+            cooldownWaitMs: Math.max(0, Math.round(cooldownUntil - now())), knowledge: knowledge.diagnostics(), coverageAdjustments: data.coverageDiagnostics?.().filter(facts => ['episode-count-adjusted', 'manual-season-coverage'].includes(facts.reason)) || [], requests, checked: checked.size, pending: pending.size, running, unavailable: failed.size > 0, failed: failed.size, failedTitles: [...failed].slice(0, 12).map(id => ({ id, type: type(id) || 'unknown', attempts: attempts.get(id) || 0, missing: type(id) === 'series' ? 'coverage' : 'type', coverageFailure: data.coverageDiagnostic?.(id) || null })), failedTitlesTruncated: failed.size > 12, retrying: retryTimer !== null, windowRequests }) });
 }

@@ -982,3 +982,20 @@ test('independently complete seasons normalize stale aggregate episode counts wi
     graph.videos[1].seasonList.length = atom(2); delete graph.seasons[11].length; assert.deepEqual(await read(), []);
     assert.equal(e.data.coverageDiagnostic('1').reason, 'season-length-missing');
 });
+
+
+test('manual series coverage accepts conflicting aggregates only with every declared season validated', async () => {
+    const e = viewingDataEnvironment(), access = e.data.beginRead(), record = { videoId: '1', seasonCount: 2, episodeCount: 26 };
+    const graph = { videos: { 1: { seasonList: { 0: reference('seasons', 10), 1: reference('seasons', 11) } } },
+        seasons: { 10: { length: atom(13) }, 11: { length: atom(14) } } };
+    const read = async allowManual => { e.responses.push({ graph }); return e.data.readSeasons([record], access, e.owner, { allowManual }); };
+    assert.deepEqual(await read(false), []);
+    const [plan] = await read(true); assert.equal(plan.manualOnly, true); assert.equal(plan.expected, 27);
+    assert.deepEqual(plan.seasons, [{ id: '10', count: 13 }, { id: '11', count: 14 }]);
+    assert.equal(e.data.coverageDiagnostic('1').reason, 'manual-season-coverage');
+    delete graph.seasons[11].length; assert.deepEqual(await read(true), []);
+    graph.seasons[11].length = atom(14); graph.videos[1].seasonList[1] = reference('seasons', 10);
+    assert.deepEqual(await read(true), []);
+    graph.videos[1].seasonList[1] = reference('seasons', 11); graph.videos[1].seasonList.length = atom(3);
+    assert.deepEqual(await read(true), []);
+});

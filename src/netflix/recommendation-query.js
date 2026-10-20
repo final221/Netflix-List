@@ -28,37 +28,52 @@ function carouselQuery(query) {
         Array.isArray(variables) && ['rowId', 'carouselAfterCursor', 'carouselPageSize'].every(name => variables.some(v => v?.variable?.name?.value === name));
 }
 export function findRecommendationQuery(card, mountedIds, { paginationOnly = false } = {}) {
-    const mounted = new Set(mountedIds), found = new Map(); let pagination = null;
-    const key = Object.getOwnPropertyNames(card || {}).find(name => name.startsWith('__reactFiber$') || name.startsWith('__reactInternalInstance$'));
-    let fiber = key && own(card, key); const fibers = new Set();
+    const mounted = new Set(mountedIds), found = new Map(), fibers = new Set(); let pagination = null;
+    const probe = { fibers: 0, hooks: 0, results: 0, namedQuery: 0, operation: 0, variables: 0, cacheApi: 0, connection: 0, maxOverlap: 0, mounted: mounted.size };
+    const seen = new WeakSet(); let inspected = 0;
     function inspect(value, depth = 0) {
-        if (!value || typeof value !== 'object' || depth > 2) return;
+        if (!value || typeof value !== 'object' || depth > 5 || seen.has(value)) return;
+        if (inspected++ >= 2048) { probe.truncated = true; return; }
+        seen.add(value);
         if (Array.isArray(value)) { for (let i = 0; i < Math.min(value.length, 4); i++) inspect(own(value, String(i)), depth + 1); return; }
         const index = own(value, 'pageIndex'), count = own(value, 'pageCount'), setter = own(value, 'setPageIndex');
         if (!pagination && Number.isSafeInteger(index) && index >= 0 && Number.isSafeInteger(count) && count > index && typeof setter === 'function')
             pagination = { index, set: setter.bind(value) };
-        if (paginationOnly) { inspect(own(value, 'value'), depth + 1); return; }
+        for (const key of ['value', 'current', 'ref', 'state']) inspect(own(value, key), depth + 1);
+        if (paginationOnly) return;
         const observable = own(value, 'observable'), options = own(observable, 'options');
         const query = own(options, 'query'), variables = own(options, 'variables') || own(value, 'variables');
-        if (!carouselQuery(query) || typeof own(variables, 'rowId') !== 'string') { inspect(own(value, 'value'), depth + 1); return; }
-        const data = own(value, 'data'), client = own(value, 'client'), cache = own(client, 'cache');
+        if (observable) probe.results++;
+        if (own(query, 'definitions')?.some(d => d?.kind === 'OperationDefinition' && d.name?.value === 'CarouselPage')) probe.namedQuery++;
+        if (!carouselQuery(query)) return; probe.operation++;
+        if (typeof own(variables, 'rowId') !== 'string') return; probe.variables++;
+        const data = own(value, 'data'), client = own(value, 'client') || own(observable, 'client') || own(own(observable, 'queryManager'), 'client'), cache = own(client, 'cache');
         const read = method(cache, 'readQuery'), write = method(cache, 'writeQuery');
-        if (!read || !write || !valid(data)) return;
+        if (!read || !write) return; probe.cacheApi++;
+        if (!valid(data)) {
+            const value = connection(data);
+            probe.rejectedConnection = { edges: Array.isArray(value?.edges) ? value.edges.length : null, totalType: typeof value?.totalCount, pageFlagType: typeof value?.pageInfo?.hasNextPage };
+            return;
+        } probe.connection++;
         const ids = new Set(connection(data).edges.map(videoId).filter(Boolean));
-        const overlap = [...mounted].filter(id => ids.has(id)).length;
+        const overlap = [...mounted].filter(id => ids.has(id)).length; probe.maxOverlap = Math.max(probe.maxOverlap, overlap);
         if (mounted.size < 2 || overlap < Math.max(2, Math.ceil(mounted.size * .85))) return;
         found.set(observable, { observable, options, query, variables, data, read, write, queryRead: method(client, 'query'), overlap });
     }
-    for (let depth = 0; fiber && depth < 24 && !fibers.has(fiber) && !(paginationOnly && pagination); depth++, fiber = own(fiber, 'return')) {
-        fibers.add(fiber); inspect(own(fiber, 'memoizedProps'));
-        let hook = own(fiber, 'memoizedState'); const hooks = new Set();
-        for (let i = 0; hook && i < 48 && !hooks.has(hook) && !(paginationOnly && pagination); i++, hook = own(hook, 'next')) {
-            hooks.add(hook); inspect(own(hook, 'memoizedState'));
+    for (const root of Array.isArray(card) ? card.slice(0, 3) : [card]) {
+        const key = Object.getOwnPropertyNames(root || {}).find(name => name.startsWith('__reactFiber$') || name.startsWith('__reactInternalInstance$'));
+        let fiber = key && own(root, key);
+        for (let depth = 0; fiber && depth < 32 && fibers.size < 64 && !fibers.has(fiber) && !(paginationOnly && pagination); depth++, fiber = own(fiber, 'return')) {
+            fibers.add(fiber); probe.fibers++; inspect(own(fiber, 'memoizedProps'));
+            let hook = own(fiber, 'memoizedState'); const hooks = new Set();
+            for (let i = 0; hook && i < 48 && !hooks.has(hook) && !(paginationOnly && pagination); i++, hook = own(hook, 'next')) {
+                hooks.add(hook); probe.hooks++; inspect(own(hook, 'memoizedState'));
+            }
         }
     }
     if (paginationOnly) return { pagination };
-    if (found.size !== 1) return { reason: found.size ? 'ambiguous-query' : 'no-matching-query' };
-    return { binding: createBinding([...found.values()][0]), pagination };
+    if (found.size !== 1) return { reason: found.size ? 'ambiguous-query' : 'no-matching-query', probe };
+    return { binding: createBinding([...found.values()][0]), pagination, probe };
 }
 function createBinding(native) {
     const { query, options, observable, read, write, queryRead } = native, rowId = native.variables.rowId;

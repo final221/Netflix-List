@@ -209,6 +209,7 @@ export function createRecommendationDom(environment) {
         } catch (_) { return [{ unavailable: true }]; }
         return result;
     }
+    const queryRoots = card => [card, ...(card.closest?.('section, .lolomoRow')?.querySelectorAll(arrowSelector) || [])].slice(0, 3);
     function navigationTarget(target) {
         const next = target?.closest?.('[data-uia="carousel-hawkins-right-button"], [data-uia="carousel-right-button"], .handleNext');
         const previous = next ? null : target?.closest?.('[data-uia="carousel-hawkins-left-button"], [data-uia="carousel-left-button"], .handlePrev');
@@ -431,5 +432,5 @@ export function createRecommendationDom(environment) {
         } catch (_) { return null; }
     }
     return Object.freeze({ scan, lease, updateArrows, describe, refillState, loadingFacts, navigationTarget, rowDiagnostics,
-        navigationStart, navigationRequests, observeRequests, queryBinding: findRecommendationQuery, queryPage: card => findRecommendationQuery(card, [], { paginationOnly: true }).pagination });
+        navigationStart, navigationRequests, observeRequests, queryBinding: (card, ids) => findRecommendationQuery(queryRoots(card), ids), queryPage: card => findRecommendationQuery(queryRoots(card), [], { paginationOnly: true }).pagination });
 }

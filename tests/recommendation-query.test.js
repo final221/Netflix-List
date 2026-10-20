@@ -63,3 +63,18 @@ test('readback rejection rolls back and retirement during a network read prevent
     current = false; resolve({ data: later.page(['3'], false, 3) }); await assert.rejects(work, /retired/);
     assert.equal(active.state({}, '1').known, 2); assert.equal(later.state.writes.length, 0);
 });
+
+
+test('bounded arrow discovery finds wrapped query results when the card path has no binding', () => {
+    const f = queryFixture(), arrow = f.card();
+    arrow.__reactFiber$queryTest.memoizedState.memoizedState = { current: { value: [f.result] } };
+    const found = findRecommendationQuery([{}, arrow], ['1', '2']);
+    assert.ok(found.binding); assert.equal(found.probe.cacheApi, 1); assert.equal(found.probe.maxOverlap, 2);
+    found.binding.publish({ 1: 'hide' }, () => {}); assert.deepEqual(ids(f.state.data), ['2', '3']);
+    const client = f.result.client; delete f.result.client;
+    const missing = findRecommendationQuery([{}, arrow], ['2', '3']);
+    assert.equal(missing.reason, 'no-matching-query'); assert.equal(missing.probe.operation, 1);
+    assert.equal(missing.probe.cacheApi, 0); assert.doesNotMatch(JSON.stringify(missing.probe), /private/);
+    f.result.observable.queryManager = { client };
+    assert.ok(findRecommendationQuery([{}, arrow], ['2', '3']).binding);
+});

@@ -22,6 +22,7 @@ export function createNativeRows({ environment, dom, admitted, canRestore = admi
             if (!job.binding) {
                 job.lookups--;
                 const found = dom.queryBinding(values[0].card, values.map(value => value.id)); check();
+                job.probe = found.probe;
                 if (!found.binding) { job.reason = found.reason; return; }
                 job.binding = found.binding; job.pagination = found.pagination; stats.activated++;
             }
@@ -57,12 +58,16 @@ export function createNativeRows({ environment, dom, admitted, canRestore = admi
             if (job.dirty) try { guard(job); schedule(job); } catch (_) {}
         }
     }
+    function presentation(row) {
+        const snapshot = dom.rowDiagnostics(row, readChoices());
+        return snapshot ? { visible: snapshot.visible, capacity: snapshot.pageCapacity, hidden: snapshot.hidden, mounted: snapshot.mounted, pageIndex: snapshot.pageIndex } : null;
+    }
     function interact(row) {
         if (!row || !admitted()) return;
         let job = rows.get(row);
         if (job && identity(row) !== job.identity) { retire(job); job = null; }
         if (!job) {
-            if (rows.size >= 4) return;
+            if (rows.size >= 4) retire(rows.values().next().value);
             job = { row, identity: identity(row), generation, timer: null, deadline: null, controller: null, binding: null, pagination: null,
                 credit: 0, lookups: 0, intent: 0, dirty: false, failed: false, reason: 'pending', running: false }; rows.set(row, job);
         }
@@ -83,5 +88,5 @@ export function createNativeRows({ environment, dom, admitted, canRestore = admi
         generation++; rows.clear(); requests.length = 0;
     }
     return Object.freeze({ interact, refresh, dispose, diagnostics: () => ({ ...stats, rows: [...rows.values()].map(job => ({ reason: job.reason,
-        running: job.running, pageContext: Boolean(job.pagination), ...job.summary })) }) });
+        running: job.running, pageContext: Boolean(job.pagination), probe: job.probe, presentation: presentation(job.row), ...job.summary })) }) });
 }

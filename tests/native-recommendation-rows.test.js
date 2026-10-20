@@ -58,3 +58,15 @@ test('an unresponsive native query times out and cannot later publish into the r
     resolve({ data: b.page(['3'], false, 3) }); await b.scheduler.flush();
     assert.equal(b.state.writes.length, writes); b.owner.dispose(); assert.equal(b.scheduler.timers.size, 0);
 });
+
+
+test('real DOM adapter discovers the query from an arrow and exports page-fill and admission facts', async () => {
+    const b = fixture();
+    for (const card of b.row.querySelectorAll('a')) delete card.__reactFiber$queryTest;
+    const arrow = b.row.appendChild(new Element('button')); arrow.setAttribute('data-uia', 'carousel-right-button'); b.attach(arrow);
+    b.owner.interact(b.row); await b.scheduler.advance(200);
+    const facts = b.owner.diagnostics(); assert.equal(facts.activated, 1); assert.equal(facts.writes, 1);
+    assert.equal(facts.rows[0].probe.maxOverlap, 2); assert.equal(facts.rows[0].probe.cacheApi, 1);
+    assert.equal(facts.rows[0].presentation.mounted, 2); assert.ok(facts.rows[0].presentation.capacity > 0);
+    b.owner.dispose();
+});
