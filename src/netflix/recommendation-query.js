@@ -58,7 +58,7 @@ export function findRecommendationQuery(card, mountedIds, { paginationOnly = fal
         const ids = new Set(connection(data).edges.map(videoId).filter(Boolean));
         const overlap = [...mounted].filter(id => ids.has(id)).length; probe.maxOverlap = Math.max(probe.maxOverlap, overlap);
         if (mounted.size < 2 || overlap < Math.max(2, Math.ceil(mounted.size * .85))) return;
-        found.set(observable, { observable, options, query, variables, data, read, write, queryRead: method(client, 'query'), overlap });
+        found.set(observable, { observable, options, query, variables, data, read, write, client, cache, queryRead: method(client, 'query'), overlap });
     }
     for (const root of Array.isArray(card) ? card.slice(0, 3) : [card]) {
         const key = Object.getOwnPropertyNames(root || {}).find(name => name.startsWith('__reactFiber$') || name.startsWith('__reactInternalInstance$'));
@@ -75,12 +75,37 @@ export function findRecommendationQuery(card, mountedIds, { paginationOnly = fal
     if (found.size !== 1) return { reason: found.size ? 'ambiguous-query' : 'no-matching-query', probe };
     return { binding: createBinding([...found.values()][0]), pagination, probe };
 }
+function variableKey(variables) {
+    let visited = 0;
+    function normalize(value, depth = 0) {
+        if (depth > 8 || ++visited > 512) throw Error('variable-limit');
+        if (value === undefined || value === null) return [String(value)];
+        if (['string', 'boolean'].includes(typeof value)) return [typeof value, value];
+        if (typeof value === 'number' && Number.isFinite(value)) return ['number', value];
+        if (!value || typeof value !== 'object') throw Error('variable-type');
+        if (Array.isArray(value)) {
+            if (value.length > 512) throw Error('variable-limit');
+            return ['array', Array.from({ length: value.length }, (_, index) => normalize(own(value, String(index)), depth + 1))];
+        }
+        return ['object', Object.keys(value).sort().filter(key => depth || !['carouselAfterCursor', 'carouselPageSize'].includes(key))
+            .map(key => { if (!Object.hasOwn(Object.getOwnPropertyDescriptor(value, key), 'value')) throw Error('variable-accessor');
+                return [key, normalize(own(value, key), depth + 1)]; })];
+    }
+    try { return JSON.stringify(normalize(variables)); } catch (_) { return null; }
+}
 function createBinding(native) {
-    const { query, options, observable, read, write, queryRead } = native, rowId = native.variables.rowId;
+    const { query, observable, read, write, queryRead } = native, rowId = native.variables.rowId, identity = variableKey(native.variables);
+    let options = native.options, optionsRefreshes = 0, loadStop = null, lastLoad = null;
     const edges = new Map(), cursors = new Set(); let server = null, last = null, disabled = false, pendingServer = false;
     const key = edge => videoId(edge) || 'cursor:' + edge.cursor;
     const signature = data => JSON.stringify([connection(data)?.edges?.map(key), connection(data)?.totalCount, connection(data)?.pageInfo]);
-    const current = () => !disabled && own(observable, 'options') === options && own(options, 'query') === query && own(own(options, 'variables'), 'rowId') === rowId;
+    function ownership() {
+        const next = own(observable, 'options'), variables = own(next, 'variables');
+        return { disabled, optionsChanged: next !== options, queryChanged: own(next, 'query') !== query,
+            rowChanged: own(variables, 'rowId') !== rowId, variablesChanged: identity === null || variableKey(variables) !== identity,
+            cacheChanged: own(native.client, 'cache') !== native.cache };
+    }
+    const current = () => { const status = ownership(); return !status.disabled && !status.queryChanged && !status.rowChanged && !status.variablesChanged && !status.cacheChanged; };
     function ingest(data, updateServer = true) {
         if (!valid(data)) throw Error('invalid-connection');
         const value = connection(data);
@@ -91,11 +116,15 @@ function createBinding(native) {
     function copy(data, selected, metadata) {
         return { ...data, node: { ...data.node, entities: { ...connection(data), edges: selected, ...metadata } } };
     }
-    function access() { if (!current()) throw Error('query-owner-replaced'); return { query, variables: options.variables }; }
+    function access() {
+        if (!current()) throw Error('query-owner-replaced');
+        const next = own(observable, 'options'); if (next !== options) { optionsRefreshes++; options = next; }
+        return { query, variables: options.variables };
+    }
     function publish(choices, assertCurrent, anchor = null, capacity = 8, pagination = null) {
         assertCurrent(); const input = access(), data = read(input); assertCurrent(); ingest(data, !pendingServer || connection(data)?.edges.length > edges.size); pendingServer = false;
         const selected = [...edges.values()].filter(edge => !choices[videoId(edge)]);
-        const totalCount = selected.length + (server.pageInfo.hasNextPage ? Math.max(0, server.totalCount - edges.size) : 0);
+        const totalCount = selected.length;
         const output = copy(data, selected, { totalCount, pageInfo: server.pageInfo });
         if (signature(output) === signature(data)) return false;
         const original = data; last = signature(output);
@@ -113,9 +142,9 @@ function createBinding(native) {
     }
     async function load(signal, assertCurrent) {
         assertCurrent(); const input = access();
-        if (!queryRead || !server?.pageInfo.hasNextPage) return false;
+        if (!queryRead || !server?.pageInfo.hasNextPage) { loadStop = queryRead ? 'server-exhausted' : 'no-query-api'; return false; }
         const cursor = server.pageInfo.endCursor;
-        if (cursors.has(cursor)) return false;
+        if (cursors.has(cursor)) { loadStop = 'cursor-stalled'; return false; }
         cursors.add(cursor);
         const pageSize = Number.isSafeInteger(input.variables.carouselPageSize) ? Math.min(28, Math.max(1, input.variables.carouselPageSize)) : 14;
         let result;
@@ -124,7 +153,10 @@ function createBinding(native) {
         catch (error) { cursors.delete(cursor); throw error; }
         assertCurrent(); if (signal.aborted) throw Error('query-aborted'); access();
         if (result.error || result.errors?.length) throw Error('native-query-failed');
-        ingest(result.data); pendingServer = true; return true;
+        const before = edges.size; ingest(result.data); pendingServer = true;
+        lastLoad = { received: connection(result.data).edges.length, added: edges.size - before, cursorAdvanced: server.pageInfo.endCursor !== cursor };
+        loadStop = !server.pageInfo.hasNextPage ? 'server-exhausted' : !lastLoad.cursorAdvanced ? 'cursor-stalled' : null;
+        return true;
     }
     function restore(assertCurrent) {
         if (!last || !current()) return false;
@@ -137,6 +169,7 @@ function createBinding(native) {
         state(choices, anchor) {
             const ids = [...edges.values()].map(videoId).filter(id => id && !choices[id]);
             return { known: edges.size, filtered: ids.length, anchorIndex: Math.max(0, ids.indexOf(anchor)),
-                hasNextPage: server.pageInfo.hasNextPage, canLoad: Boolean(queryRead), overlap: native.overlap };
+                hasNextPage: server.pageInfo.hasNextPage, canLoad: Boolean(queryRead), overlap: native.overlap,
+                serverTotal: server.totalCount, optionsRefreshes, ownership: ownership(), loadStop, lastLoad: lastLoad && { ...lastLoad } };
         } });
 }

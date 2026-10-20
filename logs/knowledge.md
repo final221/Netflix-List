@@ -4,15 +4,9 @@
 
 Full provenance/measurements atdf6dd8c:logs/knowledge.md(summary,not runtime). Signatures:.53 routeSessionToken ReferenceError;.54 mapping changed;.67/.69 fallback500;.70 cached9/live500 mismatch,fresh500/72pages/init8282ms/native7521ms. Lifecycle/Undo/popup remain unverified. .67 omitted40groups/2sections; .69 none.
 
-## Historical sessions — 1.9.1–1.9.10
+## Historical sessions — 1.9.1–1.9.14
 
-Windows/Firefox157/en/2560×1279/DPR1/homepage;2026-10-10 UTC+02;runtime refs unknown. Complete measurements, filename suffix convention and provenance routes retained at96cf0d9:logs/knowledge.md (summary revision). Uncommitted source provenance:1.9.1–.6 at7772317;1.9.7–.11 ate72fa6a.
-.1 folder/playback confirmed,pending26→0;.4 repeated saves,pending0;.5/.6 row13→25→26 mounted,not loader/cache proof;.7 500checked/0pending,later row8 recycling8/8;.8 608decorated/572checked/4failed/0pending,observer119drops;.9 288checked/6series coverage failures/0pending;.10 317checked/2series coverage failures/0pending. Timing/empty wrapper records cannot establish independent prefetch or fresh recommendations. .10 nine forward arrows each add2previously observed IDs;user reports repeats. Earlier arrow measurements did not establish horizontal hit targets. Detailed comparisons at7689b02.
-
-## Historical sessions - 1.9.11–1.9.14
-
-Windows/Firefox157/2560x1279/DPR1;2026-10-11 UTC+02,runtime refs unknown. Full distinguishing measurements/source provenance retained at1a03336:logs/knowledge.md (summary revision,not runtime). Original uncommitted source routes:.11/.12 atec76b82;.13 at98d3c46;.14 at567ac12 (all logs/knowledge.md).
-.11 first-observed0/8/16 then0/8/8 twice;.12 arrow56x238/right2516vs2560,vertical hits inside;.13 edge2559hit inside/right2560,13→25→26mounted,no saved actions;.14 period connection36/14/true then36/9/false followed by6arrows/no responses/novel2,0,0,0,0,0. Movie connection150/14/true twice. Three coverage failures lack independent full season/list proof. Request timing/ID overlap cannot prove independent prefetch or causal row identity;wrap/Undo/popup/compact/correction behavior unverified.
+Full measurements/dates/environment/source provenance atd30830a:logs/knowledge.md (summary,not runtime);runtime refs unknown. Windows/Firefox157;2026-10-10–11 UTC+02. .1 pending26→0;.4 repeated saves;.5/.6/.13 mounted13→25→26;.7 recycling8/8;.8 observer119drops;.9/.10/.11 series coverage failures6/2/6. .10 arrows add returning IDs;user reports repeats;.11 first-observed0/8/16 then0/8/8 twice. .12 arrow56x238/right2516vs2560;.13 right2560/edge2559hit inside. .14 period connection36/14/true then36/9/false,followed by6arrows/no responses/novel2,0,0,0,0,0;movie150/14/true twice. Request timing/overlap cannot prove causal identity or independent prefetch;wrap/Undo/popup/compact/correction behavior unverified.
 
 ## Evidence limits
 
@@ -22,9 +16,7 @@ No-warning captures do not certify mapping repair. Resize/lifecycle/Undo/timers/
 
 ## Sessions - 1.10.0
 
-Windows/Firefox158/en/2560x1279/DPR1;2026-10-20 UTC+02;runtime refs unknown. Five original uncommitted filenames/copiedAt/SHA256 and full measurements retained ate7a44b7:logs/knowledge.md (summary revision, not runtime).
-First browse export19:46:08:701titles/212completions/154writes/0storage-notification failures/3missing names;325checked/201requests/0pending/4coverage failures. Three sampled episode-count mismatches:81171925(27vs28),81663323(28vs29),82719204(16vs17),each3attempts. Later startup21:21:09.667,three exports21:21:46-21:22:11:one hide/hides4,browse-MyList transitions/789titles/212completions/0storage failures. MyList500titles/7GraphQLpages/init3360ms;scan still running. Two missing-carousel-ID warnings recover;one cancelled export. Stationary refill shortfall16/loader unverified;no watched/reversal/cross-tab/reload/profile proof.
-Final same-visit export21:26:58.947:390checked/248requests/0pending/7coverage failures;214completions/791titles/0storage failures. Arrow13to25mounted/12first-observed by1200ms/two GraphQL timings;survey28components/truncated,no identified loader. MyList scan completes2299ms/23requests/190complete/279unknown;178unknown finales lack watched and have negative bookmarks. Earlier pending-scan limitation superseded only for this visit.
+Windows/Firefox158/en/2560x1279/DPR1;2026-10-20 UTC+02;runtime refs unknown. Five original uncommitted filenames/copiedAt/SHA256 ate7a44b7:logs/knowledge.md;full measurements atd30830a:logs/knowledge.md (summary revisions,not runtime). Browsing knowledge701→791titles/212→214completions/0storage failures;three sampled series have aggregate count mismatches. Final390checked/248requests/0pending/7coverage failures. Arrow13→25mounted/12first-observed by1200ms/two GraphQL timings;survey28components/truncated/no loader identified. MyList initial500/7pages/init3360ms;later scan completes2299ms/23requests/190complete/279unknown,178unknown finales lack watched and have negative bookmarks. No watched/reversal/cross-tab/reload/profile proof;later scan completion supersedes pending status only for this visit.
 
 ## Session - 1.10.1
 
@@ -46,3 +38,8 @@ Source logs/1.10.3-2026-10-20T20-16-10-955Z-ecbde325.txt;SHA256 885c9e65e8660cad
 
 Source logs/1.11.0-2026-10-20T21-47-52-572Z-7c6294a9.txt;SHA256 7b1f71157dedbb449bb9a8c3261dece4288a52506122f779bcb78d92ed23cda9;copied2026-10-20T23:47:52.536+02:00;Windows/Firefox158/en/1920x919/DPR1;runtime ref unknown. Compact490586bytes/24entries/0omitted groups or sections/2extra examples omitted.17arrows/0navigation failures/one timed sample pending. At1200ms visible5,6,5,7,7,5,2,3,2,1,0,1,5,5,6,4,3;empty page retains38eligible IDs. No saved actions.
 Final nativeRows41attempts/0activated,writes,loads,failures;one row reason no-matching-query/pageContext:false. Two retained browse snapshots also show0activation/12attempts;one prior sample omits nativeRows. Readiness464/mean3086ms/max5688ms/53requests/0pending/7failed;three sampled series reject episode-count mismatch(27vs28,28vs29,16vs17). Work249scans/13577cards/max58ms/120303paints/2794writes. User reports empty/sparse pages and unexpected Refresh viewing status controls. No accepted-cache rendering, precise rejection stage or frame-time result is established.
+
+## Session - 1.11.1
+
+Source logs/1.11.1-2026-10-20T22-00-03-725Z-8844cd6b.txt;SHA256 0d152490524d4ae15693e3f8cb7f1cd663ff8cb0d8dba98839e6394d2c8a5566;copied2026-10-21T00:00:03.700+02:00;Windows/Firefox158/en/1920x919/DPR1;runtime ref unknown. Compact309966bytes/21entries/0omitted groups or sections/2extra examples omitted.16Next arrows/0navigation failures/no saved actions. At1200ms visible7,7,5,2,3,2,1,0,2,4,4,6,1,0,0,7;empty samples retain40/58eligible IDs. User reports first-page gaps,brief later-page improvement and loading wall.
+NativeRows17attempts/1activated/1write/1load/16failures,query-owner-replaced;pageContext:false. Probe42fibers/138hooks/3query-variable-cache matches/2valid connections/maxOverlap15of15. Retained binding27known/16filtered/hasNext:true;final visible7/7,hidden0,mounted15. Two prior browse snapshots show0attempts/rows before arrows. Viewing449checked/31requests/0pending/0failed/5manual-season-coverage adjustments(3retained examples). Work272scans/9299cards/max49ms/91252paints/2256controlWrites. No individual owner-identity comparison, server exhaustion or frame-time result is established.

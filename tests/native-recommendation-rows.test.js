@@ -30,13 +30,13 @@ test('interacted rows coalesce filtering and restore owned cache data on route r
     assert.equal(b.state.data.node.entities.edges.length, 2); assert.equal(b.scheduler.timers.size, 0);
 });
 
-test('lookahead is bounded to two read-only requests per interaction', async () => {
+test('heavily filtered lookahead continues up to six requests then reports its interaction limit', async () => {
     const b = fixture({ hasNextPage: true, totalCount: 50 });
-    b.state.pages.push(Promise.resolve({ data: b.page(['3', '4'], true, 50, 'c2') }),
-        Promise.resolve({ data: b.page(['5', '6'], true, 50, 'c3') }));
-    b.owner.interact(b.row); await b.scheduler.advance(200); for (let i = 0; i < 4; i++) await b.scheduler.flush();
-    assert.equal(b.state.requests.length, 2); assert.equal(b.owner.diagnostics().loads, 2);
-    b.owner.refresh(); await b.scheduler.advance(200); assert.equal(b.state.requests.length, 2);
+    for (let id = 3; id <= 8; id++) { b.choices[id] = 'hide'; b.state.pages.push(Promise.resolve({ data: b.page([String(id)], true, 50, 'c' + id) })); }
+    b.owner.interact(b.row); await b.scheduler.advance(200); for (let i = 0; i < 12; i++) await b.scheduler.flush();
+    assert.equal(b.state.requests.length, 6); assert.equal(b.owner.diagnostics().loads, 6);
+    assert.equal(b.owner.diagnostics().rows[0].reason, 'interaction-limit');
+    b.owner.refresh(); await b.scheduler.advance(200); assert.equal(b.state.requests.length, 6);
     b.owner.dispose(); assert.equal(b.scheduler.timers.size, 0);
 });
 
@@ -68,5 +68,58 @@ test('real DOM adapter discovers the query from an arrow and exports page-fill a
     const facts = b.owner.diagnostics(); assert.equal(facts.activated, 1); assert.equal(facts.writes, 1);
     assert.equal(facts.rows[0].probe.maxOverlap, 2); assert.equal(facts.rows[0].probe.cacheApi, 1);
     assert.equal(facts.rows[0].presentation.mounted, 2); assert.ok(facts.rows[0].presentation.capacity > 0);
+    b.owner.dispose();
+});
+
+
+test('visible rows activate on the original page and retire their exact observer on disposal', async () => {
+    const b = fixture(); let deliver, disconnected = false, target;
+    b.context.IntersectionObserver = class {
+        constructor(callback) { deliver = callback; }
+        observe(row) { target = row; } unobserve() {} disconnect() { disconnected = true; }
+    };
+    b.owner.observe(new Set([b.row])); assert.equal(target, b.row);
+    deliver([{ target: b.row, isIntersecting: true }]); await b.scheduler.advance(200);
+    const facts = b.owner.diagnostics(); assert.equal(facts.automatic, 1); assert.equal(facts.writes, 1);
+    assert.equal(facts.rows[0].source, 'visible'); assert.equal(facts.rows[0].reason, 'server-exhausted');
+    b.owner.dispose(); assert.equal(disconnected, true);
+    deliver([{ target: b.row, isIntersecting: true }]); await b.scheduler.advance(200);
+    assert.equal(b.owner.diagnostics().activated, 1); assert.equal(b.scheduler.timers.size, 0);
+});
+
+
+test('shared request budget reports a timed wait and resumes without another arrow click', async () => {
+    const b = fixture({ hasNextPage: true, totalCount: 100 });
+    for (let id = 3; id <= 40; id++) { b.choices[id] = 'hide'; b.state.pages.push(Promise.resolve({ data: b.page([String(id)], true, 100, 'c' + id) })); }
+    for (let turn = 0; turn < 5; turn++) {
+        b.owner.interact(b.row); await b.scheduler.advance(200); for (let i = 0; i < 12; i++) await b.scheduler.flush();
+    }
+    assert.equal(b.state.requests.length, 24);
+    assert.equal(b.owner.diagnostics().rows[0].reason, 'request-budget');
+    assert.ok(b.owner.diagnostics().rows[0].retryInMs > 0);
+    await b.scheduler.advance(60000); for (let i = 0; i < 12; i++) await b.scheduler.flush();
+    assert.equal(b.state.requests.length, 30); b.owner.dispose(); assert.equal(b.scheduler.timers.size, 0);
+});
+
+test('owner continues publication and lookahead when a native cache broadcast refreshes options', async () => {
+    const b = fixture({ hasNextPage: true, totalCount: 4 });
+    b.state.onWrite = () => { b.result.observable.options = { ...b.result.observable.options,
+        variables: { ...b.result.observable.options.variables } }; b.owner.refresh(); };
+    b.state.pages.push(Promise.resolve({ data: b.page(['3', '4'], false, 4, 'c2') }));
+    b.owner.interact(b.row); await b.scheduler.advance(200); for (let i = 0; i < 4; i++) await b.scheduler.flush();
+    await b.scheduler.advance(200);
+    const facts = b.owner.diagnostics(); assert.equal(facts.failures, 0); assert.equal(facts.loads, 1);
+    assert.ok(facts.rows[0].optionsRefreshes > 0); assert.equal(facts.rows[0].reason, 'server-exhausted');
+    assert.deepEqual(b.state.data.node.entities.edges.map(e => e.node.unifiedEntity.videoId), ['2', '3', '4']);
+    b.owner.dispose();
+});
+
+
+test('meeting the buffer target on the last allowed read reports ready rather than a loading wall', async () => {
+    const b = fixture({ hasNextPage: true, totalCount: 100 });
+    for (let index = 0; index < 6; index++) b.state.pages.push(Promise.resolve({ data: b.page(
+        index === 5 ? ['8', '9', '10'] : [String(index + 3)], true, 100, 'c' + index) }));
+    b.owner.interact(b.row); await b.scheduler.advance(200); for (let i = 0; i < 12; i++) await b.scheduler.flush();
+    assert.equal(b.state.requests.length, 6); assert.equal(b.owner.diagnostics().rows[0].reason, 'buffer-ready');
     b.owner.dispose();
 });

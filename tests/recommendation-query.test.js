@@ -37,6 +37,8 @@ test('lookahead uses the matched read-only query and keeps network results priva
     assert.equal(f.state.requests[0].context.preserve, true);
     binding.publish({ 2: 'hide' }, () => {}); assert.deepEqual(ids(f.state.data), ['1', '3', '4']);
     assert.equal(binding.state({}, '1').hasNextPage, false);
+    const copied = binding.state({}, '1'); copied.lastLoad.added = 999;
+    assert.equal(binding.state({}, '1').lastLoad.added, 2);
     assert.doesNotMatch(JSON.stringify(binding.state({}, '1')), /private-|next-cursor/);
 });
 
@@ -77,4 +79,31 @@ test('bounded arrow discovery finds wrapped query results when the card path has
     assert.equal(missing.probe.cacheApi, 0); assert.doesNotMatch(JSON.stringify(missing.probe), /private/);
     f.result.observable.queryManager = { client };
     assert.ok(findRecommendationQuery([{}, arrow], ['2', '3']).binding);
+});
+
+
+test('equivalent native options replacement survives cache broadcasts and in-flight lookahead', async () => {
+    const f = queryFixture(['1', '2'], { hasNextPage: true, totalCount: 40 });
+    const { binding } = findRecommendationQuery(f.card(), ['1', '2']);
+    f.state.onWrite = () => { f.result.observable.options = { ...f.result.observable.options,
+        variables: { ...f.result.observable.options.variables } }; };
+    binding.publish({ 1: 'hide' }, () => {});
+    assert.equal(f.state.data.node.entities.totalCount, 1, 'only loaded eligible titles form pages');
+    f.state.pages.push(Promise.resolve({ data: f.page(['3', '4'], true, 40, 'c2') }));
+    await binding.load(new AbortController().signal, () => {}); binding.publish({ 1: 'hide' }, () => {});
+    assert.deepEqual(ids(f.state.data), ['2', '3', '4']); assert.equal(binding.current(), true);
+    assert.equal(binding.restore(() => {}), true); assert.deepEqual(ids(f.state.data), ['1', '2', '3', '4']);
+    assert.equal(f.state.data.node.entities.totalCount, 40);
+    f.result.observable.options.variables = { ...f.variables, artwork: 'different' };
+    assert.equal(binding.current(), false, 'changed non-pagination variables still retire access');
+});
+
+test('repeated server cursors are diagnosed without extra requests or invented exhaustion', async () => {
+    const f = queryFixture(['1', '2'], { hasNextPage: true, totalCount: 40 });
+    const { binding } = findRecommendationQuery(f.card(), ['1', '2']);
+    f.state.pages.push(Promise.resolve({ data: f.page(['1', '2'], true, 40) }));
+    await binding.load(new AbortController().signal, () => {});
+    assert.equal(binding.state({}, '1').loadStop, 'cursor-stalled');
+    assert.equal(await binding.load(new AbortController().signal, () => {}), false);
+    assert.equal(f.state.requests.length, 1); assert.equal(binding.state({}, '1').hasNextPage, true);
 });

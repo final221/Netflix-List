@@ -749,3 +749,29 @@ test('failed known-series metadata keeps the caught-up action label without subs
     assert.equal(a.host.querySelectorAll('button').some(node => /refresh/i.test(node.textContent)), false);
     b.feature.dispose();
 });
+
+
+test('original-page compaction is wired through visibility before any native arrow or saved action', async () => {
+    const b = setup(), a = mount(b, '1'), second = mount(b, '2'); let visible; const observed = new Set();
+    b.saved.set('legacyMyListForNetflix.recommendationChoices.v1.A', { version: 1, choices: { 1: 'hide' } });
+    a.row.appendChild(second.host); second.row.remove();
+    b.context.IntersectionObserver = class {
+        constructor(callback) { visible = callback; } observe(row) { observed.add(row); }
+        unobserve(row) { observed.delete(row); } disconnect() { observed.clear(); }
+    };
+    const native = queryFixture(['1', '2', '3', '4']); native.attach(a.card); native.attach(second.card);
+    native.state.onWrite = data => {
+        const old = a.row.querySelectorAll('[data-virtual-slot]'); old.forEach(host => host.remove());
+        const incoming = data.node.entities.edges.map(edge => {
+            const item = mount(b, edge.node.unifiedEntity.videoId); native.attach(item.card);
+            a.row.appendChild(item.host); item.row.remove(); return item.host;
+        });
+        b.mutate(a.row, { addedNodes: incoming, removedNodes: old });
+    };
+    b.feature.check(); await b.scheduler.flush(); assert.equal(observed.has(a.row), true);
+    visible([{ target: a.row, isIntersecting: true }]); await b.scheduler.advance(200); await b.scheduler.flush();
+    assert.deepEqual(native.state.data.node.entities.edges.map(e => e.node.unifiedEntity.videoId), ['2', '3', '4']);
+    assert.equal(b.feature.diagnostics().nativeRows.automatic, 1);
+    assert.equal(a.row.querySelectorAll('.tm-rec-controls').length, 3);
+    b.feature.dispose(); assert.equal(observed.size, 0);
+});

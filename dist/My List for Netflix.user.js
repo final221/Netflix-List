@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.1
+// @version      1.11.2
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -21256,7 +21256,7 @@ ${CARD_ACTION_STYLES}
       const overlap = [...mounted].filter((id) => ids.has(id)).length;
       probe.maxOverlap = Math.max(probe.maxOverlap, overlap);
       if (mounted.size < 2 || overlap < Math.max(2, Math.ceil(mounted.size * 0.85))) return;
-      found.set(observable, { observable, options, query, variables, data, read, write, queryRead: method(client, "query"), overlap });
+      found.set(observable, { observable, options, query, variables, data, read, write, client, cache, queryRead: method(client, "query"), overlap });
     }
     for (const root of Array.isArray(card) ? card.slice(0, 3) : [card]) {
       const key = Object.getOwnPropertyNames(root || {}).find((name) => name.startsWith("__reactFiber$") || name.startsWith("__reactInternalInstance$"));
@@ -21278,13 +21278,51 @@ ${CARD_ACTION_STYLES}
     if (found.size !== 1) return { reason: found.size ? "ambiguous-query" : "no-matching-query", probe };
     return { binding: createBinding([...found.values()][0]), pagination, probe };
   }
+  function variableKey(variables) {
+    let visited = 0;
+    function normalize(value, depth = 0) {
+      if (depth > 8 || ++visited > 512) throw Error("variable-limit");
+      if (value === void 0 || value === null) return [String(value)];
+      if (["string", "boolean"].includes(typeof value)) return [typeof value, value];
+      if (typeof value === "number" && Number.isFinite(value)) return ["number", value];
+      if (!value || typeof value !== "object") throw Error("variable-type");
+      if (Array.isArray(value)) {
+        if (value.length > 512) throw Error("variable-limit");
+        return ["array", Array.from({ length: value.length }, (_, index) => normalize(own(value, String(index)), depth + 1))];
+      }
+      return ["object", Object.keys(value).sort().filter((key) => depth || !["carouselAfterCursor", "carouselPageSize"].includes(key)).map((key) => {
+        if (!Object.hasOwn(Object.getOwnPropertyDescriptor(value, key), "value")) throw Error("variable-accessor");
+        return [key, normalize(own(value, key), depth + 1)];
+      })];
+    }
+    try {
+      return JSON.stringify(normalize(variables));
+    } catch (_) {
+      return null;
+    }
+  }
   function createBinding(native) {
-    const { query, options, observable, read, write, queryRead } = native, rowId = native.variables.rowId;
+    const { query, observable, read, write, queryRead } = native, rowId = native.variables.rowId, identity = variableKey(native.variables);
+    let options = native.options, optionsRefreshes = 0, loadStop = null, lastLoad = null;
     const edges = /* @__PURE__ */ new Map(), cursors = /* @__PURE__ */ new Set();
     let server = null, last = null, disabled = false, pendingServer = false;
     const key = (edge) => videoId(edge) || "cursor:" + edge.cursor;
     const signature = (data) => JSON.stringify([connection(data)?.edges?.map(key), connection(data)?.totalCount, connection(data)?.pageInfo]);
-    const current = () => !disabled && own(observable, "options") === options && own(options, "query") === query && own(own(options, "variables"), "rowId") === rowId;
+    function ownership() {
+      const next = own(observable, "options"), variables = own(next, "variables");
+      return {
+        disabled,
+        optionsChanged: next !== options,
+        queryChanged: own(next, "query") !== query,
+        rowChanged: own(variables, "rowId") !== rowId,
+        variablesChanged: identity === null || variableKey(variables) !== identity,
+        cacheChanged: own(native.client, "cache") !== native.cache
+      };
+    }
+    const current = () => {
+      const status = ownership();
+      return !status.disabled && !status.queryChanged && !status.rowChanged && !status.variablesChanged && !status.cacheChanged;
+    };
     function ingest(data, updateServer = true) {
       if (!valid(data)) throw Error("invalid-connection");
       const value = connection(data);
@@ -21297,6 +21335,11 @@ ${CARD_ACTION_STYLES}
     }
     function access() {
       if (!current()) throw Error("query-owner-replaced");
+      const next = own(observable, "options");
+      if (next !== options) {
+        optionsRefreshes++;
+        options = next;
+      }
       return { query, variables: options.variables };
     }
     function publish(choices, assertCurrent, anchor = null, capacity = 8, pagination = null) {
@@ -21306,7 +21349,7 @@ ${CARD_ACTION_STYLES}
       ingest(data, !pendingServer || connection(data)?.edges.length > edges.size);
       pendingServer = false;
       const selected = [...edges.values()].filter((edge) => !choices[videoId(edge)]);
-      const totalCount = selected.length + (server.pageInfo.hasNextPage ? Math.max(0, server.totalCount - edges.size) : 0);
+      const totalCount = selected.length;
       const output = copy(data, selected, { totalCount, pageInfo: server.pageInfo });
       if (signature(output) === signature(data)) return false;
       const original = data;
@@ -21332,9 +21375,15 @@ ${CARD_ACTION_STYLES}
     async function load(signal, assertCurrent) {
       assertCurrent();
       const input = access();
-      if (!queryRead || !server?.pageInfo.hasNextPage) return false;
+      if (!queryRead || !server?.pageInfo.hasNextPage) {
+        loadStop = queryRead ? "server-exhausted" : "no-query-api";
+        return false;
+      }
       const cursor = server.pageInfo.endCursor;
-      if (cursors.has(cursor)) return false;
+      if (cursors.has(cursor)) {
+        loadStop = "cursor-stalled";
+        return false;
+      }
       cursors.add(cursor);
       const pageSize = Number.isSafeInteger(input.variables.carouselPageSize) ? Math.min(28, Math.max(1, input.variables.carouselPageSize)) : 14;
       let result;
@@ -21353,8 +21402,11 @@ ${CARD_ACTION_STYLES}
       if (signal.aborted) throw Error("query-aborted");
       access();
       if (result.error || result.errors?.length) throw Error("native-query-failed");
+      const before = edges.size;
       ingest(result.data);
       pendingServer = true;
+      lastLoad = { received: connection(result.data).edges.length, added: edges.size - before, cursorAdvanced: server.pageInfo.endCursor !== cursor };
+      loadStop = !server.pageInfo.hasNextPage ? "server-exhausted" : !lastLoad.cursorAdvanced ? "cursor-stalled" : null;
       return true;
     }
     function restore(assertCurrent) {
@@ -21381,7 +21433,12 @@ ${CARD_ACTION_STYLES}
           anchorIndex: Math.max(0, ids.indexOf(anchor)),
           hasNextPage: server.pageInfo.hasNextPage,
           canLoad: Boolean(queryRead),
-          overlap: native.overlap
+          overlap: native.overlap,
+          serverTotal: server.totalCount,
+          optionsRefreshes,
+          ownership: ownership(),
+          loadStop,
+          lastLoad: lastLoad && { ...lastLoad }
         };
       }
     });
@@ -22078,8 +22135,9 @@ ${CARD_ACTION_STYLES}
 
   // src/recommendations/native-rows.js
   function createNativeRows({ environment, dom, admitted, canRestore = admitted, readChoices }) {
-    const rows = /* @__PURE__ */ new Map(), requests = [], stats = { attempts: 0, activated: 0, writes: 0, loads: 0, restored: 0, failures: 0 };
-    let generation = 0;
+    const rows = /* @__PURE__ */ new Map(), requests = [], stats = { attempts: 0, activated: 0, writes: 0, loads: 0, restored: 0, failures: 0, automatic: 0, stops: {} };
+    let generation = 0, visibility = null;
+    const observed = /* @__PURE__ */ new Map();
     const now = () => environment.performance?.now() ?? Date.now();
     const identity = (row) => [row.id, row.getAttribute("data-list-id"), row.querySelector("h2, .rowTitle")?.textContent].join("|");
     function guard(job) {
@@ -22091,7 +22149,12 @@ ${CARD_ACTION_STYLES}
         job.dirty = true;
         return;
       }
-      if (job.timer !== null) return;
+      if (job.timer !== null) {
+        if (delay === 200 && job.resumeAt > now()) {
+          environment.clearTimeout(job.timer);
+          job.timer = null;
+        } else return;
+      }
       job.timer = environment.setTimeout(() => {
         job.timer = null;
         void run(job);
@@ -22128,6 +22191,8 @@ ${CARD_ACTION_STYLES}
         check();
         const anchor = snapshot?.visibleIds[0], capacity = snapshot?.pageCapacity || job.capacity || 8;
         job.capacity = capacity;
+        job.anchor = anchor;
+        job.resumeAt = 0;
         if (job.binding.publish(selected, check, anchor, capacity, job.pagination)) stats.writes++;
         job.reason = "active";
         while (job.credit > 0) {
@@ -22135,10 +22200,22 @@ ${CARD_ACTION_STYLES}
           const choices = readChoices(), state = job.binding.state(choices, anchor);
           job.summary = state;
           const index = anchor ? state.anchorIndex : (job.pagination?.index || 0) * capacity;
-          if (!state.hasNextPage || !state.canLoad || state.filtered - index >= capacity * 3) break;
+          if (!state.hasNextPage) {
+            job.reason = "server-exhausted";
+            break;
+          }
+          if (!state.canLoad || state.loadStop === "cursor-stalled") {
+            job.reason = state.loadStop || "no-query-api";
+            break;
+          }
+          if (state.filtered - index >= capacity * 3) {
+            job.reason = "buffer-ready";
+            break;
+          }
           while (requests.length && now() - requests[0] >= 6e4) requests.shift();
           if (requests.length >= 24) {
             job.reason = "request-budget";
+            job.resumeAt = requests[0] + 6e4;
             break;
           }
           job.credit--;
@@ -22160,11 +22237,18 @@ ${CARD_ACTION_STYLES}
             if (job.controller === controller) job.controller = null;
           }
           check();
-          if (!loaded) break;
+          if (!loaded) {
+            job.reason = job.binding.state(readChoices(), anchor).loadStop || "no-progress";
+            break;
+          }
           stats.loads++;
           if (job.binding.publish(readChoices(), check, anchor, capacity)) stats.writes++;
         }
         job.summary = job.binding.state(readChoices(), anchor);
+        if (job.reason === "active") {
+          const index = anchor ? job.summary.anchorIndex : (job.pagination?.index || 0) * capacity;
+          job.reason = !job.summary.hasNextPage ? "server-exhausted" : job.summary.loadStop || (job.summary.filtered - index >= capacity * 3 ? "buffer-ready" : "interaction-limit");
+        }
       } catch (error) {
         try {
           check();
@@ -22180,9 +22264,15 @@ ${CARD_ACTION_STYLES}
         }
       } finally {
         job.running = false;
-        if (job.dirty) try {
+        try {
           guard(job);
-          schedule(job);
+          if (job.binding) job.summary = job.binding.state(readChoices(), job.anchor);
+          stats.stops[job.reason] = (stats.stops[job.reason] || 0) + 1;
+        } catch (_) {
+        }
+        if (job.dirty || job.resumeAt) try {
+          guard(job);
+          schedule(job, Math.max(200, (job.resumeAt || 0) - now()));
         } catch (_) {
         }
       }
@@ -22191,7 +22281,7 @@ ${CARD_ACTION_STYLES}
       const snapshot = dom.rowDiagnostics(row, readChoices());
       return snapshot ? { visible: snapshot.visible, capacity: snapshot.pageCapacity, hidden: snapshot.hidden, mounted: snapshot.mounted, pageIndex: snapshot.pageIndex } : null;
     }
-    function interact(row) {
+    function interact(row, source = "interaction") {
       if (!row || !admitted()) return;
       let job = rows.get(row);
       if (job && identity(row) !== job.identity) {
@@ -22219,8 +22309,12 @@ ${CARD_ACTION_STYLES}
         };
         rows.set(row, job);
       }
+      environment.clearTimeout(job.timer);
+      job.timer = null;
       job.intent++;
-      job.credit = 2;
+      job.source = source;
+      if (source === "visible") stats.automatic++;
+      job.credit = 6;
       job.lookups = 3;
       job.failed = false;
       job.controller?.abort();
@@ -22245,14 +22339,37 @@ ${CARD_ACTION_STYLES}
         else schedule(job);
       }
     }
+    function observe(collection) {
+      if (!admitted() || typeof environment.IntersectionObserver !== "function") return;
+      if (!visibility) {
+        const owner = generation;
+        visibility = new environment.IntersectionObserver((entries) => {
+          if (owner !== generation || !admitted()) return;
+          for (const entry of entries) if (entry.isIntersecting && observed.has(entry.target) && !rows.has(entry.target)) interact(entry.target, "visible");
+        }, { threshold: 0.01 });
+      }
+      for (const [row, name] of observed) if (!collection.has(row) || !row.isConnected || identity(row) !== name) {
+        visibility.unobserve(row);
+        observed.delete(row);
+      }
+      for (const row of collection) if (!observed.has(row) && observed.size < 80) {
+        observed.set(row, identity(row));
+        visibility.observe(row);
+      }
+    }
     function dispose() {
+      visibility?.disconnect();
+      visibility = null;
+      observed.clear();
       for (const job of rows.values()) retire(job);
       generation++;
       rows.clear();
       requests.length = 0;
     }
-    return Object.freeze({ interact, refresh, dispose, diagnostics: () => ({ ...stats, rows: [...rows.values()].map((job) => ({
+    return Object.freeze({ interact, observe, refresh, dispose, diagnostics: () => ({ ...stats, stops: { ...stats.stops }, visibility: { available: typeof environment.IntersectionObserver === "function", observed: observed.size }, rows: [...rows.values()].map((job) => ({
       reason: job.reason,
+      source: job.source,
+      retryInMs: Math.max(0, (job.resumeAt || 0) - now()),
       running: job.running,
       pageContext: Boolean(job.pagination),
       probe: job.probe,
@@ -22897,6 +23014,7 @@ ${CARD_ACTION_STYLES}
       }
       for (const row of new Set([...entries.values()].map((entry) => entry.row))) dom.updateArrows(row);
       updateRefill();
+      nativeRows.observe(new Set([...entries.values()].map((entry) => entry.row)));
       nativeRows.refresh();
       work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
     }
@@ -23342,7 +23460,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.1";
+  var SCRIPT_VERSION = "1.11.2";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

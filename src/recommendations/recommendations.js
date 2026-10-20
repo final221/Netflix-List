@@ -167,7 +167,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             environment.window?.addEventListener('resize', resize);
         }
         for (const row of new Set([...entries.values()].map(entry => entry.row))) dom.updateArrows(row);
-        updateRefill(); nativeRows.refresh(); work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
+        updateRefill(); nativeRows.observe(new Set([...entries.values()].map(entry => entry.row))); nativeRows.refresh(); work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
     }
     function schedule(root) {
         pending.add(root); if (pending.size > 24) { pending.clear(); pending.add(document); } if (queued) return;
