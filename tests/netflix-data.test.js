@@ -197,6 +197,20 @@ test('membership toggle receipts require the same connected title and an observe
     e.document.body.appendChild(tracker); receipt.release(); assert.equal(receipt.read(), null);
 });
 
+test('addition toggle receipts require a matching add-to-remove transition and release exact identity', () => {
+    const e=environment(),tracker=e.document.body.appendChild(new Element('div'));
+    tracker.className='ptrack-content';
+    const identity=id=>tracker.setAttribute('data-ui-tracking-context',JSON.stringify({video_id:id}));
+    identity('1');const button=tracker.appendChild(new Element('button'));
+    button.setAttribute('data-uia','add-to-my-list');
+    const receipt=e.dom.captureMembershipToggle(e.dom.describeMembershipClick({target:button}));
+    assert.equal(receipt.read(),null);
+    button.setAttribute('data-uia','remove-from-my-list-with-undo');assert.equal(receipt.read(),true);
+    identity('2');assert.equal(receipt.read(),null);
+    identity('1');tracker.remove();assert.equal(receipt.read(),null);
+    e.document.body.appendChild(tracker);receipt.release();assert.equal(receipt.read(),null);
+});
+
 test('toast action decoding accepts one button in a Netflix toast without localized text or list decisions', () => {
     // The shared DOM fixture does not implement descendant selectors.
     class DescendantElement extends Element {

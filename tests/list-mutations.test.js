@@ -141,7 +141,7 @@ test('queue clearing invalidates intents before observer cleanup can queue a rep
 
 test('native candidate wins over captured fallback with admitted order and no borrowed Undo correlation',()=>{
     const tree={},native={videoId:'3',snapshot:tree},fallback={videoId:'3',snapshot:{}},calls=[];
-    const e=publicationFixture({applyMutation:null,
+    const e=publicationFixture({applyMutation:null,readNativeMembership:()=>true,
         refreshNative:()=>({track:{}}),observeNative:()=>{throw new Error('unneeded discovery');},captureNative:()=>native,
         hasMaterial:item=>item===native,assertNative:()=>calls.push('admit'),
         readVisible:()=>({ids:['3'],page:2,columns:2,available:true,assertCurrent(){}}),
@@ -155,7 +155,7 @@ test('native candidate wins over captured fallback with admitted order and no bo
 });
 test('reconciliation preserves intent when a candidate callback replaces the admitted parent',()=>{
     let parent={};const original=parent;let added=0;
-    const e=queueFixture({applyMutation:null,readParent:()=>parent,canApply:()=>true,hasMember:()=>false,
+    const e=queueFixture({applyMutation:null,readParent:()=>parent,canApply:()=>true,hasMember:()=>false,readNativeMembership:()=>true,
         refreshNative:()=>({track:{}}),captureNative:()=>{parent={};return {videoId:'1'};},
         insertCard:()=>{added++;return true;}});
     const intent=e.owner.observeMembership({videoId:'1',action:'add'});
@@ -223,6 +223,24 @@ function publicationFixture(extra={}) {
     const e=queueFixture(options,list);
     return {...e,list,membership,retained,cards,hints,events,replaceParent(){parent={};},setLayout:value=>layout=value,setVisible:value=>visible=value};
 }
+
+test('Undo observes delayed cache absence and retains addition confirmation across deferral',()=>{
+    let native=true,released=0;
+    const e=publicationFixture({applyMutation:null,readNativeMembership:()=>native,
+        refreshNative:()=>({}),captureNative:()=>null,assertNative(){}});
+    e.owner.remove('1');const entry=e.owner.latestUndo();
+    const intent=e.owner.queueMutation({videoId:'1',action:'add',undo:true,fallbackItem:entry.item,
+        correlationId:entry.correlationId,preferredIndex:entry.index},{read:()=>null,release(){released++;}});
+    assert.equal(e.owner.reconcileMutation(intent),false,'unchanged present cache is stale');
+    native=false;assert.equal(e.owner.reconcileMutation(intent),false);
+    const ticket=e.owner.deferReconciliation('resize');
+    native=true;assert.equal(e.owner.reconcileMutation(intent),false);
+    assert.equal(e.owner.workDiagnostics().additionsConfirmed,1);
+    native=null;ticket.release();
+    assert.deepEqual(e.membership.records.map(item=>item.videoId),['1','2']);
+    assert.equal(e.owner.latestUndo(),null);assert.equal(released,1);
+    assert.equal(e.owner.pendingMutation('1'),null);assert.equal(e.timers.size,0);
+});
 
 test('list publication owns removal, exact Undo reinsertion, count/order and separate material release',()=>{
     const e=publicationFixture(),original=e.membership.records[0];

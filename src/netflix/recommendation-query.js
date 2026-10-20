@@ -132,7 +132,7 @@ function createBinding(native) {
         const totalCount = selected.length;
         const output = copy(data, selected, { totalCount, pageInfo: server.pageInfo });
         if (signature(output) === signature(data)) return false;
-        const original = data; last = signature(output);
+        last = signature(output);
         assertCurrent(); write({ ...input, data: output, overwrite: true }); assertCurrent();
         const observed = read(input); assertCurrent();
         const expected = connection(output), actual = connection(observed);
@@ -141,7 +141,9 @@ function createBinding(native) {
             expectedEdges: expected.edges.length, observedEdges: actual?.edges?.length ?? null, expectedTotal: expected.totalCount, observedTotal: actual?.totalCount ?? null,
             cursor: expected.pageInfo.endCursor === actual?.pageInfo?.endCursor, pageFlag: expected.pageInfo.hasNextPage === actual?.pageInfo?.hasNextPage };
         if (!projection.matches) {
-            write({ ...input, data: original, overwrite: true }); disabled = true; throw Error('cache-projection-rejected');
+            // Mismatching readback may belong to a synchronous native update.
+            // It gives us no ownership to overwrite the current cache.
+            disabled = true; throw Error('cache-projection-rejected');
         }
         const index = selected.findIndex(edge => videoId(edge) === anchor);
         if (pagination) {
@@ -172,7 +174,9 @@ function createBinding(native) {
         if (!last || !current()) return false;
         assertCurrent(); const input = access(), data = read(input); assertCurrent();
         if (signature(data) !== last) return false;
-        write({ ...input, data: copy(data, [...edges.values()], server), overwrite: true }); last = null; return true;
+        const visible = new Map(connection(data).edges.map(edge => [key(edge), edge]));
+        const restored = [...edges.values()].map(edge => visible.get(key(edge)) || edge);
+        write({ ...input, data: copy(data, restored, server), overwrite: true }); last = null; return true;
     }
     ingest(native.data);
     return Object.freeze({ publish, load, restore, current,

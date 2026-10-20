@@ -53,17 +53,48 @@ test('ambiguous or unrelated query candidates and changed query owners cannot wr
     assert.throws(() => binding.publish({ 1: 'hide' }, () => {}), /owner-replaced/); assert.equal(f.state.writes.length, 0);
 });
 
-test('readback rejection rolls back and retirement during a network read prevents stale publication', async () => {
+test('readback rejection preserves native data and retirement during a network read prevents stale publication', async () => {
     const f = queryFixture(), { binding } = findRecommendationQuery(f.card(), ['1', '2']);
     f.state.rejectWrites = true;
     assert.throws(() => binding.publish({ 1: 'hide' }, () => {}), /projection-rejected/);
     assert.deepEqual(ids(f.state.data), ['1', '2', '3']);
+    assert.equal(f.state.writes.length, 1, 'a rejected projection does not authorize a rollback write');
     const later = queryFixture(['1', '2'], { hasNextPage: true, totalCount: 3 }); let resolve, current = true;
     const { binding: active } = findRecommendationQuery(later.card(), ['1', '2']);
     later.state.pages.push(new Promise(done => { resolve = done; }));
     const work = active.load(new AbortController().signal, () => { if (!current) throw Error('retired'); });
     current = false; resolve({ data: later.page(['3'], false, 3) }); await assert.rejects(work, /retired/);
     assert.equal(active.state({}, '1').known, 2); assert.equal(later.state.writes.length, 0);
+});
+
+test('rejected and partial projections preserve intervening native writes and retire access', () => {
+    for (const incoming of [['1', '2', '3', '4'], ['2', '3', '4'], ['2', '3']]) {
+        const f = queryFixture(), { binding } = findRecommendationQuery(f.card(), ['1', '2']);
+        const native = f.page(incoming, true, 12, 'new-native-cursor');
+        f.state.onWrite = () => { f.state.data = native; };
+        assert.throws(() => binding.publish({ 1: 'hide' }, () => {}), /projection-rejected/);
+        assert.equal(f.state.data, native); assert.equal(f.state.writes.length, 1);
+        assert.equal(binding.current(), false); assert.equal(binding.restore(() => {}), false);
+    }
+});
+
+test('query replacement during rejected projection cannot receive a rollback', () => {
+    const f = queryFixture(), { binding } = findRecommendationQuery(f.card(), ['1', '2']);
+    const native = f.page(['4', '5']);
+    f.state.onWrite = () => { f.result.observable.options.variables = { ...f.variables, rowId: 'replacement' }; f.state.data = native; };
+    assert.throws(() => binding.publish({ 1: 'hide' }, () => {}), /projection-rejected/);
+    assert.equal(f.state.data, native); assert.equal(f.state.writes.length, 1);
+    assert.equal(binding.restore(() => {}), false);
+});
+
+test('normal restoration preserves native updates to visible edge fields', () => {
+    const f = queryFixture(), { binding } = findRecommendationQuery(f.card(), ['1', '2']);
+    binding.publish({ 1: 'hide' }, () => {});
+    const updated = structuredClone(f.state.data);
+    updated.node.entities.edges[0].node.untouched = 'new native fields'; f.state.data = updated;
+    assert.equal(binding.restore(() => {}), true);
+    assert.deepEqual(ids(f.state.data), ['1', '2', '3']);
+    assert.equal(f.state.data.node.entities.edges[1].node.untouched, 'new native fields');
 });
 
 

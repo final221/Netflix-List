@@ -144,7 +144,8 @@ export function createMyListSession({ environment = globalThis, version, context
             return observer;
         },
         onTimeout: detail => warn(detail.action === 'remove' ? 'My List removal was not confirmed by Netflix'
-            : tLog('differentialUpdateTimedOutWaitingForAUsableCardSnapshot'), detail),
+            : !detail.confirmed ? 'My List addition was not confirmed by Netflix'
+                : tLog('differentialUpdateTimedOutWaitingForAUsableCardSnapshot'), detail),
         onQueued: intent => log(tLog('myListMutationQueued'), { seq: intent.seq, videoId: intent.videoId, action: intent.action,
             uiaAction: intent.uiaAction, uia: intent.uia, syncMode: 'event-driven', undo: intent.undo,
             preferredIndex: intent.preferredIndex, hasFallbackSnapshot: Boolean(gridView.materialFor(intent.fallbackItem, intent.correlationId)) }),

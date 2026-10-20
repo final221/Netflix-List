@@ -120,9 +120,12 @@ export function createNetflixPageDom({ document, Element, location, readGraphqlI
         const id = facts?.videoId, initial = facts?.uiaAction;
         return Object.freeze({ read() {
             try {
-                if (!button?.isConnected || !id || initial !== 'remove') return null;
+                if (!button?.isConnected || !id || !['remove', 'add'].includes(initial)) return null;
                 const current = describeMembershipClick({ target: button });
-                return current?.videoId === id && current.uiaAction === 'add' ? false : null;
+                if (current?.videoId !== id) return null;
+                if (initial === 'remove' && current.uiaAction === 'add') return false;
+                if (initial === 'add' && current.uiaAction === 'remove') return true;
+                return null;
             } catch (_) { return null; }
         }, release() { button = null; } });
     }

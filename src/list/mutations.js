@@ -18,7 +18,8 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
     let publicationGeneration = 0;
     let deferralEpoch = 0, disposedToken = null, cleanupFailures = 0;
     const undoWork = { remembered: 0, expired: 0, consumed: 0, cleared: 0, schedules: 0, expiryCallbacks: 0,
-        removalWaits: 0, removalsConfirmed: 0, removalsUnconfirmed: 0 };
+        removalWaits: 0, removalsConfirmed: 0, removalsUnconfirmed: 0,
+        additionWaits: 0, additionsConfirmed: 0, additionsUnconfirmed: 0 };
     function recordCounter(name, amount) { undoWork[name] += amount; onCounter(name, amount); }
     function cleanup(operation) { try { operation(); } catch (_) { cleanupFailures++; } }
     const isAdmitted = token => token !== disposedToken && isSessionActive(token);
@@ -120,6 +121,7 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
                 disposeMutation(videoId, intent); return true;
             }
             if (call(hasMember, videoId)) { disposeMutation(videoId, intent); return true; }
+            if (!phases.get(intent).confirmed) return false;
             const nativeItem = call(captureNative, videoId, live);
             const candidate = nativeItem || intent.fallbackItem || call(findFallback, videoId);
             const correlationId = candidate === intent.fallbackItem ? intent.correlationId : null;
@@ -150,13 +152,19 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
         const phase = phases.get(intent);
         // Observe accepted native input even while presentation is deferred. The
         // exact toggle may disappear before initialization/resize releases its ticket.
-        if (intent.action === 'remove' && !phase.confirmed) {
+        if (!phase.confirmed) {
+            const adding = intent.action === 'add';
             const toggle = phase.confirmation?.read();
             if (!isMutationCurrent(intent)) return false;
-            const membership = phase.nativeBefore === true ? readNativeMembership(intent.videoId) : null;
+            const membership = adding || phase.nativeBefore === true ? readNativeMembership(intent.videoId) : null;
             if (!isMutationCurrent(intent)) return false;
-            phase.confirmed = toggle === false || membership === false;
-            if (phase.confirmed) undoWork.removalsConfirmed++; else undoWork.removalWaits++;
+            if (adding && membership === false) phase.nativeBefore = false;
+            phase.confirmed = toggle === adding || membership === adding && (!adding || phase.nativeBefore !== true);
+            if (adding) {
+                if (phase.confirmed) undoWork.additionsConfirmed++; else undoWork.additionWaits++;
+            } else {
+                if (phase.confirmed) undoWork.removalsConfirmed++; else undoWork.removalWaits++;
+            }
         }
         if (isDeferred() || isBlocked()) { phase.deferred = true; return false; }
         if (!isMutationCurrent(intent)) return false;
@@ -176,8 +184,11 @@ export function createMutations({ now, readSession, isSessionActive, setTimeout,
             const applied = reconcileMutation(intent, 'observer-timeout');
             if (applied || !isMutationCurrent(intent)) return;
             if (isDeferred()) { phase.deferred = true; return; }
-            if (intent.action === 'remove') undoWork.removalsUnconfirmed++;
-            onTimeout({ seq: intent.seq, videoId: intent.videoId, action: intent.action, timeoutMs: mutationTimeout });
+            if (!phases.get(intent).confirmed) {
+                if (intent.action === 'remove') undoWork.removalsUnconfirmed++; else undoWork.additionsUnconfirmed++;
+            }
+            onTimeout({ seq: intent.seq, videoId: intent.videoId, action: intent.action,
+                confirmed: Boolean(phase.confirmed), timeoutMs: mutationTimeout });
             disposeMutation(intent.videoId, intent);
         }, mutationTimeout);
         if (!isMutationCurrent(intent) || phase.timer !== owner) clearTimeout(owner.id);

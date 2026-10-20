@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.6
+// @version      1.11.7
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -2834,9 +2834,12 @@
       const id = facts?.videoId, initial = facts?.uiaAction;
       return Object.freeze({ read() {
         try {
-          if (!button?.isConnected || !id || initial !== "remove") return null;
+          if (!button?.isConnected || !id || !["remove", "add"].includes(initial)) return null;
           const current = describeMembershipClick({ target: button });
-          return current?.videoId === id && current.uiaAction === "add" ? false : null;
+          if (current?.videoId !== id) return null;
+          if (initial === "remove" && current.uiaAction === "add") return false;
+          if (initial === "add" && current.uiaAction === "remove") return true;
+          return null;
         } catch (_) {
           return null;
         }
@@ -5614,7 +5617,10 @@ ${CARD_ACTION_STYLES}
       expiryCallbacks: 0,
       removalWaits: 0,
       removalsConfirmed: 0,
-      removalsUnconfirmed: 0
+      removalsUnconfirmed: 0,
+      additionWaits: 0,
+      additionsConfirmed: 0,
+      additionsUnconfirmed: 0
     };
     function recordCounter(name, amount) {
       undoWork[name] += amount;
@@ -5774,6 +5780,7 @@ ${CARD_ACTION_STYLES}
           disposeMutation(videoId2, intent);
           return true;
         }
+        if (!phases.get(intent).confirmed) return false;
         const nativeItem = call(captureNative, videoId2, live);
         const candidate = nativeItem || intent.fallbackItem || call(findFallback, videoId2);
         const correlationId = candidate === intent.fallbackItem ? intent.correlationId : null;
@@ -5799,14 +5806,21 @@ ${CARD_ACTION_STYLES}
         return false;
       }
       const phase = phases.get(intent);
-      if (intent.action === "remove" && !phase.confirmed) {
+      if (!phase.confirmed) {
+        const adding = intent.action === "add";
         const toggle = phase.confirmation?.read();
         if (!isMutationCurrent(intent)) return false;
-        const membership = phase.nativeBefore === true ? readNativeMembership(intent.videoId) : null;
+        const membership = adding || phase.nativeBefore === true ? readNativeMembership(intent.videoId) : null;
         if (!isMutationCurrent(intent)) return false;
-        phase.confirmed = toggle === false || membership === false;
-        if (phase.confirmed) undoWork.removalsConfirmed++;
-        else undoWork.removalWaits++;
+        if (adding && membership === false) phase.nativeBefore = false;
+        phase.confirmed = toggle === adding || membership === adding && (!adding || phase.nativeBefore !== true);
+        if (adding) {
+          if (phase.confirmed) undoWork.additionsConfirmed++;
+          else undoWork.additionWaits++;
+        } else {
+          if (phase.confirmed) undoWork.removalsConfirmed++;
+          else undoWork.removalWaits++;
+        }
       }
       if (isDeferred() || isBlocked()) {
         phase.deferred = true;
@@ -5836,8 +5850,17 @@ ${CARD_ACTION_STYLES}
           phase.deferred = true;
           return;
         }
-        if (intent.action === "remove") undoWork.removalsUnconfirmed++;
-        onTimeout({ seq: intent.seq, videoId: intent.videoId, action: intent.action, timeoutMs: mutationTimeout });
+        if (!phases.get(intent).confirmed) {
+          if (intent.action === "remove") undoWork.removalsUnconfirmed++;
+          else undoWork.additionsUnconfirmed++;
+        }
+        onTimeout({
+          seq: intent.seq,
+          videoId: intent.videoId,
+          action: intent.action,
+          confirmed: Boolean(phase.confirmed),
+          timeoutMs: mutationTimeout
+        });
         disposeMutation(intent.videoId, intent);
       }, mutationTimeout);
       if (!isMutationCurrent(intent) || phase.timer !== owner) clearTimeout(owner.id);
@@ -18974,7 +18997,7 @@ ${CARD_ACTION_STYLES}
         }
         return observer;
       },
-      onTimeout: (detail) => warn(detail.action === "remove" ? "My List removal was not confirmed by Netflix" : tLog("differentialUpdateTimedOutWaitingForAUsableCardSnapshot"), detail),
+      onTimeout: (detail) => warn(detail.action === "remove" ? "My List removal was not confirmed by Netflix" : !detail.confirmed ? "My List addition was not confirmed by Netflix" : tLog("differentialUpdateTimedOutWaitingForAUsableCardSnapshot"), detail),
       onQueued: (intent) => log(tLog("myListMutationQueued"), {
         seq: intent.seq,
         videoId: intent.videoId,
@@ -21506,7 +21529,6 @@ ${CARD_ACTION_STYLES}
       const totalCount = selected.length;
       const output = copy(data, selected, { totalCount, pageInfo: server.pageInfo });
       if (signature(output) === signature(data)) return false;
-      const original = data;
       last = signature(output);
       assertCurrent();
       write({ ...input, data: output, overwrite: true });
@@ -21527,7 +21549,6 @@ ${CARD_ACTION_STYLES}
         pageFlag: expected.pageInfo.hasNextPage === actual?.pageInfo?.hasNextPage
       };
       if (!projection.matches) {
-        write({ ...input, data: original, overwrite: true });
         disabled = true;
         throw Error("cache-projection-rejected");
       }
@@ -21582,7 +21603,9 @@ ${CARD_ACTION_STYLES}
       const input = access(), data = read(input);
       assertCurrent();
       if (signature(data) !== last) return false;
-      write({ ...input, data: copy(data, [...edges.values()], server), overwrite: true });
+      const visible = new Map(connection(data).edges.map((edge) => [key(edge), edge]));
+      const restored = [...edges.values()].map((edge) => visible.get(key(edge)) || edge);
+      write({ ...input, data: copy(data, restored, server), overwrite: true });
       last = null;
       return true;
     }
@@ -23743,7 +23766,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.6";
+  var SCRIPT_VERSION = "1.11.7";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

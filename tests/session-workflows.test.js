@@ -394,6 +394,11 @@ test('real session toast Undo restores retained markup and expiry prevents borro
     e.click('3');e.setIds(['1','2','4','5','6']);await e.scheduler.flush();
     await e.drain(()=>!e.cardIds().includes('3'));
     const button=toastButton(e);e.document.dispatchEvent({type:'click',target:button});await e.scheduler.flush();
+    assert.ok(!e.cardIds().includes('3'), 'retained markup alone does not confirm native Undo');
+    // Native cache accepts Undo before the corresponding card is mounted.
+    const entities=e.window.netflix.reactContext.models.graphql.data.list.entities;
+    entities.edges.push({node:{__ref:'Video:3'}});entities.totalCount=6;
+    e.deliver();
     await e.drain(()=>e.cardIds().includes('3'));
     assert.deepEqual(e.cardIds(),['1','2','3','4','5','6']);
     assert.equal((await e.snapshot()).performanceWork.undoRetention.consumed,1);
@@ -402,6 +407,44 @@ test('real session toast Undo restores retained markup and expiry prevents borro
     const before=e.cardIds();e.document.dispatchEvent({type:'click',target:button});await e.scheduler.flush();
     assert.deepEqual(e.cardIds(),before);assert.ok(!before.includes('3'));
     assert.equal((await e.snapshot()).performanceWork.undoRetention.expired,1);e.dispose();
+});
+
+test('real session rejected toast Undo expires without restoring retained material',async()=>{
+    const e=sessionBrowser();await e.start();
+    e.click('3');e.setIds(['1','2','4','5','6']);await e.scheduler.flush();
+    await e.drain(()=>!e.cardIds().includes('3'));
+    const before=e.cardIds(),button=toastButton(e);
+    e.document.dispatchEvent({type:'click',target:button});await e.scheduler.flush();
+    assert.deepEqual(e.cardIds(),before);
+    await e.scheduler.advance(1800);await e.scheduler.frame();
+    assert.deepEqual(e.cardIds(),before);
+    const work=(await e.snapshot()).performanceWork.undoRetention;
+    assert.equal(work.consumed,0);assert.equal(work.additionsUnconfirmed,1);e.dispose();
+});
+
+test('real session stale native membership and markup cannot confirm toast Undo',async()=>{
+    const e=sessionBrowser();await e.start();
+    // The native toggle accepts removal before its cache and mounted card change.
+    e.click('3',{nativeAction:'add'});await e.scheduler.flush();
+    await e.drain(()=>!e.cardIds().includes('3'));
+    const before=e.cardIds(),button=toastButton(e);
+    e.document.dispatchEvent({type:'click',target:button});await e.scheduler.flush();
+    await e.scheduler.advance(1800);await e.scheduler.frame();
+    assert.deepEqual(e.cardIds(),before);assert.ok(e.ids.includes('3'));
+    assert.equal((await e.snapshot()).performanceWork.undoRetention.additionsUnconfirmed,1);e.dispose();
+});
+
+test('real session profile replacement retires a pending toast Undo confirmation',async()=>{
+    const e=sessionBrowser();await e.start();
+    e.click('3');e.setIds(['1','2','4','5','6']);await e.scheduler.flush();
+    await e.drain(()=>!e.cardIds().includes('3'));
+    const before=e.cardIds(),button=toastButton(e);
+    e.document.dispatchEvent({type:'click',target:button});await e.scheduler.flush();
+    e.models.userInfo.userGuid='profile-b';
+    const entities=e.window.netflix.reactContext.models.graphql.data.list.entities;
+    entities.edges.push({node:{__ref:'Video:3'}});entities.totalCount=6;e.deliver();
+    await e.scheduler.flush();assert.deepEqual(e.cardIds(),before);
+    assert.equal((await e.snapshot()).performanceWork.undoRetention.additionsConfirmed,0);e.dispose();
 });
 
 test('real session unavailable addition times out truthfully and old deliveries cannot mutate a replacement visit',async()=>{
