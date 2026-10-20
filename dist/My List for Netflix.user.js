@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.10.2
+// @version      1.10.3
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -21423,7 +21423,8 @@ ${CARD_ACTION_STYLES}
       const control = next || previous, row = control?.closest("section, .lolomoRow");
       return control?.isConnected && row && scan(row).length ? { row, control, direction: next ? "next" : "previous" } : null;
     }
-    function navigationStart(control) {
+    function navigationStart(control, { detailed = true } = {}) {
+      if (!detailed) return { at: diagnosticTime(), detailed: false };
       const components = [];
       let truncated = false, shapeBudget = 360;
       const quotas = { props: 0, state: 0 };
@@ -21616,7 +21617,7 @@ ${CARD_ACTION_STYLES}
       };
     }
     function observeRequests() {
-      const graphql = createRecommendationRequests(environment);
+      let graphql = null;
       let observer = null, active = true, dropped = 0, failures = 0;
       const records = [];
       function accept(entries) {
@@ -21649,16 +21650,21 @@ ${CARD_ACTION_STYLES}
         }
         observer = null;
       }
-      return { begin: graphql.begin, read() {
+      return { begin({ detailed = false } = {}) {
+        if (detailed) {
+          graphql ||= createRecommendationRequests(environment);
+          graphql.begin();
+        }
+      }, read() {
         if (observer && active) try {
           accept(observer.takeRecords());
         } catch (_) {
           failures++;
         }
-        return { available: Boolean(observer && active), records: records.slice(), dropped, failures, graphql: graphql.read() };
+        return { available: Boolean(observer && active), records: records.slice(), dropped, failures, graphql: graphql?.read() || null };
       }, dispose() {
         active = false;
-        graphql.dispose();
+        graphql?.dispose();
         try {
           observer?.disconnect();
         } catch (_) {
@@ -21796,9 +21802,15 @@ ${CARD_ACTION_STYLES}
       if (!admitted()) return;
       const choices = readChoices();
       for (const row of currentRows) {
+        let job = rows.get(row);
+        if (job) prune(job, choices);
+        const triggered = dismissal?.row === row && choices[dismissal.id];
+        if (!triggered && !job?.requests.size) {
+          if (job) cancel(job);
+          continue;
+        }
         const state = dom.refillState(row, choices);
         if (!state) continue;
-        let job = rows.get(row);
         if (job && job.scroller !== state.scroller) {
           cancel(job);
           rows.delete(row);
@@ -22053,11 +22065,11 @@ ${CARD_ACTION_STYLES}
         timers.set(timer, record);
       }
     }
-    function recordInteraction(records, closeReason, row, before, captureDetails, initialSample = null) {
+    function recordInteraction(records, closeReason, row, before, captureDetails, { initialSample = null, detailed = false } = {}) {
       const previous = records.at(-1);
       if (previous) close(previous, closeReason);
       requests ||= dom.observeRequests();
-      requests.begin();
+      requests.begin({ detailed });
       const record = {
         ...captureDetails(),
         row,
@@ -22090,7 +22102,7 @@ ${CARD_ACTION_STYLES}
           row,
           before,
           () => ({ sequence: movementCount, action, id, loading: { at: now() } }),
-          "saved"
+          { initialSample: "saved" }
         );
       } catch (_) {
         failures++;
@@ -22122,7 +22134,7 @@ ${CARD_ACTION_STYLES}
         failures++;
       }
     }
-    function click(target) {
+    function click(target, { detailed = false } = {}) {
       if (!admitted()) return;
       try {
         const navigation = dom.navigationTarget(target);
@@ -22130,9 +22142,9 @@ ${CARD_ACTION_STYLES}
         const before = dom.rowDiagnostics(navigation.row, readChoices());
         if (!before) return;
         const record = recordInteraction(recent, "before-next-arrow", navigation.row, before, () => {
-          const loading = dom.navigationStart(navigation.control);
+          const loading = dom.navigationStart(navigation.control, { detailed });
           return { sequence: ++sequence, direction: navigation.direction, loading };
-        });
+        }, { detailed });
         log("Native recommendation arrow clicked", { sequence: record.sequence, direction: record.direction, before });
       } catch (_) {
         failures++;
@@ -22241,6 +22253,20 @@ ${CARD_ACTION_STYLES}
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
     let scrollTimer = null;
     const pending = /* @__PURE__ */ new Set();
+    const work = { scans: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
+    const now = () => environment.performance?.now() ?? Date.now();
+    function property(node, name, value) {
+      if (node[name] !== value) {
+        node[name] = value;
+        work.controlWrites++;
+      }
+    }
+    function attribute(node, name, value) {
+      if (node.getAttribute(name) !== value) {
+        node.setAttribute(name, value);
+        work.controlWrites++;
+      }
+    }
     const allowed = () => location.origin === "https://www.netflix.com" && (location.pathname === "/browse" || location.pathname.startsWith("/browse/") && location.pathname !== "/browse/my-list" || location.pathname === "/search");
     const readProfile = () => {
       const value = context.activeProfile();
@@ -22322,7 +22348,6 @@ ${CARD_ACTION_STYLES}
         scrollTimer = null;
         if (active && allowed()) {
           navigation.movement("scroll");
-          updateRefill();
         }
       }, 250);
     }
@@ -22366,21 +22391,21 @@ ${CARD_ACTION_STYLES}
       savedPanel.paint();
     }
     function paint(entry) {
+      work.paintCalls++;
       const reason = choices[entry.id] || (viewing.complete(entry.id) ? "watched" : null);
       if (!entry.lease.hide(Boolean(reason))) return;
-      entry.controls.setAttribute("data-tm-rec-hidden", reason ? "true" : "false");
-      entry.watched.hidden = Boolean(reason);
-      entry.hide.hidden = Boolean(reason);
-      for (const button of [entry.watched, entry.hide]) {
-        button.disabled = !profile || failed;
-        button.title = failed || !profile ? tUi("viewingChoiceStorageFailed") : button.textContent;
-      }
+      attribute(entry.controls, "data-tm-rec-hidden", reason ? "true" : "false");
+      property(entry.watched, "hidden", Boolean(reason));
+      property(entry.hide, "hidden", Boolean(reason));
       const type = viewing.type(entry.id), facts = viewing.presentation();
-      const unavailable = viewing.unavailable(entry.id);
-      entry.watched.textContent = tUi(unavailable ? "refreshViewingStatus" : type === "series" ? "markCaughtUp" : type === "movie" ? "markWatched" : "checkingViewingStatus");
-      entry.watched.setAttribute("aria-label", entry.watched.textContent);
-      entry.watched.disabled ||= !viewing.ready(entry.id) && !unavailable || facts.disabled;
-      entry.watched.title = !profile || failed || facts.manualFailure ? tUi("viewingChoiceStorageFailed") : !viewing.ready(entry.id) ? tUi(unavailable ? "refreshViewingStatus" : "checkingViewingStatus") : entry.watched.textContent;
+      const unavailable = viewing.unavailable(entry.id), ready = viewing.ready(entry.id);
+      const label = tUi(unavailable ? "refreshViewingStatus" : type === "series" ? "markCaughtUp" : type === "movie" ? "markWatched" : "checkingViewingStatus");
+      property(entry.hide, "disabled", !profile || failed);
+      property(entry.hide, "title", failed || !profile ? tUi("viewingChoiceStorageFailed") : entry.hide.textContent);
+      property(entry.watched, "textContent", label);
+      attribute(entry.watched, "aria-label", label);
+      property(entry.watched, "disabled", Boolean(!profile || failed || !ready && !unavailable || facts.disabled));
+      property(entry.watched, "title", !profile || failed || facts.manualFailure ? tUi("viewingChoiceStorageFailed") : !ready ? tUi(unavailable ? "refreshViewingStatus" : "checkingViewingStatus") : label);
     }
     function decorate(value) {
       const existing = entries.get(value.host);
@@ -22407,9 +22432,12 @@ ${CARD_ACTION_STYLES}
       savedPanel.mount();
       if (!profile) return;
       if (previous !== profile) root = document;
+      const scanStart = now();
+      work.scans++;
       for (const entry of [...entries.values()]) if (!entry.lease.current()) release(entry);
       for (const row of inventories.keys()) if (!row.isConnected) inventories.delete(row);
       const discovered = dom.scan(root), byRow = /* @__PURE__ */ new Map();
+      work.scannedCards += discovered.length;
       for (const value of discovered) {
         if (!byRow.has(value.row)) byRow.set(value.row, []);
         byRow.get(value.row).push(value);
@@ -22435,6 +22463,7 @@ ${CARD_ACTION_STYLES}
       }
       for (const row of new Set([...entries.values()].map((entry) => entry.row))) dom.updateArrows(row);
       updateRefill();
+      work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
     }
     function schedule(root) {
       pending.add(root);
@@ -22450,11 +22479,12 @@ ${CARD_ACTION_STYLES}
         queued = false;
         const roots = [...pending];
         pending.clear();
-        for (const node of roots) if (node === document || node.isConnected) scan(node);
+        const selected = roots.includes(document) ? [document] : roots.filter((node) => node.isConnected && !roots.some((other) => other !== node && other.isConnected && other.contains?.(node)));
+        for (const node of selected) scan(node);
       });
     }
     function click(event) {
-      navigation.click(event.target);
+      navigation.click(event.target, { detailed: event.shiftKey === true });
       navigation.movement("click", event.target, { x: event.clientX, y: event.clientY });
       const button = event.target?.closest?.("button"), input = buttons.get(button) || savedPanel.inputFor(button);
       if (!input || input.entry && entries.get(input.entry.host) !== input.entry) return;
@@ -22610,6 +22640,7 @@ ${CARD_ACTION_STYLES}
       decorated: entries.size,
       hiddenCount: Object.keys(visibleChoices()).length,
       storageFailed: failed,
+      work: { ...work },
       inventory: { rows: inventories.size, limitReached: inventoryLimit },
       refill: refill.diagnostics(),
       viewing: viewing.diagnostics(),
@@ -22875,7 +22906,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.10.2";
+  var SCRIPT_VERSION = "1.10.3";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

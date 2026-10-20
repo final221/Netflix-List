@@ -214,7 +214,8 @@ export function createRecommendationDom(environment) {
         const control = next || previous, row = control?.closest('section, .lolomoRow');
         return control?.isConnected && row && scan(row).length ? { row, control, direction: next ? 'next' : 'previous' } : null;
     }
-    function navigationStart(control) {
+    function navigationStart(control, { detailed = true } = {}) {
+        if (!detailed) return { at: diagnosticTime(), detailed: false };
         const components = []; let truncated = false, shapeBudget = 360; const quotas = { props: 0, state: 0 };
         const row = control.closest?.('section, .lolomoRow');
         const loader = createLoaderSurvey(row ? scan(row).slice(0, 120).map(item => item.id) : []);
@@ -362,7 +363,7 @@ export function createRecommendationDom(environment) {
                 ...(/^[A-Za-z_][A-Za-z_0-9]{0,99}$/.test(url.searchParams.get('operationName') || '') ? { operation: url.searchParams.get('operationName') } : {}) } : {}) };
     }
     function observeRequests() {
-        const graphql = createRecommendationRequests(environment);
+        let graphql = null;
         let observer = null, active = true, dropped = 0, failures = 0; const records = [];
         function accept(entries) {
             if (!active) return;
@@ -376,10 +377,12 @@ export function createRecommendationDom(environment) {
             observer = new PerformanceObserver(list => { if (active) try { accept(list.getEntries()); } catch (_) { failures++; } });
             observer.observe({ type: 'resource', buffered: false });
         } catch (_) { try { observer?.disconnect(); } catch (_) {} observer = null; }
-        return { begin: graphql.begin, read() {
+        return { begin({ detailed = false } = {}) {
+            if (detailed) { graphql ||= createRecommendationRequests(environment); graphql.begin(); }
+        }, read() {
             if (observer && active) try { accept(observer.takeRecords()); } catch (_) { failures++; }
-            return { available: Boolean(observer && active), records: records.slice(), dropped, failures, graphql: graphql.read() };
-        }, dispose() { active = false; graphql.dispose(); try { observer?.disconnect(); } catch (_) {} observer = null; records.length = 0; } };
+            return { available: Boolean(observer && active), records: records.slice(), dropped, failures, graphql: graphql?.read() || null };
+        }, dispose() { active = false; graphql?.dispose(); try { observer?.disconnect(); } catch (_) {} observer = null; records.length = 0; } };
     }
     function navigationRequests(start, stop = diagnosticTime(), capture = null) {
         try {

@@ -39,6 +39,10 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
     let scrollTimer = null;
     const pending = new Set();
+    const work = { scans: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
+    const now = () => environment.performance?.now() ?? Date.now();
+    function property(node, name, value) { if (node[name] !== value) { node[name] = value; work.controlWrites++; } }
+    function attribute(node, name, value) { if (node.getAttribute(name) !== value) { node.setAttribute(name, value); work.controlWrites++; } }
     const allowed = () => location.origin === 'https://www.netflix.com' &&
         (location.pathname === '/browse' || (location.pathname.startsWith('/browse/') && location.pathname !== '/browse/my-list') || location.pathname === '/search');
     const readProfile = () => { const value = context.activeProfile(); return typeof value === 'string' && value ? value : null; };
@@ -76,7 +80,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     function updateRefill(dismissal = null) { refill.update(new Set([...entries.values()].map(entry => entry.row)), dismissal); }
     function scroll() {
         if (scrollTimer !== null) return;
-        scrollTimer = environment.setTimeout(() => { scrollTimer = null; if (active && allowed()) { navigation.movement('scroll'); updateRefill(); } }, 250);
+        scrollTimer = environment.setTimeout(() => { scrollTimer = null; if (active && allowed()) { navigation.movement('scroll'); } }, 250);
     }
     function read(p) {
         if (readProfile() !== p) throw new Error('profile-changed');
@@ -99,22 +103,20 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         savedPanel.paint();
     }
     function paint(entry) {
+        work.paintCalls++;
         const reason = choices[entry.id] || (viewing.complete(entry.id) ? 'watched' : null);
         if (!entry.lease.hide(Boolean(reason))) return;
-        entry.controls.setAttribute('data-tm-rec-hidden', reason ? 'true' : 'false');
-        entry.watched.hidden = Boolean(reason); entry.hide.hidden = Boolean(reason);
-        for (const button of [entry.watched, entry.hide]) {
-            button.disabled = !profile || failed;
-            button.title = failed || !profile ? tUi('viewingChoiceStorageFailed') : button.textContent;
-        }
+        attribute(entry.controls, 'data-tm-rec-hidden', reason ? 'true' : 'false');
+        property(entry.watched, 'hidden', Boolean(reason)); property(entry.hide, 'hidden', Boolean(reason));
         const type = viewing.type(entry.id), facts = viewing.presentation();
-        const unavailable = viewing.unavailable(entry.id);
-        entry.watched.textContent = tUi(unavailable ? 'refreshViewingStatus' : type === 'series' ? 'markCaughtUp' : type === 'movie' ? 'markWatched'
-            : 'checkingViewingStatus');
-        entry.watched.setAttribute('aria-label', entry.watched.textContent);
-        entry.watched.disabled ||= !viewing.ready(entry.id) && !unavailable || facts.disabled;
-        entry.watched.title = !profile || failed || facts.manualFailure ? tUi('viewingChoiceStorageFailed')
-            : !viewing.ready(entry.id) ? tUi(unavailable ? 'refreshViewingStatus' : 'checkingViewingStatus') : entry.watched.textContent;
+        const unavailable = viewing.unavailable(entry.id), ready = viewing.ready(entry.id);
+        const label = tUi(unavailable ? 'refreshViewingStatus' : type === 'series' ? 'markCaughtUp' : type === 'movie' ? 'markWatched' : 'checkingViewingStatus');
+        property(entry.hide, 'disabled', !profile || failed);
+        property(entry.hide, 'title', failed || !profile ? tUi('viewingChoiceStorageFailed') : entry.hide.textContent);
+        property(entry.watched, 'textContent', label); attribute(entry.watched, 'aria-label', label);
+        property(entry.watched, 'disabled', Boolean(!profile || failed || !ready && !unavailable || facts.disabled));
+        property(entry.watched, 'title', !profile || failed || facts.manualFailure ? tUi('viewingChoiceStorageFailed')
+            : !ready ? tUi(unavailable ? 'refreshViewingStatus' : 'checkingViewingStatus') : label);
     }
     function decorate(value) {
         const existing = entries.get(value.host);
@@ -136,9 +138,10 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         savedPanel.mount();
         if (!profile) return;
         if (previous !== profile) root = document;
+        const scanStart = now(); work.scans++;
         for (const entry of [...entries.values()]) if (!entry.lease.current()) release(entry);
         for (const row of inventories.keys()) if (!row.isConnected) inventories.delete(row);
-        const discovered = dom.scan(root), byRow = new Map();
+        const discovered = dom.scan(root), byRow = new Map(); work.scannedCards += discovered.length;
         for (const value of discovered) {
             if (!byRow.has(value.row)) byRow.set(value.row, []);
             byRow.get(value.row).push(value);
@@ -160,17 +163,20 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             environment.window?.addEventListener('resize', resize);
         }
         for (const row of new Set([...entries.values()].map(entry => entry.row))) dom.updateArrows(row);
-        updateRefill();
+        updateRefill(); work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
     }
     function schedule(root) {
         pending.add(root); if (pending.size > 24) { pending.clear(); pending.add(document); } if (queued) return;
         queued = true; const owner = epoch;
         queueMicrotask(() => { if (!active || owner !== epoch) return; queued = false;
-            const roots = [...pending]; pending.clear(); for (const node of roots) if (node === document || node.isConnected) scan(node);
+            const roots = [...pending]; pending.clear();
+            const selected = roots.includes(document) ? [document] : roots.filter(node => node.isConnected &&
+                !roots.some(other => other !== node && other.isConnected && other.contains?.(node)));
+            for (const node of selected) scan(node);
         });
     }
     function click(event) {
-        navigation.click(event.target); navigation.movement('click', event.target, { x: event.clientX, y: event.clientY });
+        navigation.click(event.target, { detailed: event.shiftKey === true }); navigation.movement('click', event.target, { x: event.clientX, y: event.clientY });
         const button = event.target?.closest?.('button'), input = buttons.get(button) || savedPanel.inputFor(button);
         if (!input || (input.entry && entries.get(input.entry.host) !== input.entry)) return;
         event.preventDefault(); event.stopImmediatePropagation();
@@ -256,6 +262,6 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         style?.remove(); style = null; profile = null; choices = {}; failed = false;
     }
     return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(visibleChoices()).length,
-        storageFailed: failed, inventory: { rows: inventories.size, limitReached: inventoryLimit }, refill: refill.diagnostics(), viewing: viewing.diagnostics(),
+        storageFailed: failed, work: { ...work }, inventory: { rows: inventories.size, limitReached: inventoryLimit }, refill: refill.diagnostics(), viewing: viewing.diagnostics(),
         rows: rowDiagnostics(), navigation: navigation.snapshot() }) });
 }

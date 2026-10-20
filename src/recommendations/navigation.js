@@ -32,9 +32,9 @@ export function createNavigationDiagnostics({ environment, dom, readChoices, adm
             }, delay); timers.set(timer, record);
         }
     }
-    function recordInteraction(records, closeReason, row, before, captureDetails, initialSample = null) {
+    function recordInteraction(records, closeReason, row, before, captureDetails, { initialSample = null, detailed = false } = {}) {
         const previous = records.at(-1); if (previous) close(previous, closeReason);
-        requests ||= dom.observeRequests(); requests.begin();
+        requests ||= dom.observeRequests(); requests.begin({ detailed });
         const record = { ...captureDetails(), row, before,
             owner: generation, seenBefore: new Set(remember(row, before)), samples: [], closed: false };
         records.push(record); if (records.length > 20) cancel(records.shift());
@@ -50,7 +50,7 @@ export function createNavigationDiagnostics({ environment, dom, readChoices, adm
         if (!before || !admitted()) return;
         try {
             recordInteraction(actions, 'before-next-action', row, before,
-                () => ({ sequence: movementCount, action, id, loading: { at: now() } }), 'saved');
+                () => ({ sequence: movementCount, action, id, loading: { at: now() } }), { initialSample: 'saved' });
         } catch (_) { failures++; }
     }
     function movement(kind, target, detail = {}) {
@@ -69,15 +69,15 @@ export function createNavigationDiagnostics({ environment, dom, readChoices, adm
             movementCount++; if (movements.length > 240) movements.shift();
         } catch (_) { failures++; }
     }
-    function click(target) {
+    function click(target, { detailed = false } = {}) {
         if (!admitted()) return;
         try {
             const navigation = dom.navigationTarget(target); if (!navigation) return;
             const before = dom.rowDiagnostics(navigation.row, readChoices()); if (!before) return;
             const record = recordInteraction(recent, 'before-next-arrow', navigation.row, before, () => {
-                const loading = dom.navigationStart(navigation.control);
+                const loading = dom.navigationStart(navigation.control, { detailed });
                 return { sequence: ++sequence, direction: navigation.direction, loading };
-            });
+            }, { detailed });
             log('Native recommendation arrow clicked', { sequence: record.sequence, direction: record.direction, before });
         } catch (_) { failures++; }
     }

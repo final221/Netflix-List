@@ -525,7 +525,7 @@ test('consecutive native clicks partition request windows and retire the handler
         name: 'https://www.netflix.com/graphql?secret=excluded', startTime, initiatorType: 'fetch', duration: 10, transferSize: 10 }));
     const next = nextControl(b, a.row, () => { calls++; });
     next.__reactFiber$test = { memoizedProps: { onClick() { calls++; }, rowData: { items: [1, 2, 3] } } };
-    b.feature.check(); b.document.dispatchEvent({ type: 'click', target: next });
+    b.feature.check(); b.document.dispatchEvent({ type: 'click', target: next, shiftKey: true });
     now = 200; b.document.dispatchEvent({ type: 'click', target: next }); now = 300;
     const recent = b.feature.diagnostics().navigation.recent;
     assert.deepEqual(recent.map(x => x.requests.entries.map(e => e.offsetMs)), [[20], [20]]);
@@ -674,4 +674,40 @@ test('live row inventories survive recycled native slots, filter saved choices a
     assert.equal(retained().known, 1); assert.equal(retained().retainedUnmounted, 0);
     b.select('B'); b.feature.check(); assert.equal(retained().known, 1);
     b.feature.dispose(); assert.equal(b.feature.diagnostics().inventory.rows, 0);
+});
+
+
+test('idle scans and scrolling avoid refill geometry and unchanged control writes', async () => {
+    const b = setup(), a = mount(b), other = mount(b, '2'); let reads = 0;
+    for (const item of [a, other]) item.host.getBoundingClientRect = () => { reads++; return { left: 0, width: 200 }; };
+    b.feature.check(); await b.scheduler.flush(); reads = 0;
+    const writes = b.feature.diagnostics().work.controlWrites; reads = 0;
+    b.feature.check(); await b.scheduler.flush();
+    b.window.dispatchEvent({ type: 'scroll' }); await b.scheduler.advance(250);
+    assert.equal(reads, 0);
+    assert.equal(b.feature.diagnostics().work.controlWrites, writes);
+    b.feature.dispose();
+});
+
+test('normal native arrows skip React surveys and Shift-click explicitly captures one', () => {
+    const b = setup(), a = mount(b); let surveys = 0;
+    const next = nextControl(b, a.row, () => {});
+    next.__reactFiber$test = { memoizedProps: new Proxy({}, { ownKeys() { surveys++; return []; } }), return: null };
+    const fetch = b.context.fetch;
+    b.feature.check(); b.document.dispatchEvent({ type: 'click', target: next });
+    assert.equal(b.context.fetch, fetch);
+    assert.equal(surveys, 0); assert.equal(b.feature.diagnostics().navigation.recent[0].loading.detailed, false);
+    b.document.dispatchEvent({ type: 'click', target: next, shiftKey: true });
+    assert.notEqual(b.context.fetch, fetch);
+    assert.ok(surveys > 0); assert.ok(b.feature.diagnostics().navigation.recent[1].loading.components);
+    b.feature.dispose();
+});
+
+
+test('overlapping native mutation roots share one scan in the same observer turn', async () => {
+    const b = setup(), a = mount(b); b.feature.check(); await b.scheduler.flush();
+    const scans = b.feature.diagnostics().work.scans;
+    b.mutate(a.card, { type: 'attributes' }); b.mutate(a.host, { type: 'attributes' });
+    await b.scheduler.flush();
+    assert.equal(b.feature.diagnostics().work.scans, scans + 1); b.feature.dispose();
 });

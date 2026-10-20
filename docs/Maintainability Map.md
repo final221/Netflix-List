@@ -2,6 +2,8 @@
 
 ## Current implementation measurements
 
+Release **1.10.3**, 2026-10-20: **68 runtime modules, 18,181 physical lines**. Stabilization removes automatic survey/body-capture work and idle refill geometry, avoids unchanged control writes and coalesces overlapping scan roots; native/admission owners remain unchanged. Generated output is separately 22,921 lines. These are work-reduction checks, not live frame-time evidence.
+
 Release **1.10.2**, 2026-10-20: **68 authored runtime modules, 18,169 readable physical lines** (+143 from 1.10.1). Private `recommendations/row-buffer.js` (36 lines) owns visit-local ordered retention/filter projections; private `netflix/recommendation-loader.js` (69 lines) owns descriptor-only query-result interpretation. Keeping the inventory in the native adapter would couple page policy to private query shapes; embedding the query interpreter in recommendations would reverse that dependency. Recommendations owns row lifetime/admission; the DOM adapter owns native discovery. Generated output is separately 22,890 lines. This adds a bounded diagnostic checkpoint; visible paging integration remains pending.
 
 Release **1.10.1**, 2026-10-20: **66 authored runtime modules, 18,026 readable physical lines**. Browsing readiness/transport batching and focused pagination discovery add 66 lines relative to 1.10.0; no module boundaries change. `viewing/browsing.js` is 165 lines; the native recommendation DOM adapter is 426 lines and retains DOM interpretation, leases and passive native-shape discovery together. Generated output is separately 22,682 lines. The following 1.10.0 table remains the shared-knowledge implementation checkpoint.

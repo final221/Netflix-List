@@ -30,9 +30,12 @@ export function createRefill({ environment, dom, readChoices, admitted, onPage, 
         if (!admitted()) return;
         const choices = readChoices();
         for (const row of currentRows) {
+            let job = rows.get(row);
+            if (job) prune(job, choices);
+            const triggered = dismissal?.row === row && choices[dismissal.id];
+            if (!triggered && !job?.requests.size) { if (job) cancel(job); continue; }
             const state = dom.refillState(row, choices);
             if (!state) continue;
-            let job = rows.get(row);
             if (job && job.scroller !== state.scroller) { cancel(job); rows.delete(row); job = null; }
             if (!job) { job = { row, scroller: state.scroller, timer: null, requests: new Map() }; rows.set(row, job); }
             prune(job, choices);
