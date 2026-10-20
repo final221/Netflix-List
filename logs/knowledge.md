@@ -18,50 +18,10 @@ Historical1.4.64–1.4.70 source filenames, copiedAt/environment and SHA256: log
 
 Compact278/39names/no groups omitted/25examples omitted. Later detailed509events/46names;new initial MyList;init8282/native7521ms;500/72pages/not stale;two fallback warnings/no error.
 
-For 1.9.x: `version/suffix` identifies uncommitted `logs/<version>-2026-10-10T<suffix>.txt`; capture times are 2026-10-10 UTC+02. Windows/Firefox157/English/2560×1279/DPR1/homepage; runtime refs unknown.
+## Historical sessions — 1.9.1–1.9.10
 
-Earlier1.9.1–1.9.6 source filenames, copiedAt and SHA256 records are retained in logs/knowledge.md at7772317 (summary revision, not runtime ref; originals were uncommitted).
-
-## Session — 1.9.1
-
-Folder memory/playback overlay confirmed;checked160→186/pending26→0.
-
-## Session — 1.9.3
-
-
-## Session — 1.9.4
-
-Repeated saves/pending0;decorated263→275/checked262→275;arrow confirmed/no row facts.
-
-## Session — 1.9.5
-
-Row11 arrows:13→25→26mounted/12,8added/0,7removed;visible5→7→8/hidden8→10→9/offscreen0→8→9. Untruncated/no warnings;totalCount:number/depth14;pageIndex=-1/transform:none/origin unknown. Detailed times at7689b02.
-
-## Session — 1.9.6
-
-Row11 13→25/12added/0removed. Window2363ms/250buffered/0matches;React10/truncated;no loader/cache proof. Details at7689b02.
-
-Source filenames, copiedAt/environment and SHA256 for1.9.7–1.9.11: logs/knowledge.md at e72fa6a (summary revision, not runtime; originals uncommitted).
-
-## Session — 1.9.7
-
-Startup21:17:51.407;45rows/40sampled;refill8visible/13mounted/1offscreen. Row29 arrow13→26/13added;GraphQL+3ms/+224ms,4Falcor/time correlation only. Hooks crowd props;500checked/0pending.
-
-Later same startup, still1.9.7 (not1.9.8), detailed captures:
-
-Later:493→500checked/0pending;row29 17→26;row8 13→25→26 then8/8recycling/offscreen3→16. Consecutive before states bound intervals;export cumulative/sample16;no precise latency/prefetch proof.
-
-## Session — 1.9.8
-
-Viewing163→299requests/375→572checked/3→4failed/0pending;decorated461→608. Row34:13→26/offscreen1→9;row42:13→25→26 then8/8/offscreen4→18. GraphQL timing/installed lease zero records;observer119drops/early windows lost;no independent loader/precise latency. Details at7689b02.
-
-## Session — 1.9.9
-
-Viewing95→166requests/184→288checked/3→6failed/all series coverage/three attempts/final0pending. Row6:13→25→26/offscreen3→18;row19:13→25→26/offscreen0→9. GraphQL timing/lease10→58intercepted/0GraphQL/no drops;no global stall. Screenshot:arrow short;details at7689b02.
-
-## Session — 1.9.10
-
-Same startup/three exports/399decorated/317checked/161requests/2failed series coverage(attempts4,3)/0pending. Row20 consecutive before states:two previous arrows add2 then3IDs(first observed2 then1);nine forward arrows add2IDs each,all previously observed;26mounted. Same-origin GraphQL timing/empty query keys;lease8intercepted/0GraphQL/no failures. Some older timing windows disappear;no causal payload proof. Screenshots:arrow hit area tall/visible button small;user reports repeated titles.
+Windows/Firefox157/en/2560×1279/DPR1/homepage;2026-10-10 UTC+02;runtime refs unknown. Complete measurements, filename suffix convention and provenance routes retained at96cf0d9:logs/knowledge.md (summary revision). Uncommitted source provenance:1.9.1–.6 at7772317;1.9.7–.11 ate72fa6a.
+.1 folder/playback confirmed,pending26→0;.4 repeated saves,pending0;.5/.6 row13→25→26 mounted,not loader/cache proof;.7 500checked/0pending,later row8 recycling8/8;.8 608decorated/572checked/4failed/0pending,observer119drops;.9 288checked/6series coverage failures/0pending;.10 317checked/2series coverage failures/0pending. Timing/empty wrapper records cannot establish independent prefetch or fresh recommendations. .10 nine forward arrows each add2previously observed IDs;user reports repeats. Earlier arrow measurements did not establish horizontal hit targets. Detailed comparisons at7689b02.
 
 ## Session — 1.9.11
 
@@ -94,3 +54,11 @@ No-warning captures do not certify mapping repair. Resize/lifecycle/Undo/timers/
 
 One compact browse capture, copied2026-10-20T19:46:08.396+02:00;Windows/Firefox158/en/2560×1279/DPR1;runtime ref unknown. Source logs/1.10.0-2026-10-20T17-46-08-397Z-92a9a334.txt;SHA256 1e04faa8e2baa9d83237be6f5b179b57948a6e6452455ce1db1dc4463be55356.
 Five entries;no omitted groups/sections. Knowledge701titles/212completion records/154writes/1listener/0invalid records/0notification failures/failure:false/3missing names/0unverified series. Browsing325checked/201requests/0pending/4failed. Three sampled series report episode-count-mismatch:81171925(27vs28),81663323(28vs29),82719204(16vs17),each3attempts;fourth omitted. One cancelled log download;later export supplied. No manual actions, My List session or retained prior pages;no cross-tab/reload/profile-switch proof. Private storage export comparison belongs in findings, not this capture record.
+
+### Later 1.10.0 captures — same startup21:21:09.667+02:00
+
+Three compact exports2026-10-20, same Firefox158 environment;runtime ref unknown. Uncommitted logs/ sources (filenames UTC;copiedAt UTC+02):
+- 1.10.0-2026-10-20T19-21-46-941Z-76a41b47.txt;21:21:46.937;SHA256 8fd70df4b5805998185f82ad7b869b6a9b06c5b0915a703f89d7f1b4bd9e0a9a.
+- 1.10.0-2026-10-20T19-22-02-853Z-57bae187.txt;21:22:02.846;SHA256 bff7ed6f8a77dbfb5ca7adbc9347cef7183987335aff1182a4c7b1e8073abef1.
+- 1.10.0-2026-10-20T19-22-11-477Z-d6f60262.txt;21:22:11.445;SHA256 3d79a27aff8a5ec4f845fb26414f11f6c1ee7ffedbbf652ce566c4b4c049601b.
+Browse→MyList→browse→MyList;one hide saved(hides4,browsing hiddenCount328→329),no watched/caught-up/reversal. Knowledge789titles/212completions/3missing names;161→165→373writes/0invalid/0notification failures/1listener/failure:false. MyList500titles/7GraphQLpages/init3360ms;final190completed/279unknown/loading:true,22requests succeeded/1inflight,496cached titles. Two missing-carousel-ID warnings recover via bootstrap/GraphQL;one cancelled export. One native arrow;stationary refill still reports bufferShortfall16/independentLoader:unverified. No omitted groups/sections;extra examples1/1/11 omitted. No cross-tab/reload/profile proof;final scan unfinished.
