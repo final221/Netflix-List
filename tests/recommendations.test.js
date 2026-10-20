@@ -1,3 +1,4 @@
+import { queryFixture } from './helpers/recommendation-query.js';
 import { knowledgeSnapshot, fact, storageClient } from './helpers/knowledge.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -710,4 +711,29 @@ test('overlapping native mutation roots share one scan in the same observer turn
     b.mutate(a.card, { type: 'attributes' }); b.mutate(a.host, { type: 'attributes' });
     await b.scheduler.flush();
     assert.equal(b.feature.diagnostics().work.scans, scans + 1); b.feature.dispose();
+});
+
+
+test('matched native query filtering feeds complete candidate pages through the real recommendation owner', async () => {
+    const b = setup(), a = mount(b, '1'), second = mount(b, '2');
+    a.row.appendChild(second.host); second.row.remove();
+    const native = queryFixture(Array.from({ length: 12 }, (_, i) => String(i + 1)));
+    native.attach(a.card); native.attach(second.card);
+    native.state.onWrite = data => {
+        const old = a.row.querySelectorAll('[data-virtual-slot]'); old.forEach(host => host.remove());
+        const incoming = [];
+        for (const edge of data.node.entities.edges.slice(0, 3)) {
+            const value = mount(b, edge.node.unifiedEntity.videoId); native.attach(value.card);
+            a.row.appendChild(value.host); value.row.remove(); incoming.push(value.host);
+        }
+        b.mutate(a.row, { addedNodes: incoming, removedNodes: old });
+    };
+    b.feature.check(); b.click(a.host, 'Hide suggestion'); await b.scheduler.advance(200); await b.scheduler.flush();
+    assert.deepEqual(native.state.data.node.entities.edges.slice(0, 3).map(e => e.node.unifiedEntity.videoId), ['2', '3', '4']);
+    assert.equal(b.feature.diagnostics().nativeRows.writes, 1);
+    assert.equal(knowledgeSnapshot(b.saved, 'A').recommendations.choices['1'], 'hide');
+    assert.equal(native.state.requests.length, 0);
+    assert.equal(a.row.querySelectorAll('.tm-rec-controls').length, 3);
+    b.feature.dispose(); await b.scheduler.flush();
+    assert.equal(native.state.data.node.entities.edges.length, 12); assert.equal(b.scheduler.timers.size, 0);
 });

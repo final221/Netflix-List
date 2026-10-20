@@ -1,6 +1,7 @@
 import { readVideoIdFromHref } from './page-dom.js';
 import { createRecommendationRequests } from './recommendation-requests.js';
 import { createLoaderSurvey } from './recommendation-loader.js';
+import { findRecommendationQuery } from './recommendation-query.js';
 
 
 export const RECOMMENDATION_ARROW_STYLES = `
@@ -430,5 +431,5 @@ export function createRecommendationDom(environment) {
         } catch (_) { return null; }
     }
     return Object.freeze({ scan, lease, updateArrows, describe, refillState, loadingFacts, navigationTarget, rowDiagnostics,
-        navigationStart, navigationRequests, observeRequests });
+        navigationStart, navigationRequests, observeRequests, queryBinding: findRecommendationQuery, queryPage: card => findRecommendationQuery(card, [], { paginationOnly: true }).pagination });
 }

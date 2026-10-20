@@ -13,19 +13,10 @@ Historical1.4.64/.67/.69/.70 measurements retained at6405a0e:logs/knowledge.md (
 Windows/Firefox157/en/2560×1279/DPR1/homepage;2026-10-10 UTC+02;runtime refs unknown. Complete measurements, filename suffix convention and provenance routes retained at96cf0d9:logs/knowledge.md (summary revision). Uncommitted source provenance:1.9.1–.6 at7772317;1.9.7–.11 ate72fa6a.
 .1 folder/playback confirmed,pending26→0;.4 repeated saves,pending0;.5/.6 row13→25→26 mounted,not loader/cache proof;.7 500checked/0pending,later row8 recycling8/8;.8 608decorated/572checked/4failed/0pending,observer119drops;.9 288checked/6series coverage failures/0pending;.10 317checked/2series coverage failures/0pending. Timing/empty wrapper records cannot establish independent prefetch or fresh recommendations. .10 nine forward arrows each add2previously observed IDs;user reports repeats. Earlier arrow measurements did not establish horizontal hit targets. Detailed comparisons at7689b02.
 
-## Historical sessions - 1.9.11/1.9.12
+## Historical sessions - 1.9.11–1.9.14
 
-Complete source provenance and measurements atec76b82:logs/knowledge.md (summary revision);2026-10-11 UTC+02,Firefox157/2560x1279/DPR1,runtime refs unknown. .11 five exports/5arrows/6dismissals:row7 first-observed0/8/16 then0/8/8 twice;6coverage failures/0pending,trace38dropped;arrow56x64. .12 seven arrows/6watched actions:56x238/right2516 vs2560,vertical hits inside;284checked/132requests/3coverage failures/0pending. GraphQL timings/0wrapper captures;no independent preload/causality proof;horizontal hits/compact/timed actions untested.
-
-## Session — 1.9.13
-
-Three detailed captures, 2026-10-11 UTC+02;Windows/Firefox157/2560×1279/DPR1;runtime ref unknown. Sources/copiedAt/SHA256 retained at98d3c46:logs/knowledge.md (summary revision, not runtime; originals uncommitted).
-Same visit/baseline+2next arrows;no saved actions. Row6:13→25→26mounted;first arrow4/12/12first-observed at200/1200/5000ms;second0/8(final timer pending). Arrow[2460,284,100,199]/right2560/rgba37,.32;edge2559hit inside. Two GraphQL timings+3/+116ms;wrapper4intercepted/0GraphQL. Hook dependencies only shallow shapes. Viewing170→177checked/87→93requests;three series(81663323,81969861,81171925) lack coverage after3attempts/0pending;field rejection unspecified. No warnings/dropped movements;compact mode, saved-action outcomes and independent preload untested.
-
-## Session — 1.9.14
-
-Five detailed exports, Windows/Firefox157/2560×1279/DPR1;2026-10-11 UTC+02;runtime ref unknown. Original uncommitted filenames/copiedAt/SHA256 retained in logs/knowledge.md at567ac12 (summary revision, not runtime).
-Baseline+10arrows/no saved actions/warnings;174→200checked/76→93requests/0pending. Three failures after3attempts:episode-count-mismatch/headline26/partial season sum27;declared seasons2,2,3;full sums and independent list lengths unrecorded. Probe2response hooks/8text reads/0fetch GraphQL;4paired connections+entity responses. Movie row reports150/14items/hasNext:true twice;period row36/14/true then36/9/false, followed by6arrows/no responses and novel counts2,0,0,0,0,0. Returned entity IDs intersect clicked row12/14,6/14,12/14,6/9;time-window association, not causal proof. Compact, caught-up correction and independent preloading untested.
+Windows/Firefox157/2560x1279/DPR1;2026-10-11 UTC+02,runtime refs unknown. Full distinguishing measurements/source provenance retained at1a03336:logs/knowledge.md (summary revision,not runtime). Original uncommitted source routes:.11/.12 atec76b82;.13 at98d3c46;.14 at567ac12 (all logs/knowledge.md).
+.11 first-observed0/8/16 then0/8/8 twice;.12 arrow56x238/right2516vs2560,vertical hits inside;.13 edge2559hit inside/right2560,13→25→26mounted,no saved actions;.14 period connection36/14/true then36/9/false followed by6arrows/no responses/novel2,0,0,0,0,0. Movie connection150/14/true twice. Three coverage failures lack independent full season/list proof. Request timing/ID overlap cannot prove independent prefetch or causal row identity;wrap/Undo/popup/compact/correction behavior unverified.
 
 ## Evidence limits
 
@@ -49,3 +40,8 @@ Readiness447samples/mean2615ms/max5359ms/58requests/0pending/0budget or cooldown
 
 Source logs/1.10.2-2026-10-20T20-03-01-947Z-61266587.txt;SHA256 fa901fe96b22b6a89df13c00ae5d4662f9d34807be78a24c0ea45082ac144f34;copied2026-10-20T22:03:01.899+02:00;Windows/Firefox158/en/1920x919/DPR1;runtime ref unknown. Compact859111bytes/29entries/0omitted groups or sections/4extra examples omitted.18arrows/2saved actions(hide,watched)/0diagnostic errors. User reports severe scroll/paging stutter;capture has no frame/long-task timing. Sparse/empty samples persist. Inventory27rows/no cap;406ready/mean3132ms/max6304ms/43requests/0pending or budget wait/8coverage failures;0invalid/storage/notification failures.
 Loader hook43 matches CarouselPage(query),rowId/carouselAfterCursor/carouselPageSize variables,observable/options/network-only;22-23title overlap. Native connection27to114edges,total114,late hasNext:false/cursor present. Identity-variable match:false;args/cache-render contract unverified. Retention and query projections work;this does not prove smoothness or corrected visible paging.
+
+## Session - 1.10.3
+
+Source logs/1.10.3-2026-10-20T20-16-10-955Z-ecbde325.txt;SHA256 885c9e65e8660cadc06f8ae5e72f6b985539ce2419a39cf50dd8c97f8e81997e;copied2026-10-20T22:16:10.936+02:00;Windows/Firefox158/en/1920x919/DPR1;runtime ref unknown. Compact236439bytes/18entries/0omitted groups or sections/1extra example omitted. User reports stutters improved,lists still incoherent;no frame timing proof.
+15Next arrows/0navigation failures/no saved actions. At1200ms(or before-next),visible5,7,7,7,2,0,0,3,3,6,7,7,7,4,2;empty samples retain30/32eligible IDs. Inventory reaches110known/61filtered on this row;all-row inventory40/limit:true. No normal-arrow deep query survey. Work214scans/11625cards/max60ms/124159paints/3573controlWrites;57viewing requests/0pending. Timing and counts do not isolate remaining frame cost or establish full wrap behavior.

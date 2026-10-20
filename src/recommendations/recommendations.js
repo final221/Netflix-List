@@ -1,6 +1,7 @@
 import { createRecommendationDom, RECOMMENDATION_ARROW_STYLES } from '../netflix/recommendation-dom.js';
 import { createCardActions, CARD_ACTION_STYLES } from '../card-actions.js';
 import { createRefill } from './refill.js';
+import { createNativeRows } from './native-rows.js';
 import { createRowBuffer } from './row-buffer.js';
 import { createSavedChoicesPanel, SAVED_CHOICES_PANEL_STYLES } from './saved-choices-panel.js';
 import { createNavigationDiagnostics } from './navigation.js';
@@ -62,7 +63,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             for (const entry of entries.values()) paint(entry);
             // Refill the bounded metadata queue from mounted cards as slots become available.
             viewing.observe([...entries.values()]);
-            savedPanel.paint(); updateRefill();
+            savedPanel.paint(); updateRefill(); nativeRows.refresh();
         } catch (error) { warn('Browsing viewing migration unavailable', { reason: error.message }); }
     }
     const refill = createRefill({ environment, dom, readChoices: visibleChoices,
@@ -70,6 +71,9 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         onPage: row => scan(row), log, warn });
     const navigation = createNavigationDiagnostics({ environment, dom, readChoices: visibleChoices,
         admitted: () => active && allowed() && Boolean(profile) && readProfile() === profile, log });
+    const nativeRows = createNativeRows({ environment, dom, readChoices: visibleChoices,
+        admitted: () => active && allowed() && Boolean(profile) && !failed && readProfile() === profile,
+        canRestore: () => Boolean(profile) && readProfile() === profile });
     function rowDiagnostics() {
         if (!active || !allowed() || !profile || readProfile() !== profile) return { total: 0, truncated: false, rows: [] };
         const rows = [...new Set([...entries.values()].map(entry => entry.row))].filter(row => row.isConnected);
@@ -90,7 +94,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     function syncProfile() {
         const next = readProfile();
         if (next === profile) return;
-        refill.dispose(); navigation.dispose(); viewing.dispose();
+        nativeRows.dispose(); refill.dispose(); navigation.dispose(); viewing.dispose();
         for (const entry of [...entries.values()]) release(entry);
         profile = next; choices = {}; failed = false; epoch++; pending.clear(); queued = false;
         inventories.clear(); inventoryLimit = false;
@@ -163,7 +167,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             environment.window?.addEventListener('resize', resize);
         }
         for (const row of new Set([...entries.values()].map(entry => entry.row))) dom.updateArrows(row);
-        updateRefill(); work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
+        updateRefill(); nativeRows.refresh(); work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
     }
     function schedule(root) {
         pending.add(root); if (pending.size > 24) { pending.clear(); pending.add(document); } if (queued) return;
@@ -177,6 +181,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     }
     function click(event) {
         navigation.click(event.target, { detailed: event.shiftKey === true }); navigation.movement('click', event.target, { x: event.clientX, y: event.clientY });
+        const target = dom.navigationTarget(event.target); if (target) nativeRows.interact(target.row);
         const button = event.target?.closest?.('button'), input = buttons.get(button) || savedPanel.inputFor(button);
         if (!input || (input.entry && entries.get(input.entry.host) !== input.entry)) return;
         event.preventDefault(); event.stopImmediatePropagation();
@@ -206,6 +211,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             for (const entry of entries.values()) paint(entry);
             savedPanel.paint();
             updateRefill(input.action !== 'undo' ? input.entry : null);
+            if (input.entry) nativeRows.interact(input.entry.row); else nativeRows.refresh();
             navigation.movement('action', input.entry?.card, { action: diagnosticAction, id });
             navigation.savedAction(input.entry?.row, actionBefore, diagnosticAction, id);
             log('Recommendation visibility choice saved', { action: input.action, hiddenCount: Object.keys(choices).length });
@@ -250,7 +256,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     }
     function dispose() {
         unsubscribe?.(); unsubscribe = null;
-        refill.dispose(); navigation.dispose(); viewing.dispose();
+        nativeRows.dispose(); refill.dispose(); navigation.dispose(); viewing.dispose();
         if (ownsKnowledge) knowledge.dispose();
         environment.window?.removeEventListener('scroll', scroll);
         environment.window?.removeEventListener('resize', resize);
@@ -262,6 +268,6 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         style?.remove(); style = null; profile = null; choices = {}; failed = false;
     }
     return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(visibleChoices()).length,
-        storageFailed: failed, work: { ...work }, inventory: { rows: inventories.size, limitReached: inventoryLimit }, refill: refill.diagnostics(), viewing: viewing.diagnostics(),
+        storageFailed: failed, work: { ...work }, nativeRows: nativeRows.diagnostics(), inventory: { rows: inventories.size, limitReached: inventoryLimit }, refill: refill.diagnostics(), viewing: viewing.diagnostics(),
         rows: rowDiagnostics(), navigation: navigation.snapshot() }) });
 }

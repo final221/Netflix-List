@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.10.3
+// @version      1.11.0
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -2003,24 +2003,24 @@
       if (!proxy) return;
       let failures = 0;
       for (const entry of proxy.entries) {
-        for (const method of ["getBoundingClientRect", "getClientRects"]) {
-          const descriptor = entry.descriptors[method];
+        for (const method2 of ["getBoundingClientRect", "getClientRects"]) {
+          const descriptor = entry.descriptors[method2];
           const methods = geometryMethods.get(entry.source);
-          if (entry.installed && methods?.[method]?.lease !== entry) continue;
-          if (entry.installed && Object.getOwnPropertyDescriptor(entry.source, method)?.value !== entry.installed[method]) {
-            delete methods[method];
+          if (entry.installed && methods?.[method2]?.lease !== entry) continue;
+          if (entry.installed && Object.getOwnPropertyDescriptor(entry.source, method2)?.value !== entry.installed[method2]) {
+            delete methods[method2];
             continue;
           }
           try {
             if (descriptor) {
-              Object.defineProperty(entry.source, method, descriptor);
+              Object.defineProperty(entry.source, method2, descriptor);
             } else {
-              if (!delete entry.source[method]) failures++;
+              if (!delete entry.source[method2]) failures++;
             }
           } catch (_) {
             failures++;
           }
-          if (entry.installed) delete methods[method];
+          if (entry.installed) delete methods[method2];
         }
       }
       if (activeGeometryProxy?.sourceSlot !== proxy.sourceSlot) proxy.sourceSlot.removeAttribute("data-tm-source-proxied");
@@ -2241,19 +2241,19 @@
       const href = node.href || node.getAttribute("href") || "";
       return videoIdFromHref(href) || (/\/watch\/(\d+)(?:[/?#]|$)/.exec(href)?.[1] || "");
     }
-    function findNativeHoverPreview(target, videoId) {
+    function findNativeHoverPreview(target, videoId2) {
       if (!(target instanceof Element)) return { root: null, reason: "not-preview" };
       const root = target.closest(".previewModal--wrapper, .bob-container") || target.closest(".previewModal--container, .bob-card");
       if (!root?.isConnected) return { root: null, reason: "not-preview" };
       let node = target;
       for (let index = 0; node && index < 8; index++, node = node.parentElement) {
-        if (nativePreviewNodeVideoId(node) === videoId) return { root, reason: "matching-preview-title" };
+        if (nativePreviewNodeVideoId(node) === videoId2) return { root, reason: "matching-preview-title" };
         if (node === root) break;
       }
       const references = root.querySelectorAll("a[href], [data-ui-tracking-context]");
       const limit = Math.min(references.length, 16);
       for (let index = 0; index < limit; index++) {
-        if (nativePreviewNodeVideoId(references[index]) === videoId) {
+        if (nativePreviewNodeVideoId(references[index]) === videoId2) {
           return { root, reason: "matching-preview-title" };
         }
       }
@@ -2333,12 +2333,12 @@
       const root = owner?.previewRoot;
       if (!root || !event.isTrusted || !root.contains(event.target) || event.relatedTarget && root.contains(event.relatedTarget)) return;
       const clone = owner.previewClone;
-      const valid = root.isConnected && nativePreviewOwnerMatches(owner);
-      if (valid && event.relatedTarget && gridCloneFromPointerEvent({ target: event.relatedTarget }, readEnvironment().grid) === clone) {
+      const valid2 = root.isConnected && nativePreviewOwnerMatches(owner);
+      if (valid2 && event.relatedTarget && gridCloneFromPointerEvent({ target: event.relatedTarget }, readEnvironment().grid) === clone) {
         clearNativePreviewTransfer(owner, "preview-return");
         return;
       }
-      releaseNativePreview(owner, valid ? "preview-leave" : "preview-owner-invalid", event.relatedTarget);
+      releaseNativePreview(owner, valid2 ? "preview-leave" : "preview-owner-invalid", event.relatedTarget);
     }
     function alignSourceSlotToClone(sourceSlot, clone, assertCurrent = () => {
     }) {
@@ -2355,7 +2355,7 @@
         if (!(source instanceof Element) || !(target instanceof Element)) continue;
         const methods = geometryMethods.get(source) || {};
         geometryMethods.set(source, methods);
-        const descriptors = Object.fromEntries(["getBoundingClientRect", "getClientRects"].map((method) => [method, methods[method] ? methods[method].baseline : Object.getOwnPropertyDescriptor(source, method) || null]));
+        const descriptors = Object.fromEntries(["getBoundingClientRect", "getClientRects"].map((method2) => [method2, methods[method2] ? methods[method2].baseline : Object.getOwnPropertyDescriptor(source, method2) || null]));
         const installed = { getBoundingClientRect: () => target.getBoundingClientRect(), getClientRects: () => makeClientRectList(target.getBoundingClientRect()) };
         const entry = { source, descriptors, installed };
         try {
@@ -2368,12 +2368,12 @@
             value: installed.getClientRects
           });
           entries.push(entry);
-          for (const method of ["getBoundingClientRect", "getClientRects"]) methods[method] = { lease: entry, baseline: descriptors[method] };
+          for (const method2 of ["getBoundingClientRect", "getClientRects"]) methods[method2] = { lease: entry, baseline: descriptors[method2] };
         } catch (_) {
-          for (const method of ["getBoundingClientRect", "getClientRects"]) {
+          for (const method2 of ["getBoundingClientRect", "getClientRects"]) {
             try {
-              if (descriptors[method]) Object.defineProperty(source, method, descriptors[method]);
-              else delete source[method];
+              if (descriptors[method2]) Object.defineProperty(source, method2, descriptors[method2]);
+              else delete source[method2];
             } catch (_2) {
             }
           }
@@ -2787,15 +2787,15 @@
       const slot = button?.closest?.(NETFLIX_DOM_SELECTORS.virtualSlot);
       if (slot) {
         for (const anchor of slot.querySelectorAll("a[href]")) {
-          const videoId = videoIdFromHref(anchor.href || anchor.getAttribute("href") || "");
-          if (videoId) return videoId;
+          const videoId2 = videoIdFromHref(anchor.href || anchor.getAttribute("href") || "");
+          if (videoId2) return videoId2;
         }
       }
       const modal = button?.closest?.('[role="dialog"], .previewModal--container, .previewModal--wrapper');
       if (modal) {
         for (const anchor of modal.querySelectorAll("a[href]")) {
-          const videoId = videoIdFromHref(anchor.href || anchor.getAttribute("href") || "");
-          if (videoId) return videoId;
+          const videoId2 = videoIdFromHref(anchor.href || anchor.getAttribute("href") || "");
+          if (videoId2) return videoId2;
         }
         if (activeVideoId) return String(activeVideoId);
       }
@@ -2816,10 +2816,10 @@
       const trackedAsMyList = trackingContext?.appView === "addToMyListButton";
       const uiaIsMyList = /(?:^|-)add-to-my-list|remove-from-my-list/i.test(uia);
       if (!trackedAsMyList && !uiaIsMyList) return null;
-      const videoId = videoIdFromToggleContext(button, trackingContext, activeVideoId);
-      if (!videoId) return null;
+      const videoId2 = videoIdFromToggleContext(button, trackingContext, activeVideoId);
+      if (!videoId2) return null;
       const uiaAction = /remove-from-my-list/i.test(uia) ? "remove" : /add-to-my-list/i.test(uia) ? "add" : "unknown";
-      return { button, videoId, uiaAction, uia, trackingContext };
+      return { button, videoId: videoId2, uiaAction, uia, trackingContext };
     }
     function describeToastActionClick(event) {
       const target = event.target instanceof Element ? event.target : null;
@@ -5642,7 +5642,7 @@ ${CARD_ACTION_STYLES}
       }
     }
     const phases = /* @__PURE__ */ new WeakMap();
-    const readPending = (videoId) => pending.get(String(videoId)) || null;
+    const readPending = (videoId2) => pending.get(String(videoId2)) || null;
     const isMutationCurrent = (intent) => Boolean(intent && readPending(intent.videoId) === intent && isAdmitted(phases.get(intent)?.token));
     function releaseIntent(intent, oldEntries = entries) {
       const phase = phases.get(intent), oldTimer = phase.timer, observer = phase.observer;
@@ -5656,8 +5656,8 @@ ${CARD_ACTION_STYLES}
         cleanup(() => releaseRetained(intent.correlationId));
       }
     }
-    function disposeMutation(videoId, expected = null) {
-      const key = String(videoId || ""), intent = readPending(key);
+    function disposeMutation(videoId2, expected = null) {
+      const key = String(videoId2 || ""), intent = readPending(key);
       if (!intent || expected && expected !== intent) return;
       pending.delete(key);
       releaseIntent(intent);
@@ -5670,13 +5670,13 @@ ${CARD_ACTION_STYLES}
     }
     function observeMembership(descriptor) {
       if (!descriptor?.videoId) return null;
-      const token = readSession(), seq = ++sequence, videoId = String(descriptor.videoId);
+      const token = readSession(), seq = ++sequence, videoId2 = String(descriptor.videoId);
       if (!isAdmitted(token)) return null;
-      const previous = readPending(videoId);
+      const previous = readPending(videoId2);
       const phase = { token, timer: null, observer: null, deferred: Boolean(descriptor.deferredWhileBusy) };
       const intent = Object.freeze({
         seq,
-        videoId,
+        videoId: videoId2,
         action: descriptor.action,
         uia: descriptor.uia || "",
         uiaAction: descriptor.uiaAction || "unknown",
@@ -5692,7 +5692,7 @@ ${CARD_ACTION_STYLES}
       });
       if (sequence !== seq || !isAdmitted(token)) return null;
       phases.set(intent, phase);
-      pending.set(videoId, intent);
+      pending.set(videoId2, intent);
       if (previous) releaseIntent(previous);
       if (sequence !== seq || !isMutationCurrent(intent)) return null;
       return intent;
@@ -5713,35 +5713,35 @@ ${CARD_ACTION_STYLES}
       };
       try {
         guard();
-        const videoId = intent.videoId;
+        const videoId2 = intent.videoId;
         let live = call(refreshNative) || call(observeNative);
         if (intent.action === "remove") {
-          const changed2 = call(remove, videoId, reason, { assertCurrent: guard });
-          if (!changed2 && !call(hasMember, videoId)) {
-            disposeMutation(videoId, intent);
+          const changed2 = call(remove, videoId2, reason, { assertCurrent: guard });
+          if (!changed2 && !call(hasMember, videoId2)) {
+            disposeMutation(videoId2, intent);
             return true;
           }
           if (!changed2) return false;
           live = call(refreshNative) || live;
           if (live?.track) call(reconcileOrder, live, { assertCurrent: guard });
-          disposeMutation(videoId, intent);
+          disposeMutation(videoId2, intent);
           return true;
         }
-        if (call(hasMember, videoId)) {
-          disposeMutation(videoId, intent);
+        if (call(hasMember, videoId2)) {
+          disposeMutation(videoId2, intent);
           return true;
         }
-        const nativeItem = call(captureNative, videoId, live);
-        const candidate = nativeItem || intent.fallbackItem || call(findFallback, videoId);
+        const nativeItem = call(captureNative, videoId2, live);
+        const candidate = nativeItem || intent.fallbackItem || call(findFallback, videoId2);
         const correlationId = candidate === intent.fallbackItem ? intent.correlationId : null;
         if (!candidate) return false;
-        const index = nativeItem ? call(preferredIndex, videoId, live, { assertCurrent: guard }) : Number.isFinite(intent.preferredIndex) ? intent.preferredIndex : 0;
+        const index = nativeItem ? call(preferredIndex, videoId2, live, { assertCurrent: guard }) : Number.isFinite(intent.preferredIndex) ? intent.preferredIndex : 0;
         call(assertNative, live);
         const changed = call(add, candidate, index, nativeItem ? reason + "-native" : reason + "-captured", correlationId, { assertCurrent: guard });
-        if (changed || call(hasMember, videoId)) {
+        if (changed || call(hasMember, videoId2)) {
           live = call(refreshNative) || live;
           if (live?.track && (nativeItem || !correlationId)) call(reconcileOrder, live, { assertCurrent: guard });
-          disposeMutation(videoId, intent);
+          disposeMutation(videoId2, intent);
           return true;
         }
         return false;
@@ -5801,11 +5801,11 @@ ${CARD_ACTION_STYLES}
       if (!admitted() || generation !== undoOwner) return null;
       let descriptor;
       if (facts?.membership?.videoId) {
-        const { videoId, uia, uiaAction } = facts.membership;
-        const present = hasMember(videoId);
+        const { videoId: videoId2, uia, uiaAction } = facts.membership;
+        const present = hasMember(videoId2);
         if (!admitted() || generation !== undoOwner) return null;
         const remove2 = present == null ? uiaAction === "remove" : Boolean(present);
-        descriptor = { videoId, uia, uiaAction, action: remove2 ? "remove" : "add" };
+        descriptor = { videoId: videoId2, uia, uiaAction, action: remove2 ? "remove" : "add" };
       } else if (facts?.toastAction) {
         const entry = latestUndo();
         if (!entry || !admitted()) return null;
@@ -5900,8 +5900,8 @@ ${CARD_ACTION_STYLES}
       recordCounter("cleared", old.size);
       for (const entry of old.values()) releaseRetained(entry.correlationId);
     }
-    function forgetUndo(videoId) {
-      const key = String(videoId), entry = entries.get(key);
+    function forgetUndo(videoId2) {
+      const key = String(videoId2), entry = entries.get(key);
       if (!entries.delete(key)) return;
       generation++;
       releaseRetained(entry.correlationId);
@@ -5910,13 +5910,13 @@ ${CARD_ACTION_STYLES}
     }
     function pruneUndo(at = now()) {
       let expired = 0, pendingFallbacksPreserved = 0;
-      for (const [videoId, entry] of [...entries]) {
-        if (entries.get(videoId) !== entry) continue;
+      for (const [videoId2, entry] of [...entries]) {
+        if (entries.get(videoId2) !== entry) continue;
         if (!Number.isFinite(entry.removedAt) || at - entry.removedAt >= ttl) {
-          const admitted2 = generation, pending2 = readPending(videoId);
-          if (generation !== admitted2 || entries.get(videoId) !== entry) return false;
+          const admitted2 = generation, pending2 = readPending(videoId2);
+          if (generation !== admitted2 || entries.get(videoId2) !== entry) return false;
           const keep = pending2?.fallbackItem === entry.item && pending2?.correlationId === entry.correlationId;
-          entries.delete(videoId);
+          entries.delete(videoId2);
           generation++;
           expired++;
           if (keep) pendingFallbacksPreserved++;
@@ -6036,10 +6036,10 @@ ${CARD_ACTION_STYLES}
       reindexOwned(owner, reason);
       return true;
     }
-    function remove(videoId, reason = "click-delta", admission = {}) {
+    function remove(videoId2, reason = "click-delta", admission = {}) {
       const owner = publicationOwner(admission);
       if (!owner) return false;
-      const { membership, guard, parent } = owner, key = "v:" + videoId;
+      const { membership, guard, parent } = owner, key = "v:" + videoId2;
       const record = membership.lookup.get(key);
       if (!record) return false;
       const index = membership.records.indexOf(record);
@@ -6119,10 +6119,10 @@ ${CARD_ACTION_STYLES}
       owner.call(facts.assertCurrent);
       return facts;
     }
-    function preferredIndex(videoId, live, admission = {}) {
+    function preferredIndex(videoId2, live, admission = {}) {
       const owner = publicationOwner(admission);
       if (!owner) return 0;
-      const facts = visibleFacts(owner, live), position = facts.ids.indexOf(String(videoId));
+      const facts = visibleFacts(owner, live), position = facts.ids.indexOf(String(videoId2));
       if (position < 0) return 0;
       const columns = Math.max(1, facts.columns || facts.ids.length || 1);
       return Math.min(owner.membership.records.length, (facts.page || 0) * columns + position);
@@ -6466,10 +6466,10 @@ ${CARD_ACTION_STYLES}
       const items = [], seen = /* @__PURE__ */ new Set();
       const complete = await runChunks(records.length, (index) => {
         guard();
-        const record = records[index], videoId = record?.videoId;
-        if (!videoId || seen.has(videoId)) return;
+        const record = records[index], videoId2 = record?.videoId;
+        if (!videoId2 || seen.has(videoId2)) return;
         items.push(toRecord({ ...record, graphql: true }));
-        seen.add(videoId);
+        seen.add(videoId2);
       }, guard);
       guard();
       return complete !== false && items.length === totalCount ? items : null;
@@ -7160,9 +7160,9 @@ ${CARD_ACTION_STYLES}
     async function copyDiagnosticLogs(options = {}) {
       log(tLog("copyLogsRequested"), { detailed: Boolean(options.detailed) });
       try {
-        const method = await diagnosticReport.copy(options);
-        log(tLog("copyLogsCompleted"), { method, entries: logger.size() });
-        return method;
+        const method2 = await diagnosticReport.copy(options);
+        log(tLog("copyLogsCompleted"), { method: method2, entries: logger.size() });
+        return method2;
       } catch (error) {
         warn(tLog("copyLogsFailed"), error);
         throw error;
@@ -8157,15 +8157,15 @@ ${CARD_ACTION_STYLES}
       const records = [], seen = /* @__PURE__ */ new Set();
       const complete = await runChunks(edges.length, (index) => {
         const node = edges[index]?.node;
-        const videoId = videoIdFromGraphqlNode(node);
-        if (!videoId || seen.has(videoId)) return;
+        const videoId2 = videoIdFromGraphqlNode(node);
+        if (!videoId2 || seen.has(videoId2)) return;
         records.push({
-          href: location.origin + "/browse?jbv=" + encodeURIComponent(videoId),
-          videoId,
-          ariaLabel: firstGraphqlText(node?.displayString) || firstGraphqlText(node) || "Netflix " + videoId,
+          href: location.origin + "/browse?jbv=" + encodeURIComponent(videoId2),
+          videoId: videoId2,
+          ariaLabel: firstGraphqlText(node?.displayString) || firstGraphqlText(node) || "Netflix " + videoId2,
           imageUrl: firstGraphqlImageUrl(node?.contextualArtwork) || firstGraphqlImageUrl(node)
         });
-        seen.add(videoId);
+        seen.add(videoId2);
       }, () => assertCurrent(sessionToken));
       assertCurrent(sessionToken);
       return complete && records.length === totalCount ? records : null;
@@ -8310,14 +8310,14 @@ ${CARD_ACTION_STYLES}
       if (unwrapped == null) return null;
       return Number.isSafeInteger(unwrapped) && unwrapped >= 0 ? unwrapped : NaN;
     }
-    function viewingVideoRecord(graph, videoId, type = "") {
-      const video = readViewingGraph(graph, ["videos", String(videoId)]);
+    function viewingVideoRecord(graph, videoId2, type = "") {
+      const video = readViewingGraph(graph, ["videos", String(videoId2)]);
       if (!video || typeof video !== "object") return null;
-      const field = (key) => video[key]?.$type === "ref" ? readViewingGraph(graph, ["videos", String(videoId), key]) : unwrapViewingAtom(video[key]);
+      const field = (key) => video[key]?.$type === "ref" ? readViewingGraph(graph, ["videos", String(videoId2), key]) : unwrapViewingAtom(video[key]);
       const summary = field("summary");
       const watched = field("watched");
       return {
-        videoId: String(videoId),
+        videoId: String(videoId2),
         type: type || (typeof summary?.type === "string" ? summary.type.toLowerCase() : ""),
         watched: typeof watched === "boolean" ? watched : void 0,
         bookmark: viewingNumber(field("bookmarkPosition")),
@@ -8711,8 +8711,8 @@ ${CARD_ACTION_STYLES}
         }
         if (!records.has(match[1])) records.set(match[1], {});
         const kind = match[2];
-        const valid = kind === "manual" ? validChoice(value) : kind.startsWith("completion") ? ["movie", "series"].includes(value.type) && Number.isFinite(value.observedAt) && (value.coverage === null || validCoverage(value.coverage)) : kind.startsWith("metadata") ? ["movie", "series"].includes(value.type) && (value.coverage === null || validCoverage(value.coverage)) : kind === "hidden" ? typeof value.hidden === "boolean" : kind === "legacy" ? value.watched === true : Boolean(titleName(value.name));
-        if (!valid) {
+        const valid2 = kind === "manual" ? validChoice(value) : kind.startsWith("completion") ? ["movie", "series"].includes(value.type) && Number.isFinite(value.observedAt) && (value.coverage === null || validCoverage(value.coverage)) : kind.startsWith("metadata") ? ["movie", "series"].includes(value.type) && (value.coverage === null || validCoverage(value.coverage)) : kind === "hidden" ? typeof value.hidden === "boolean" : kind === "legacy" ? value.watched === true : Boolean(titleName(value.name));
+        if (!valid2) {
           stats.invalidRecords++;
           continue;
         }
@@ -10593,12 +10593,12 @@ ${CARD_ACTION_STYLES}
         if (owner !== revision) throw error("NATIVE_PAGE_HINT_REPLACED");
       };
     }
-    const valid = (page) => Number.isFinite(page) && page >= 0;
+    const valid2 = (page) => Number.isFinite(page) && page >= 0;
     function set(record, page, { assertCurrent: admission = () => {
     } } = {}) {
       const guard = guardFor(admission);
       guard();
-      if (!valid(page)) throw error("NATIVE_PAGE_HINT_INVALID");
+      if (!valid2(page)) throw error("NATIVE_PAGE_HINT_INVALID");
       hints.set(record, page);
       revision++;
     }
@@ -10609,7 +10609,7 @@ ${CARD_ACTION_STYLES}
       for (const record of records) {
         const page = readPage(record);
         guard();
-        if (valid(page)) staged.set(record, page);
+        if (valid2(page)) staged.set(record, page);
       }
       records = null;
       readPage = null;
@@ -14808,7 +14808,7 @@ ${CARD_ACTION_STYLES}
         });
       });
     }
-    function captureMountedItem({ discovery: discovery2, videoId }) {
+    function captureMountedItem({ discovery: discovery2, videoId: videoId2 }) {
       return withNativeReadScope(() => {
         assertObservation(discovery2);
         if (!discovery2.track) return null;
@@ -14817,7 +14817,7 @@ ${CARD_ACTION_STYLES}
           for (const slot of netflixDom.directSlots(discovery2.track)) {
             item = cardMarkup.capture(slot, discovery2.selectedPage || 0, false);
             assertObservation(discovery2);
-            if (item?.videoId !== String(videoId)) continue;
+            if (item?.videoId !== String(videoId2)) continue;
             const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
             const assertCapturedSlot = () => {
               const current = cardMarkup.capture(slot, discovery2.selectedPage || 0, false);
@@ -15619,8 +15619,8 @@ ${CARD_ACTION_STYLES}
         entries
       });
     }
-    function captureFallbackItem(videoId) {
-      const wanted = String(videoId);
+    function captureFallbackItem(videoId2) {
+      const wanted = String(videoId2);
       for (const card of document.querySelectorAll(NETFLIX_DOM_SELECTORS2.standardCardWithHref)) {
         if (card.closest(`#${GRID_ID2}`)) continue;
         const href = card.href || card.getAttribute("href") || "";
@@ -16607,9 +16607,9 @@ ${CARD_ACTION_STYLES}
         assertCurrent
       });
     }
-    function findNativeMyListItemByVideoId(videoId, liveState = null) {
+    function findNativeMyListItemByVideoId(videoId2, liveState = null) {
       const discovery = liveState || nativeDiscoveryObservation();
-      return dependencies.nativeCarousel.captureMountedItem({ discovery, videoId });
+      return dependencies.nativeCarousel.captureMountedItem({ discovery, videoId: videoId2 });
     }
     function restartInitializationForPopulatedNativeMyList(live, reason = "late-populated-source") {
       if (!source.current?.empty || !live?.section || !live?.scroller || !live?.track) return false;
@@ -18806,7 +18806,7 @@ ${CARD_ACTION_STYLES}
       isBlocked: () => initialization.isNativeBlocked(sessionScope.token),
       onChanged: reportListChange,
       createCancelledError: createRouteSessionCancelledError,
-      findFallback: (videoId) => nativeCarousel.captureFallbackItem(videoId),
+      findFallback: (videoId2) => nativeCarousel.captureFallbackItem(videoId2),
       queueMicrotask,
       observeChanges(callback) {
         const root = document.body || document.documentElement;
@@ -20856,17 +20856,17 @@ ${CARD_ACTION_STYLES}
           if (child && typeof child === "object") queue.push([child, next, depth + 1]);
         }
       }
-      const connection = root?.data?.node?.entities;
-      const pageInfo = connection?.pageInfo;
+      const connection2 = root?.data?.node?.entities;
+      const pageInfo = connection2?.pageInfo;
       return {
         collections,
         pagination,
         traversalTruncated: queue.length > 0,
-        ...connection && typeof pageInfo?.hasNextPage === "boolean" ? { serverPage: {
+        ...connection2 && typeof pageInfo?.hasNextPage === "boolean" ? { serverPage: {
           hasNextPage: pageInfo.hasNextPage,
           exhausted: !pageInfo.hasNextPage,
-          totalCount: Number.isSafeInteger(connection.totalCount) && connection.totalCount >= 0 ? connection.totalCount : null,
-          returnedItems: Array.isArray(connection.edges) ? connection.edges.length : null,
+          totalCount: Number.isSafeInteger(connection2.totalCount) && connection2.totalCount >= 0 ? connection2.totalCount : null,
+          returnedItems: Array.isArray(connection2.edges) ? connection2.edges.length : null,
           attribution: "response-connection; row match not established"
         } } : {}
       };
@@ -20972,7 +20972,7 @@ ${CARD_ACTION_STYLES}
       } catch (_) {
       }
     }
-    for (const prototype of prototypes) for (const method of ["json", "text"]) {
+    for (const prototype of prototypes) for (const method2 of ["json", "text"]) {
       try {
         let wrappedRead = function(...args) {
           const result = original2.apply(this, args);
@@ -20985,13 +20985,13 @@ ${CARD_ACTION_STYLES}
             Promise.resolve(result).then((value) => {
               if (!active) return;
               try {
-                if (method === "text" && (typeof value !== "string" || value.length > 256 * 1024)) {
+                if (method2 === "text" && (typeof value !== "string" || value.length > 256 * 1024)) {
                   dropped++;
                   return;
                 }
                 let record = responseRecords.get(response);
                 if (!record) {
-                  record = { at, source: "response-" + method, operation: "unknown", variables: [], persistedQuery: false };
+                  record = { at, source: "response-" + method2, operation: "unknown", variables: [], persistedQuery: false };
                   responseRecords.set(response, record);
                   records.push(record);
                   if (records.length > 20) {
@@ -20999,7 +20999,7 @@ ${CARD_ACTION_STYLES}
                     dropped++;
                   }
                 }
-                record.response = responseFacts(method === "text" ? JSON.parse(value) : value);
+                record.response = responseFacts(method2 === "text" ? JSON.parse(value) : value);
               } catch (_) {
                 failures++;
               }
@@ -21010,10 +21010,10 @@ ${CARD_ACTION_STYLES}
           }
           return result;
         };
-        const descriptor = Object.getOwnPropertyDescriptor(prototype, method), original2 = descriptor?.value;
+        const descriptor = Object.getOwnPropertyDescriptor(prototype, method2), original2 = descriptor?.value;
         if (typeof original2 !== "function" || !descriptor.writable) continue;
-        Object.defineProperty(prototype, method, { ...descriptor, value: wrappedRead });
-        responseLeases.push({ prototype, method, descriptor, wrappedRead });
+        Object.defineProperty(prototype, method2, { ...descriptor, value: wrappedRead });
+        responseLeases.push({ prototype, method: method2, descriptor, wrappedRead });
       } catch (_) {
         failures++;
       }
@@ -21041,8 +21041,8 @@ ${CARD_ACTION_STYLES}
         if (environment.fetch === wrapped) environment.fetch = original;
       } catch (_) {
       }
-      for (const { prototype, method, descriptor, wrappedRead } of responseLeases) try {
-        if (Object.getOwnPropertyDescriptor(prototype, method)?.value === wrappedRead) Object.defineProperty(prototype, method, descriptor);
+      for (const { prototype, method: method2, descriptor, wrappedRead } of responseLeases) try {
+        if (Object.getOwnPropertyDescriptor(prototype, method2)?.value === wrappedRead) Object.defineProperty(prototype, method2, descriptor);
       } catch (_) {
       }
       responseLeases.length = 0;
@@ -21059,67 +21059,67 @@ ${CARD_ACTION_STYLES}
   // src/netflix/recommendation-loader.js
   function createLoaderSurvey(rowIds) {
     const mounted = new Set(rowIds), candidates = [], seen = /* @__PURE__ */ new WeakSet();
-    const own = (value, key) => value && typeof value === "object" ? Object.getOwnPropertyDescriptor(value, key)?.value : void 0;
+    const own2 = (value, key) => value && typeof value === "object" ? Object.getOwnPropertyDescriptor(value, key)?.value : void 0;
     const safeName = (value) => typeof value === "string" && /^[A-Za-z_][A-Za-z_0-9]{0,79}$/.test(value) ? value : null;
     const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
     let truncated = false;
-    const items = (value, limit) => Array.isArray(value) ? Array.from({ length: Math.min(value.length, limit) }, (_, i) => own(value, String(i))) : [];
+    const items = (value, limit) => Array.isArray(value) ? Array.from({ length: Math.min(value.length, limit) }, (_, i) => own2(value, String(i))) : [];
     function definitions(query) {
       const operations = [];
-      for (const definition of items(own(query, "definitions"), 4)) {
-        if (own(definition, "kind") !== "OperationDefinition") continue;
+      for (const definition of items(own2(query, "definitions"), 4)) {
+        if (own2(definition, "kind") !== "OperationDefinition") continue;
         const variables = [];
-        for (const variable of items(own(definition, "variableDefinitions"), 20)) {
-          const name = safeName(own(own(own(variable, "variable"), "name"), "value"));
+        for (const variable of items(own2(definition, "variableDefinitions"), 20)) {
+          const name = safeName(own2(own2(own2(variable, "variable"), "name"), "value"));
           if (!name || /auth|token|cookie|credential|profile|account|session/i.test(name)) continue;
-          let type = own(variable, "type"), parts = [];
-          for (let i = 0; type && i < 6; i++, type = own(type, "type")) {
-            const kind = own(type, "kind"), name2 = safeName(own(own(type, "name"), "value"));
+          let type = own2(variable, "type"), parts = [];
+          for (let i = 0; type && i < 6; i++, type = own2(type, "type")) {
+            const kind = own2(type, "kind"), name2 = safeName(own2(own2(type, "name"), "value"));
             if (kind === "NamedType" && name2) parts.push(name2);
             else if (kind === "ListType" || kind === "NonNullType") parts.push(kind);
           }
           variables.push({ name, type: parts.join(":") });
         }
         operations.push({
-          name: safeName(own(own(definition, "name"), "value")),
-          kind: ["query", "mutation", "subscription"].includes(own(definition, "operation")) ? own(definition, "operation") : null,
+          name: safeName(own2(own2(definition, "name"), "value")),
+          kind: ["query", "mutation", "subscription"].includes(own2(definition, "operation")) ? own2(definition, "operation") : null,
           variables
         });
       }
       return operations;
     }
     function inspect(result, location) {
-      if (!result || typeof result !== "object" || seen.has(result) || typeof own(result, "fetchMore") !== "function") return;
+      if (!result || typeof result !== "object" || seen.has(result) || typeof own2(result, "fetchMore") !== "function") return;
       seen.add(result);
       if (candidates.length >= 16) {
         truncated = true;
         return;
       }
-      const observable = own(result, "observable"), options = own(observable, "options") || own(result, "options");
-      const variables = own(result, "variables") || own(options, "variables");
-      const query = own(options, "query") || own(result, "query");
-      const data = own(result, "data"), node = own(data, "node");
+      const observable = own2(result, "observable"), options = own2(observable, "options") || own2(result, "options");
+      const variables = own2(result, "variables") || own2(options, "variables");
+      const query = own2(options, "query") || own2(result, "query");
+      const data = own2(result, "data"), node = own2(data, "node");
       const dataKeys = Object.keys(data && typeof data === "object" ? data : {}).filter((key) => safeName(key) && !/auth|token|cookie|credential|profile|account|session/i.test(key)).slice(0, 12);
-      const connection = own(node, "entities"), edges = own(connection, "edges"), pageInfo = own(connection, "pageInfo");
+      const connection2 = own2(node, "entities"), edges = own2(connection2, "edges"), pageInfo = own2(connection2, "pageInfo");
       const ids = [];
       if (Array.isArray(edges)) for (let i = 0; i < Math.min(edges.length, 200); i++) {
-        const edge = own(edges, String(i)), entity = own(edge, "node"), unified = own(entity, "unifiedEntity");
-        const id = own(unified, "videoId") || own(entity, "videoId") || own(entity, "id");
+        const edge = own2(edges, String(i)), entity = own2(edge, "node"), unified = own2(entity, "unifiedEntity");
+        const id = own2(unified, "videoId") || own2(entity, "videoId") || own2(entity, "id");
         if ((typeof id === "string" || typeof id === "number" && Number.isSafeInteger(id)) && /^\d+$/.test(String(id))) ids.push(String(id));
       }
       const variableFacts = [];
       for (const name of Object.keys(variables || {}).slice(0, 24)) {
         if (!safeName(name) || /auth|token|cookie|credential|profile|account|session/i.test(name)) continue;
-        const value = own(variables, name);
+        const value = own2(variables, name);
         variableFacts.push({
           name,
           type: value === null ? "null" : Array.isArray(value) ? "array" : typeof value,
           .../^(first|last|count|limit|offset|pageSize)$/i.test(name) && count(value) !== null ? { value } : {}
         });
       }
-      const identity = own(node, "id");
-      const identityMatches = typeof identity === "string" && Object.keys(variables || {}).some((key) => /^(id|rowId|listId|nodeId)$/i.test(key) && own(variables, key) === identity);
-      const fetchPolicy = own(options, "fetchPolicy");
+      const identity = own2(node, "id");
+      const identityMatches = typeof identity === "string" && Object.keys(variables || {}).some((key) => /^(id|rowId|listId|nodeId)$/i.test(key) && own2(variables, key) === identity);
+      const fetchPolicy = own2(options, "fetchPolicy");
       candidates.push({
         ...location,
         dataKeys,
@@ -21127,13 +21127,13 @@ ${CARD_ACTION_STYLES}
         operations: definitions(query),
         variables: variableFacts,
         observable: Boolean(observable),
-        observableFetchMore: typeof own(observable, "fetchMore") === "function",
+        observableFetchMore: typeof own2(observable, "fetchMore") === "function",
         fetchPolicy: ["cache-first", "cache-only", "cache-and-network", "network-only", "no-cache", "standby"].includes(fetchPolicy) ? fetchPolicy : null,
         connection: {
-          totalCount: count(own(connection, "totalCount")),
+          totalCount: count(own2(connection2, "totalCount")),
           edges: Array.isArray(edges) ? edges.length : null,
-          hasNextPage: typeof own(pageInfo, "hasNextPage") === "boolean" ? own(pageInfo, "hasNextPage") : null,
-          cursorPresent: typeof own(pageInfo, "endCursor") === "string" && Boolean(own(pageInfo, "endCursor")),
+          hasNextPage: typeof own2(pageInfo, "hasNextPage") === "boolean" ? own2(pageInfo, "hasNextPage") : null,
+          cursorPresent: typeof own2(pageInfo, "endCursor") === "string" && Boolean(own2(pageInfo, "endCursor")),
           identityMatchesVariable: identityMatches,
           titleIds: ids.slice(0, 12),
           titleIdsTruncated: ids.length > 12,
@@ -21148,6 +21148,186 @@ ${CARD_ACTION_STYLES}
         truncated: truncated || candidates.length > 4
       }));
     } });
+  }
+
+  // src/netflix/recommendation-query.js
+  var own = (value, key) => value && typeof value === "object" ? Object.getOwnPropertyDescriptor(value, key)?.value : void 0;
+  function method(value, key) {
+    for (let i = 0, node = value; node && i < 5; i++, node = Object.getPrototypeOf(node)) {
+      const descriptor = Object.getOwnPropertyDescriptor(node, key);
+      if (descriptor) return typeof descriptor.value === "function" ? descriptor.value.bind(value) : null;
+    }
+    return null;
+  }
+  var connection = (data) => data?.node?.entities;
+  function videoId(edge) {
+    const value = edge?.node?.unifiedEntity?.videoId ?? edge?.node?.videoId ?? edge?.node?.id;
+    return (typeof value === "string" || typeof value === "number") && /^\d+$/.test(String(value)) ? String(value) : null;
+  }
+  function valid(data) {
+    const value = connection(data);
+    return value && Array.isArray(value.edges) && value.edges.length <= 500 && value.edges.every((edge) => edge && typeof edge === "object" && (videoId(edge) || typeof edge.cursor === "string")) && Number.isSafeInteger(value.totalCount) && value.totalCount >= value.edges.length && typeof value.pageInfo?.hasNextPage === "boolean" && (!value.pageInfo.hasNextPage || typeof value.pageInfo.endCursor === "string" && value.pageInfo.endCursor.length > 0);
+  }
+  function carouselQuery(query) {
+    const definitions = own(query, "definitions");
+    const operations = Array.isArray(definitions) ? definitions.filter((d) => d?.kind === "OperationDefinition") : [];
+    const operation = operations[0], variables = operation?.variableDefinitions;
+    return operations.length === 1 && operation.operation === "query" && operation.name?.value === "CarouselPage" && Array.isArray(variables) && ["rowId", "carouselAfterCursor", "carouselPageSize"].every((name) => variables.some((v) => v?.variable?.name?.value === name));
+  }
+  function findRecommendationQuery(card, mountedIds, { paginationOnly = false } = {}) {
+    const mounted = new Set(mountedIds), found = /* @__PURE__ */ new Map();
+    let pagination = null;
+    const key = Object.getOwnPropertyNames(card || {}).find((name) => name.startsWith("__reactFiber$") || name.startsWith("__reactInternalInstance$"));
+    let fiber = key && own(card, key);
+    const fibers = /* @__PURE__ */ new Set();
+    function inspect(value, depth = 0) {
+      if (!value || typeof value !== "object" || depth > 2) return;
+      if (Array.isArray(value)) {
+        for (let i = 0; i < Math.min(value.length, 4); i++) inspect(own(value, String(i)), depth + 1);
+        return;
+      }
+      const index = own(value, "pageIndex"), count = own(value, "pageCount"), setter = own(value, "setPageIndex");
+      if (!pagination && Number.isSafeInteger(index) && index >= 0 && Number.isSafeInteger(count) && count > index && typeof setter === "function")
+        pagination = { index, set: setter.bind(value) };
+      if (paginationOnly) {
+        inspect(own(value, "value"), depth + 1);
+        return;
+      }
+      const observable = own(value, "observable"), options = own(observable, "options");
+      const query = own(options, "query"), variables = own(options, "variables") || own(value, "variables");
+      if (!carouselQuery(query) || typeof own(variables, "rowId") !== "string") {
+        inspect(own(value, "value"), depth + 1);
+        return;
+      }
+      const data = own(value, "data"), client = own(value, "client"), cache = own(client, "cache");
+      const read = method(cache, "readQuery"), write = method(cache, "writeQuery");
+      if (!read || !write || !valid(data)) return;
+      const ids = new Set(connection(data).edges.map(videoId).filter(Boolean));
+      const overlap = [...mounted].filter((id) => ids.has(id)).length;
+      if (mounted.size < 2 || overlap < Math.max(2, Math.ceil(mounted.size * 0.85))) return;
+      found.set(observable, { observable, options, query, variables, data, read, write, queryRead: method(client, "query"), overlap });
+    }
+    for (let depth = 0; fiber && depth < 24 && !fibers.has(fiber) && !(paginationOnly && pagination); depth++, fiber = own(fiber, "return")) {
+      fibers.add(fiber);
+      inspect(own(fiber, "memoizedProps"));
+      let hook = own(fiber, "memoizedState");
+      const hooks = /* @__PURE__ */ new Set();
+      for (let i = 0; hook && i < 48 && !hooks.has(hook) && !(paginationOnly && pagination); i++, hook = own(hook, "next")) {
+        hooks.add(hook);
+        inspect(own(hook, "memoizedState"));
+      }
+    }
+    if (paginationOnly) return { pagination };
+    if (found.size !== 1) return { reason: found.size ? "ambiguous-query" : "no-matching-query" };
+    return { binding: createBinding([...found.values()][0]), pagination };
+  }
+  function createBinding(native) {
+    const { query, options, observable, read, write, queryRead } = native, rowId = native.variables.rowId;
+    const edges = /* @__PURE__ */ new Map(), cursors = /* @__PURE__ */ new Set();
+    let server = null, last = null, disabled = false, pendingServer = false;
+    const key = (edge) => videoId(edge) || "cursor:" + edge.cursor;
+    const signature = (data) => JSON.stringify([connection(data)?.edges?.map(key), connection(data)?.totalCount, connection(data)?.pageInfo]);
+    const current = () => !disabled && own(observable, "options") === options && own(options, "query") === query && own(own(options, "variables"), "rowId") === rowId;
+    function ingest(data, updateServer = true) {
+      if (!valid(data)) throw Error("invalid-connection");
+      const value = connection(data);
+      if (edges.size + value.edges.filter((edge) => !edges.has(key(edge))).length > 500) throw Error("row-capacity");
+      for (const edge of value.edges) if (updateServer || !edges.has(key(edge))) edges.set(key(edge), edge);
+      if (updateServer && signature(data) !== last) server = { totalCount: value.totalCount, pageInfo: { ...value.pageInfo } };
+    }
+    function copy(data, selected, metadata) {
+      return { ...data, node: { ...data.node, entities: { ...connection(data), edges: selected, ...metadata } } };
+    }
+    function access() {
+      if (!current()) throw Error("query-owner-replaced");
+      return { query, variables: options.variables };
+    }
+    function publish(choices, assertCurrent, anchor = null, capacity = 8, pagination = null) {
+      assertCurrent();
+      const input = access(), data = read(input);
+      assertCurrent();
+      ingest(data, !pendingServer || connection(data)?.edges.length > edges.size);
+      pendingServer = false;
+      const selected = [...edges.values()].filter((edge) => !choices[videoId(edge)]);
+      const totalCount = selected.length + (server.pageInfo.hasNextPage ? Math.max(0, server.totalCount - edges.size) : 0);
+      const output = copy(data, selected, { totalCount, pageInfo: server.pageInfo });
+      if (signature(output) === signature(data)) return false;
+      const original = data;
+      last = signature(output);
+      assertCurrent();
+      write({ ...input, data: output, overwrite: true });
+      assertCurrent();
+      const observed = read(input);
+      assertCurrent();
+      if (signature(observed) !== last) {
+        write({ ...input, data: original, overwrite: true });
+        disabled = true;
+        throw Error("cache-projection-rejected");
+      }
+      const index = selected.findIndex((edge) => videoId(edge) === anchor);
+      if (pagination) {
+        const position = index >= 0 ? index : Math.min(pagination.index * capacity, Math.max(0, selected.length - 1));
+        assertCurrent();
+        pagination.set(Math.floor(position / capacity));
+      }
+      return true;
+    }
+    async function load(signal, assertCurrent) {
+      assertCurrent();
+      const input = access();
+      if (!queryRead || !server?.pageInfo.hasNextPage) return false;
+      const cursor = server.pageInfo.endCursor;
+      if (cursors.has(cursor)) return false;
+      cursors.add(cursor);
+      const pageSize = Number.isSafeInteger(input.variables.carouselPageSize) ? Math.min(28, Math.max(1, input.variables.carouselPageSize)) : 14;
+      let result;
+      try {
+        result = await queryRead({
+          query,
+          variables: { ...input.variables, carouselAfterCursor: cursor, carouselPageSize: pageSize },
+          fetchPolicy: "no-cache",
+          context: { ...options.context, fetchOptions: { ...options.context?.fetchOptions, signal } }
+        });
+      } catch (error) {
+        cursors.delete(cursor);
+        throw error;
+      }
+      assertCurrent();
+      if (signal.aborted) throw Error("query-aborted");
+      access();
+      if (result.error || result.errors?.length) throw Error("native-query-failed");
+      ingest(result.data);
+      pendingServer = true;
+      return true;
+    }
+    function restore(assertCurrent) {
+      if (!last || !current()) return false;
+      assertCurrent();
+      const input = access(), data = read(input);
+      assertCurrent();
+      if (signature(data) !== last) return false;
+      write({ ...input, data: copy(data, [...edges.values()], server), overwrite: true });
+      last = null;
+      return true;
+    }
+    ingest(native.data);
+    return Object.freeze({
+      publish,
+      load,
+      restore,
+      current,
+      state(choices, anchor) {
+        const ids = [...edges.values()].map(videoId).filter((id) => id && !choices[id]);
+        return {
+          known: edges.size,
+          filtered: ids.length,
+          anchorIndex: Math.max(0, ids.indexOf(anchor)),
+          hasNextPage: server.pageInfo.hasNextPage,
+          canLoad: Boolean(queryRead),
+          overlap: native.overlap
+        };
+      }
+    });
   }
 
   // src/netflix/recommendation-dom.js
@@ -21753,7 +21933,9 @@ ${CARD_ACTION_STYLES}
       rowDiagnostics,
       navigationStart,
       navigationRequests,
-      observeRequests
+      observeRequests,
+      queryBinding: findRecommendationQuery,
+      queryPage: (card) => findRecommendationQuery(card, [], { paginationOnly: true }).pagination
     });
   }
 
@@ -21834,6 +22016,184 @@ ${CARD_ACTION_STYLES}
       },
       diagnostics: () => ({ ...counters, pending: [...rows.values()].filter((job) => job.timer !== null).length })
     });
+  }
+
+  // src/recommendations/native-rows.js
+  function createNativeRows({ environment, dom, admitted, canRestore = admitted, readChoices }) {
+    const rows = /* @__PURE__ */ new Map(), requests = [], stats = { attempts: 0, activated: 0, writes: 0, loads: 0, restored: 0, failures: 0 };
+    let generation = 0;
+    const now = () => environment.performance?.now() ?? Date.now();
+    const identity = (row) => [row.id, row.getAttribute("data-list-id"), row.querySelector("h2, .rowTitle")?.textContent].join("|");
+    function guard(job) {
+      if (job.generation !== generation || rows.get(job.row) !== job || !job.row.isConnected || identity(job.row) !== job.identity || !admitted()) throw Error("native-row-retired");
+    }
+    function schedule(job, delay = 200) {
+      if (job.failed || !job.binding && job.lookups <= 0) return;
+      if (job.running) {
+        job.dirty = true;
+        return;
+      }
+      if (job.timer !== null) return;
+      job.timer = environment.setTimeout(() => {
+        job.timer = null;
+        void run(job);
+      }, delay);
+    }
+    async function run(job) {
+      job.running = true;
+      job.dirty = false;
+      const intent = job.intent;
+      const check = () => {
+        guard(job);
+        if (intent !== job.intent) throw Error("native-row-retired");
+      };
+      try {
+        check();
+        stats.attempts++;
+        const values = dom.scan(job.row).filter((value) => value.row === job.row);
+        if (!values.length) return;
+        if (!job.binding) {
+          job.lookups--;
+          const found = dom.queryBinding(values[0].card, values.map((value) => value.id));
+          check();
+          if (!found.binding) {
+            job.reason = found.reason;
+            return;
+          }
+          job.binding = found.binding;
+          job.pagination = found.pagination;
+          stats.activated++;
+        }
+        job.pagination = dom.queryPage?.(values[0].card) || job.pagination;
+        const selected = readChoices(), snapshot = dom.rowDiagnostics(job.row, selected);
+        check();
+        const anchor = snapshot?.visibleIds[0], capacity = snapshot?.pageCapacity || job.capacity || 8;
+        job.capacity = capacity;
+        if (job.binding.publish(selected, check, anchor, capacity, job.pagination)) stats.writes++;
+        job.reason = "active";
+        while (job.credit > 0) {
+          check();
+          const choices = readChoices(), state = job.binding.state(choices, anchor);
+          job.summary = state;
+          const index = anchor ? state.anchorIndex : (job.pagination?.index || 0) * capacity;
+          if (!state.hasNextPage || !state.canLoad || state.filtered - index >= capacity * 3) break;
+          while (requests.length && now() - requests[0] >= 6e4) requests.shift();
+          if (requests.length >= 24) {
+            job.reason = "request-budget";
+            break;
+          }
+          job.credit--;
+          requests.push(now());
+          job.controller = new environment.AbortController();
+          const controller = job.controller;
+          const deadline = new Promise((_, reject) => {
+            job.deadline = environment.setTimeout(() => {
+              controller.abort();
+              reject(Error("query-timeout"));
+            }, 8e3);
+          });
+          let loaded;
+          try {
+            loaded = await Promise.race([job.binding.load(controller.signal, check), deadline]);
+          } finally {
+            environment.clearTimeout(job.deadline);
+            job.deadline = null;
+            if (job.controller === controller) job.controller = null;
+          }
+          check();
+          if (!loaded) break;
+          stats.loads++;
+          if (job.binding.publish(readChoices(), check, anchor, capacity)) stats.writes++;
+        }
+        job.summary = job.binding.state(readChoices(), anchor);
+      } catch (error) {
+        try {
+          check();
+          job.reason = ["cache-projection-rejected", "row-capacity", "query-timeout", "invalid-connection", "query-owner-replaced"].includes(error.message) ? error.message : "native-query-failed";
+          stats.failures++;
+          job.credit = 0;
+          job.failed = true;
+          try {
+            if (job.binding?.restore(check)) stats.restored++;
+          } catch (_) {
+          }
+        } catch (_) {
+        }
+      } finally {
+        job.running = false;
+        if (job.dirty) try {
+          guard(job);
+          schedule(job);
+        } catch (_) {
+        }
+      }
+    }
+    function interact(row) {
+      if (!row || !admitted()) return;
+      let job = rows.get(row);
+      if (job && identity(row) !== job.identity) {
+        retire(job);
+        job = null;
+      }
+      if (!job) {
+        if (rows.size >= 4) return;
+        job = {
+          row,
+          identity: identity(row),
+          generation,
+          timer: null,
+          deadline: null,
+          controller: null,
+          binding: null,
+          pagination: null,
+          credit: 0,
+          lookups: 0,
+          intent: 0,
+          dirty: false,
+          failed: false,
+          reason: "pending",
+          running: false
+        };
+        rows.set(row, job);
+      }
+      job.intent++;
+      job.credit = 2;
+      job.lookups = 3;
+      job.failed = false;
+      job.controller?.abort();
+      schedule(job);
+    }
+    function retire(job) {
+      environment.clearTimeout(job.timer);
+      environment.clearTimeout(job.deadline);
+      job.controller?.abort();
+      const restoreGuard = () => {
+        if (job.generation !== generation || rows.get(job.row) !== job || !canRestore()) throw Error("native-row-retired");
+      };
+      try {
+        if (job.binding?.restore(restoreGuard)) stats.restored++;
+      } catch (_) {
+      }
+      rows.delete(job.row);
+    }
+    function refresh() {
+      if (admitted()) for (const job of rows.values()) {
+        if (!job.row.isConnected || identity(job.row) !== job.identity) retire(job);
+        else schedule(job);
+      }
+    }
+    function dispose() {
+      for (const job of rows.values()) retire(job);
+      generation++;
+      rows.clear();
+      requests.length = 0;
+    }
+    return Object.freeze({ interact, refresh, dispose, diagnostics: () => ({ ...stats, rows: [...rows.values()].map((job) => ({
+      reason: job.reason,
+      running: job.running,
+      pageContext: Boolean(job.pagination),
+      ...job.summary
+    })) }) });
   }
 
   // src/recommendations/row-buffer.js
@@ -22309,6 +22669,7 @@ ${CARD_ACTION_STYLES}
         viewing.observe([...entries.values()]);
         savedPanel.paint();
         updateRefill();
+        nativeRows.refresh();
       } catch (error) {
         warn("Browsing viewing migration unavailable", { reason: error.message });
       }
@@ -22328,6 +22689,13 @@ ${CARD_ACTION_STYLES}
       readChoices: visibleChoices,
       admitted: () => active && allowed() && Boolean(profile) && readProfile() === profile,
       log
+    });
+    const nativeRows = createNativeRows({
+      environment,
+      dom,
+      readChoices: visibleChoices,
+      admitted: () => active && allowed() && Boolean(profile) && !failed && readProfile() === profile,
+      canRestore: () => Boolean(profile) && readProfile() === profile
     });
     function rowDiagnostics() {
       if (!active || !allowed() || !profile || readProfile() !== profile) return { total: 0, truncated: false, rows: [] };
@@ -22363,6 +22731,7 @@ ${CARD_ACTION_STYLES}
     function syncProfile() {
       const next = readProfile();
       if (next === profile) return;
+      nativeRows.dispose();
       refill.dispose();
       navigation.dispose();
       viewing.dispose();
@@ -22463,6 +22832,7 @@ ${CARD_ACTION_STYLES}
       }
       for (const row of new Set([...entries.values()].map((entry) => entry.row))) dom.updateArrows(row);
       updateRefill();
+      nativeRows.refresh();
       work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
     }
     function schedule(root) {
@@ -22486,6 +22856,8 @@ ${CARD_ACTION_STYLES}
     function click(event) {
       navigation.click(event.target, { detailed: event.shiftKey === true });
       navigation.movement("click", event.target, { x: event.clientX, y: event.clientY });
+      const target = dom.navigationTarget(event.target);
+      if (target) nativeRows.interact(target.row);
       const button = event.target?.closest?.("button"), input = buttons.get(button) || savedPanel.inputFor(button);
       if (!input || input.entry && entries.get(input.entry.host) !== input.entry) return;
       event.preventDefault();
@@ -22537,6 +22909,8 @@ ${CARD_ACTION_STYLES}
         for (const entry of entries.values()) paint(entry);
         savedPanel.paint();
         updateRefill(input.action !== "undo" ? input.entry : null);
+        if (input.entry) nativeRows.interact(input.entry.row);
+        else nativeRows.refresh();
         navigation.movement("action", input.entry?.card, { action: diagnosticAction, id });
         navigation.savedAction(input.entry?.row, actionBefore, diagnosticAction, id);
         log("Recommendation visibility choice saved", { action: input.action, hiddenCount: Object.keys(choices).length });
@@ -22609,6 +22983,7 @@ ${CARD_ACTION_STYLES}
     function dispose() {
       unsubscribe?.();
       unsubscribe = null;
+      nativeRows.dispose();
       refill.dispose();
       navigation.dispose();
       viewing.dispose();
@@ -22641,6 +23016,7 @@ ${CARD_ACTION_STYLES}
       hiddenCount: Object.keys(visibleChoices()).length,
       storageFailed: failed,
       work: { ...work },
+      nativeRows: nativeRows.diagnostics(),
       inventory: { rows: inventories.size, limitReached: inventoryLimit },
       refill: refill.diagnostics(),
       viewing: viewing.diagnostics(),
@@ -22807,17 +23183,17 @@ ${CARD_ACTION_STYLES}
       const deliver = (reason) => {
         if (active && revision === owner) routeChanged(reason);
       };
-      for (const method of ["pushState", "replaceState"]) {
-        const original = history[method];
+      for (const method2 of ["pushState", "replaceState"]) {
+        const original = history[method2];
         if (typeof original !== "function") continue;
         const wrapper = function(...args) {
           const result = original.apply(this, args);
-          queueMicrotask(() => deliver(`history.${method}`));
+          queueMicrotask(() => deliver(`history.${method2}`));
           return result;
         };
-        history[method] = wrapper;
+        history[method2] = wrapper;
         hooks.push(() => {
-          if (history[method] === wrapper) history[method] = original;
+          if (history[method2] === wrapper) history[method2] = original;
         });
       }
       for (const type of ["popstate", "hashchange"]) {
@@ -22906,7 +23282,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.10.3";
+  var SCRIPT_VERSION = "1.11.0";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
