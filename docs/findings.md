@@ -1,8 +1,29 @@
 # Findings and follow-up plan
 
-Updated: 2026-10-12
+Updated: 2026-10-20
 
 This file records the code-review findings and the agreed follow-up plan for My List for Netflix. It is a working record; the user authorizes necessary investigation and implementation steps toward stationary recommendation refill without repeated per-step approval; unrelated work remains outside that goal. Current release and remaining work come first. Historical checkpoints follow; later completion records supersede earlier pending-work statements.
+
+## Unified viewing knowledge — agreed rework, implementation pending
+
+The user requires one profile-scoped body of viewing knowledge across Netflix pages and open tabs, incorporating manual choices and acknowledged automatic completion. Freshness checks may trigger validation but must not by themselves erase remembered completion. Keep explicit reversals, per-series episode coverage and hidden-suggestion intent distinct. Persist known title names with saved decisions and repair missing labels when reliable names become available. This section records the assessment and agreed requirements; runtime changes and a storage migration are not implemented.
+
+### Confirmed bugs and retention gaps
+
+- **Stale manual choices across active pages:** `choices.sync` skips storage reads when the profile is unchanged, and no storage-change listener connects owners. Offline probes against 1.9.28 reproduced both directions: an already-open browsing owner misses a My List save, and an already-open My List owner misses a browsing save even after viewing-status refresh. Reset/reentry reads the shared choice. Existing cross-page tests cover reset/new-session sharing rather than live synchronization.
+- **Automatic completion is unavailable to browsing:** browsing's `complete` operation reads manual choices only. An offline probe established a My List automatic completion that remains absent from browsing after reset. The export contains 106 cached completions without manual choices in the profile containing those choices; these are observations to preserve, not equivalent to permanent manual decisions.
+- **The automatic cache is a replaceable snapshot:** six-hour expiry only rejects read-time reuse and does not mutate storage. A later successful scan writes only its current item/type/result set, replacing the previous entries. A focused offline probe confirms that an omitted title disappears and an `unknown` result can replace a previous completion. This is unsuitable as the sole durable completion record; it is separate from the age check.
+- **Saved choices can lose their displayed names:** My List has `item.ariaLabel` but passes only the ID to `viewing.place`; the choice schema persists status/type/coverage without a name. Browsing stores names separately in `recommendationChoices.titles`, and the panel falls back to `#ID` when neither those names nor a mounted card supplies one. Three valid manual choices in the export lack saved names. This code path explains how available names can be omitted; the export cannot identify which action originally created each record.
+
+### Preservation and compatibility requirements
+
+The supplied Tampermonkey export contains one enabled Netflix script at **1.9.28**. Its 220 manual choices all pass the current validator, including 83 completed series with coverage snapshots and one explicit main-group choice. The separate recommendation store contains three hides and title labels, with no pending legacy watched choices. Preserve these decisions and labels without applying completion-overrides-main union rules.
+
+Keep profiles isolated. The other profile's v1 automatic cache contains 298 type/status entries: 37 complete, five in progress and 256 unknown. The older `titleDetails.v1` store contains 500 title-detail entries with title, synopsis, year, runtime, maturity, genres and type, plus locale/save-time metadata; no current runtime source reads that store. Retain it without forcing a viewing-schema conversion. A migration must support all profile suffixes when accessed, preserve source data and distinguish manual decisions from dated automatic evidence. Existing v1 automatic entries lack per-title timestamps and series episode coverage; do not invent those facts. The main profile's automatic cache was 9.57 hours old at export, beyond its six-hour reuse limit; age does not establish data deletion or invalid completion.
+
+Next work: design the shared knowledge owner and migration before runtime edits; preserve known completions when a later lookup is unknown, retain manual precedence and series expansion checks, synchronize active owners, and capture/backfill names from both page paths. Verification must cover old-storage import, repeated migration, both profiles, stale/unknown automatic reads, live cross-page updates, reversals, series expiry, labels and save failures. Existing offline suites passing does not establish these missing guarantees or live Firefox behavior. The backup cannot recover earlier choices that may already have been removed by historical migration.
+
+Source: private untracked root export `tampermonkey-backup-firefox-2026-10-20T16-20-37-550Z.txt`, SHA256 `ca1c1b69928460af12727947170fd2c37461866f89009baa2cc4281cb0601cbd`. It includes other userscripts; leave the original untouched and exclude it from commits. This is a storage snapshot, not a live-log capture; no entries were added to logs/knowledge.md. No runtime/version change is part of this assessment.
 
 ## Carousel discovery ownership — completed
 
