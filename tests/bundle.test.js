@@ -390,7 +390,7 @@ test('importing authored application/session source does not activate the runtim
 });
 
 for (const [relative, name] of [['list-data/protocol.js', 'listCount'], ['native-popup/graft.js', 'createGraft'],
-    ['native-popup/geometry.js', 'createGeometry']]) {
+    ['native-popup/geometry.js', 'createGeometry'], ['recommendation-dom/inspection.js', 'createRecommendationInspection']]) {
 test(`production graph rejects another native adapter importing private ${relative}`, async () => {
     const { checkUserscript } = await import('../scripts/check.mjs');
     await fixture(async directory => {

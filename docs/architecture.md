@@ -14,7 +14,9 @@ This document owns the implemented architecture and continuing ownership, depend
 
 ## Continuing architectural contracts
 
-### Selected staged ownership refinement
+### Private ownership boundaries
+
+Stage 7 leaves recommendation discovery, visibility/action leases, arrow geometry, row sampling and query binding in `netflix/recommendation-dom.js`. Its private `recommendation-dom/inspection.js` owns bounded loading/component surveys, control hit facts and request-observation lifetimes, using a read-only scan operation. Detailed probing remains opt-in; construction starts no observer/request and public diagnostic shapes, budgets and disposal behavior remain unchanged. Only the entry point and inspection siblings may import this private directory.
 
 Stage 6 separates private native-popup `graft.js`, `geometry.js` and pure `dom-pairs.js`. Graft owns copied React values and exact card association; geometry owns installed methods, baselines and opaque registered restoration leases. Popup captures/detaches an old geometry lease, dispatches native exits, then restores only that lease; a reentrant open retains its newer ownership. Replay admission, preview/probe transfer and grid replacement stay in popup. Hover's private `input.js` owns document/grid listeners, their exact activation/session admission and retirement; hover retains intent, dwell/retry/scroll policy and replacement acceptance. Callers request complete installation/retirement rather than reconstructing listener cleanup.
 
@@ -34,7 +36,7 @@ The selected seven-release refinement preserves capability entry points and all 
 
 Initialization requests provisional, populated or empty publication through display. Membership, page hints and grid references commit in the same synchronous rendering callback. Replacement source facts are published before releasing the exact previous resources; replacement viewing state is attached before previous state is retired. Display captures resources before multi-part cleanup, so a reentrant replacement cannot lend its resources to old cleanup. Source facts have one authoritative owner: cached app receipts expose borrowed read-only facts and DOM identities needed by native consumers, while membership controllers, lookup/card maps, page-hint resources and viewing handles remain inside display and its private list-mutation adapter. Borrowed record arrays are read-only by contract; receipts do not copy whole collections on every hover/resize.
 
-`my-list-initialization.js` owns attempts, blocked outcomes, earliest-run scheduling, exact reconciliation tickets and the single native replacement recovery allowance. Both publication outcomes use its `acceptPublication` handler for recovery accounting and mismatch reset notification. `my-list-interaction.js` owns native hover/search/mismatch policy; display performs its accepted page/card repairs. Responsive owns measurement/settling, deferral and convergence policy, then requests complete display layout/mapping operations. Separate route, parent, profile, binding, mapping, card and hover-attempt admission remains in force.
+`my-list-initialization.js` owns running/blocked outcomes, earliest-run scheduling, exact reconciliation tickets and the single native replacement recovery allowance; private `attempt.js` performs the admitted ordered attempt. Both publication outcomes use its `acceptPublication` handler for recovery accounting and mismatch reset notification. `my-list-interaction.js` owns ready-source reuse and mismatch/reinitialization policy; private preparation owns expected/preferred/search/graft flow; display performs its accepted page/card repairs. Responsive owns measurement/settling, deferral and convergence policy, then requests complete display layout/mapping operations. Separate route, parent, profile, binding, mapping, card and hover-attempt admission remains in force.
 
 Display emits a fixed set of synchronous lifecycle outcomes to session: accepted initialization, adopted source, published layout, mapped membership, membership layout change, source reinitialization and initialization required. Session coordinates responsive observation/checks, initialization requests and mismatch reset at the existing checkpoints. This callback is not a general event bus and carries no mutable collaborator state. Constructors remain inert; deferred feature access accommodates existing grid/hover/native-popup construction callbacks, without exposing whole initialization/interaction/responsive objects to display or its private owners. Viewing receives only parent-current/attachment/status acceptance callbacks and a passive work sampler. These callbacks express acceptance guarantees and rendering feedback, not reconstruction of a transaction.
 
@@ -135,23 +137,29 @@ src/main.js
         -> recommendations/saved-choices-panel.js: private saved-choice presentation, commands, focus and Escape lifetime
         -> netflix/recommendation-dom.js: native browsing-card identity, collapse leases and stationary loading facts
            -> netflix/recommendation-query.js: private matched query/cache binding and retained native edge data
-            -> recommendation-requests.js: bounded native GraphQL request/response evidence
+            -> recommendation-dom/inspection.js: bounded surveys, hit facts and request observation
+                -> recommendation-requests.js: bounded native GraphQL request/response evidence
             -> recommendation-loader.js: descriptor-only row/query/connection candidate evidence
      -> app/my-list-session.js: one My List visit's route lifetime, wiring and ordered teardown
         -> app/my-list-display.js: complete accepted source/display transitions and private mutation adapter
            -> app/my-list-display/source.js: private accepted facts, source resources and admitted geometry
+           -> app/my-list-display/adoption.js: live/empty adoption and populated restart policy
            -> app/my-list-display/viewing.js: private viewing attachment/transfer and group delivery
            -> app/my-list-display/page-mapping.js: shared admitted hint/card publication mechanics
-        -> app/my-list-initialization.js: initialization attempts, deferral tickets, scheduling and bounded recovery
-        -> app/my-list-interaction.js: hover preparation, mapping repair and mismatch recovery
+        -> app/my-list-initialization.js: running/blocked ownership, deferral tickets, scheduling and bounded recovery
+           -> app/my-list-initialization/attempt.js: ordered admitted initialization
+        -> app/my-list-interaction.js: ready-source reuse, mismatch policy and mutation recovery
+           -> app/my-list-interaction/preparation.js: admitted expected/preferred/search/graft flow
         -> app/my-list-diagnostics.js: passive snapshots, work summaries and report export
         -> app/session-scope.js: page-owned request registry, deadlines and cancellation
         -> app/responsive.js: viewport/source checks, refresh and list deferral
+           -> app/responsive/policy.js: pure signatures and classification
         -> list/list.js: membership, collection and mutations
         -> viewing/viewing.js: profile-specific scan, placement and persistence
         -> grid/grid.js: cards, frame, grouping and private image diagnostics
             -> grid/frame.js -> grid/mismatch-dialog.js: frame resources and private dialog lifetime
-        -> hover/hover.js: intent, delegated listeners and private timing
+        -> hover/hover.js: intent, dwell/retry/scroll policy and private timing
+           -> hover/input.js: exact document/grid listeners
         -> netflix/carousel/carousel.js: native binding, model authority, mapping and composition
             -> carousel/native-readings.js: synchronous cached native facts
             -> carousel/source-resolution.js: registered card resolution and mounted waits
@@ -164,8 +172,11 @@ src/main.js
             -> carousel/collection.js: mounted proofs, operations and material transfer
                 -> carousel/collection-logical.js and collection-indicator.js: complete traversals
             -> carousel/readiness.js: source polling, readiness policy and cancellable confirmation waits
-        -> netflix/native-popup.js: private React graft, geometry, replay and preview
+        -> netflix/native-popup.js: replay, native exit and preview orchestration
+           -> native-popup/graft.js and geometry.js: exact copied-value/method leases
+           -> native-popup/dom-pairs.js: pure tree pairing
         -> netflix/page-dom.js / list-data.js / viewing-data.js / popup-inspection.js
+           -> list-data/protocol.js and fresh-collection.js: pure parsing and fresh collection
      -> netflix/context.js / i18n/i18n.js / diagnostics/logger.js
 ```
 
@@ -228,15 +239,15 @@ Binding discovery examines bounded card and native-arrow ancestor paths with a s
 
 `netflix/context.js` lazily reads page/profile/language/request context. `page-dom.js` interprets native section/card/membership-click/toast identity, heading typography, row gaps and empty shell/content. Native title normalization belongs there. `card-markup.js` captures, creates and sanitizes detached card material without owning membership or displayed structure. Adapters keep DOM/endpoint/protocol assumptions local rather than exposing raw page objects as application state.
 
-`list-data.js` derives paired standard/high-resolution artwork variables from shared artwork-family definitions. Title/image normalization shares bounded ordered traversal while retaining distinct preferred fields, depth limits and scalar acceptance rules. Fresh bootstrap and continuation requests share private request retirement/error handling; request-specific parsing, pagination and fallback admission remain local.
+Private `list-data/protocol.js` derives paired standard/high-resolution artwork variables from shared artwork-family definitions. Title/image normalization shares bounded ordered traversal while retaining distinct preferred fields, depth limits and scalar acceptance rules. Fresh bootstrap and continuation requests share private request retirement/error handling; request-specific parsing, pagination and fallback admission remain local.
 
-`list-data.js` owns GraphQL/page requests, cursors, headers, normalization and whole-list completeness; incomplete optional pagination never publishes a partial successful collection. At an existing bootstrap request, list-data samples passive row-selection diagnostics before dispatch and after the response: selection reason, opaque requested row ID, selected/live section IDs and comparison, cached candidate counts and up to three card identities. Page-DOM supplies bounded structural-anchor identity sampling; native carousel retains authoritative native count ownership. Cached counts are labeled separately from the existing native-count reconciliation. Diagnostic failures return unavailable facts without changing selection/request/fallback behavior; route guards still run after each sample. Reports retain these small decision records in normal compact output. No request, retry, observer, timer, geometry read or persistent DOM reference is added. `viewing-data.js` owns Falcor addresses, credential/profile request admission, interpreted movie/episode/coverage records and bounded title/season/episode responses. Raw responses/cursors/credentials stay private; no module extraction adds requests, retries or background detail work.
+Private `list-data/fresh-collection.js` owns GraphQL/page requests, cursors, headers, normalization and whole-list completeness; incomplete optional pagination never publishes a partial successful collection. At an existing bootstrap request, list-data samples passive row-selection diagnostics before dispatch and after the response: selection reason, opaque requested row ID, selected/live section IDs and comparison, cached candidate counts and up to three card identities. Page-DOM supplies bounded structural-anchor identity sampling; native carousel retains authoritative native count ownership. Cached counts are labeled separately from the existing native-count reconciliation. Diagnostic failures return unavailable facts without changing selection/request/fallback behavior; route guards still run after each sample. Reports retain these small decision records in normal compact output. No request, retry, observer, timer, geometry read or persistent DOM reference is added. `viewing-data.js` owns Falcor addresses, credential/profile request admission, interpreted movie/episode/coverage records and bounded title/season/episode responses. Raw responses/cursors/credentials stay private; no module extraction adds requests, retries or background detail work.
 
 `netflix/carousel/carousel.js` owns binding generations, mutable page models, preparation admission, validated count acceptance, exact-record preferred hints, collection composition and mapping refresh. Private `native-readings.js`, `source-resolution.js` and `observations.js` own sampling, card resolution and registered observations. `discovery.js`, `readiness.js`, `page-model.js`, `react-readings.js`, `navigation.js`, `restoration.js`, `collection.js` and `source-presentation.js` retain their existing algorithms. Logical/indicator modes, wrapped-tail repair, bounded React index/count reads, serialized movement/acknowledgement/hydration/restoration and motion/presentation leases retain their existing limits and behavior.
 
 Private `netflix/carousel/discovery.js` owns the filtered/coalesced mutation observer: watched browse host, My List section and ancestor path, broad discovery mode, exact activation owner and pending notification frame. It exposes only start/stop/refresh and copied diagnostics to carousel. Construction is inert; stop cancels its frame and disconnects its observer, and retired observer/frame deliveries cannot consume a newer activation. Carousel delegates its existing public discovery operations and incorporates the copied diagnostic fields. Session supplies route checks, delivery notifications and recovery/coalescing predicates at their existing checkpoints; these express application policy, not observer targeting or frame sequencing. Discovery depends on page-DOM lookup and session admission, never carousel bindings/models or application imports. It observes without adopting a source.
 
-Retain the larger carousel parent as the single native-source authority. Binding/model identity, synchronous DOM caches, source handles, mapping/preparation/observation receipts and their requested live-fact checks remain local. Logical selected-page reads can update the model; source resolution and remapping must issue handles/results against that exact interpretation and revalidate around waits and reentrant diagnostics. Extracting those bodies independently would expose mutable model/ticket state or distribute admission through numerous technical callbacks. Preparation keeps reset/readiness/one-time acceptance together; geometry and page observations keep exact validation beside their source authority; capture and passive descriptions reuse those admitted/cached readings without granting authority. Existing private navigation, collection, readiness, presentation, React readings, layout and page-model owners retain their complete algorithms. The discovery extraction isolates a separate resource lifetime without changing those interfaces; revisit parent retention when an independently maintainable capability emerges.
+Carousel retains the single binding/model authority. Logical selected-page reads can update its private model; card, resolution and observation admission closures capture distinct revision/generation checks without lending writers or mutable maps. Native-readings owns synchronous caches; source-resolution owns exact card receipts and waits; observations owns discovery/layout/page registration and validation. Mapping/preparation acceptance remains local to Carousel. Private navigation, collection, readiness, presentation, layout and page-model owners retain complete operations and exact reset order. React diagnostic descriptions remain bounded and separate from first-valid-prop reads.
 
 Private `netflix/carousel/readiness.js` owns source polling, distinct completion/stability policies, two-frame confirmation, timeout reporting and its cancellable wait registry. Carousel supplies binding identity checks, interpreted readiness observations and source lookup through read collaborators; it composes waiting, reset and copied diagnostics. Binding retirement cancels and settles waits before advancing generation. Cleanup failures remain counted, and obsolete callbacks cannot settle newer waits. Carousel retains native interpretation, models and exact preparation/observation receipts; navigation acknowledgement and mounted-card hydration keep separate resource lifetimes. Readiness starts no resources at import or construction and grants no model/publication authority. Binding/model interpretation and exact receipt validation remain co-located today.
 

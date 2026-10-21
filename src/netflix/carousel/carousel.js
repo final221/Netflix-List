@@ -1,8 +1,7 @@
 import { createNativeReadings } from './native-readings.js';
 import { createSourceResolution } from './source-resolution.js';
 import { createObservations } from './observations.js';
-import { createPageModel, createPageHints, normalizeNetflixLogicalIndex, expectedLogicalIndicesForPage,
-    wrappedTailLogicalPageForRebuild } from './page-model.js';
+import { createPageModel, createPageHints, wrappedTailLogicalPageForRebuild } from './page-model.js';
 import { NETFLIX_DOM_SELECTORS as DEFAULT_SELECTORS } from '../page-dom.js';
 import { createReadiness } from './readiness.js';
 import { createDiscovery } from './discovery.js';
@@ -12,8 +11,7 @@ import { createReactReadings } from './react-readings.js';
 import { createSourcePresentation } from './source-presentation.js';
 import { createLayout } from './layout.js';
 import { GRID_ID as DEFAULT_GRID_ID, STATUS_ID as DEFAULT_STATUS_ID, LEGACY_EMPTY_STATE_ID as DEFAULT_EMPTY_ID,
-    ORDER_MISMATCH_DIALOG_ID as DEFAULT_DIALOG_ID, SYNTHETIC_SECTION_ID, ORIGINAL_VISIBILITY_ATTR,
-    FAST_MOVE_CLASS, SOURCE_SCAN_CLASS, SOURCE_PARKED_CLASS } from '../../dom-names.js';
+    ORDER_MISMATCH_DIALOG_ID as DEFAULT_DIALOG_ID, FAST_MOVE_CLASS } from '../../dom-names.js';
 
 // Native binding and mapping are owned here. Composition supplies interpreted
 // membership shape and lifecycle operations, never a mutable feature state bag.
@@ -53,8 +51,8 @@ export function createCarousel({ pageDom: netflixDom, scope, document, window, E
     const {
         withNativeReadScope, invalidateNativeReadScope, nativeRect, nativeFilledSlots,
         nativeIndicatorItems, detectCarouselDomProfile, carouselMoveButton, carouselMoveButtonDisabled,
-        currentPageSlots, visibleSignature, nativeCarouselReadiness, readNativeMyListDomState,
-        nativeReactCarouselTotalCount, requireNativeReactCarouselTotalCount, netflixItemIndexFromSlot, logicalSlotPositions,
+        currentPageSlots, visibleSignature, nativeCarouselReadiness,
+        nativeReactCarouselTotalCount, netflixItemIndexFromSlot,
         nativeLogicalPageState, requireNativeLogicalPageState, viewportPageSlots, currentPageVideoIds, slotDescriptor } = readings;
     const layoutMeasurements = createLayout({ pageDom: netflixDom, window, getComputedStyle,
         readRect: nativeRect, readFilledSlots: nativeFilledSlots, cardSelector: NETFLIX_DOM_SELECTORS.standardCard });

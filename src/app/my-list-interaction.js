@@ -1,8 +1,7 @@
 import { createHoverPreparation } from './my-list-interaction/preparation.js';
 
 export function createMyListInteraction(dependencies) {
-    const { environment, i18n, logger, session } = dependencies;
-    const { window } = environment;
+    const { i18n, logger, session } = dependencies;
     const { tUi, tLog } = i18n;
     const { log, warn } = logger;
     const ORDER_MISMATCH_POSITION_THRESHOLD = 10;

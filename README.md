@@ -8,7 +8,7 @@ Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released u
 
 For copies installed from the former root location, open the released-userscript link once and confirm the update in Tampermonkey. The script name/namespace is unchanged; this release specifies the new URLs for future updates.
 
-Version **1.11.13** separates popup graft/geometry resources and hover listener ownership. Native exit ordering, exact cleanup, replay and preview behavior remain preserved. All 779 offline tests pass. Stages 1-6 of the selected seven-release refactoring are complete; combined Windows/Firefox validation remains pending. See [findings](docs/findings.md#selected-seven-release-ownership-refactoring).
+Version **1.11.14** completes all seven ownership-refactoring stages. All behavioral runtime modules are below 600 lines, including Carousel at 591; public behavior and resource/admission policies are preserved. All 780 offline tests pass. Combined Windows/Firefox validation and normal CopyLogs remain pending. See [findings](docs/findings.md#selected-seven-release-ownership-refactoring).
 
 Version **1.11.6** requires native confirmation before removing a My List card, repairs discovery when Netflix mounts late, coalesces cross-tab storage reloads and reduces browsing work for large viewing histories. Encountered title names no longer block new saved choices at the incidental-history limit. CopyLogs includes confirmation/reload counters.
 

@@ -2,7 +2,36 @@
 
 ## Current implementation measurements
 
-Release **1.11.13**: **87 modules / 19028 authored physical lines**; generated separately **24545 lines**. Stage 6: netflix/native-popup.js 555, netflix/native-popup/graft.js 98, netflix/native-popup/geometry.js 90, netflix/native-popup/dom-pairs.js 18, hover/hover.js 569, hover/input.js 79. Popup's native exit/preview/replay orchestration remains readable independently of copied React metadata and method-baseline registries. Geometry exposes opaque exact leases, retaining native exits before old restoration and protecting reentrant replacement. Input owns exact listeners without moving intent/scroll policy. Original bodies need fewer lines than estimates. All 779 tests pass; a new partial-proxy-installation case also passed the pre-extraction popup. Existing partial graft, replay replacement, preview transfer, synthetic pointer and obsolete-listener scenarios remain green. Private native imports are rejected.
+Release **1.11.14**, 2026-10-21: **88 authored runtime modules / 19,034 physical lines**; generated output is separately **24,548 lines**. Baseline 1.11.7 was 70 modules / 18,705 source lines and 23,781 generated lines. All **780 tests pass**. Stage 7 separates recommendation-dom (262) from private inspection (220), retaining passive diagnostic shapes, opt-in detail and exact observer/response retirement.
+
+| Runtime file under src/ | Before | After | Retained responsibility |
+| --- | ---: | ---: | --- |
+| netflix/carousel/carousel.js | 1678 | 591 | Binding/model authority and mapping/preparation acceptance |
+| netflix/carousel/navigation.js | 829 | 418 | Queue, direction/retry policy and restoration composition |
+| netflix/carousel/collection.js | 746 | 236 | Mounted proofs, operation/material transfer and strategy selection |
+| netflix/list-data.js | 654 | 152 | Cached-row selection/key and passive membership/count facts |
+| app/my-list-display.js | 780 | 562 | Collection/empty publication, mutation presentation and accepted resources |
+| app/my-list-initialization.js | 663 | 171 | Scheduling, exact running/blocked ownership and bounded recovery |
+| app/my-list-interaction.js | 537 | 212 | Ready-source reuse, mismatch/reinitialization and mutation recovery |
+| app/responsive.js | 566 | 529 | Observers, refresh transactions, deferral and convergence |
+| netflix/native-popup.js | 728 | 555 | Replay, native exits, preview/probes and replacement orchestration |
+| hover/hover.js | 628 | 569 | Intent, dwell/retry/scroll policy and replacement admission |
+| netflix/recommendation-dom.js | 473 | 262 | Discovery, visibility/action leases, arrow geometry, sampling and query binding |
+| app/my-list-session.js | 458 | 458 | Retained composition and ordered route teardown |
+| list/mutations.js | 470 | 470 | Retained confirmation, pending intents, Undo correlation and publication |
+| viewing/scan.js | 482 | 482 | Retained finite queue, budgets, partial results and retirement |
+| netflix/carousel/restoration.js | 444 | 444 | Retained strict/fast verification and phase repair |
+
+All 15 selected files have final dispositions. Every behavioral runtime module is now below 600 lines; translation catalogs and styles remain explicit exceptions. The four retained files are unchanged from baseline and were rechecked for cohesive ownership: route teardown; intent/confirmation/Undo; finite scan budgets/publication; and restoration phase repair. Final interface review also removed leftover unused imports/bindings in Carousel, display and interaction. No extra scheduler, general React framework, dependency or public feature was added. New private directories are enforced by dependency checks, including rejection scenarios for each family.
+
+Representative changes now stay within the relevant owner: sampling/cache rules in native-readings; mounted source resolution in source-resolution; acknowledgement resources in navigation-waits; traversal policy in its complete strategy; fresh protocol/continuation handling in list-data private owners; adoption and attempt ordering in their private modules; responsive classification in pure policy; exact graft/method/listener cleanup in the resource owner; and investigation in inspection. Retained parents were reviewed as complete bodies, including error/cancellation/retirement paths and their integration callers. Model writers and mutable registries remain private, and semantic resource operations hide cleanup sequencing.
+
+Actual sizes differ from estimates: popup is 555 (15 above its proposed range, still below the general 600-line boundary) because replay/preview/native exit policy remains cohesive. Several private files are shorter than estimates, particularly pure policy, motion, input and tree pairing; original readable operations are retained without padding or formatting compression. Total authored source increased by 329 lines while comprehension boundaries narrowed. These are structural outcomes, not measured live latency or compatibility claims.
+
+## Staged release evidence
+
+
+Release **1.11.13**: **87 modules / 19029 authored physical lines**; generated separately **24545 lines**. Stage 6: netflix/native-popup.js 555, netflix/native-popup/graft.js 98, netflix/native-popup/geometry.js 90, netflix/native-popup/dom-pairs.js 19, hover/hover.js 569, hover/input.js 79. Popup's native exit/preview/replay orchestration remains readable independently of copied React metadata and method-baseline registries. Geometry exposes opaque exact leases, retaining native exits before old restoration and protecting reentrant replacement. Input owns exact listeners without moving intent/scroll policy. Original bodies need fewer lines than estimates. All 779 tests pass; a new partial-proxy-installation case also passed the pre-extraction popup. Existing partial graft, replay replacement, preview transfer, synthetic pointer and obsolete-listener scenarios remain green. Private native imports are rejected.
 
 Release **1.11.12**: **83 modules / 18975 authored physical lines**; generated separately **24461 lines**. Stage 5: my-list-interaction.js 213, my-list-interaction/preparation.js 336, responsive.js 529, responsive/policy.js 58. The admitted preparation flow can be read independently of mismatch UI/reinitialization policy. Responsive classification is pure and its caller collects one position/presentation observation, protected by a public sampling-count regression. Scheduling, resource retirement, convergence and retry timing remain in responsive. All 776 tests pass, including parked-height exception limits, viewport/zoom invalidation, target-only grafting, cancelled recovery and private-import denial. Smaller-than-estimated preparation/policy bodies retain readable original operations and need no padding.
 

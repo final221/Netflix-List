@@ -16,4 +16,3 @@ export function pairDomTrees(sourceRoot, cloneRoot, Element) {
     walk(sourceRoot, cloneRoot);
     return { domMap, pairs };
 }
-

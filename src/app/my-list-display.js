@@ -1,5 +1,5 @@
 import { createSourceAdoption } from './my-list-display/adoption.js';
-import { GRID_ID, STATUS_ID } from '../dom-names.js';
+import { GRID_ID } from '../dom-names.js';
 import { createDisplaySource } from './my-list-display/source.js';
 import { applyPageAssignments } from './my-list-display/page-mapping.js';
 import { createDisplayViewing } from './my-list-display/viewing.js';
@@ -40,7 +40,7 @@ export function createMyListDisplay(dependencies) {
         get gridView() { return dependencies.gridView; }, get nativeCarousel() { return dependencies.nativeCarousel; },
         get nativePopup() { return dependencies.nativePopup; }, get netflixDom() { return dependencies.netflixDom; },
         onTransition: event => dependencies.onTransition(event), syncLegacyEmptyState, visibleNativeItems, publishSourceState });
-    const { ensureSyntheticMyListSection, moveLegacyFrameToSyntheticEmpty, ensureLiveNativeBinding } = adoption;
+    const { ensureSyntheticMyListSection, ensureLiveNativeBinding } = adoption;
     function publishSourceState(next) {
         const previous = source.current;
         next = source.replace(next);
