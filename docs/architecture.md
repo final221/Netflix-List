@@ -14,6 +14,8 @@ This document owns the implemented architecture and continuing ownership, depend
 
 ### Selected staged ownership refinement
 
+Stage 2 separates `navigation-waits.js` (acknowledgement, hydration and settlement resources/reset) and `motion.js` (exact suppression leases) from queue admission and movement policy in navigation. Collection retains mounted proofs, operation/material/frame ownership, progress reporting and strategy selection. `collection-logical.js` and `collection-indicator.js` each own a complete traversal; per-operation capabilities expose guarded capture/frame/progress, counter snapshots and initial-page acceptance without resource registries. Queue reset still closes waits before releasing motion and movement tickets; cancellation after an issued click still settles before the next click. Restoration keeps its private page-key dependency and collection keeps transform access.
+
 The selected seven-release refinement preserves capability entry points and all existing admission and retirement rules. Stage 1 gives Carousel three private owners: `native-readings.js` owns synchronous sampling caches, DOM/React geometry and native-window facts; `source-resolution.js` owns registered card receipts and bounded mounted resolution; `observations.js` owns registered discovery/layout/page observations and captured mounted material. `react-readings.js` also owns bounded React diagnostic descriptions. Carousel retains binding registration, mutable page models, mapping/preparation acceptance and composition. Its card, resolution and observation admission closures retain distinct revision/generation checks; collaborators receive guarded read-only facts and semantic operations, never mutable models/maps. Reset keeps readiness, mounted waits, collection and navigation retirement in that order. Synchronous sampling never survives an asynchronous boundary.
 
 ### My List session composition
@@ -145,7 +147,12 @@ src/main.js
             -> carousel/source-resolution.js: registered card resolution and mounted waits
             -> carousel/observations.js: registered source/layout/page observations
             -> carousel/discovery.js: filtered mutation targeting and exact observer/frame lifetime
-            -> carousel/navigation.js -> carousel/restoration.js: movement lifetime and private restoration policy
+            -> carousel/navigation.js: queue and movement policy
+                -> carousel/navigation-waits.js: acknowledgement/hydration/settlement resources
+                -> carousel/motion.js: suppression leases
+                -> carousel/restoration.js: private restoration policy
+            -> carousel/collection.js: mounted proofs, operations and material transfer
+                -> carousel/collection-logical.js and collection-indicator.js: complete traversals
             -> carousel/readiness.js: source polling, readiness policy and cancellable confirmation waits
         -> netflix/native-popup.js: private React graft, geometry, replay and preview
         -> netflix/page-dom.js / list-data.js / viewing-data.js / popup-inspection.js

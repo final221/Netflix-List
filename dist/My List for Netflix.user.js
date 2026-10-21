@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.8
+// @version      1.11.9
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -12624,6 +12624,523 @@ ${CARD_ACTION_STYLES}
     });
   }
 
+  // src/netflix/carousel/navigation-waits.js
+  function createNavigationWaits({
+    borrowBinding,
+    assertBinding,
+    bindingForSource,
+    bindingGuard,
+    diagnosticSink,
+    native,
+    scope,
+    performance,
+    getComputedStyle,
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame,
+    cancelAnimationFrame,
+    MutationObserver,
+    isHoverCancelled,
+    initializationTimeoutError,
+    logOperationTimeout,
+    mountedItemKeys
+  }) {
+    const PAGE_CHANGE_TIMEOUT_MS = 3e3, PAGE_CHANGE_OBSERVER_PRIMARY_MS = 320;
+    const PAGE_STABLE_TIMEOUT_MS = 2e3, SCRIPT_MOVE_SETTLE_TIMEOUT_MS = 260;
+    const CANCELLED_MOVE_POLL_MS = 80;
+    const {
+      model: getCarouselDomRuntime,
+      registerPage: registerLogicalPageSignature,
+      selectedPage,
+      currentSlots: currentPageSlots,
+      signatureOf: visibleSignature
+    } = native;
+    const assertRouteSession = (token) => scope.assertCurrent(token);
+    const isRouteSessionActive = (token) => scope.isCurrent(token);
+    const hoverPreparationCancelled = isHoverCancelled;
+    const waits = /* @__PURE__ */ new Set();
+    const sleep = (ms) => scheduledWait((close) => setTimeout(close, ms), clearTimeout);
+    function scheduledWait(schedule, cancel) {
+      return new Promise((resolve, reject) => {
+        let handle = null, closed = false;
+        const close = () => {
+          if (closed) return;
+          closed = true;
+          waits.delete(close);
+          try {
+            if (handle !== null) cancel(handle);
+          } catch (_) {
+          }
+          resolve();
+        };
+        waits.add(close);
+        try {
+          handle = schedule(close);
+        } catch (error) {
+          reject(error);
+          close();
+        }
+      });
+    }
+    function createLogicalMoveSignal(scroller, token, sessionToken, bindingOwner = bindingForSource(scroller, null)) {
+      const diagnostic = diagnosticSink(token);
+      const bump = diagnostic.bump;
+      if (typeof MutationObserver !== "function") {
+        bump("logicalMoveObserverUnsupported");
+        return null;
+      }
+      let observer = null, frame = null, timer = null, pending = null;
+      let closed = false, dirty = true;
+      const wake = (available) => {
+        const oldTimer = timer, oldFrame = frame;
+        timer = null;
+        frame = null;
+        dirty = false;
+        const resolve = pending;
+        pending = null;
+        try {
+          if (oldTimer !== null) clearTimeout(oldTimer);
+        } catch (_) {
+          bump("logicalMoveObserverFailures");
+        }
+        try {
+          if (oldFrame !== null) cancelAnimationFrame(oldFrame);
+        } catch (_) {
+          bump("logicalMoveObserverFailures");
+        }
+        resolve?.(available);
+      };
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        waits.delete(close);
+        try {
+          observer?.disconnect();
+        } catch (_) {
+          bump("logicalMoveObserverFailures");
+        }
+        observer = null;
+        wake(false);
+      };
+      waits.add(close);
+      const queueFrame = () => {
+        try {
+          assertBinding(bindingOwner);
+        } catch (_) {
+          close();
+          return;
+        }
+        if (closed || !pending || frame !== null || hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken)) return;
+        try {
+          frame = requestAnimationFrame(() => {
+            frame = null;
+            if (closed) return;
+            bump("logicalMoveSignalFrames");
+            wake(true);
+          });
+        } catch (_) {
+          bump("logicalMoveObserverFailures");
+          close();
+        }
+      };
+      try {
+        observer = new MutationObserver(() => {
+          if (closed) return;
+          bump("logicalMoveNotifications");
+          dirty = true;
+          queueFrame();
+        });
+        observer.observe(scroller, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["href", "style", "class", "tabindex"]
+        });
+        bump("logicalMoveObserverStarts");
+        return { close, wait: () => new Promise((resolve) => {
+          if (closed) {
+            resolve(false);
+            return;
+          }
+          pending = resolve;
+          timer = setTimeout(() => {
+            if (closed) return;
+            bump("logicalMoveFallbackWakes");
+            wake(true);
+          }, CANCELLED_MOVE_POLL_MS);
+          if (dirty) queueFrame();
+        }) };
+      } catch (_) {
+        bump("logicalMoveObserverFailures");
+        close();
+        return null;
+      }
+    }
+    async function waitLogicalPageChange(section, scroller, track, beforePage, direction, beforeTransform, beforeSignature, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
+      assertRouteSession(sessionToken);
+      const bindingOwner = borrowBinding(section, scroller, track);
+      const assertCurrent = bindingGuard(bindingOwner, sessionToken);
+      assertBinding(bindingOwner);
+      const runtime = getCarouselDomRuntime(section);
+      const started = performance.now();
+      let lastTransform = beforeTransform;
+      let lastSignature = beforeSignature;
+      const diagnostic = diagnosticSink(token);
+      let signal = token === null || hoverPreparationCancelled(token) ? null : createLogicalMoveSignal(scroller, token, sessionToken, bindingOwner);
+      try {
+        while (performance.now() - started < timeout) {
+          if (hoverPreparationCancelled(token)) {
+            signal?.close();
+            signal = null;
+            await sleep(CANCELLED_MOVE_POLL_MS);
+          } else {
+            let signalled = false;
+            try {
+              if (signal) signalled = await signal.wait();
+            } catch (_) {
+              diagnostic.bump("logicalMoveObserverFailures");
+            }
+            assertCurrent();
+            if (!signalled) {
+              signal?.close();
+              signal = null;
+              await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
+            }
+          }
+          assertCurrent();
+          if (token !== null) diagnostic.bump("logicalMoveReads");
+          const transform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
+          const signature = visibleSignature(currentPageSlots(scroller, track));
+          const signatureChanged = Boolean(signature) && signature !== beforeSignature;
+          lastTransform = transform;
+          lastSignature = signature;
+          if (!signatureChanged) continue;
+          const existingPage = runtime?.signatureToPage.get(signature);
+          const proposedPage = Math.max(0, beforePage + (direction < 0 ? -1 : 1));
+          const mapped = Number.isFinite(existingPage) ? existingPage : registerLogicalPageSignature(section, signature, proposedPage);
+          if (runtime) {
+            native.notePage(section, mapped, Number.isFinite(existingPage) && existingPage !== beforePage);
+          }
+          return {
+            page: mapped,
+            changed: true,
+            transform,
+            signature,
+            transformChanged: transform !== beforeTransform,
+            signatureChanged: true,
+            cycleDetected: Boolean(runtime?.cycleDetected)
+          };
+        }
+        assertCurrent();
+        if (hoverPreparationCancelled(token)) {
+          return { page: beforePage, changed: false, transform: lastTransform, signature: lastSignature };
+        }
+        const details = {
+          direction: direction < 0 ? "left" : "right",
+          beforePage,
+          beforeTransform,
+          lastTransform,
+          beforeSignature,
+          lastSignature,
+          domGeneration: runtime?.profile?.generation || null,
+          navigationMode: runtime?.profile?.navigationMode || null,
+          pageMode: runtime?.profile?.pageMode || null
+        };
+        logOperationTimeout("logical-page-change", timeout, details);
+        throw initializationTimeoutError("logical-page-change", timeout, details);
+      } finally {
+        signal?.close();
+      }
+    }
+    async function waitPageByPolling(section, before, timeout, sessionToken = null, token = null) {
+      const bindingOwner = borrowBinding(section);
+      const assertCurrent = bindingGuard(bindingOwner, sessionToken);
+      assertCurrent();
+      const start = performance.now();
+      while (performance.now() - start < timeout) {
+        await sleep(hoverPreparationCancelled(token) ? CANCELLED_MOVE_POLL_MS : 12);
+        assertCurrent();
+        const now = selectedPage(section);
+        if (now !== before) return now;
+      }
+      assertCurrent();
+      return selectedPage(section);
+    }
+    async function waitPage(section, before, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
+      const bindingOwner = borrowBinding(section);
+      const assertCurrent = bindingGuard(bindingOwner, sessionToken);
+      assertCurrent();
+      const immediate = selectedPage(section);
+      if (immediate !== before) return immediate;
+      if (timeout <= 0) return immediate;
+      if (typeof MutationObserver !== "function") {
+        return waitPageByPolling(section, before, timeout, sessionToken, token);
+      }
+      const started = performance.now();
+      const observerBudget = Math.min(timeout, PAGE_CHANGE_OBSERVER_PRIMARY_MS);
+      const observedPage = await new Promise((resolve, reject) => {
+        let observer = null;
+        let timer = null;
+        let finished = false;
+        const finish = (value) => {
+          if (finished) return;
+          finished = true;
+          waits.delete(close);
+          try {
+            if (timer !== null) clearTimeout(timer);
+          } catch (_) {
+          }
+          try {
+            observer?.disconnect();
+          } catch (_) {
+          }
+          resolve(value);
+        };
+        const close = () => finish(null);
+        waits.add(close);
+        const check = () => {
+          if (finished) return;
+          try {
+            assertCurrent();
+          } catch (_) {
+            close();
+            return;
+          }
+          const now = selectedPage(section);
+          if (now !== before) finish(now);
+        };
+        try {
+          observer = new MutationObserver(check);
+          observer.observe(section, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: ["data-indicator-selected"]
+          });
+          check();
+          if (!finished) timer = setTimeout(() => finish(null), observerBudget);
+        } catch (error) {
+          reject(error);
+          close();
+        }
+      });
+      assertCurrent();
+      if (observedPage !== null) return observedPage;
+      const elapsed = performance.now() - started;
+      const remaining = Math.max(0, timeout - elapsed);
+      return waitPageByPolling(section, before, remaining, sessionToken, token);
+    }
+    async function waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, timeout = SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken = null) {
+      const bindingOwner = bindingForSource(scroller, track);
+      const assertCurrent = bindingGuard(bindingOwner, sessionToken);
+      assertCurrent();
+      const started = performance.now();
+      let currentTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
+      let currentSignature = visibleSignature(currentPageSlots(scroller, track));
+      let observedChange = currentTransform !== beforeTransform || Boolean(beforeSignature) && Boolean(currentSignature) && currentSignature !== beforeSignature;
+      let stableFrames = 0;
+      let previousSignature = currentSignature;
+      while (performance.now() - started < timeout) {
+        await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
+        assertCurrent();
+        currentTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
+        currentSignature = visibleSignature(currentPageSlots(scroller, track));
+        if (currentTransform !== beforeTransform || Boolean(beforeSignature) && Boolean(currentSignature) && currentSignature !== beforeSignature) {
+          observedChange = true;
+        }
+        if (observedChange && currentSignature && currentSignature === previousSignature) {
+          stableFrames++;
+          if (stableFrames >= 2) break;
+        } else {
+          stableFrames = 0;
+        }
+        previousSignature = currentSignature;
+      }
+      await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
+      assertCurrent();
+      return {
+        transform: currentTransform,
+        signature: currentSignature,
+        observedChange
+      };
+    }
+    async function waitStableCurrentPage(scroller, track, options = {}) {
+      const assertOperation = options.assertOperation || (() => {
+      });
+      const timeout = options.timeout ?? PAGE_STABLE_TIMEOUT_MS;
+      const previousSignature = options.previousSignature ?? "";
+      const requiredStableFrames = options.requiredStableFrames ?? 2;
+      const minimumSlots = Math.max(0, options.minimumSlots ?? 0);
+      const minimumNewItems = Math.max(0, options.minimumNewItems ?? 0);
+      const seenKeys = options.seenKeys instanceof Set || options.seenKeys instanceof Map ? options.seenKeys : null;
+      const requiredKeys = options.requiredKeys instanceof Set ? options.requiredKeys : null;
+      const sessionToken = options.sessionToken ?? null;
+      const token = options.hoverToken ?? null;
+      const bindingOwner = bindingForSource(scroller, track);
+      const assertCurrent = bindingGuard(bindingOwner, sessionToken, assertOperation);
+      assertCurrent();
+      if (hoverPreparationCancelled(token)) return [];
+      const start = performance.now();
+      let lastSignature = "";
+      let stableFrames = 0;
+      let best = [];
+      let bestNewItems = 0;
+      let bestRequiredMatches = 0;
+      let freshContentSeen = !previousSignature;
+      while (performance.now() - start < timeout) {
+        await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
+        assertCurrent();
+        if (hoverPreparationCancelled(token)) return [];
+        const slots = currentPageSlots(scroller, track);
+        let newItems = 0, requiredMatches = 0;
+        if (seenKeys && minimumNewItems > 0 || requiredKeys?.size) {
+          for (const key of mountedItemKeys(slots)) {
+            if (seenKeys && minimumNewItems > 0 && !seenKeys.has(key)) newItems++;
+            if (requiredKeys?.has(key)) requiredMatches++;
+          }
+        }
+        if (requiredMatches > bestRequiredMatches || requiredMatches === bestRequiredMatches && (slots.length > best.length || slots.length === best.length && newItems >= bestNewItems)) {
+          best = slots;
+          bestNewItems = newItems;
+          bestRequiredMatches = requiredMatches;
+        }
+        const signature = visibleSignature(slots);
+        if (!signature) continue;
+        if (!freshContentSeen && signature !== previousSignature) {
+          freshContentSeen = true;
+          stableFrames = 0;
+          lastSignature = "";
+        }
+        if (!freshContentSeen) continue;
+        const slotCountReady = slots.length >= minimumSlots;
+        const newItemCountReady = !seenKeys || minimumNewItems <= 0 || newItems >= minimumNewItems;
+        const requiredKeysReady = !requiredKeys || requiredKeys.size === 0 || requiredMatches >= requiredKeys.size;
+        if (!slotCountReady || !newItemCountReady || !requiredKeysReady) {
+          stableFrames = 0;
+          lastSignature = signature;
+          continue;
+        }
+        if (signature === lastSignature) {
+          stableFrames++;
+          if (stableFrames >= requiredStableFrames) return slots;
+        } else {
+          lastSignature = signature;
+          stableFrames = 1;
+          if (requiredStableFrames <= 1) return slots;
+        }
+      }
+      assertCurrent();
+      if (hoverPreparationCancelled(token)) return [];
+      return best;
+    }
+    return Object.freeze({
+      scheduledWait,
+      sleep,
+      waitLogicalPageChange,
+      waitPage,
+      waitForScriptMoveSettle,
+      waitStableCurrentPage,
+      reset() {
+        for (const close of [...waits]) close();
+      },
+      pending: () => waits.size
+    });
+  }
+
+  // src/netflix/carousel/motion.js
+  function createMotion({ borrowBinding, assertBinding, fastMoveClass }) {
+    const motionOwners = /* @__PURE__ */ new Map();
+    function capture(track, property) {
+      return Object.freeze({
+        value: track.style.getPropertyValue(property),
+        priority: track.style.getPropertyPriority(property)
+      });
+    }
+    function restore(track, property, saved) {
+      if (!saved.value) track.style.removeProperty(property);
+      else track.style.setProperty(property, saved.value, saved.priority || "");
+    }
+    function restoreOwner(owner) {
+      if (motionOwners.get(owner.track) !== owner) return;
+      motionOwners.delete(owner.track);
+      owner.leases.clear();
+      let failure;
+      for (const operation of [
+        () => {
+          if (!owner.hadClass) owner.section.classList.remove(fastMoveClass);
+        },
+        () => restore(owner.track, "transition", owner.transition),
+        () => restore(owner.track, "animation", owner.animation),
+        () => {
+          void owner.track.offsetWidth;
+        }
+      ]) {
+        try {
+          operation();
+        } catch (error) {
+          failure ??= error;
+        }
+      }
+      if (failure) throw failure;
+    }
+    function suppress(section, track) {
+      const binding = borrowBinding(section, null, track);
+      assertBinding(binding);
+      let owner = motionOwners.get(track);
+      if (owner) assertBinding(owner.binding);
+      else {
+        owner = {
+          section,
+          track,
+          binding,
+          leases: /* @__PURE__ */ new Set(),
+          hadClass: section.classList.contains(fastMoveClass),
+          transition: capture(track, "transition"),
+          animation: capture(track, "animation")
+        };
+        motionOwners.set(track, owner);
+        try {
+          section.classList.add(fastMoveClass);
+          track.style.setProperty("transition", "none", "important");
+          track.style.setProperty("animation", "none", "important");
+          void track.offsetWidth;
+        } catch (error) {
+          try {
+            restoreOwner(owner);
+          } catch (_) {
+          }
+          throw error;
+        }
+      }
+      let released = false;
+      const lease = Object.freeze({
+        release() {
+          if (released) return;
+          released = true;
+          if (motionOwners.get(track) !== owner) return;
+          owner.leases.delete(lease);
+          if (!owner.leases.size) restoreOwner(owner);
+        },
+        restored: () => track.style.getPropertyValue("transition") === owner.transition.value && track.style.getPropertyPriority("transition") === owner.transition.priority && section.classList.contains(fastMoveClass) === owner.hadClass
+      });
+      owner.leases.add(lease);
+      return lease;
+    }
+    function restoreMotion() {
+      for (const owner of [...motionOwners.values()]) {
+        try {
+          restoreOwner(owner);
+        } catch (_) {
+        }
+      }
+    }
+    return Object.freeze({
+      suppress,
+      restoreMotion,
+      pending: () => [...motionOwners.values()].reduce((count, owner) => count + owner.leases.size, 0)
+    });
+  }
+
   // src/netflix/carousel/restoration.js
   function createRestoration({
     native,
@@ -13095,14 +13612,12 @@ ${CARD_ACTION_STYLES}
     logTimeout = () => {
     }
   }) {
-    const PAGE_CHANGE_TIMEOUT_MS = 3e3, PAGE_CHANGE_OBSERVER_PRIMARY_MS = 320;
+    const PAGE_CHANGE_TIMEOUT_MS = 3e3;
     const PAGE_STABLE_TIMEOUT_MS = 2e3, SCRIPT_MOVE_SETTLE_TIMEOUT_MS = 260;
-    const CANCELLED_MOVE_POLL_MS = 80;
     const FAST_MOVE_CLASS2 = fastMoveClass;
     const {
       model: getCarouselDomRuntime,
       profile: detectCarouselDomProfile,
-      registerPage: registerLogicalPageSignature,
       selectedPage,
       pageCount,
       navigationControl: carouselMoveButton,
@@ -13111,9 +13626,7 @@ ${CARD_ACTION_STYLES}
       signatureOf: visibleSignature
     } = native;
     const assertRouteSession = (token) => scope.assertCurrent(token);
-    const isRouteSessionActive = (token) => scope.isCurrent(token);
     const isRouteSessionCancelledError = (error) => scope.isCancelled?.(error) || error?.code === "LEGACY_MY_LIST_ROUTE_SESSION_CANCELLED";
-    const hoverPreparationCancelled = isHoverCancelled;
     const NETFLIX_DOM_SELECTORS2 = { standardCard: cardSelector };
     const logOperationTimeout = logTimeout;
     const initializationTimeoutError = (stage, timeoutMs, details) => createError(
@@ -13122,7 +13635,6 @@ ${CARD_ACTION_STYLES}
       "Timeout at " + stage + " after " + timeoutMs + " ms",
       { timeoutMs, ...details }
     );
-    const sleep = (ms) => scheduledWait((close) => setTimeout(close, ms), clearTimeout);
     const itemKey = (item) => item.videoId ? "v:" + item.videoId : "h:" + item.href;
     const itemKeyFromCard = (card) => {
       const href = card?.href || card?.getAttribute?.("href") || "";
@@ -13134,8 +13646,29 @@ ${CARD_ACTION_STYLES}
     let sequence = 0;
     let tail = Promise.resolve();
     const moves = /* @__PURE__ */ new Set();
-    const motionOwners = /* @__PURE__ */ new Map();
-    const waits = /* @__PURE__ */ new Set();
+    const motion = createMotion({ borrowBinding, assertBinding, fastMoveClass });
+    const { suppress, restoreMotion } = motion;
+    const waitResources = createNavigationWaits({
+      borrowBinding,
+      assertBinding,
+      bindingForSource,
+      bindingGuard,
+      diagnosticSink,
+      native,
+      scope,
+      performance,
+      getComputedStyle,
+      setTimeout,
+      clearTimeout,
+      requestAnimationFrame,
+      cancelAnimationFrame,
+      MutationObserver,
+      isHoverCancelled,
+      initializationTimeoutError,
+      logOperationTimeout,
+      mountedItemKeys
+    });
+    const { scheduledWait, sleep, waitLogicalPageChange, waitPage, waitForScriptMoveSettle, waitStableCurrentPage } = waitResources;
     function bindingGuard(binding, sessionToken, assertOperation = () => {
     }) {
       return () => {
@@ -13164,28 +13697,6 @@ ${CARD_ACTION_STYLES}
           }
         } : null
       };
-    }
-    function scheduledWait(schedule, cancel) {
-      return new Promise((resolve, reject) => {
-        let handle = null, closed = false;
-        const close = () => {
-          if (closed) return;
-          closed = true;
-          waits.delete(close);
-          try {
-            if (handle !== null) cancel(handle);
-          } catch (_) {
-          }
-          resolve();
-        };
-        waits.add(close);
-        try {
-          handle = schedule(close);
-        } catch (error) {
-          reject(error);
-          close();
-        }
-      });
     }
     function begin(section, scroller) {
       const binding = borrowBinding(section, scroller);
@@ -13224,378 +13735,12 @@ ${CARD_ACTION_STYLES}
       moves.add(ticket);
       return ticket;
     }
-    function capture(track, property) {
-      return Object.freeze({
-        value: track.style.getPropertyValue(property),
-        priority: track.style.getPropertyPriority(property)
-      });
-    }
-    function restore(track, property, saved) {
-      if (!saved.value) track.style.removeProperty(property);
-      else track.style.setProperty(property, saved.value, saved.priority || "");
-    }
-    function restoreOwner(owner) {
-      if (motionOwners.get(owner.track) !== owner) return;
-      motionOwners.delete(owner.track);
-      owner.leases.clear();
-      let failure;
-      for (const operation of [
-        () => {
-          if (!owner.hadClass) owner.section.classList.remove(fastMoveClass);
-        },
-        () => restore(owner.track, "transition", owner.transition),
-        () => restore(owner.track, "animation", owner.animation),
-        () => {
-          void owner.track.offsetWidth;
-        }
-      ]) {
-        try {
-          operation();
-        } catch (error) {
-          failure ??= error;
-        }
-      }
-      if (failure) throw failure;
-    }
-    function suppress(section, track) {
-      const binding = borrowBinding(section, null, track);
-      assertBinding(binding);
-      let owner = motionOwners.get(track);
-      if (owner) assertBinding(owner.binding);
-      else {
-        owner = {
-          section,
-          track,
-          binding,
-          leases: /* @__PURE__ */ new Set(),
-          hadClass: section.classList.contains(fastMoveClass),
-          transition: capture(track, "transition"),
-          animation: capture(track, "animation")
-        };
-        motionOwners.set(track, owner);
-        try {
-          section.classList.add(fastMoveClass);
-          track.style.setProperty("transition", "none", "important");
-          track.style.setProperty("animation", "none", "important");
-          void track.offsetWidth;
-        } catch (error) {
-          try {
-            restoreOwner(owner);
-          } catch (_) {
-          }
-          throw error;
-        }
-      }
-      let released = false;
-      const lease = Object.freeze({
-        release() {
-          if (released) return;
-          released = true;
-          if (motionOwners.get(track) !== owner) return;
-          owner.leases.delete(lease);
-          if (!owner.leases.size) restoreOwner(owner);
-        },
-        restored: () => track.style.getPropertyValue("transition") === owner.transition.value && track.style.getPropertyPriority("transition") === owner.transition.priority && section.classList.contains(fastMoveClass) === owner.hadClass
-      });
-      owner.leases.add(lease);
-      return lease;
-    }
-    function restoreMotion() {
-      for (const owner of [...motionOwners.values()]) {
-        try {
-          restoreOwner(owner);
-        } catch (_) {
-        }
-      }
-    }
     function reset() {
       epoch++;
-      for (const close of [...waits]) close();
+      waitResources.reset();
       restoreMotion();
       for (const move of [...moves]) move.release();
       tail = Promise.resolve();
-    }
-    function createLogicalMoveSignal(scroller, token, sessionToken, bindingOwner = bindingForSource(scroller, null)) {
-      const diagnostic = diagnosticSink(token);
-      const bump = diagnostic.bump;
-      if (typeof MutationObserver !== "function") {
-        bump("logicalMoveObserverUnsupported");
-        return null;
-      }
-      let observer = null, frame = null, timer = null, pending = null;
-      let closed = false, dirty = true;
-      const wake = (available) => {
-        const oldTimer = timer, oldFrame = frame;
-        timer = null;
-        frame = null;
-        dirty = false;
-        const resolve = pending;
-        pending = null;
-        try {
-          if (oldTimer !== null) clearTimeout(oldTimer);
-        } catch (_) {
-          bump("logicalMoveObserverFailures");
-        }
-        try {
-          if (oldFrame !== null) cancelAnimationFrame(oldFrame);
-        } catch (_) {
-          bump("logicalMoveObserverFailures");
-        }
-        resolve?.(available);
-      };
-      const close = () => {
-        if (closed) return;
-        closed = true;
-        waits.delete(close);
-        try {
-          observer?.disconnect();
-        } catch (_) {
-          bump("logicalMoveObserverFailures");
-        }
-        observer = null;
-        wake(false);
-      };
-      waits.add(close);
-      const queueFrame = () => {
-        try {
-          assertBinding(bindingOwner);
-        } catch (_) {
-          close();
-          return;
-        }
-        if (closed || !pending || frame !== null || hoverPreparationCancelled(token) || !isRouteSessionActive(sessionToken)) return;
-        try {
-          frame = requestAnimationFrame(() => {
-            frame = null;
-            if (closed) return;
-            bump("logicalMoveSignalFrames");
-            wake(true);
-          });
-        } catch (_) {
-          bump("logicalMoveObserverFailures");
-          close();
-        }
-      };
-      try {
-        observer = new MutationObserver(() => {
-          if (closed) return;
-          bump("logicalMoveNotifications");
-          dirty = true;
-          queueFrame();
-        });
-        observer.observe(scroller, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ["href", "style", "class", "tabindex"]
-        });
-        bump("logicalMoveObserverStarts");
-        return { close, wait: () => new Promise((resolve) => {
-          if (closed) {
-            resolve(false);
-            return;
-          }
-          pending = resolve;
-          timer = setTimeout(() => {
-            if (closed) return;
-            bump("logicalMoveFallbackWakes");
-            wake(true);
-          }, CANCELLED_MOVE_POLL_MS);
-          if (dirty) queueFrame();
-        }) };
-      } catch (_) {
-        bump("logicalMoveObserverFailures");
-        close();
-        return null;
-      }
-    }
-    async function waitLogicalPageChange(section, scroller, track, beforePage, direction, beforeTransform, beforeSignature, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
-      assertRouteSession(sessionToken);
-      const bindingOwner = borrowBinding(section, scroller, track);
-      const assertCurrent = bindingGuard(bindingOwner, sessionToken);
-      assertBinding(bindingOwner);
-      const runtime = getCarouselDomRuntime(section);
-      const started = performance.now();
-      let lastTransform = beforeTransform;
-      let lastSignature = beforeSignature;
-      const diagnostic = diagnosticSink(token);
-      let signal = token === null || hoverPreparationCancelled(token) ? null : createLogicalMoveSignal(scroller, token, sessionToken, bindingOwner);
-      try {
-        while (performance.now() - started < timeout) {
-          if (hoverPreparationCancelled(token)) {
-            signal?.close();
-            signal = null;
-            await sleep(CANCELLED_MOVE_POLL_MS);
-          } else {
-            let signalled = false;
-            try {
-              if (signal) signalled = await signal.wait();
-            } catch (_) {
-              diagnostic.bump("logicalMoveObserverFailures");
-            }
-            assertCurrent();
-            if (!signalled) {
-              signal?.close();
-              signal = null;
-              await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
-            }
-          }
-          assertCurrent();
-          if (token !== null) diagnostic.bump("logicalMoveReads");
-          const transform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
-          const signature = visibleSignature(currentPageSlots(scroller, track));
-          const signatureChanged = Boolean(signature) && signature !== beforeSignature;
-          lastTransform = transform;
-          lastSignature = signature;
-          if (!signatureChanged) continue;
-          const existingPage = runtime?.signatureToPage.get(signature);
-          const proposedPage = Math.max(0, beforePage + (direction < 0 ? -1 : 1));
-          const mapped = Number.isFinite(existingPage) ? existingPage : registerLogicalPageSignature(section, signature, proposedPage);
-          if (runtime) {
-            native.notePage(section, mapped, Number.isFinite(existingPage) && existingPage !== beforePage);
-          }
-          return {
-            page: mapped,
-            changed: true,
-            transform,
-            signature,
-            transformChanged: transform !== beforeTransform,
-            signatureChanged: true,
-            cycleDetected: Boolean(runtime?.cycleDetected)
-          };
-        }
-        assertCurrent();
-        if (hoverPreparationCancelled(token)) {
-          return { page: beforePage, changed: false, transform: lastTransform, signature: lastSignature };
-        }
-        const details = {
-          direction: direction < 0 ? "left" : "right",
-          beforePage,
-          beforeTransform,
-          lastTransform,
-          beforeSignature,
-          lastSignature,
-          domGeneration: runtime?.profile?.generation || null,
-          navigationMode: runtime?.profile?.navigationMode || null,
-          pageMode: runtime?.profile?.pageMode || null
-        };
-        logOperationTimeout("logical-page-change", timeout, details);
-        throw initializationTimeoutError("logical-page-change", timeout, details);
-      } finally {
-        signal?.close();
-      }
-    }
-    async function waitPageByPolling(section, before, timeout, sessionToken = null, token = null) {
-      const bindingOwner = borrowBinding(section);
-      const assertCurrent = bindingGuard(bindingOwner, sessionToken);
-      assertCurrent();
-      const start = performance.now();
-      while (performance.now() - start < timeout) {
-        await sleep(hoverPreparationCancelled(token) ? CANCELLED_MOVE_POLL_MS : 12);
-        assertCurrent();
-        const now = selectedPage(section);
-        if (now !== before) return now;
-      }
-      assertCurrent();
-      return selectedPage(section);
-    }
-    async function waitPage(section, before, timeout = PAGE_CHANGE_TIMEOUT_MS, sessionToken = null, token = null) {
-      const bindingOwner = borrowBinding(section);
-      const assertCurrent = bindingGuard(bindingOwner, sessionToken);
-      assertCurrent();
-      const immediate = selectedPage(section);
-      if (immediate !== before) return immediate;
-      if (timeout <= 0) return immediate;
-      if (typeof MutationObserver !== "function") {
-        return waitPageByPolling(section, before, timeout, sessionToken, token);
-      }
-      const started = performance.now();
-      const observerBudget = Math.min(timeout, PAGE_CHANGE_OBSERVER_PRIMARY_MS);
-      const observedPage = await new Promise((resolve, reject) => {
-        let observer = null;
-        let timer = null;
-        let finished = false;
-        const finish = (value) => {
-          if (finished) return;
-          finished = true;
-          waits.delete(close);
-          try {
-            if (timer !== null) clearTimeout(timer);
-          } catch (_) {
-          }
-          try {
-            observer?.disconnect();
-          } catch (_) {
-          }
-          resolve(value);
-        };
-        const close = () => finish(null);
-        waits.add(close);
-        const check = () => {
-          if (finished) return;
-          try {
-            assertCurrent();
-          } catch (_) {
-            close();
-            return;
-          }
-          const now = selectedPage(section);
-          if (now !== before) finish(now);
-        };
-        try {
-          observer = new MutationObserver(check);
-          observer.observe(section, {
-            subtree: true,
-            childList: true,
-            attributes: true,
-            attributeFilter: ["data-indicator-selected"]
-          });
-          check();
-          if (!finished) timer = setTimeout(() => finish(null), observerBudget);
-        } catch (error) {
-          reject(error);
-          close();
-        }
-      });
-      assertCurrent();
-      if (observedPage !== null) return observedPage;
-      const elapsed = performance.now() - started;
-      const remaining = Math.max(0, timeout - elapsed);
-      return waitPageByPolling(section, before, remaining, sessionToken, token);
-    }
-    async function waitForScriptMoveSettle(scroller, track, beforeTransform, beforeSignature, timeout = SCRIPT_MOVE_SETTLE_TIMEOUT_MS, sessionToken = null) {
-      const bindingOwner = bindingForSource(scroller, track);
-      const assertCurrent = bindingGuard(bindingOwner, sessionToken);
-      assertCurrent();
-      const started = performance.now();
-      let currentTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
-      let currentSignature = visibleSignature(currentPageSlots(scroller, track));
-      let observedChange = currentTransform !== beforeTransform || Boolean(beforeSignature) && Boolean(currentSignature) && currentSignature !== beforeSignature;
-      let stableFrames = 0;
-      let previousSignature = currentSignature;
-      while (performance.now() - started < timeout) {
-        await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
-        assertCurrent();
-        currentTransform = track.style.getPropertyValue("transform") || getComputedStyle(track).transform;
-        currentSignature = visibleSignature(currentPageSlots(scroller, track));
-        if (currentTransform !== beforeTransform || Boolean(beforeSignature) && Boolean(currentSignature) && currentSignature !== beforeSignature) {
-          observedChange = true;
-        }
-        if (observedChange && currentSignature && currentSignature === previousSignature) {
-          stableFrames++;
-          if (stableFrames >= 2) break;
-        } else {
-          stableFrames = 0;
-        }
-        previousSignature = currentSignature;
-      }
-      await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
-      assertCurrent();
-      return {
-        transform: currentTransform,
-        signature: currentSignature,
-        observedChange
-      };
     }
     async function moveOnePage(section, scroller, direction, token = null, sessionToken = null, assertOperation = () => {
     }) {
@@ -13860,75 +14005,6 @@ ${CARD_ACTION_STYLES}
       }
       return result;
     }
-    async function waitStableCurrentPage(scroller, track, options = {}) {
-      const assertOperation = options.assertOperation || (() => {
-      });
-      const timeout = options.timeout ?? PAGE_STABLE_TIMEOUT_MS;
-      const previousSignature = options.previousSignature ?? "";
-      const requiredStableFrames = options.requiredStableFrames ?? 2;
-      const minimumSlots = Math.max(0, options.minimumSlots ?? 0);
-      const minimumNewItems = Math.max(0, options.minimumNewItems ?? 0);
-      const seenKeys = options.seenKeys instanceof Set || options.seenKeys instanceof Map ? options.seenKeys : null;
-      const requiredKeys = options.requiredKeys instanceof Set ? options.requiredKeys : null;
-      const sessionToken = options.sessionToken ?? null;
-      const token = options.hoverToken ?? null;
-      const bindingOwner = bindingForSource(scroller, track);
-      const assertCurrent = bindingGuard(bindingOwner, sessionToken, assertOperation);
-      assertCurrent();
-      if (hoverPreparationCancelled(token)) return [];
-      const start = performance.now();
-      let lastSignature = "";
-      let stableFrames = 0;
-      let best = [];
-      let bestNewItems = 0;
-      let bestRequiredMatches = 0;
-      let freshContentSeen = !previousSignature;
-      while (performance.now() - start < timeout) {
-        await scheduledWait(requestAnimationFrame, cancelAnimationFrame);
-        assertCurrent();
-        if (hoverPreparationCancelled(token)) return [];
-        const slots = currentPageSlots(scroller, track);
-        let newItems = 0, requiredMatches = 0;
-        if (seenKeys && minimumNewItems > 0 || requiredKeys?.size) {
-          for (const key of mountedItemKeys(slots)) {
-            if (seenKeys && minimumNewItems > 0 && !seenKeys.has(key)) newItems++;
-            if (requiredKeys?.has(key)) requiredMatches++;
-          }
-        }
-        if (requiredMatches > bestRequiredMatches || requiredMatches === bestRequiredMatches && (slots.length > best.length || slots.length === best.length && newItems >= bestNewItems)) {
-          best = slots;
-          bestNewItems = newItems;
-          bestRequiredMatches = requiredMatches;
-        }
-        const signature = visibleSignature(slots);
-        if (!signature) continue;
-        if (!freshContentSeen && signature !== previousSignature) {
-          freshContentSeen = true;
-          stableFrames = 0;
-          lastSignature = "";
-        }
-        if (!freshContentSeen) continue;
-        const slotCountReady = slots.length >= minimumSlots;
-        const newItemCountReady = !seenKeys || minimumNewItems <= 0 || newItems >= minimumNewItems;
-        const requiredKeysReady = !requiredKeys || requiredKeys.size === 0 || requiredMatches >= requiredKeys.size;
-        if (!slotCountReady || !newItemCountReady || !requiredKeysReady) {
-          stableFrames = 0;
-          lastSignature = signature;
-          continue;
-        }
-        if (signature === lastSignature) {
-          stableFrames++;
-          if (stableFrames >= requiredStableFrames) return slots;
-        } else {
-          lastSignature = signature;
-          stableFrames = 1;
-          if (requiredStableFrames <= 1) return slots;
-        }
-      }
-      assertCurrent();
-      if (hoverPreparationCancelled(token)) return [];
-      return best;
-    }
     function pageItemKeys(items, page) {
       return new Set(
         items.filter((item) => item.page === page).map(itemKey).filter(Boolean)
@@ -13975,17 +14051,565 @@ ${CARD_ACTION_STYLES}
       stable: waitStableCurrentPage,
       restoreStrict: restoration.strict,
       restoreFast: restoration.fast,
-      pageKeys: pageItemKeys,
       transform: trackTransformValue,
-      acknowledgeLogical: waitLogicalPageChange,
-      acknowledgeIndicator: waitPage,
-      logicalSignal: createLogicalMoveSignal,
       diagnostics: () => ({
         pendingMoves: moves.size,
-        pendingWaits: waits.size,
-        motionLeases: [...motionOwners.values()].reduce((count, owner) => count + owner.leases.size, 0)
+        pendingWaits: waitResources.pending(),
+        motionLeases: motion.pending()
       })
     });
+  }
+
+  // src/netflix/carousel/collection-logical.js
+  function createLogicalCollection({
+    native,
+    navigation,
+    scope,
+    performance,
+    captureItem,
+    videoIdFromHref,
+    cardSelector,
+    initializationError,
+    log,
+    warn,
+    tLog,
+    logOperationTimeout
+  }) {
+    const LOGICAL_COLLECTION_TIMEOUT_MS = 12e4, PARTIAL_PAGE_RECOVERY_TIMEOUT_MS = 2500, PAGE_STABLE_TIMEOUT_MS = 2e3;
+    const {
+      resetModel: resetCarouselDomRuntime,
+      profileSummary: carouselDomProfileSummary,
+      currentSlots: currentPageSlots,
+      signatureOf: visibleSignature,
+      selectedPage,
+      pageCount,
+      logicalWindow: nativeLogicalPageState,
+      requireLogicalWindow: requireNativeLogicalPageState,
+      forcePage: forceLogicalPageSignature,
+      navigationControl: carouselMoveButton,
+      controlDisabled: carouselMoveButtonDisabled
+    } = native;
+    const { move: moveOnePage, stable: waitStableCurrentPage, transform: trackTransformValue } = navigation;
+    const itemFromSlot = captureItem;
+    const itemKey = (item) => item.videoId ? "v:" + item.videoId : "h:" + item.href;
+    const itemSummary = (item) => item ? {
+      videoId: item.videoId || "",
+      page: item.page,
+      href: item.href || "",
+      ariaLabel: item.ariaLabel || ""
+    } : null;
+    const initializationTimeoutError = (stage, timeoutMs, details) => initializationError(
+      "INITIALIZATION_TIMEOUT",
+      stage,
+      "Timeout at " + stage + " after " + timeoutMs + " ms",
+      { timeoutMs, ...details }
+    );
+    async function collectAllItemsLogical(operation) {
+      const { section, scroller, track, totalCount, sessionToken } = operation;
+      operation.guard();
+      const snapshotWork = operation.snapshotWork;
+      if (!Number.isFinite(totalCount) || totalCount < 0) {
+        throw initializationError(
+          "TOTAL_COUNT_REQUIRED",
+          "total-count-detection",
+          "Generation 2 collection requires a known My List totalCount",
+          { totalCount, carouselDom: carouselDomProfileSummary(section) }
+        );
+      }
+      let runtime = resetCarouselDomRuntime(section);
+      native.beginCollection(section);
+      const goal = totalCount;
+      const itemsByLogicalIndex = /* @__PURE__ */ new Map();
+      const videoIndex = /* @__PURE__ */ new Map();
+      const visitedSignatures = /* @__PURE__ */ new Set();
+      const responsiveColumns = operation.columns || currentPageSlots(scroller, track).length || 1;
+      const estimatedPages = Math.max(1, Math.ceil(totalCount / Math.max(1, responsiveColumns)));
+      const started = performance.now();
+      const report = operation.report(goal, started, { pageMode: "logical" });
+      const stablePageTransforms = /* @__PURE__ */ new Map();
+      let initialPage = null;
+      let endingPage = 0;
+      let completionReason = "";
+      const collectedCount = () => itemsByLogicalIndex.size;
+      const ensureCollectionTime = (stage) => {
+        const elapsedMs = performance.now() - started;
+        if (elapsedMs < LOGICAL_COLLECTION_TIMEOUT_MS) return;
+        const details = {
+          stage,
+          elapsedMs: Math.round(elapsedMs),
+          collected: collectedCount(),
+          totalCount,
+          missing: Math.max(0, totalCount - collectedCount()),
+          logicalPage: runtime.currentPage,
+          carouselDom: carouselDomProfileSummary(section)
+        };
+        logOperationTimeout("logical-full-collection", LOGICAL_COLLECTION_TIMEOUT_MS, details);
+        throw initializationTimeoutError("logical-full-collection", LOGICAL_COLLECTION_TIMEOUT_MS, details);
+      };
+      const incomplete = (stage, reason, details = {}) => {
+        const payload = {
+          stage,
+          reason,
+          collected: collectedCount(),
+          totalCount,
+          missing: Math.max(0, totalCount - collectedCount()),
+          logicalPage: runtime.currentPage,
+          cycleDetected: runtime.cycleDetected,
+          snapshotWork: snapshotWork(),
+          carouselDom: carouselDomProfileSummary(section),
+          ...details
+        };
+        warn(tLog("fullCollectionIncomplete"), payload);
+        throw initializationError("COLLECTION_INCOMPLETE", stage, `Collection incomplete at ${stage}: ${reason}`, payload);
+      };
+      log(tLog("fullCollectionStarted"), {
+        totalCount,
+        goal,
+        domGeneration: runtime.profile.generation,
+        navigationMode: runtime.profile.navigationMode,
+        pageMode: runtime.profile.pageMode,
+        selectedPage: selectedPage(section),
+        currentPageCards: currentPageSlots(scroller, track).length,
+        expectedPageSlots: responsiveColumns,
+        internalIndicator: "netflix-react-item-index"
+      });
+      const motionLease = native.suppressMotion(section, track);
+      try {
+        let guard = estimatedPages * 3 + 12;
+        let previousPageSignature = "";
+        while (guard-- > 0 && collectedCount() < goal) {
+          ensureCollectionTime("collect-page");
+          const beforeCount = collectedCount();
+          const remaining = Math.max(0, goal - beforeCount);
+          const expectedSlots = Math.max(1, Math.min(responsiveColumns, remaining));
+          const stabilizeStarted = performance.now();
+          const slots = await waitStableCurrentPage(scroller, track, {
+            previousSignature: previousPageSignature,
+            minimumSlots: expectedSlots,
+            minimumNewItems: 1,
+            seenKeys: videoIndex,
+            sessionToken
+          });
+          operation.guard();
+          let stabilizedSignature = visibleSignature(slots);
+          let stabilizedTransform = trackTransformValue(track);
+          let pageState = nativeLogicalPageState(
+            scroller,
+            track,
+            totalCount,
+            responsiveColumns
+          );
+          const initialLogicalPageStateValid = pageState.positions.length > 0 && pageState.positions.every((position) => Number.isSafeInteger(position.itemIndex)) && Number.isFinite(pageState.page);
+          if (!initialLogicalPageStateValid) {
+            const fullWindowSlots = Math.max(1, Math.min(responsiveColumns, totalCount));
+            log("Transient partial logical page detected; waiting for native window completion", {
+              totalCount,
+              columns: responsiveColumns,
+              requestedMinimumSlots: expectedSlots,
+              recoveryMinimumSlots: fullWindowSlots,
+              slots: pageState.slots.length,
+              itemIndices: pageState.itemIndices,
+              logicalIndices: pageState.logicalIndices,
+              resolvedPage: pageState.page
+            });
+            const recoveredSlots = await waitStableCurrentPage(scroller, track, {
+              previousSignature: "",
+              minimumSlots: fullWindowSlots,
+              minimumNewItems: 1,
+              seenKeys: videoIndex,
+              requiredStableFrames: 2,
+              timeout: PARTIAL_PAGE_RECOVERY_TIMEOUT_MS,
+              sessionToken
+            });
+            operation.guard();
+            stabilizedSignature = visibleSignature(recoveredSlots);
+            stabilizedTransform = trackTransformValue(track);
+            pageState = requireNativeLogicalPageState(
+              scroller,
+              track,
+              totalCount,
+              responsiveColumns,
+              "logical-item-index-detection-retry"
+            );
+          } else {
+            pageState = requireNativeLogicalPageState(
+              scroller,
+              track,
+              totalCount,
+              responsiveColumns,
+              "logical-item-index-detection"
+            );
+          }
+          if (visibleSignature(pageState.slots) !== stabilizedSignature) {
+            incomplete("collect-page", "raw-index-page-changed-during-stabilization", {
+              stabilizedSignature,
+              currentSignature: visibleSignature(pageState.slots),
+              itemIndices: pageState.itemIndices,
+              logicalIndices: pageState.logicalIndices
+            });
+          }
+          const page = pageState.page;
+          native.notePage(section, page);
+          forceLogicalPageSignature(section, stabilizedSignature, page);
+          stablePageTransforms.set(page, stabilizedTransform);
+          if (initialPage === null) {
+            initialPage = page;
+            operation.acceptInitialPage(initialPage);
+            operation.publish({ initialPage });
+            log("Logical My List native position located", {
+              page,
+              itemIndices: pageState.itemIndices,
+              logicalIndices: pageState.logicalIndices,
+              signature: stabilizedSignature
+            });
+          }
+          if (visitedSignatures.has(stabilizedSignature) && collectedCount() < goal) {
+            native.markCycle(section);
+            incomplete("collect-page", "known-signature-cycle-before-total-count", {
+              page,
+              signature: stabilizedSignature,
+              itemIndices: pageState.itemIndices,
+              logicalIndices: pageState.logicalIndices
+            });
+          }
+          visitedSignatures.add(stabilizedSignature);
+          const pageFacts = report.pageFacts(
+            page,
+            page,
+            pageState.positions.map((position) => position.slot),
+            expectedSlots,
+            1,
+            videoIndex
+          );
+          pageFacts.slots = pageState.slots.length;
+          const indexFacts = { itemIndices: pageState.itemIndices, logicalIndices: pageState.logicalIndices };
+          log(tLog("collectionPageStabilized"), {
+            ...pageFacts,
+            signature: stabilizedSignature,
+            transform: stabilizedTransform,
+            ...indexFacts,
+            stabilizeElapsedMs: Math.round(performance.now() - stabilizeStarted)
+          });
+          if (pageState.slots.length < expectedSlots || pageFacts.newItemsReady < 1 || !stabilizedSignature) {
+            const details = {
+              ...pageFacts,
+              signaturePresent: Boolean(stabilizedSignature),
+              ...indexFacts
+            };
+            logOperationTimeout("logical-page-stabilization", PAGE_STABLE_TIMEOUT_MS, details);
+            throw initializationTimeoutError("logical-page-stabilization", PAGE_STABLE_TIMEOUT_MS, details);
+          }
+          const added = [];
+          for (const position of pageState.positions) {
+            const logicalIndex = position.logicalIndex;
+            if (!Number.isSafeInteger(logicalIndex) || logicalIndex < 0 || logicalIndex >= totalCount) {
+              operation.bump("consistencyFailures");
+              incomplete("collect-page", "invalid-logical-index", {
+                page,
+                itemIndex: position.itemIndex,
+                logicalIndex
+              });
+            }
+            const canonicalPage = Math.min(estimatedPages - 1, Math.floor(logicalIndex / responsiveColumns));
+            operation.bump("metadataReads");
+            const item = itemFromSlot(position.slot, canonicalPage, false);
+            if (!item) {
+              operation.bump("invalidMetadata");
+              continue;
+            }
+            const key = itemKey(item);
+            const existingAtIndex = itemsByLogicalIndex.get(logicalIndex);
+            if (existingAtIndex && itemKey(existingAtIndex) !== key) {
+              operation.bump("consistencyFailures");
+              incomplete("collect-page", "logical-index-content-changed-during-scan", {
+                page,
+                logicalIndex,
+                previous: itemSummary(existingAtIndex),
+                current: itemSummary(item)
+              });
+            }
+            const existingIndex = videoIndex.get(key);
+            if (Number.isSafeInteger(existingIndex) && existingIndex !== logicalIndex) {
+              operation.bump("consistencyFailures");
+              incomplete("collect-page", "video-id-moved-during-scan", {
+                page,
+                key,
+                previousLogicalIndex: existingIndex,
+                currentLogicalIndex: logicalIndex
+              });
+            }
+            if (existingAtIndex) {
+              operation.bump("duplicateSnapshotsAvoided");
+              continue;
+            }
+            operation.capture(item, position.slot);
+            operation.bump("snapshotsCaptured");
+            item.logicalIndex = logicalIndex;
+            itemsByLogicalIndex.set(logicalIndex, item);
+            videoIndex.set(key, logicalIndex);
+            added.push(item);
+          }
+          report.pageResult(page, added, collectedCount(), { missing: Math.max(0, goal - collectedCount()) });
+          endingPage = page;
+          if (collectedCount() >= goal) {
+            completionReason = "total-count-and-logical-index-range-reached";
+            break;
+          }
+          previousPageSignature = stabilizedSignature;
+          const rightControl = carouselMoveButton(section, scroller, 1);
+          if (!rightControl.button) {
+            incomplete("advance-right", "right-control-not-found", { selector: rightControl.selector, page });
+          }
+          if (carouselMoveButtonDisabled(rightControl.button)) {
+            incomplete("advance-right", "right-edge-before-total-count", { page });
+          }
+          const beforeSignature = stabilizedSignature;
+          await moveOnePage(section, scroller, 1, null, sessionToken);
+          operation.guard();
+          const afterSignature = visibleSignature(currentPageSlots(scroller, track));
+          if (!afterSignature || afterSignature === beforeSignature) {
+            incomplete("advance-right", "enabled-control-did-not-change-page", {
+              page,
+              beforeSignature,
+              afterSignature
+            });
+          }
+        }
+        if (collectedCount() !== totalCount) {
+          incomplete("validate-count", guard <= 0 ? "guard-exhausted" : "collected-count-mismatch", {
+            expected: totalCount,
+            actual: collectedCount()
+          });
+        }
+        const missingLogicalIndices = [];
+        for (let index = 0; index < totalCount; index++) {
+          if (!itemsByLogicalIndex.has(index)) missingLogicalIndices.push(index);
+        }
+        if (missingLogicalIndices.length) {
+          incomplete("validate-logical-index-range", "logical-index-gap", {
+            missingLogicalIndices
+          });
+        }
+        const items = Array.from({ length: totalCount }, (_, logicalIndex) => itemsByLogicalIndex.get(logicalIndex));
+        const uniqueKeys = new Set(items.map(itemKey).filter(Boolean));
+        if (uniqueKeys.size !== totalCount) {
+          incomplete("validate-logical-index-range", "duplicate-item-key-across-logical-indices", {
+            expected: totalCount,
+            uniqueKeys: uniqueKeys.size
+          });
+        }
+        completionReason = completionReason || "total-count-and-logical-index-range-reached";
+        native.completeCollection(section, estimatedPages);
+        initialPage = Number.isFinite(initialPage) ? initialPage : 0;
+        operation.acceptInitialPage(initialPage);
+        operation.publish({ initialPage });
+        forceLogicalPageSignature(section, visibleSignature(currentPageSlots(scroller, track)), endingPage);
+        log(tLog("logicalCarouselPagesFinalized"), {
+          pageCount: runtime.knownPageCount,
+          pageCountFinalized: runtime.pageCountFinalized,
+          endingPage,
+          initialPage,
+          signatures: runtime.signatureToPage.size,
+          totalCount,
+          collected: items.length,
+          completionReason,
+          cycleDetected: runtime.cycleDetected,
+          indexCoverage: `${itemsByLogicalIndex.size}/${totalCount}`
+        });
+        if (endingPage !== initialPage) {
+          const restorationStarted = performance.now();
+          const canonicalTargetTransform = stablePageTransforms.get(initialPage) || "";
+          const restorationComplete = await report.restore(
+            items,
+            responsiveColumns,
+            initialPage,
+            endingPage,
+            canonicalTargetTransform,
+            restorationStarted
+          );
+          operation.guard();
+          if (!restorationComplete || selectedPage(section) !== initialPage) {
+            incomplete("restore-initial-page", "native-restoration-incomplete", {
+              from: endingPage,
+              target: initialPage,
+              selectedPage: selectedPage(section)
+            });
+          }
+        }
+        report.complete(items, endingPage, initialPage, {
+          completionReason,
+          cycleDetected: runtime.cycleDetected,
+          domGeneration: runtime.profile.generation
+        });
+        return items;
+      } finally {
+        motionLease.release();
+      }
+    }
+    return collectAllItemsLogical;
+  }
+
+  // src/netflix/carousel/collection-indicator.js
+  function createIndicatorCollection({
+    native,
+    navigation,
+    scope,
+    performance,
+    captureItem,
+    videoIdFromHref,
+    cardSelector,
+    initializationError,
+    log,
+    warn,
+    tLog,
+    logOperationTimeout
+  }) {
+    const PAGE_STABLE_TIMEOUT_MS = 2e3;
+    const { currentSlots: currentPageSlots, signatureOf: visibleSignature, selectedPage, pageCount } = native;
+    const { move: moveOnePage, navigate: goToPage, stable: waitStableCurrentPage, transform: trackTransformValue } = navigation;
+    const itemFromSlot = captureItem;
+    const itemKey = (item) => item.videoId ? "v:" + item.videoId : "h:" + item.href;
+    async function collectAllItems(operation) {
+      const { section, scroller, track, totalCount, sessionToken } = operation;
+      operation.guard();
+      const snapshotWork = operation.snapshotWork;
+      const items = [];
+      const seen = /* @__PURE__ */ new Set();
+      const pages = pageCount(section);
+      const goal = Number.isFinite(totalCount) ? totalCount : Infinity;
+      const initialCurrentSlots = currentPageSlots(scroller, track);
+      const responsiveColumns = operation.columns || initialCurrentSlots.length || 1;
+      const expectedPageSlots = pages === 1 ? Math.max(1, initialCurrentSlots.length) : Math.max(
+        1,
+        Math.min(
+          responsiveColumns,
+          Number.isFinite(totalCount) ? totalCount : responsiveColumns
+        )
+      );
+      const started = performance.now();
+      const report = operation.report(goal, started);
+      const initialPage = selectedPage(section);
+      operation.acceptInitialPage(initialPage);
+      operation.publish({ initialPage });
+      log(tLog("fullCollectionStarted"), {
+        totalCount,
+        goal,
+        pages,
+        selectedPage: selectedPage(section),
+        currentPageCards: currentPageSlots(scroller, track).length,
+        expectedPageSlots
+      });
+      const stablePageTransforms = /* @__PURE__ */ new Map();
+      let endingPage = initialPage;
+      const motionLease = native.suppressMotion(section, track);
+      try {
+        operation.guard();
+        const signatureBeforeStartMove = visibleSignature(currentPageSlots(scroller, track));
+        await goToPage(section, scroller, 0, null, sessionToken);
+        operation.guard();
+        let previousPageSignature = initialPage === 0 ? "" : signatureBeforeStartMove;
+        for (let page = 0; page < pages && (!Number.isFinite(goal) || items.length < goal); page++) {
+          const actualPage = selectedPage(section);
+          const beforeCount = items.length;
+          const remaining = Number.isFinite(goal) ? Math.max(0, goal - items.length) : Infinity;
+          const singlePageList = pages === 1;
+          const minimumNewItems = singlePageList ? expectedPageSlots : page < pages - 1 ? Math.min(expectedPageSlots, remaining) : Number.isFinite(remaining) ? Math.min(expectedPageSlots, remaining) : 1;
+          const minimumSlots = singlePageList ? expectedPageSlots : page < pages - 1 ? expectedPageSlots : Number.isFinite(remaining) ? Math.min(expectedPageSlots, Math.max(1, remaining)) : expectedPageSlots;
+          const stabilizeStarted = performance.now();
+          const slots = await waitStableCurrentPage(scroller, track, {
+            previousSignature: previousPageSignature,
+            minimumSlots,
+            minimumNewItems,
+            seenKeys: seen,
+            sessionToken
+          });
+          operation.guard();
+          const stabilizedSignature = visibleSignature(slots);
+          const stabilizedTransform = trackTransformValue(track);
+          stablePageTransforms.set(actualPage, stabilizedTransform);
+          const pageFacts = report.pageFacts(page, actualPage, slots, minimumSlots, minimumNewItems, seen);
+          log(tLog("collectionPageStabilized"), {
+            ...pageFacts,
+            signature: stabilizedSignature,
+            transform: stabilizedTransform,
+            stabilizeElapsedMs: Math.round(performance.now() - stabilizeStarted)
+          });
+          if (slots.length < minimumSlots || pageFacts.newItemsReady < minimumNewItems) {
+            warn(tLog("collectionStoppedBecauseThePageNeverReachedTheExpectedStableState"), {
+              ...pageFacts,
+              timeoutMs: PAGE_STABLE_TIMEOUT_MS
+            });
+            break;
+          }
+          for (const slot of slots) {
+            if (Number.isFinite(goal) && items.length >= goal) break;
+            operation.bump("metadataReads");
+            const item = itemFromSlot(slot, actualPage, false);
+            if (!item) {
+              operation.bump("invalidMetadata");
+              continue;
+            }
+            const key = itemKey(item);
+            if (seen.has(key)) {
+              operation.bump("duplicateSnapshotsAvoided");
+              continue;
+            }
+            operation.capture(item, slot);
+            operation.bump("snapshotsCaptured");
+            seen.add(key);
+            items.push(item);
+          }
+          const added = items.slice(beforeCount);
+          report.pageResult(actualPage, added, items.length);
+          if (Number.isFinite(goal) && items.length >= goal || actualPage >= pages - 1) break;
+          previousPageSignature = stabilizedSignature;
+          const next = await moveOnePage(section, scroller, 1, null, sessionToken);
+          operation.guard();
+          if (next === actualPage) {
+            warn(tLog("couldNotAdvanceDuringFullCollection"), {
+              actualPage,
+              items: items.length,
+              goal
+            });
+            break;
+          }
+        }
+        endingPage = selectedPage(section);
+        if (endingPage !== initialPage) {
+          const restorationStarted = performance.now();
+          const canonicalTargetTransform = stablePageTransforms.get(initialPage) || "";
+          log(tLog("nativeRestorationBaselineCaptured"), {
+            from: endingPage,
+            target: initialPage,
+            pages,
+            pageCountParity: pages % 2 === 0 ? "even" : "odd",
+            moveCount: Math.abs(endingPage - initialPage),
+            moveCountParity: Math.abs(endingPage - initialPage) % 2 === 0 ? "even" : "odd",
+            canonicalTargetTransform
+          });
+          const restorationComplete = await report.restore(
+            items,
+            expectedPageSlots,
+            initialPage,
+            endingPage,
+            canonicalTargetTransform,
+            restorationStarted
+          );
+          operation.guard();
+          if (restorationComplete && selectedPage(section) === initialPage) {
+            await operation.nextFrame();
+            operation.guard();
+            await operation.nextFrame();
+            operation.guard();
+          }
+        }
+      } finally {
+        motionLease.release();
+      }
+      report.complete(items, endingPage, initialPage);
+      return items;
+    }
+    return collectAllItems;
   }
 
   // src/netflix/carousel/collection.js
@@ -14008,32 +14632,15 @@ ${CARD_ACTION_STYLES}
     logTimeout: logOperationTimeout = () => {
     }
   }) {
-    const LOGICAL_COLLECTION_TIMEOUT_MS = 12e4, PARTIAL_PAGE_RECOVERY_TIMEOUT_MS = 2500, PAGE_STABLE_TIMEOUT_MS = 2e3;
     const assertRouteSession = (token) => scope.assertCurrent(token);
     const {
       model: getCarouselDomRuntime,
-      resetModel: resetCarouselDomRuntime,
       profile: detectCarouselDomProfile,
-      profileSummary: carouselDomProfileSummary,
       currentSlots: currentPageSlots,
-      signatureOf: visibleSignature,
-      selectedPage,
-      pageCount,
-      logicalWindow: nativeLogicalPageState,
-      requireLogicalWindow: requireNativeLogicalPageState,
-      forcePage: forceLogicalPageSignature,
-      navigationControl: carouselMoveButton,
-      controlDisabled: carouselMoveButtonDisabled
+      selectedPage
     } = native;
-    const {
-      move: moveOnePage,
-      navigate: goToPage,
-      stable: waitStableCurrentPage,
-      transform: trackTransformValue,
-      restoreFast: restoreNativePageFast
-    } = navigation;
+    const { restoreFast: restoreNativePageFast } = navigation;
     const itemFromSlot = captureItem;
-    const itemKey = (item) => item.videoId ? "v:" + item.videoId : "h:" + item.href;
     const itemKeyFromCard = (card) => {
       const href = card?.href || card?.getAttribute?.("href") || "";
       if (!href) return "";
@@ -14046,12 +14653,22 @@ ${CARD_ACTION_STYLES}
       href: item.href || "",
       ariaLabel: item.ariaLabel || ""
     } : null;
-    const initializationTimeoutError = (stage, timeoutMs, details) => initializationError(
-      "INITIALIZATION_TIMEOUT",
-      stage,
-      "Timeout at " + stage + " after " + timeoutMs + " ms",
-      { timeoutMs, ...details }
-    );
+    const strategyOptions = {
+      native,
+      navigation,
+      scope,
+      performance,
+      captureItem,
+      videoIdFromHref,
+      cardSelector,
+      initializationError,
+      log,
+      warn,
+      tLog,
+      logOperationTimeout
+    };
+    const collectLogical = createLogicalCollection(strategyOptions);
+    const collectIndicator = createIndicatorCollection(strategyOptions);
     const newCounters = () => ({
       metadataReads: 0,
       snapshotsCaptured: 0,
@@ -14233,7 +14850,31 @@ ${CARD_ACTION_STYLES}
       assertOperation(operation);
       operations.add(operation);
       try {
-        const items = await collectAllItems(operation);
+        const profile = getCarouselDomRuntime(section)?.profile || detectCarouselDomProfile(section);
+        assertOperation(operation);
+        const work = Object.freeze({
+          section,
+          scroller,
+          track,
+          totalCount,
+          sessionToken,
+          columns: operation.columns,
+          guard: () => assertOperation(operation),
+          capture: (item, slot) => captureMaterial(operation, item, slot),
+          nextFrame: () => nextFrame(operation),
+          publish: (facts) => publish(operation, facts),
+          acceptInitialPage(page) {
+            assertOperation(operation);
+            operation.initialPage = page;
+          },
+          bump(field) {
+            assertOperation(operation);
+            operation.counters[field]++;
+          },
+          snapshotWork: () => ({ ...operation.counters }),
+          report: (...args) => scanReporter(operation, ...args)
+        });
+        const items = await (profile.pageMode === "logical" ? collectLogical : collectIndicator)(work);
         assertOperation(operation);
         operation.material.clear();
         return Object.freeze({
@@ -14317,493 +14958,6 @@ ${CARD_ACTION_STYLES}
           });
         }
       };
-    }
-    async function collectAllItemsLogical(operation) {
-      const { section, scroller, track, totalCount, sessionToken } = operation;
-      assertOperation(operation);
-      const snapshotWork = operation.counters;
-      if (!Number.isFinite(totalCount) || totalCount < 0) {
-        throw initializationError(
-          "TOTAL_COUNT_REQUIRED",
-          "total-count-detection",
-          "Generation 2 collection requires a known My List totalCount",
-          { totalCount, carouselDom: carouselDomProfileSummary(section) }
-        );
-      }
-      let runtime = resetCarouselDomRuntime(section);
-      native.beginCollection(section);
-      const goal = totalCount;
-      const itemsByLogicalIndex = /* @__PURE__ */ new Map();
-      const videoIndex = /* @__PURE__ */ new Map();
-      const visitedSignatures = /* @__PURE__ */ new Set();
-      const responsiveColumns = operation.columns || currentPageSlots(scroller, track).length || 1;
-      const estimatedPages = Math.max(1, Math.ceil(totalCount / Math.max(1, responsiveColumns)));
-      const started = performance.now();
-      const report = scanReporter(operation, goal, started, { pageMode: "logical" });
-      const stablePageTransforms = /* @__PURE__ */ new Map();
-      let initialPage = null;
-      let endingPage = 0;
-      let completionReason = "";
-      const collectedCount = () => itemsByLogicalIndex.size;
-      const ensureCollectionTime = (stage) => {
-        const elapsedMs = performance.now() - started;
-        if (elapsedMs < LOGICAL_COLLECTION_TIMEOUT_MS) return;
-        const details = {
-          stage,
-          elapsedMs: Math.round(elapsedMs),
-          collected: collectedCount(),
-          totalCount,
-          missing: Math.max(0, totalCount - collectedCount()),
-          logicalPage: runtime.currentPage,
-          carouselDom: carouselDomProfileSummary(section)
-        };
-        logOperationTimeout("logical-full-collection", LOGICAL_COLLECTION_TIMEOUT_MS, details);
-        throw initializationTimeoutError("logical-full-collection", LOGICAL_COLLECTION_TIMEOUT_MS, details);
-      };
-      const incomplete = (stage, reason, details = {}) => {
-        const payload = {
-          stage,
-          reason,
-          collected: collectedCount(),
-          totalCount,
-          missing: Math.max(0, totalCount - collectedCount()),
-          logicalPage: runtime.currentPage,
-          cycleDetected: runtime.cycleDetected,
-          snapshotWork: { ...snapshotWork },
-          carouselDom: carouselDomProfileSummary(section),
-          ...details
-        };
-        warn(tLog("fullCollectionIncomplete"), payload);
-        throw initializationError("COLLECTION_INCOMPLETE", stage, `Collection incomplete at ${stage}: ${reason}`, payload);
-      };
-      log(tLog("fullCollectionStarted"), {
-        totalCount,
-        goal,
-        domGeneration: runtime.profile.generation,
-        navigationMode: runtime.profile.navigationMode,
-        pageMode: runtime.profile.pageMode,
-        selectedPage: selectedPage(section),
-        currentPageCards: currentPageSlots(scroller, track).length,
-        expectedPageSlots: responsiveColumns,
-        internalIndicator: "netflix-react-item-index"
-      });
-      const motionLease = native.suppressMotion(section, track);
-      try {
-        let guard = estimatedPages * 3 + 12;
-        let previousPageSignature = "";
-        while (guard-- > 0 && collectedCount() < goal) {
-          ensureCollectionTime("collect-page");
-          const beforeCount = collectedCount();
-          const remaining = Math.max(0, goal - beforeCount);
-          const expectedSlots = Math.max(1, Math.min(responsiveColumns, remaining));
-          const stabilizeStarted = performance.now();
-          const slots = await waitStableCurrentPage(scroller, track, {
-            previousSignature: previousPageSignature,
-            minimumSlots: expectedSlots,
-            minimumNewItems: 1,
-            seenKeys: videoIndex,
-            sessionToken
-          });
-          assertOperation(operation);
-          let stabilizedSignature = visibleSignature(slots);
-          let stabilizedTransform = trackTransformValue(track);
-          let pageState = nativeLogicalPageState(
-            scroller,
-            track,
-            totalCount,
-            responsiveColumns
-          );
-          const initialLogicalPageStateValid = pageState.positions.length > 0 && pageState.positions.every((position) => Number.isSafeInteger(position.itemIndex)) && Number.isFinite(pageState.page);
-          if (!initialLogicalPageStateValid) {
-            const fullWindowSlots = Math.max(1, Math.min(responsiveColumns, totalCount));
-            log("Transient partial logical page detected; waiting for native window completion", {
-              totalCount,
-              columns: responsiveColumns,
-              requestedMinimumSlots: expectedSlots,
-              recoveryMinimumSlots: fullWindowSlots,
-              slots: pageState.slots.length,
-              itemIndices: pageState.itemIndices,
-              logicalIndices: pageState.logicalIndices,
-              resolvedPage: pageState.page
-            });
-            const recoveredSlots = await waitStableCurrentPage(scroller, track, {
-              previousSignature: "",
-              minimumSlots: fullWindowSlots,
-              minimumNewItems: 1,
-              seenKeys: videoIndex,
-              requiredStableFrames: 2,
-              timeout: PARTIAL_PAGE_RECOVERY_TIMEOUT_MS,
-              sessionToken
-            });
-            assertOperation(operation);
-            stabilizedSignature = visibleSignature(recoveredSlots);
-            stabilizedTransform = trackTransformValue(track);
-            pageState = requireNativeLogicalPageState(
-              scroller,
-              track,
-              totalCount,
-              responsiveColumns,
-              "logical-item-index-detection-retry"
-            );
-          } else {
-            pageState = requireNativeLogicalPageState(
-              scroller,
-              track,
-              totalCount,
-              responsiveColumns,
-              "logical-item-index-detection"
-            );
-          }
-          if (visibleSignature(pageState.slots) !== stabilizedSignature) {
-            incomplete("collect-page", "raw-index-page-changed-during-stabilization", {
-              stabilizedSignature,
-              currentSignature: visibleSignature(pageState.slots),
-              itemIndices: pageState.itemIndices,
-              logicalIndices: pageState.logicalIndices
-            });
-          }
-          const page = pageState.page;
-          native.notePage(section, page);
-          forceLogicalPageSignature(section, stabilizedSignature, page);
-          stablePageTransforms.set(page, stabilizedTransform);
-          if (initialPage === null) {
-            initialPage = page;
-            operation.initialPage = initialPage;
-            publish(operation, { initialPage });
-            log("Logical My List native position located", {
-              page,
-              itemIndices: pageState.itemIndices,
-              logicalIndices: pageState.logicalIndices,
-              signature: stabilizedSignature
-            });
-          }
-          if (visitedSignatures.has(stabilizedSignature) && collectedCount() < goal) {
-            native.markCycle(section);
-            incomplete("collect-page", "known-signature-cycle-before-total-count", {
-              page,
-              signature: stabilizedSignature,
-              itemIndices: pageState.itemIndices,
-              logicalIndices: pageState.logicalIndices
-            });
-          }
-          visitedSignatures.add(stabilizedSignature);
-          const pageFacts = report.pageFacts(
-            page,
-            page,
-            pageState.positions.map((position) => position.slot),
-            expectedSlots,
-            1,
-            videoIndex
-          );
-          pageFacts.slots = pageState.slots.length;
-          const indexFacts = { itemIndices: pageState.itemIndices, logicalIndices: pageState.logicalIndices };
-          log(tLog("collectionPageStabilized"), {
-            ...pageFacts,
-            signature: stabilizedSignature,
-            transform: stabilizedTransform,
-            ...indexFacts,
-            stabilizeElapsedMs: Math.round(performance.now() - stabilizeStarted)
-          });
-          if (pageState.slots.length < expectedSlots || pageFacts.newItemsReady < 1 || !stabilizedSignature) {
-            const details = {
-              ...pageFacts,
-              signaturePresent: Boolean(stabilizedSignature),
-              ...indexFacts
-            };
-            logOperationTimeout("logical-page-stabilization", PAGE_STABLE_TIMEOUT_MS, details);
-            throw initializationTimeoutError("logical-page-stabilization", PAGE_STABLE_TIMEOUT_MS, details);
-          }
-          const added = [];
-          for (const position of pageState.positions) {
-            const logicalIndex = position.logicalIndex;
-            if (!Number.isSafeInteger(logicalIndex) || logicalIndex < 0 || logicalIndex >= totalCount) {
-              snapshotWork.consistencyFailures++;
-              incomplete("collect-page", "invalid-logical-index", {
-                page,
-                itemIndex: position.itemIndex,
-                logicalIndex
-              });
-            }
-            const canonicalPage = Math.min(estimatedPages - 1, Math.floor(logicalIndex / responsiveColumns));
-            snapshotWork.metadataReads++;
-            const item = itemFromSlot(position.slot, canonicalPage, false);
-            if (!item) {
-              snapshotWork.invalidMetadata++;
-              continue;
-            }
-            const key = itemKey(item);
-            const existingAtIndex = itemsByLogicalIndex.get(logicalIndex);
-            if (existingAtIndex && itemKey(existingAtIndex) !== key) {
-              snapshotWork.consistencyFailures++;
-              incomplete("collect-page", "logical-index-content-changed-during-scan", {
-                page,
-                logicalIndex,
-                previous: itemSummary(existingAtIndex),
-                current: itemSummary(item)
-              });
-            }
-            const existingIndex = videoIndex.get(key);
-            if (Number.isSafeInteger(existingIndex) && existingIndex !== logicalIndex) {
-              snapshotWork.consistencyFailures++;
-              incomplete("collect-page", "video-id-moved-during-scan", {
-                page,
-                key,
-                previousLogicalIndex: existingIndex,
-                currentLogicalIndex: logicalIndex
-              });
-            }
-            if (existingAtIndex) {
-              snapshotWork.duplicateSnapshotsAvoided++;
-              continue;
-            }
-            captureMaterial(operation, item, position.slot);
-            snapshotWork.snapshotsCaptured++;
-            item.logicalIndex = logicalIndex;
-            itemsByLogicalIndex.set(logicalIndex, item);
-            videoIndex.set(key, logicalIndex);
-            added.push(item);
-          }
-          report.pageResult(page, added, collectedCount(), { missing: Math.max(0, goal - collectedCount()) });
-          endingPage = page;
-          if (collectedCount() >= goal) {
-            completionReason = "total-count-and-logical-index-range-reached";
-            break;
-          }
-          previousPageSignature = stabilizedSignature;
-          const rightControl = carouselMoveButton(section, scroller, 1);
-          if (!rightControl.button) {
-            incomplete("advance-right", "right-control-not-found", { selector: rightControl.selector, page });
-          }
-          if (carouselMoveButtonDisabled(rightControl.button)) {
-            incomplete("advance-right", "right-edge-before-total-count", { page });
-          }
-          const beforeSignature = stabilizedSignature;
-          await moveOnePage(section, scroller, 1, null, sessionToken);
-          assertOperation(operation);
-          const afterSignature = visibleSignature(currentPageSlots(scroller, track));
-          if (!afterSignature || afterSignature === beforeSignature) {
-            incomplete("advance-right", "enabled-control-did-not-change-page", {
-              page,
-              beforeSignature,
-              afterSignature
-            });
-          }
-        }
-        if (collectedCount() !== totalCount) {
-          incomplete("validate-count", guard <= 0 ? "guard-exhausted" : "collected-count-mismatch", {
-            expected: totalCount,
-            actual: collectedCount()
-          });
-        }
-        const missingLogicalIndices = [];
-        for (let index = 0; index < totalCount; index++) {
-          if (!itemsByLogicalIndex.has(index)) missingLogicalIndices.push(index);
-        }
-        if (missingLogicalIndices.length) {
-          incomplete("validate-logical-index-range", "logical-index-gap", {
-            missingLogicalIndices
-          });
-        }
-        const items = Array.from({ length: totalCount }, (_, logicalIndex) => itemsByLogicalIndex.get(logicalIndex));
-        const uniqueKeys = new Set(items.map(itemKey).filter(Boolean));
-        if (uniqueKeys.size !== totalCount) {
-          incomplete("validate-logical-index-range", "duplicate-item-key-across-logical-indices", {
-            expected: totalCount,
-            uniqueKeys: uniqueKeys.size
-          });
-        }
-        completionReason = completionReason || "total-count-and-logical-index-range-reached";
-        native.completeCollection(section, estimatedPages);
-        initialPage = Number.isFinite(initialPage) ? initialPage : 0;
-        operation.initialPage = initialPage;
-        publish(operation, { initialPage });
-        forceLogicalPageSignature(section, visibleSignature(currentPageSlots(scroller, track)), endingPage);
-        log(tLog("logicalCarouselPagesFinalized"), {
-          pageCount: runtime.knownPageCount,
-          pageCountFinalized: runtime.pageCountFinalized,
-          endingPage,
-          initialPage,
-          signatures: runtime.signatureToPage.size,
-          totalCount,
-          collected: items.length,
-          completionReason,
-          cycleDetected: runtime.cycleDetected,
-          indexCoverage: `${itemsByLogicalIndex.size}/${totalCount}`
-        });
-        if (endingPage !== initialPage) {
-          const restorationStarted = performance.now();
-          const canonicalTargetTransform = stablePageTransforms.get(initialPage) || "";
-          const restorationComplete = await report.restore(
-            items,
-            responsiveColumns,
-            initialPage,
-            endingPage,
-            canonicalTargetTransform,
-            restorationStarted
-          );
-          assertOperation(operation);
-          if (!restorationComplete || selectedPage(section) !== initialPage) {
-            incomplete("restore-initial-page", "native-restoration-incomplete", {
-              from: endingPage,
-              target: initialPage,
-              selectedPage: selectedPage(section)
-            });
-          }
-        }
-        report.complete(items, endingPage, initialPage, {
-          completionReason,
-          cycleDetected: runtime.cycleDetected,
-          domGeneration: runtime.profile.generation
-        });
-        return items;
-      } finally {
-        motionLease.release();
-      }
-    }
-    async function collectAllItems(operation) {
-      const { section, scroller, track, totalCount, sessionToken } = operation;
-      assertOperation(operation);
-      const profile = getCarouselDomRuntime(section)?.profile || detectCarouselDomProfile(section);
-      if (profile.pageMode === "logical") {
-        return collectAllItemsLogical(operation);
-      }
-      assertOperation(operation);
-      const snapshotWork = operation.counters;
-      const items = [];
-      const seen = /* @__PURE__ */ new Set();
-      const pages = pageCount(section);
-      const goal = Number.isFinite(totalCount) ? totalCount : Infinity;
-      const initialCurrentSlots = currentPageSlots(scroller, track);
-      const responsiveColumns = operation.columns || initialCurrentSlots.length || 1;
-      const expectedPageSlots = pages === 1 ? Math.max(1, initialCurrentSlots.length) : Math.max(
-        1,
-        Math.min(
-          responsiveColumns,
-          Number.isFinite(totalCount) ? totalCount : responsiveColumns
-        )
-      );
-      const started = performance.now();
-      const report = scanReporter(operation, goal, started);
-      const initialPage = selectedPage(section);
-      operation.initialPage = initialPage;
-      publish(operation, { initialPage });
-      log(tLog("fullCollectionStarted"), {
-        totalCount,
-        goal,
-        pages,
-        selectedPage: selectedPage(section),
-        currentPageCards: currentPageSlots(scroller, track).length,
-        expectedPageSlots
-      });
-      const stablePageTransforms = /* @__PURE__ */ new Map();
-      let endingPage = initialPage;
-      const motionLease = native.suppressMotion(section, track);
-      try {
-        assertOperation(operation);
-        const signatureBeforeStartMove = visibleSignature(currentPageSlots(scroller, track));
-        await goToPage(section, scroller, 0, null, sessionToken);
-        assertOperation(operation);
-        let previousPageSignature = initialPage === 0 ? "" : signatureBeforeStartMove;
-        for (let page = 0; page < pages && (!Number.isFinite(goal) || items.length < goal); page++) {
-          const actualPage = selectedPage(section);
-          const beforeCount = items.length;
-          const remaining = Number.isFinite(goal) ? Math.max(0, goal - items.length) : Infinity;
-          const singlePageList = pages === 1;
-          const minimumNewItems = singlePageList ? expectedPageSlots : page < pages - 1 ? Math.min(expectedPageSlots, remaining) : Number.isFinite(remaining) ? Math.min(expectedPageSlots, remaining) : 1;
-          const minimumSlots = singlePageList ? expectedPageSlots : page < pages - 1 ? expectedPageSlots : Number.isFinite(remaining) ? Math.min(expectedPageSlots, Math.max(1, remaining)) : expectedPageSlots;
-          const stabilizeStarted = performance.now();
-          const slots = await waitStableCurrentPage(scroller, track, {
-            previousSignature: previousPageSignature,
-            minimumSlots,
-            minimumNewItems,
-            seenKeys: seen,
-            sessionToken
-          });
-          assertOperation(operation);
-          const stabilizedSignature = visibleSignature(slots);
-          const stabilizedTransform = trackTransformValue(track);
-          stablePageTransforms.set(actualPage, stabilizedTransform);
-          const pageFacts = report.pageFacts(page, actualPage, slots, minimumSlots, minimumNewItems, seen);
-          log(tLog("collectionPageStabilized"), {
-            ...pageFacts,
-            signature: stabilizedSignature,
-            transform: stabilizedTransform,
-            stabilizeElapsedMs: Math.round(performance.now() - stabilizeStarted)
-          });
-          if (slots.length < minimumSlots || pageFacts.newItemsReady < minimumNewItems) {
-            warn(tLog("collectionStoppedBecauseThePageNeverReachedTheExpectedStableState"), {
-              ...pageFacts,
-              timeoutMs: PAGE_STABLE_TIMEOUT_MS
-            });
-            break;
-          }
-          for (const slot of slots) {
-            if (Number.isFinite(goal) && items.length >= goal) break;
-            snapshotWork.metadataReads++;
-            const item = itemFromSlot(slot, actualPage, false);
-            if (!item) {
-              snapshotWork.invalidMetadata++;
-              continue;
-            }
-            const key = itemKey(item);
-            if (seen.has(key)) {
-              snapshotWork.duplicateSnapshotsAvoided++;
-              continue;
-            }
-            captureMaterial(operation, item, slot);
-            snapshotWork.snapshotsCaptured++;
-            seen.add(key);
-            items.push(item);
-          }
-          const added = items.slice(beforeCount);
-          report.pageResult(actualPage, added, items.length);
-          if (Number.isFinite(goal) && items.length >= goal || actualPage >= pages - 1) break;
-          previousPageSignature = stabilizedSignature;
-          const next = await moveOnePage(section, scroller, 1, null, sessionToken);
-          assertOperation(operation);
-          if (next === actualPage) {
-            warn(tLog("couldNotAdvanceDuringFullCollection"), {
-              actualPage,
-              items: items.length,
-              goal
-            });
-            break;
-          }
-        }
-        endingPage = selectedPage(section);
-        if (endingPage !== initialPage) {
-          const restorationStarted = performance.now();
-          const canonicalTargetTransform = stablePageTransforms.get(initialPage) || "";
-          log(tLog("nativeRestorationBaselineCaptured"), {
-            from: endingPage,
-            target: initialPage,
-            pages,
-            pageCountParity: pages % 2 === 0 ? "even" : "odd",
-            moveCount: Math.abs(endingPage - initialPage),
-            moveCountParity: Math.abs(endingPage - initialPage) % 2 === 0 ? "even" : "odd",
-            canonicalTargetTransform
-          });
-          const restorationComplete = await report.restore(
-            items,
-            expectedPageSlots,
-            initialPage,
-            endingPage,
-            canonicalTargetTransform,
-            restorationStarted
-          );
-          assertOperation(operation);
-          if (restorationComplete && selectedPage(section) === initialPage) {
-            await nextFrame(operation);
-            assertOperation(operation);
-            await nextFrame(operation);
-            assertOperation(operation);
-          }
-        }
-      } finally {
-        motionLease.release();
-      }
-      report.complete(items, endingPage, initialPage);
-      return items;
     }
     return Object.freeze({
       collect,
@@ -24050,7 +24204,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.8";
+  var SCRIPT_VERSION = "1.11.9";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

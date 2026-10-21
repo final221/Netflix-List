@@ -8,7 +8,7 @@ Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released u
 
 For copies installed from the former root location, open the released-userscript link once and confirm the update in Tampermonkey. The script name/namespace is unchanged; this release specifies the new URLs for future updates.
 
-Version **1.11.8** separates Carousel sampling, registered source resolution and observations while retaining binding/model authority and all public behavior. All 770 offline tests pass. This is stage 1 of the selected seven-release ownership refactoring; combined Windows/Firefox validation remains pending. See [findings](docs/findings.md#selected-seven-release-ownership-refactoring).
+Version **1.11.9** separates native movement waits/motion leases and complete logical/indicator collection strategies. Queue policy and collection resource ownership remain at their entry points. All 770 offline tests pass. Stages 1-2 of the selected seven-release refactoring are complete; combined Windows/Firefox validation remains pending. See [findings](docs/findings.md#selected-seven-release-ownership-refactoring).
 
 Version **1.11.6** requires native confirmation before removing a My List card, repairs discovery when Netflix mounts late, coalesces cross-tab storage reloads and reduces browsing work for large viewing histories. Encountered title names no longer block new saved choices at the incidental-history limit. CopyLogs includes confirmation/reload counters.
 
