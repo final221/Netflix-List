@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.12
+// @version      1.11.13
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -780,6 +780,100 @@
     });
   }
 
+  // src/hover/input.js
+  function createHoverInput({
+    document,
+    Element,
+    gridOwnsClone,
+    sessionScope,
+    isRouteSessionActive,
+    handleGridClonePointerOver,
+    handleGridClonePointerLeave,
+    cancelPendingGridHover,
+    handleTargetPointerMove,
+    previewPointerOut,
+    handleHoverDiagnosticVisibilityChange,
+    handleTargetScroll
+  }) {
+    let listenersActive = false;
+    let listenerRevision = 0;
+    let documentListeners = [];
+    const gridListeners = /* @__PURE__ */ new Map();
+    function gridCloneFromPointerEvent(event, grid, includeViewingControls = false) {
+      let node = event.target instanceof Element ? event.target : event.target?.parentElement;
+      while (node && node !== grid) {
+        if (!includeViewingControls && node.getAttribute("data-tm-viewing-actions") === "true") return null;
+        if (node.__tmMyListItem && gridOwnsClone(node, grid)) return node;
+        node = node.parentElement;
+      }
+      return null;
+    }
+    function ensureGridHoverBehavior(grid) {
+      if (!grid || grid.__tmHoverBehaviorInstalled) return;
+      for (const [previous, listeners] of gridListeners) if (!previous.isConnected) {
+        previous.removeEventListener("pointerover", listeners.over, true);
+        previous.removeEventListener("pointerout", listeners.out, true);
+        delete previous.__tmHoverBehaviorInstalled;
+        gridListeners.delete(previous);
+      }
+      grid.__tmHoverBehaviorInstalled = true;
+      const installedSession = sessionScope.token;
+      const over = (event) => {
+        if (!listenersActive || gridListeners.get(grid)?.over !== over || !isRouteSessionActive(installedSession)) return;
+        const clone = gridCloneFromPointerEvent(event, grid);
+        if (clone) {
+          clone.__tmViewingControlHovered = false;
+          handleGridClonePointerOver(event, clone, clone.__tmMyListItem);
+        } else {
+          const controlClone = gridCloneFromPointerEvent(event, grid, true);
+          if (controlClone) {
+            controlClone.__tmViewingControlHovered = true;
+            handleGridClonePointerLeave(controlClone, controlClone.__tmMyListItem, event.target, event);
+          } else cancelPendingGridHover("controls");
+        }
+      };
+      const out = (event) => {
+        if (!listenersActive || gridListeners.get(grid)?.out !== out || !isRouteSessionActive(installedSession)) return;
+        const clone = gridCloneFromPointerEvent(event, grid);
+        if (!clone || event.relatedTarget && clone.contains(event.relatedTarget)) return;
+        handleGridClonePointerLeave(clone, clone.__tmMyListItem, event.relatedTarget, event);
+      };
+      gridListeners.set(grid, { over, out });
+      grid.addEventListener("pointerover", over, { capture: true, passive: true });
+      grid.addEventListener("pointerout", out, { capture: true, passive: true });
+    }
+    function start() {
+      if (listenersActive) return;
+      listenersActive = true;
+      const revision = ++listenerRevision, sessionToken = sessionScope.token;
+      documentListeners = [
+        ["pointermove", handleTargetPointerMove, true],
+        ["pointerout", previewPointerOut, true],
+        ["visibilitychange", handleHoverDiagnosticVisibilityChange, false],
+        ["wheel", handleTargetScroll, true],
+        ["scroll", handleTargetScroll, true]
+      ].map(([type, callback, capture]) => ({ type, capture, listener: (event) => {
+        if (listenersActive && listenerRevision === revision && isRouteSessionActive(sessionToken)) callback(event);
+      } }));
+      for (const entry of documentListeners) document.addEventListener(entry.type, entry.listener, { passive: true, capture: entry.capture });
+    }
+    function dispose() {
+      listenersActive = false;
+      listenerRevision++;
+      const retiredListeners = documentListeners;
+      documentListeners = [];
+      for (const entry of retiredListeners) document.removeEventListener(entry.type, entry.listener, entry.capture);
+      const retiredGrids = [...gridListeners];
+      gridListeners.clear();
+      for (const [grid, listeners] of retiredGrids) {
+        grid.removeEventListener("pointerover", listeners.over, true);
+        grid.removeEventListener("pointerout", listeners.out, true);
+        delete grid.__tmHoverBehaviorInstalled;
+      }
+    }
+    return Object.freeze({ start, dispose, install: ensureGridHoverBehavior, target: gridCloneFromPointerEvent });
+  }
+
   // src/hover/timing.js
   function createHoverTiming(options) {
     const {
@@ -1156,10 +1250,6 @@
     let hoverSequence = 0;
     let activeAttempt = null, handoffCard = null;
     const retryWaits = /* @__PURE__ */ new Map();
-    let listenersActive = false;
-    let listenerRevision = 0;
-    let documentListeners = [];
-    const gridListeners = /* @__PURE__ */ new Map();
     const timing = createHoverTiming({
       ...options,
       isRouteSessionActive,
@@ -1170,6 +1260,21 @@
     const recordHoverTiming = (...args) => timing.record(...args);
     const startHoverFrameDiagnostics = (phase) => timing.start(phase);
     const stopHoverFrameDiagnostics = (reason) => timing.stop(reason);
+    const input = createHoverInput({
+      document,
+      Element,
+      gridOwnsClone,
+      sessionScope,
+      isRouteSessionActive,
+      handleGridClonePointerOver,
+      handleGridClonePointerLeave,
+      cancelPendingGridHover,
+      handleTargetPointerMove,
+      previewPointerOut: (event) => nativePopup.previewPointerOut(event),
+      handleHoverDiagnosticVisibilityChange,
+      handleTargetScroll
+    });
+    const ensureGridHoverBehavior = input.install;
     const nativePopup = options.createPopup({
       readIntent: () => intent(),
       readDiagnostics: () => performanceDiagnostics,
@@ -1524,14 +1629,8 @@
         retryWaits.set(timer, resolve);
       });
     }
-    function gridCloneFromPointerEvent(event, grid, includeViewingControls = false) {
-      let node = event.target instanceof Element ? event.target : event.target?.parentElement;
-      while (node && node !== grid) {
-        if (!includeViewingControls && node.getAttribute("data-tm-viewing-actions") === "true") return null;
-        if (node.__tmMyListItem && gridOwnsClone(node, grid)) return node;
-        node = node.parentElement;
-      }
-      return null;
+    function gridCloneFromPointerEvent(...args) {
+      return input.target(...args);
     }
     function gridHoverSuppressed() {
       return hoverNeedsPointerMove || performance.now() - lastTargetScrollAt < HOVER_SCROLL_QUIET_MS;
@@ -1675,40 +1774,6 @@
     function associateGridHoverItem(item, clone) {
       clone.__tmMyListItem = item;
     }
-    function ensureGridHoverBehavior(grid) {
-      if (!grid || grid.__tmHoverBehaviorInstalled) return;
-      for (const [previous, listeners] of gridListeners) if (!previous.isConnected) {
-        previous.removeEventListener("pointerover", listeners.over, true);
-        previous.removeEventListener("pointerout", listeners.out, true);
-        delete previous.__tmHoverBehaviorInstalled;
-        gridListeners.delete(previous);
-      }
-      grid.__tmHoverBehaviorInstalled = true;
-      const installedSession = sessionScope.token;
-      const over = (event) => {
-        if (!listenersActive || gridListeners.get(grid)?.over !== over || !isRouteSessionActive(installedSession)) return;
-        const clone = gridCloneFromPointerEvent(event, grid);
-        if (clone) {
-          clone.__tmViewingControlHovered = false;
-          handleGridClonePointerOver(event, clone, clone.__tmMyListItem);
-        } else {
-          const controlClone = gridCloneFromPointerEvent(event, grid, true);
-          if (controlClone) {
-            controlClone.__tmViewingControlHovered = true;
-            handleGridClonePointerLeave(controlClone, controlClone.__tmMyListItem, event.target, event);
-          } else cancelPendingGridHover("controls");
-        }
-      };
-      const out = (event) => {
-        if (!listenersActive || gridListeners.get(grid)?.out !== out || !isRouteSessionActive(installedSession)) return;
-        const clone = gridCloneFromPointerEvent(event, grid);
-        if (!clone || event.relatedTarget && clone.contains(event.relatedTarget)) return;
-        handleGridClonePointerLeave(clone, clone.__tmMyListItem, event.relatedTarget, event);
-      };
-      gridListeners.set(grid, { over, out });
-      grid.addEventListener("pointerover", over, { capture: true, passive: true });
-      grid.addEventListener("pointerout", out, { capture: true, passive: true });
-    }
     function handleTargetPointerMove(event) {
       if (!event.isTrusted) return;
       const moved = event.clientX !== lastPointerX || event.clientY !== lastPointerY;
@@ -1766,34 +1831,8 @@
       clearSourceAlignment(void 0, reason);
       if (hoverToken === token) nativePopup.invalidate();
     }
-    function start() {
-      if (listenersActive) return;
-      listenersActive = true;
-      const revision = ++listenerRevision, sessionToken = sessionScope.token;
-      documentListeners = [
-        ["pointermove", handleTargetPointerMove, true],
-        ["pointerout", nativePopup.previewPointerOut, true],
-        ["visibilitychange", handleHoverDiagnosticVisibilityChange, false],
-        ["wheel", handleTargetScroll, true],
-        ["scroll", handleTargetScroll, true]
-      ].map(([type, callback, capture]) => ({ type, capture, listener: (event) => {
-        if (listenersActive && listenerRevision === revision && isRouteSessionActive(sessionToken)) callback(event);
-      } }));
-      for (const entry of documentListeners) document.addEventListener(entry.type, entry.listener, { passive: true, capture: entry.capture });
-    }
     function dispose() {
-      listenersActive = false;
-      listenerRevision++;
-      const retiredListeners = documentListeners;
-      documentListeners = [];
-      for (const entry of retiredListeners) document.removeEventListener(entry.type, entry.listener, entry.capture);
-      const retiredGrids = [...gridListeners];
-      gridListeners.clear();
-      for (const [grid, listeners] of retiredGrids) {
-        grid.removeEventListener("pointerover", listeners.over, true);
-        grid.removeEventListener("pointerout", listeners.out, true);
-        delete grid.__tmHoverBehaviorInstalled;
-      }
+      input.dispose();
       lastTargetScrollAt = -Infinity;
       hoverNeedsPointerMove = false;
       lastPointerX = -1;
@@ -1802,7 +1841,7 @@
       cancel("route");
     }
     return Object.freeze({
-      start,
+      start: input.start,
       dispose,
       releaseInteraction() {
         clearActive();
@@ -1852,6 +1891,237 @@
         handoffCard = null;
         return true;
       }
+    });
+  }
+
+  // src/netflix/native-popup/dom-pairs.js
+  function pairDomTrees(sourceRoot, cloneRoot, Element) {
+    const domMap = /* @__PURE__ */ new Map();
+    const pairs = [];
+    function walk(source, clone) {
+      if (!(source instanceof Element) || !(clone instanceof Element)) return;
+      domMap.set(source, clone);
+      pairs.push([source, clone]);
+      const sourceChildren = source.children;
+      const cloneChildren = clone.children;
+      const count = Math.min(sourceChildren.length, cloneChildren.length);
+      for (let i = 0; i < count; i++) walk(sourceChildren[i], cloneChildren[i]);
+    }
+    walk(sourceRoot, cloneRoot);
+    return { domMap, pairs };
+  }
+
+  // src/netflix/native-popup/graft.js
+  function createGraft({ Element, Node, warn, tLog, onCleanupFailure }) {
+    const graftedGridClones = /* @__PURE__ */ new Set(), graftValues = /* @__PURE__ */ new WeakMap(), graftHandles = /* @__PURE__ */ new WeakMap();
+    const netflixReactHover = Object.freeze({
+      clearClone(root) {
+        const nodes = [root, ...root.querySelectorAll("*")];
+        for (const node of nodes) {
+          for (const key of Object.getOwnPropertyNames(node)) {
+            if (!key.startsWith("__react")) continue;
+            if (key.startsWith("__reactContainer$")) continue;
+            try {
+              delete node[key];
+            } catch (_) {
+            }
+          }
+        }
+      },
+      graftTreeToClone(sourceRoot, cloneRoot) {
+        const { domMap, pairs } = pairDomTrees(sourceRoot, cloneRoot, Element);
+        const fiberMap = /* @__PURE__ */ new Map();
+        let fiberAssignments = 0;
+        let propsAssignments = 0;
+        function cloneFiberChain(sourceFiber) {
+          if (!sourceFiber || typeof sourceFiber !== "object") return sourceFiber;
+          if (fiberMap.has(sourceFiber)) return fiberMap.get(sourceFiber);
+          const clonedFiber = Object.assign(
+            Object.create(Object.getPrototypeOf(sourceFiber) || Object.prototype),
+            sourceFiber
+          );
+          fiberMap.set(sourceFiber, clonedFiber);
+          if (sourceFiber.stateNode instanceof Node && domMap.has(sourceFiber.stateNode)) {
+            clonedFiber.stateNode = domMap.get(sourceFiber.stateNode);
+          }
+          clonedFiber.return = cloneFiberChain(sourceFiber.return);
+          return clonedFiber;
+        }
+        const groups = [
+          {
+            prefixes: ["__reactFiber$", "__reactInternalInstance$"],
+            copy: cloneFiberChain,
+            assigned: () => fiberAssignments++,
+            failure: "fiberGraftFailed"
+          },
+          {
+            prefixes: ["__reactProps$", "__reactEventHandlers$"],
+            copy: (value) => value,
+            assigned: () => propsAssignments++,
+            failure: "propsGraftFailed"
+          },
+          { prefixes: ["__react"], copy: (value) => value, assigned: () => {
+          }, failure: null }
+        ];
+        for (const [source, clone] of pairs) {
+          const keys = groups.map(() => []);
+          for (const key of Object.getOwnPropertyNames(source)) {
+            if (!key.startsWith("__react") || key.startsWith("__reactContainer$")) continue;
+            keys[groups.findIndex((group) => group.prefixes.some((prefix) => key.startsWith(prefix)))].push(key);
+          }
+          groups.forEach((group, index) => {
+            for (const key of keys[index]) {
+              try {
+                clone[key] = group.copy(source[key]);
+                group.assigned();
+              } catch (error) {
+                if (group.failure) warn(tLog(group.failure), key, error);
+              }
+            }
+          });
+        }
+        cloneRoot.setAttribute("data-tm-react-grafted", "true");
+        graftedGridClones.add(cloneRoot);
+        graftValues.set(cloneRoot, pairs.map(([, node]) => ({ node, keys: Object.getOwnPropertyNames(node).filter((key) => key.startsWith("__react") && !key.startsWith("__reactContainer$")).map((key) => [key, node[key]]) })));
+        return { fiberAssignments, propsAssignments, clonedFibers: fiberMap.size };
+      }
+    });
+    function releaseGridReact(clone) {
+      if (!clone || !graftedGridClones.delete(clone)) return;
+      const entries = graftValues.get(clone);
+      graftValues.delete(clone);
+      graftHandles.delete(clone);
+      if (entries) {
+        for (const { node, keys } of entries) for (const [key, value] of keys) {
+          try {
+            if (!graftValues.has(clone) && node[key] === value) delete node[key];
+          } catch (_) {
+          }
+        }
+      } else netflixReactHover.clearClone(clone);
+      for (const attribute of ["data-tm-hover-ready", "data-tm-backed-page", "data-tm-react-grafted"]) {
+        try {
+          if (!graftValues.has(clone)) clone.removeAttribute(attribute);
+        } catch (_) {
+          onCleanupFailure();
+        }
+      }
+    }
+    function invalidateGridReact(except = null) {
+      for (const clone of graftedGridClones) {
+        if (clone !== except || !clone.isConnected) releaseGridReact(clone);
+      }
+    }
+    return Object.freeze({
+      graft: netflixReactHover.graftTreeToClone,
+      release: releaseGridReact,
+      invalidate: invalidateGridReact,
+      associate: (handle) => graftHandles.set(handle.node, handle),
+      replaced: (handle) => graftHandles.has(handle.node) && graftHandles.get(handle.node) !== handle,
+      owns: (handle) => graftHandles.get(handle.node) === handle,
+      forget: (handle) => graftHandles.delete(handle.node),
+      pending: () => graftedGridClones.size
+    });
+  }
+
+  // src/netflix/native-popup/geometry.js
+  function createGeometry({ Element, warn, tLog, onAlignmentRestore, diagnosticFailure }) {
+    const geometryMethods = /* @__PURE__ */ new WeakMap(), leases = /* @__PURE__ */ new WeakMap();
+    let activeGeometryProxy = null, alignmentRestores = 0, alignmentRestoreFailures = 0;
+    function restoreGeometryProxy(lease) {
+      const proxy = leases.get(lease);
+      if (activeGeometryProxy === proxy) activeGeometryProxy = null;
+      if (!proxy) return;
+      leases.delete(lease);
+      let failures = 0;
+      for (const entry of proxy.entries) {
+        for (const method2 of ["getBoundingClientRect", "getClientRects"]) {
+          const descriptor = entry.descriptors[method2];
+          const methods = geometryMethods.get(entry.source);
+          if (entry.installed && methods?.[method2]?.lease !== entry) continue;
+          if (entry.installed && Object.getOwnPropertyDescriptor(entry.source, method2)?.value !== entry.installed[method2]) {
+            delete methods[method2];
+            continue;
+          }
+          try {
+            if (descriptor) {
+              Object.defineProperty(entry.source, method2, descriptor);
+            } else {
+              if (!delete entry.source[method2]) failures++;
+            }
+          } catch (_) {
+            failures++;
+          }
+          if (entry.installed) delete methods[method2];
+        }
+      }
+      if (activeGeometryProxy?.sourceSlot !== proxy.sourceSlot) proxy.sourceSlot.removeAttribute("data-tm-source-proxied");
+      alignmentRestores++;
+      alignmentRestoreFailures += failures;
+      try {
+        onAlignmentRestore(failures);
+      } catch (_) {
+        diagnosticFailure();
+      }
+      if (failures) {
+        warn(tLog("sourceAlignmentRestoreFailed"), { methods: failures, nodes: proxy.entries.length });
+      }
+    }
+    function makeClientRectList(rect) {
+      const list = [rect];
+      list.item = (index) => list[index] || null;
+      return list;
+    }
+    function install(sourceSlot, clone) {
+      const { pairs } = pairDomTrees(sourceSlot, clone, Element);
+      const entries = [];
+      for (const [source, target] of pairs) {
+        if (!(source instanceof Element) || !(target instanceof Element)) continue;
+        const methods = geometryMethods.get(source) || {};
+        geometryMethods.set(source, methods);
+        const descriptors = Object.fromEntries(["getBoundingClientRect", "getClientRects"].map((method2) => [method2, methods[method2] ? methods[method2].baseline : Object.getOwnPropertyDescriptor(source, method2) || null]));
+        const installed = { getBoundingClientRect: () => target.getBoundingClientRect(), getClientRects: () => makeClientRectList(target.getBoundingClientRect()) };
+        const entry = { source, descriptors, installed };
+        try {
+          Object.defineProperty(source, "getBoundingClientRect", {
+            configurable: true,
+            value: installed.getBoundingClientRect
+          });
+          Object.defineProperty(source, "getClientRects", {
+            configurable: true,
+            value: installed.getClientRects
+          });
+          entries.push(entry);
+          for (const method2 of ["getBoundingClientRect", "getClientRects"]) methods[method2] = { lease: entry, baseline: descriptors[method2] };
+        } catch (_) {
+          for (const method2 of ["getBoundingClientRect", "getClientRects"]) {
+            try {
+              if (descriptors[method2]) Object.defineProperty(source, method2, descriptors[method2]);
+              else delete source[method2];
+            } catch (_2) {
+            }
+          }
+        }
+      }
+      if (!entries.length) return false;
+      sourceSlot.setAttribute("data-tm-source-proxied", "true");
+      activeGeometryProxy = { sourceSlot, clone, entries };
+      const lease = Object.freeze({});
+      leases.set(lease, activeGeometryProxy);
+      activeGeometryProxy.lease = lease;
+      return true;
+    }
+    return Object.freeze({
+      install,
+      release: restoreGeometryProxy,
+      detach() {
+        const lease = activeGeometryProxy?.lease;
+        activeGeometryProxy = null;
+        return lease;
+      },
+      ownsClone: (clone) => activeGeometryProxy?.clone === clone,
+      detached: () => Boolean(activeGeometryProxy && (!activeGeometryProxy.sourceSlot.isConnected || !activeGeometryProxy.clone.isConnected)),
+      diagnostics: () => ({ geometryOwned: Boolean(activeGeometryProxy), alignmentRestores, alignmentRestoreFailures })
     });
   }
 
@@ -1916,169 +2186,22 @@
     const itemSummary = (item) => options.describeItem?.(item) || item;
     const initializationError = (...args) => options.createError?.(...args) || new Error(args[2]);
     const popupInspection = { capturePreview: (...args) => options.capturePreview?.(...args) };
-    let activeSourceSlot = null, activeGeometryProxy = null, activeNativeHover = null;
-    const graftedGridClones = /* @__PURE__ */ new Set();
-    const graftValues = /* @__PURE__ */ new WeakMap();
-    const geometryMethods = /* @__PURE__ */ new WeakMap();
+    let activeSourceSlot = null, activeNativeHover = null;
     let replayAdmission = null, replaySourceCurrent = null, replayGridCard = null;
     let interactionRevision = 0;
     let cleanupFailures = 0;
-    let alignmentRestores = 0, alignmentRestoreFailures = 0;
     const pendingFrames = /* @__PURE__ */ new Map();
-    const graftHandles = /* @__PURE__ */ new WeakMap();
-    const netflixReactHover = Object.freeze({
-      clearClone(root) {
-        const nodes = [root, ...root.querySelectorAll("*")];
-        for (const node of nodes) {
-          for (const key of Object.getOwnPropertyNames(node)) {
-            if (!key.startsWith("__react")) continue;
-            if (key.startsWith("__reactContainer$")) continue;
-            try {
-              delete node[key];
-            } catch (_) {
-            }
-          }
-        }
-      },
-      graftTreeToClone(sourceRoot, cloneRoot) {
-        const { domMap, pairs } = pairDomTrees(sourceRoot, cloneRoot);
-        const fiberMap = /* @__PURE__ */ new Map();
-        let fiberAssignments = 0;
-        let propsAssignments = 0;
-        function cloneFiberChain(sourceFiber) {
-          if (!sourceFiber || typeof sourceFiber !== "object") return sourceFiber;
-          if (fiberMap.has(sourceFiber)) return fiberMap.get(sourceFiber);
-          const clonedFiber = Object.assign(
-            Object.create(Object.getPrototypeOf(sourceFiber) || Object.prototype),
-            sourceFiber
-          );
-          fiberMap.set(sourceFiber, clonedFiber);
-          if (sourceFiber.stateNode instanceof Node && domMap.has(sourceFiber.stateNode)) {
-            clonedFiber.stateNode = domMap.get(sourceFiber.stateNode);
-          }
-          clonedFiber.return = cloneFiberChain(sourceFiber.return);
-          return clonedFiber;
-        }
-        const groups = [
-          {
-            prefixes: ["__reactFiber$", "__reactInternalInstance$"],
-            copy: cloneFiberChain,
-            assigned: () => fiberAssignments++,
-            failure: "fiberGraftFailed"
-          },
-          {
-            prefixes: ["__reactProps$", "__reactEventHandlers$"],
-            copy: (value) => value,
-            assigned: () => propsAssignments++,
-            failure: "propsGraftFailed"
-          },
-          { prefixes: ["__react"], copy: (value) => value, assigned: () => {
-          }, failure: null }
-        ];
-        for (const [source, clone] of pairs) {
-          const keys = groups.map(() => []);
-          for (const key of Object.getOwnPropertyNames(source)) {
-            if (!key.startsWith("__react") || key.startsWith("__reactContainer$")) continue;
-            keys[groups.findIndex((group) => group.prefixes.some((prefix) => key.startsWith(prefix)))].push(key);
-          }
-          groups.forEach((group, index) => {
-            for (const key of keys[index]) {
-              try {
-                clone[key] = group.copy(source[key]);
-                group.assigned();
-              } catch (error) {
-                if (group.failure) warn(tLog(group.failure), key, error);
-              }
-            }
-          });
-        }
-        cloneRoot.setAttribute("data-tm-react-grafted", "true");
-        graftedGridClones.add(cloneRoot);
-        graftValues.set(cloneRoot, pairs.map(([, node]) => ({ node, keys: Object.getOwnPropertyNames(node).filter((key) => key.startsWith("__react") && !key.startsWith("__reactContainer$")).map((key) => [key, node[key]]) })));
-        return { fiberAssignments, propsAssignments, clonedFibers: fiberMap.size };
-      }
+    const graft = createGraft({ Element, Node, warn, tLog, onCleanupFailure: () => cleanupFailures++ });
+    const { release: releaseGridReact, invalidate: invalidateGridReact } = graft;
+    const geometry = createGeometry({
+      Element,
+      warn,
+      tLog,
+      diagnosticFailure,
+      onAlignmentRestore: (failures) => options.onAlignmentRestore?.(failures)
     });
-    function pairDomTrees(sourceRoot, cloneRoot) {
-      const domMap = /* @__PURE__ */ new Map();
-      const pairs = [];
-      function walk(source, clone) {
-        if (!(source instanceof Element) || !(clone instanceof Element)) return;
-        domMap.set(source, clone);
-        pairs.push([source, clone]);
-        const sourceChildren = source.children;
-        const cloneChildren = clone.children;
-        const count = Math.min(sourceChildren.length, cloneChildren.length);
-        for (let i = 0; i < count; i++) walk(sourceChildren[i], cloneChildren[i]);
-      }
-      walk(sourceRoot, cloneRoot);
-      return { domMap, pairs };
-    }
-    function releaseGridReact(clone) {
-      if (!clone || !graftedGridClones.delete(clone)) return;
-      const entries = graftValues.get(clone);
-      graftValues.delete(clone);
-      graftHandles.delete(clone);
-      if (entries) {
-        for (const { node, keys } of entries) for (const [key, value] of keys) {
-          try {
-            if (!graftValues.has(clone) && node[key] === value) delete node[key];
-          } catch (_) {
-          }
-        }
-      } else netflixReactHover.clearClone(clone);
-      for (const attribute of ["data-tm-hover-ready", "data-tm-backed-page", "data-tm-react-grafted"]) {
-        try {
-          if (!graftValues.has(clone)) clone.removeAttribute(attribute);
-        } catch (_) {
-          cleanupFailures++;
-        }
-      }
-    }
-    function invalidateGridReact(except = null) {
-      for (const clone of graftedGridClones) {
-        if (clone !== except || !clone.isConnected) releaseGridReact(clone);
-      }
-    }
-    function restoreGeometryProxy(proxy = activeGeometryProxy) {
-      if (activeGeometryProxy === proxy) activeGeometryProxy = null;
-      if (!proxy) return;
-      let failures = 0;
-      for (const entry of proxy.entries) {
-        for (const method2 of ["getBoundingClientRect", "getClientRects"]) {
-          const descriptor = entry.descriptors[method2];
-          const methods = geometryMethods.get(entry.source);
-          if (entry.installed && methods?.[method2]?.lease !== entry) continue;
-          if (entry.installed && Object.getOwnPropertyDescriptor(entry.source, method2)?.value !== entry.installed[method2]) {
-            delete methods[method2];
-            continue;
-          }
-          try {
-            if (descriptor) {
-              Object.defineProperty(entry.source, method2, descriptor);
-            } else {
-              if (!delete entry.source[method2]) failures++;
-            }
-          } catch (_) {
-            failures++;
-          }
-          if (entry.installed) delete methods[method2];
-        }
-      }
-      if (activeGeometryProxy?.sourceSlot !== proxy.sourceSlot) proxy.sourceSlot.removeAttribute("data-tm-source-proxied");
-      alignmentRestores++;
-      alignmentRestoreFailures += failures;
-      try {
-        options.onAlignmentRestore?.(failures);
-      } catch (_) {
-        diagnosticFailure();
-      }
-      if (failures) {
-        warn(tLog("sourceAlignmentRestoreFailed"), { methods: failures, nodes: proxy.entries.length });
-      }
-    }
     function clearSourceAlignment(slot = activeSourceSlot, reason = "source-release", relatedTarget = null) {
-      const proxy = activeGeometryProxy;
-      activeGeometryProxy = null;
+      const proxy = geometry.detach();
       activeSourceSlot = null;
       try {
         releaseNativeHover(reason, relatedTarget);
@@ -2091,7 +2214,7 @@
         cleanupFailures++;
       }
       try {
-        restoreGeometryProxy(proxy);
+        geometry.release(proxy);
       } catch (_) {
         cleanupFailures++;
       }
@@ -2101,11 +2224,6 @@
         slot.style.removeProperty("z-index");
         slot.removeAttribute("data-tm-source-aligned");
       }
-    }
-    function makeClientRectList(rect) {
-      const list = [rect];
-      list.item = (index) => list[index] || null;
-      return list;
     }
     function releaseNativeHover(reason = "source-release", relatedTarget = null) {
       const owner = activeNativeHover;
@@ -2390,39 +2508,7 @@
       assertCurrent();
       clearSourceAlignment();
       assertCurrent();
-      const { pairs } = pairDomTrees(sourceSlot, clone);
-      const entries = [];
-      for (const [source, target] of pairs) {
-        if (!(source instanceof Element) || !(target instanceof Element)) continue;
-        const methods = geometryMethods.get(source) || {};
-        geometryMethods.set(source, methods);
-        const descriptors = Object.fromEntries(["getBoundingClientRect", "getClientRects"].map((method2) => [method2, methods[method2] ? methods[method2].baseline : Object.getOwnPropertyDescriptor(source, method2) || null]));
-        const installed = { getBoundingClientRect: () => target.getBoundingClientRect(), getClientRects: () => makeClientRectList(target.getBoundingClientRect()) };
-        const entry = { source, descriptors, installed };
-        try {
-          Object.defineProperty(source, "getBoundingClientRect", {
-            configurable: true,
-            value: installed.getBoundingClientRect
-          });
-          Object.defineProperty(source, "getClientRects", {
-            configurable: true,
-            value: installed.getClientRects
-          });
-          entries.push(entry);
-          for (const method2 of ["getBoundingClientRect", "getClientRects"]) methods[method2] = { lease: entry, baseline: descriptors[method2] };
-        } catch (_) {
-          for (const method2 of ["getBoundingClientRect", "getClientRects"]) {
-            try {
-              if (descriptors[method2]) Object.defineProperty(source, method2, descriptors[method2]);
-              else delete source[method2];
-            } catch (_2) {
-            }
-          }
-        }
-      }
-      if (!entries.length) return false;
-      sourceSlot.setAttribute("data-tm-source-proxied", "true");
-      activeGeometryProxy = { sourceSlot, clone, entries };
+      if (!geometry.install(sourceSlot, clone)) return false;
       activeSourceSlot = sourceSlot;
       return true;
     }
@@ -2603,7 +2689,7 @@
       const fresh = sourceSlot.cloneNode(true);
       try {
         assertExpected();
-        const stats = netflixReactHover.graftTreeToClone(sourceSlot, fresh);
+        const stats = graft.graft(sourceSlot, fresh);
         assertExpected();
         options.grid.normalizeCard(fresh);
         assertExpected();
@@ -2627,7 +2713,7 @@
           releaseGridReact(fresh);
           throw error;
         }
-        graftHandles.set(handle.node, handle);
+        graft.associate(handle);
         return { fresh: handle.node, stats: Object.freeze({ ...stats }), handle };
       } catch (error) {
         releaseGridReact(fresh);
@@ -2666,7 +2752,7 @@
         clearSourceAlignment(slot, reason, relatedTarget);
       },
       retire(handle) {
-        if (graftHandles.has(handle.node) && graftHandles.get(handle.node) !== handle) return;
+        if (graft.replaced(handle)) return;
         for (const [key, entry] of pendingFrames) if (entry.card === handle) {
           pendingFrames.delete(key);
           try {
@@ -2676,8 +2762,8 @@
           }
           entry.resolve(false);
         }
-        if (activeNativeHover?.gridCard === handle || graftHandles.get(handle.node) === handle && activeGeometryProxy?.clone === handle.node) clearSourceAlignment(void 0, "card-retired");
-        graftHandles.delete(handle.node);
+        if (activeNativeHover?.gridCard === handle || graft.owns(handle) && geometry.ownsClone(handle.node)) clearSourceAlignment(void 0, "card-retired");
+        graft.forget(handle);
         releaseGridReact(handle.node);
       },
       invalidate: invalidateGridReact,
@@ -2688,7 +2774,7 @@
       },
       checkDetached() {
         if (activeNativeHover?.previewRoot && !activeNativeHover.previewRoot.isConnected) releaseNativePreview(activeNativeHover, "preview-removed");
-        if (activeGeometryProxy && (!activeGeometryProxy.sourceSlot.isConnected || !activeGeometryProxy.clone.isConnected)) clearSourceAlignment();
+        if (geometry.detached()) clearSourceAlignment();
       },
       pointerMoved(event) {
         const owner = activeNativeHover;
@@ -2701,15 +2787,13 @@
         return false;
       },
       diagnostics: () => Object.freeze({
-        grafts: graftedGridClones.size,
-        geometryOwned: Boolean(activeGeometryProxy),
+        grafts: graft.pending(),
+        ...geometry.diagnostics(),
         sourceConnected: Boolean(activeSourceSlot?.isConnected),
         replayOwned: Boolean(activeNativeHover),
         previewOwned: Boolean(activeNativeHover?.previewRoot),
         pendingReplays: pendingFrames.size,
-        cleanupFailures,
-        alignmentRestores,
-        alignmentRestoreFailures
+        cleanupFailures
       }),
       describeActiveSource() {
         try {
@@ -24446,7 +24530,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.12";
+  var SCRIPT_VERSION = "1.11.13";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

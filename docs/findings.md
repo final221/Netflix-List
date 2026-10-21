@@ -15,7 +15,7 @@ The user selected all seven stages on 2026-10-21, sequentially on main. Baseline
 | 3. Protocol/fresh collection | Verified, 1.11.10 | 771 tests; privacy/import rejection, fallback/cursor/page limits, normalization, partial-cache membership. |
 | 4. Display adoption/initialization attempt | Verified, 1.11.11 | 773 tests; display/grid/responsive/session suites; lazy composition, atomic publication, replacement/empty recovery, exact completion ownership. |
 | 5. Preparation/responsive policy | Verified, 1.11.12 | 776 tests; responsive/hover/session suites, combined-observation sampling count, parked/zoom/convergence guards and private-import checks. |
-| 6. Popup resources/hover input | Pending | Planned checks are not completion evidence. |
+| 6. Popup resources/hover input | Verified, 1.11.13 | 779 tests; hover/hover-intent/grid-card/session suites; partial proxy characterization against original and new owners, reentrant geometry/native exits, preview/input retirement and private import checks. |
 | 7. Recommendation inspection | Pending | Planned checks are not completion evidence. |
 
 Every verified release passed focused suites, full tests, build/reproducibility/dependency checks, generated syntax and whitespace review, then was committed/pushed. Actual sizes and representative change locality are in the Maintainability Map. No public behavior, userscript identity, storage format, request budget or timing policy changed. Private registries remain with their resource owners. One combined Windows/Firefox smoke check and normal CopyLogs remain pending after all seven releases; no live evidence has been supplied. Context reviewed and unchanged because no new durable preference/knowledge was established. The private backup is untouched and excluded.

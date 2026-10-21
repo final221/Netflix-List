@@ -1,3 +1,4 @@
+import { createHoverInput } from './input.js';
 import { createHoverTiming } from './timing.js';
 
 // One route-scoped intent owner. Native mechanics and structural writes remain
@@ -34,16 +35,17 @@ export function createHover(options) {
     let hoverSequence = 0;
     let activeAttempt = null, handoffCard = null;
     const retryWaits = new Map();
-    let listenersActive = false;
-    let listenerRevision = 0;
-    let documentListeners = [];
-    const gridListeners = new Map();
     const timing = createHoverTiming({ ...options, isRouteSessionActive, sessionScope,
         probeLimits: { delayMs: 900, routeReplays: 48, roots: 6 } });
     let performanceDiagnostics = timing.counters;
     const recordHoverTiming = (...args) => timing.record(...args);
     const startHoverFrameDiagnostics = phase => timing.start(phase);
     const stopHoverFrameDiagnostics = reason => timing.stop(reason);
+    const input = createHoverInput({ document, Element, gridOwnsClone, sessionScope, isRouteSessionActive,
+        handleGridClonePointerOver, handleGridClonePointerLeave, cancelPendingGridHover,
+        handleTargetPointerMove, previewPointerOut: event => nativePopup.previewPointerOut(event),
+        handleHoverDiagnosticVisibilityChange, handleTargetScroll });
+    const ensureGridHoverBehavior = input.install;
     const nativePopup = options.createPopup({
         readIntent: () => intent(), readDiagnostics: () => performanceDiagnostics,
         gridCloneFromPointerEvent, gridOwnsClone, isCancelled: hoverPreparationCancelled,
@@ -325,15 +327,7 @@ export function createHover(options) {
             retryWaits.set(timer, resolve);
         });
     }
-    function gridCloneFromPointerEvent(event, grid, includeViewingControls = false) {
-        let node = event.target instanceof Element ? event.target : event.target?.parentElement;
-        while (node && node !== grid) {
-            if (!includeViewingControls && node.getAttribute('data-tm-viewing-actions') === 'true') return null;
-            if (node.__tmMyListItem && gridOwnsClone(node, grid)) return node;
-            node = node.parentElement;
-        }
-        return null;
-    }
+    function gridCloneFromPointerEvent(...args) { return input.target(...args); }
     function gridHoverSuppressed() {
         return hoverNeedsPointerMove || performance.now() - lastTargetScrollAt < HOVER_SCROLL_QUIET_MS;
     }
@@ -486,40 +480,6 @@ export function createHover(options) {
     function associateGridHoverItem(item, clone) {
         clone.__tmMyListItem = item;
     }
-    function ensureGridHoverBehavior(grid) {
-        if (!grid || grid.__tmHoverBehaviorInstalled) return;
-        for (const [previous, listeners] of gridListeners) if (!previous.isConnected) {
-            previous.removeEventListener('pointerover', listeners.over, true);
-            previous.removeEventListener('pointerout', listeners.out, true);
-            delete previous.__tmHoverBehaviorInstalled;
-            gridListeners.delete(previous);
-        }
-        grid.__tmHoverBehaviorInstalled = true;
-        const installedSession = sessionScope.token;
-        const over = event => {
-            if (!listenersActive || gridListeners.get(grid)?.over !== over || !isRouteSessionActive(installedSession)) return;
-            const clone = gridCloneFromPointerEvent(event, grid);
-            if (clone) {
-                clone.__tmViewingControlHovered = false;
-                handleGridClonePointerOver(event, clone, clone.__tmMyListItem);
-            } else {
-                const controlClone = gridCloneFromPointerEvent(event, grid, true);
-                if (controlClone) {
-                    controlClone.__tmViewingControlHovered = true;
-                    handleGridClonePointerLeave(controlClone, controlClone.__tmMyListItem, event.target, event);
-                } else cancelPendingGridHover('controls');
-            }
-        };
-        const out = event => {
-            if (!listenersActive || gridListeners.get(grid)?.out !== out || !isRouteSessionActive(installedSession)) return;
-            const clone = gridCloneFromPointerEvent(event, grid);
-            if (!clone || (event.relatedTarget && clone.contains(event.relatedTarget))) return;
-            handleGridClonePointerLeave(clone, clone.__tmMyListItem, event.relatedTarget, event);
-        };
-        gridListeners.set(grid, { over, out });
-        grid.addEventListener('pointerover', over, { capture: true, passive: true });
-        grid.addEventListener('pointerout', out, { capture: true, passive: true });
-    }
     function handleTargetPointerMove(event) {
         // Synthetic native replay must not overwrite the latest physical position.
         if (!event.isTrusted) return;
@@ -576,32 +536,13 @@ export function createHover(options) {
         clearActive(); clearSourceAlignment(undefined, reason);
         if (hoverToken === token) nativePopup.invalidate();
     }
-    function start() {
-        if (listenersActive) return;
-        listenersActive = true;
-        const revision = ++listenerRevision, sessionToken = sessionScope.token;
-        documentListeners = [ ['pointermove', handleTargetPointerMove, true], ['pointerout', nativePopup.previewPointerOut, true],
-            ['visibilitychange', handleHoverDiagnosticVisibilityChange, false], ['wheel', handleTargetScroll, true], ['scroll', handleTargetScroll, true] ]
-            .map(([type, callback, capture]) => ({ type, capture, listener: event => {
-                if (listenersActive && listenerRevision === revision && isRouteSessionActive(sessionToken)) callback(event);
-            } }));
-        for (const entry of documentListeners) document.addEventListener(entry.type, entry.listener, { passive: true, capture: entry.capture });
-    }
     function dispose() {
-        listenersActive = false;
-        listenerRevision++;
-        const retiredListeners = documentListeners; documentListeners = [];
-        for (const entry of retiredListeners) document.removeEventListener(entry.type, entry.listener, entry.capture);
-        const retiredGrids = [...gridListeners]; gridListeners.clear();
-        for (const [grid, listeners] of retiredGrids) {
-            grid.removeEventListener('pointerover', listeners.over, true); grid.removeEventListener('pointerout', listeners.out, true);
-            delete grid.__tmHoverBehaviorInstalled;
-        }
+        input.dispose();
         lastTargetScrollAt = -Infinity; hoverNeedsPointerMove = false; lastPointerX = -1; lastPointerY = -1;
         timing.stop('route-leave'); cancel('route');
     }
     // Public capability: complete policy operations and copied observations only.
-    return Object.freeze({ start, dispose, releaseInteraction() { clearActive(); clearSourceAlignment(); }, install: ensureGridHoverBehavior, retire: retireHoverCard, cancel,
+    return Object.freeze({ start: input.start, dispose, releaseInteraction() { clearActive(); clearSourceAlignment(); }, install: ensureGridHoverBehavior, retire: retireHoverCard, cancel,
         intent, isCancelled: hoverPreparationCancelled, isTargetCurrent: gridHoverTargetActive,
         protectedCards: () => Object.freeze([activeClone, pendingGridHoverClone].filter(Boolean)),
         hasInteraction: () => Boolean(activeClone || pendingGridHoverClone || activeHoverPreparationDiagnostic?.token === hoverToken),

@@ -389,15 +389,18 @@ test('importing authored application/session source does not activate the runtim
     assert.equal(typeof session.createMyListSession, 'function');
 });
 
-test('production graph rejects another native adapter importing private list protocol', async () => {
+for (const [relative, name] of [['list-data/protocol.js', 'listCount'], ['native-popup/graft.js', 'createGraft'],
+    ['native-popup/geometry.js', 'createGeometry']]) {
+test(`production graph rejects another native adapter importing private ${relative}`, async () => {
     const { checkUserscript } = await import('../scripts/check.mjs');
     await fixture(async directory => {
         const file = path.join(directory, 'src/netflix/viewing-data.js');
-        await writeFile(file, "import { listCount } from './list-data/protocol.js';\n" +
-            await readFile(file, 'utf8') + '\nglobalThis.forbiddenListProtocol = listCount;\n');
-        await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*viewing-data\.js.*list-data\/protocol\.js/);
+        await writeFile(file, `import { ${name} } from './${relative}';\n` +
+            await readFile(file, 'utf8') + `\nglobalThis.forbiddenNativePrivate = ${name};\n`);
+        await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*viewing-data\.js/);
     });
 });
+}
 
 for (const [relative, name] of [['my-list-initialization/attempt.js', 'createInitializationAttempt'],
     ['my-list-display/adoption.js', 'createSourceAdoption'],

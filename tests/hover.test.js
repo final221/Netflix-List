@@ -132,6 +132,26 @@ test('graft retirement visits only prepared cards in 30, 150 and 600-card regist
     }
 });
 
+test('partial geometry installation restores the failed node while releasing accepted proxies', async () => {
+    const e = await environment();
+    const slotRect = e.slot.getBoundingClientRect, cardRect = e.nativeCard.getBoundingClientRect;
+    const nativeRects = () => [{ left: 13 }];
+    Object.defineProperty(e.nativeCard, 'getClientRects', { value: nativeRects, configurable: false });
+    e.prepare();
+    const pending = e.open();
+    await e.scheduler.frame();
+    assert.equal(await pending, true);
+    assert.equal(e.popup.diagnostics().geometryOwned, true);
+    assert.equal(e.nativeCard.getBoundingClientRect, cardRect);
+    assert.equal(e.nativeCard.getClientRects, nativeRects);
+    e.popup.release();
+    assert.equal(e.popup.diagnostics().geometryOwned, false);
+    assert.equal(e.slot.getBoundingClientRect, slotRect);
+    assert.equal(e.nativeCard.getBoundingClientRect, cardRect);
+    assert.equal(e.nativeCard.getClientRects, nativeRects);
+    assert.equal(e.scheduler.timers.size, 0);
+});
+
 test('native preparation uses real grid acceptance and replaces only its admitted card', async () => {
     const e = await environment(), old = e.grid.getCard(e.item), neighbor = e.grid.getCard(e.other);
     const result = e.prepare();

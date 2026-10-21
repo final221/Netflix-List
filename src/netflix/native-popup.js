@@ -1,3 +1,6 @@
+import { createGraft } from './native-popup/graft.js';
+import { createGeometry } from './native-popup/geometry.js';
+
 // Owns native graft, geometry, replay and preview lifetimes. Importing does no work.
 export function createNativePopup(options = {}) {
     const { Element, document, PointerEvent, MouseEvent } = options;
@@ -31,157 +34,21 @@ export function createNativePopup(options = {}) {
     const itemSummary = item => options.describeItem?.(item) || item;
     const initializationError = (...args) => options.createError?.(...args) || new Error(args[2]);
     const popupInspection = { capturePreview: (...args) => options.capturePreview?.(...args) };
-    let activeSourceSlot = null, activeGeometryProxy = null, activeNativeHover = null;
-    const graftedGridClones = new Set();
-    const graftValues = new WeakMap();
-    const geometryMethods = new WeakMap();
+    let activeSourceSlot = null, activeNativeHover = null;
     let replayAdmission = null, replaySourceCurrent = null, replayGridCard = null;
     let interactionRevision = 0;
     let cleanupFailures = 0;
-    let alignmentRestores = 0, alignmentRestoreFailures = 0;
     const pendingFrames = new Map();
-    const graftHandles = new WeakMap();
-    // Contains the private React-key graft used only to make cloned cards hoverable.
-    const netflixReactHover = Object.freeze({
-        clearClone(root) {
-            const nodes = [root, ...root.querySelectorAll('*')];
-            for (const node of nodes) {
-                for (const key of Object.getOwnPropertyNames(node)) {
-                    if (!key.startsWith('__react')) continue;
-                    if (key.startsWith('__reactContainer$')) continue;
-                    try { delete node[key]; } catch (_) {}
-                }
-            }
-        },
-
-        graftTreeToClone(sourceRoot, cloneRoot) {
-            const { domMap, pairs } = pairDomTrees(sourceRoot, cloneRoot);
-            const fiberMap = new Map();
-            let fiberAssignments = 0;
-            let propsAssignments = 0;
-
-            function cloneFiberChain(sourceFiber) {
-                if (!sourceFiber || typeof sourceFiber !== 'object') return sourceFiber;
-                if (fiberMap.has(sourceFiber)) return fiberMap.get(sourceFiber);
-
-                const clonedFiber = Object.assign(
-                    Object.create(Object.getPrototypeOf(sourceFiber) || Object.prototype),
-                    sourceFiber
-                );
-                fiberMap.set(sourceFiber, clonedFiber);
-
-                if (sourceFiber.stateNode instanceof Node && domMap.has(sourceFiber.stateNode)) {
-                    clonedFiber.stateNode = domMap.get(sourceFiber.stateNode);
-                }
-
-                // Preserve the structure that produced working hover behavior in legacy 1.2.0.
-                clonedFiber.return = cloneFiberChain(sourceFiber.return);
-                return clonedFiber;
-            }
-
-            const groups = [
-                { prefixes: ['__reactFiber$', '__reactInternalInstance$'], copy: cloneFiberChain,
-                    assigned: () => fiberAssignments++, failure: 'fiberGraftFailed' },
-                { prefixes: ['__reactProps$', '__reactEventHandlers$'], copy: value => value,
-                    assigned: () => propsAssignments++, failure: 'propsGraftFailed' },
-                { prefixes: ['__react'], copy: value => value, assigned: () => {}, failure: null }
-            ];
-            for (const [source, clone] of pairs) {
-                const keys = groups.map(() => []);
-                for (const key of Object.getOwnPropertyNames(source)) {
-                    if (!key.startsWith('__react') || key.startsWith('__reactContainer$')) continue;
-                    keys[groups.findIndex(group => group.prefixes.some(prefix => key.startsWith(prefix)))].push(key);
-                }
-                // Preserve assignment order: fibers, props, then remaining React keys.
-                groups.forEach((group, index) => {
-                    for (const key of keys[index]) {
-                        try { clone[key] = group.copy(source[key]); group.assigned(); }
-                        catch (error) { if (group.failure) warn(tLog(group.failure), key, error); }
-                    }
-                });
-            }
-
-            cloneRoot.setAttribute('data-tm-react-grafted', 'true');
-            graftedGridClones.add(cloneRoot);
-            graftValues.set(cloneRoot, pairs.map(([, node]) => ({ node, keys: Object.getOwnPropertyNames(node).filter(key => key.startsWith('__react') && !key.startsWith('__reactContainer$')).map(key => [key, node[key]]) })));
-            return { fiberAssignments, propsAssignments, clonedFibers: fiberMap.size };
-        }
-    });
-
-    function pairDomTrees(sourceRoot, cloneRoot) {
-        const domMap = new Map();
-        const pairs = [];
-
-        function walk(source, clone) {
-            if (!(source instanceof Element) || !(clone instanceof Element)) return;
-            domMap.set(source, clone);
-            pairs.push([source, clone]);
-
-            const sourceChildren = source.children;
-            const cloneChildren = clone.children;
-            const count = Math.min(sourceChildren.length, cloneChildren.length);
-            for (let i = 0; i < count; i++) walk(sourceChildren[i], cloneChildren[i]);
-        }
-
-        walk(sourceRoot, cloneRoot);
-        return { domMap, pairs };
-    }
-
-    // Contains the private React-key graft used only to make cloned cards hoverable.
-
-    function releaseGridReact(clone) {
-        if (!clone || !graftedGridClones.delete(clone)) return;
-        const entries = graftValues.get(clone); graftValues.delete(clone); graftHandles.delete(clone);
-        if (entries) { for (const { node, keys } of entries) for (const [key, value] of keys) {
-            try { if (!graftValues.has(clone) && node[key] === value) delete node[key]; } catch (_) {}
-        } } else netflixReactHover.clearClone(clone);
-        for (const attribute of ['data-tm-hover-ready', 'data-tm-backed-page', 'data-tm-react-grafted']) {
-            try { if (!graftValues.has(clone)) clone.removeAttribute(attribute); } catch (_) { cleanupFailures++; }
-        }
-    }
-
-    function invalidateGridReact(except = null) {
-        for (const clone of graftedGridClones) {
-            if (clone !== except || !clone.isConnected) releaseGridReact(clone);
-        }
-    }
-
-    function restoreGeometryProxy(proxy = activeGeometryProxy) {
-        if (activeGeometryProxy === proxy) activeGeometryProxy = null;
-        if (!proxy) return;
-        let failures = 0;
-
-        for (const entry of proxy.entries) {
-            for (const method of ['getBoundingClientRect', 'getClientRects']) {
-                const descriptor = entry.descriptors[method];
-                const methods = geometryMethods.get(entry.source);
-                if (entry.installed && methods?.[method]?.lease !== entry) continue;
-                if (entry.installed && Object.getOwnPropertyDescriptor(entry.source, method)?.value !== entry.installed[method]) { delete methods[method]; continue; }
-                try {
-                    if (descriptor) {
-                        Object.defineProperty(entry.source, method, descriptor);
-                    } else {
-                        if (!delete entry.source[method]) failures++;
-                    }
-                } catch (_) { failures++; }
-                if (entry.installed) delete methods[method];
-            }
-        }
-
-        if (activeGeometryProxy?.sourceSlot !== proxy.sourceSlot) proxy.sourceSlot.removeAttribute('data-tm-source-proxied');
-        alignmentRestores++; alignmentRestoreFailures += failures;
-        try { options.onAlignmentRestore?.(failures); } catch (_) { diagnosticFailure(); }
-        if (failures) {
-            warn(tLog('sourceAlignmentRestoreFailed'), { methods: failures, nodes: proxy.entries.length });
-        }
-    }
-
+    const graft = createGraft({ Element, Node, warn, tLog, onCleanupFailure: () => cleanupFailures++ });
+    const { release: releaseGridReact, invalidate: invalidateGridReact } = graft;
+    const geometry = createGeometry({ Element, warn, tLog, diagnosticFailure,
+        onAlignmentRestore: failures => options.onAlignmentRestore?.(failures) });
     function clearSourceAlignment(slot = activeSourceSlot, reason = 'source-release', relatedTarget = null) {
-        const proxy = activeGeometryProxy; activeGeometryProxy = null;
+        const proxy = geometry.detach();
         activeSourceSlot = null;
         try { releaseNativeHover(reason, relatedTarget); } catch (_) { cleanupFailures++; }
         try { invalidateNativeReadScope(); } catch (_) { cleanupFailures++; }
-        try { restoreGeometryProxy(proxy); } catch (_) { cleanupFailures++; }
+        try { geometry.release(proxy); } catch (_) { cleanupFailures++; }
         if (slot?.hasAttribute?.('data-tm-source-aligned')) {
             // Clean up transforms left by legacy 2.1 when updating the script without a full page reload.
             slot.style.removeProperty('transform');
@@ -190,12 +57,6 @@ export function createNativePopup(options = {}) {
             slot.removeAttribute('data-tm-source-aligned');
         }
         // A reentrant open owns its own source and geometry.
-    }
-
-    function makeClientRectList(rect) {
-        const list = [rect];
-        list.item = index => list[index] || null;
-        return list;
     }
 
     function releaseNativeHover(reason = 'source-release', relatedTarget = null) {
@@ -475,41 +336,7 @@ export function createNativePopup(options = {}) {
         clearSourceAlignment();
         assertCurrent();
 
-        const { pairs } = pairDomTrees(sourceSlot, clone);
-        const entries = [];
-        for (const [source, target] of pairs) {
-            if (!(source instanceof Element) || !(target instanceof Element)) continue;
-
-            const methods = geometryMethods.get(source) || {}; geometryMethods.set(source, methods);
-            const descriptors = Object.fromEntries(['getBoundingClientRect', 'getClientRects'].map(method => [method, methods[method] ? methods[method].baseline : (Object.getOwnPropertyDescriptor(source, method) || null)]));
-            const installed = { getBoundingClientRect: () => target.getBoundingClientRect(), getClientRects: () => makeClientRectList(target.getBoundingClientRect()) };
-            const entry = { source, descriptors, installed };
-
-            try {
-                Object.defineProperty(source, 'getBoundingClientRect', {
-                    configurable: true,
-                    value: installed.getBoundingClientRect
-                });
-                Object.defineProperty(source, 'getClientRects', {
-                    configurable: true,
-                    value: installed.getClientRects
-                });
-                entries.push(entry);
-                for (const method of ['getBoundingClientRect', 'getClientRects']) methods[method] = { lease: entry, baseline: descriptors[method] };
-            } catch (_) {
-                for (const method of ['getBoundingClientRect', 'getClientRects']) {
-                    try {
-                        if (descriptors[method]) Object.defineProperty(source, method, descriptors[method]);
-                        else delete source[method];
-                    } catch (_) {}
-                }
-            }
-        }
-
-        if (!entries.length) return false;
-
-        sourceSlot.setAttribute('data-tm-source-proxied', 'true');
-        activeGeometryProxy = { sourceSlot, clone, entries };
+        if (!geometry.install(sourceSlot, clone)) return false;
         activeSourceSlot = sourceSlot;
         return true;
     }
@@ -649,7 +476,7 @@ export function createNativePopup(options = {}) {
         const fresh = sourceSlot.cloneNode(true);
         try {
             assertExpected();
-            const stats = netflixReactHover.graftTreeToClone(sourceSlot, fresh);
+            const stats = graft.graft(sourceSlot, fresh);
             assertExpected();
             options.grid.normalizeCard(fresh);
             assertExpected();
@@ -671,7 +498,7 @@ export function createNativePopup(options = {}) {
             let handle;
             try { handle = options.grid.replaceCard(expected, { node: fresh, assertCurrent, attempt: { token, sessionToken } }); }
             catch (error) { releaseGridReact(fresh); throw error; }
-            graftHandles.set(handle.node, handle);
+            graft.associate(handle);
             return { fresh: handle.node, stats: Object.freeze({ ...stats }), handle };
         } catch (error) { releaseGridReact(fresh); throw error; }
     }
@@ -695,12 +522,12 @@ export function createNativePopup(options = {}) {
             clearSourceAlignment(slot, reason, relatedTarget);
         },
         retire(handle) {
-            if (graftHandles.has(handle.node) && graftHandles.get(handle.node) !== handle) return;
+            if (graft.replaced(handle)) return;
             for (const [key, entry] of pendingFrames) if (entry.card === handle) {
                 pendingFrames.delete(key); try { cancelAnimationFrame(entry.frame); } catch (_) { cleanupFailures++; } entry.resolve(false);
             }
-            if (activeNativeHover?.gridCard === handle || (graftHandles.get(handle.node) === handle && activeGeometryProxy?.clone === handle.node)) clearSourceAlignment(undefined, 'card-retired');
-            graftHandles.delete(handle.node); releaseGridReact(handle.node);
+            if (activeNativeHover?.gridCard === handle || (graft.owns(handle) && geometry.ownsClone(handle.node))) clearSourceAlignment(undefined, 'card-retired');
+            graft.forget(handle); releaseGridReact(handle.node);
         },
         invalidate: invalidateGridReact,
         retainPreview: retainNativeHoverForPreview,
@@ -708,7 +535,7 @@ export function createNativePopup(options = {}) {
         finishProbe(details) { finishNativePreviewDiagnostic(activeNativeHover, details); },
         checkDetached() {
             if (activeNativeHover?.previewRoot && !activeNativeHover.previewRoot.isConnected) releaseNativePreview(activeNativeHover, 'preview-removed');
-            if (activeGeometryProxy && (!activeGeometryProxy.sourceSlot.isConnected || !activeGeometryProxy.clone.isConnected)) clearSourceAlignment();
+            if (geometry.detached()) clearSourceAlignment();
         },
         pointerMoved(event) {
             const owner = activeNativeHover; if (!owner?.previewRoot) return false;
@@ -719,8 +546,8 @@ export function createNativePopup(options = {}) {
             else releaseNativePreview(owner, 'preview-leave', event.target);
             return false;
         },
-        diagnostics: () => Object.freeze({ grafts: graftedGridClones.size, geometryOwned: Boolean(activeGeometryProxy),
-            sourceConnected: Boolean(activeSourceSlot?.isConnected), replayOwned: Boolean(activeNativeHover), previewOwned: Boolean(activeNativeHover?.previewRoot), pendingReplays: pendingFrames.size, cleanupFailures, alignmentRestores, alignmentRestoreFailures }),
+        diagnostics: () => Object.freeze({ grafts: graft.pending(), ...geometry.diagnostics(),
+            sourceConnected: Boolean(activeSourceSlot?.isConnected), replayOwned: Boolean(activeNativeHover), previewOwned: Boolean(activeNativeHover?.previewRoot), pendingReplays: pendingFrames.size, cleanupFailures }),
         describeActiveSource() { try { return slotDescriptor(activeSourceSlot); } catch (_) { return null; } },
         replayFacts(clone) { const owner = activeNativeHover; return owner && readIntent().clone === clone
             ? Object.freeze({ sessionToken: owner.sessionToken, replayedAt: owner.replayedAt, coordinates: Object.freeze({...owner.coordinates}) }) : null; }
