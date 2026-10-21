@@ -270,6 +270,11 @@ export function createDisplaySource(dependencies) {
         replace(next) { sourceState = parentView(next); return sourceState; },
         retireParent(parent) { parent?.listMembership?.dispose(); parent?.nativePageHints?.dispose(); },
         complete(section) { completedSection = section; }, waitForEmpty(value) { waitingForNativeEmpty = value; },
+        acceptAdoption(parent, { section, scroller = null, track = null, layout, status, grid, empty }) {
+            accept(parent);
+            attachNativeBinding(parent, section, scroller, track);
+            Object.assign(accept(parent), { layout, status, grid, empty });
+        },
         acceptLayout(parent, layout) { accept(parent).layout = layout; },
         acceptInitialPage(parent, page) { accept(parent).initialPage = page; },
         acceptViewportSignature(parent, signature) { accept(parent).resizeViewportSignature = signature; },

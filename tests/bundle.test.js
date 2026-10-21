@@ -399,6 +399,19 @@ test('production graph rejects another native adapter importing private list pro
     });
 });
 
+for (const [relative, name] of [['my-list-initialization/attempt.js', 'createInitializationAttempt'],
+    ['my-list-display/adoption.js', 'createSourceAdoption']]) {
+    test(`production graph rejects app callers importing private ${relative}`, async () => {
+        const { checkUserscript } = await import('../scripts/check.mjs');
+        await fixture(async directory => {
+            const file = path.join(directory, 'src/app/my-list-diagnostics.js');
+            await writeFile(file, `import { ${name} } from './${relative}';\n` +
+                await readFile(file, 'utf8') + `\nglobalThis.forbiddenPrivateOwner = ${name};\n`);
+            await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*my-list-diagnostics\.js/);
+        });
+    });
+}
+
 test('production graph rejects app callers importing private display helpers', async () => {
     const { checkUserscript } = await import('../scripts/check.mjs');
     await fixture(async directory => {

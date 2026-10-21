@@ -1,0 +1,525 @@
+import { GRID_ID } from '../../dom-names.js';
+
+// Ordered attempt behavior; lifecycle authority is supplied as exact completion operations.
+export function createInitializationAttempt(dependencies, { beginRunningSession, scheduleRun, missingElapsed,
+    resetMissing, initializationTimeoutError, waitForMyListTotalCount, collectMountedSinglePageItems }) {
+    const { environment, i18n, logger, session } = dependencies;
+    const { document, window, location, performance } = environment;
+    const { getUiLocale, getLogLocale, tLog } = i18n;
+    const { log, warn } = logger;
+    const { getHtmlLanguage, getNetflixLanguage } = dependencies.netflixContext;
+    const NATIVE_READY_TIMEOUT_MS = 3000, NATIVE_EMPTY_STABLE_MS = 1200, TOTAL_COUNT_TIMEOUT_MS = 5000;
+
+    async function tryMountedSinglePageFastBootstrap(section, scroller, track, sessionToken = null) {
+        session.assertRouteSession(sessionToken);
+        // Only normal SPA entry admits mounted reuse; manual recovery keeps fresh data.
+        if (session.entryKind !== 'spa' || !session.entryReason.startsWith('route:')) return null;
+        return dependencies.nativeCarousel.mountedBootstrap({ section, scroller, track, sessionToken });
+    }
+
+    function waitForNativeCarouselReady(section, scroller, track, sessionToken = null, options = {}) {
+        const owner = dependencies.display.captureSource();
+        return dependencies.nativeCarousel.prepareSource({ section, scroller, track, sessionToken,
+            fastSinglePageTotalCount: options.fastSinglePageTotalCount,
+            assertCurrent() {
+                session.assertRouteSession(sessionToken);
+                if (dependencies.display.captureSource() !== owner) throw session.initializationError('NATIVE_SOURCE_REPLACED', 'native-preparation',
+                    'Page session source changed during native preparation');
+            } });
+    }
+
+    async function collectAllItems(section, scroller, track, totalCount, sessionToken = null) {
+        const state = dependencies.display.captureSource();
+        const result = await dependencies.nativeCarousel.collect({ section, scroller, track, totalCount,
+            columns: state?.layout?.columns, sessionToken, onProgress(facts) {
+                if (dependencies.display.captureSource() !== state) return;
+                if (facts.initialPage !== undefined && state) dependencies.display.recordCollectionPage(state, facts.initialPage);
+                if (facts.collectedCount !== undefined) {
+                    if (state) dependencies.display.showCollectionProgress(state, { collectedCount: facts.collectedCount, totalCount });
+                }
+            } });
+        return result.items;
+    }
+
+
+    async function runScript(sessionToken = session.scope.token) {
+        let discovered;
+        try {
+            discovered = dependencies.display.discoverSource({ bindingOnly: true });
+        } catch (error) {
+            if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !session.isRouteSessionCancelledError(error)) throw error;
+            if (session.isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
+            return;
+        }
+        let section = discovered.section;
+        if (!section) {
+            if (dependencies.display.waitingForEmpty && dependencies.display.captureSource()?.empty) {
+                return;
+            }
+            const now = performance.now();
+            const elapsed = missingElapsed(now);
+            if (elapsed < NATIVE_EMPTY_STABLE_MS) {
+                scheduleRun(Math.max(40, NATIVE_EMPTY_STABLE_MS - elapsed), sessionToken);
+                return;
+            }
+            section = dependencies.display.ensureSynthetic(discovered);
+            if (!section) {
+                scheduleRun(120, sessionToken);
+                return;
+            }
+        } else {
+            resetMissing();
+            dependencies.gridView.removeSynthetic(section);
+        }
+        if (dependencies.display.completed === section && document.getElementById(GRID_ID) && !dependencies.display.captureSource()?.empty) return;
+
+        try {
+            dependencies.nativeCarousel.assertObservation(discovered);
+            dependencies.display.prepareArtifacts();
+            dependencies.nativeCarousel.assertObservation(discovered);
+            dependencies.gridView.installResources(() => { session.assertRouteSession(sessionToken); dependencies.nativeCarousel.assertObservation(discovered); });
+            dependencies.display.presentSource(section);
+            dependencies.nativeCarousel.assertObservation(discovered);
+        } catch (error) {
+            if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !session.isRouteSessionCancelledError(error)) throw error;
+            if (session.isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
+            return;
+        }
+
+        const initializationStarted = performance.now();
+        let mountedSource, scroller, track;
+        let provisionalLayout;
+        try {
+            mountedSource = dependencies.display.discoverSource({ bindingOnly: true });
+            if (mountedSource.section && mountedSource.section !== section) {
+                throw session.initializationError('NATIVE_SOURCE_REPLACED', 'native-discovery', 'Initialization source was replaced');
+            }
+            scroller = mountedSource.section === section ? mountedSource.scroller : null;
+            track = mountedSource.section === section ? mountedSource.track : null;
+            dependencies.nativeCarousel.sample(() => {
+                const observed = dependencies.display.measureSource(section, scroller, track);
+                provisionalLayout = { ...observed.layout };
+                provisionalLayout.rowGap = dependencies.display.measureGap(section);
+                dependencies.nativeCarousel.assertObservation(observed);
+                dependencies.display.showProvisional({ section, scroller, track, layout: provisionalLayout,
+                    initializationStarted, assertCurrent() {
+                        dependencies.nativeCarousel.assertObservation(observed);
+                        dependencies.nativeCarousel.assertObservation(mountedSource);
+                    } });
+            });
+        } catch (error) {
+            if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !session.isRouteSessionCancelledError(error)) throw error;
+            if (session.isRouteSessionActive(sessionToken)) scheduleRun(0, sessionToken);
+            return;
+        }
+        const initializationOwner = beginRunningSession(sessionToken);
+        session.assertRouteSession(sessionToken);
+        let earlyTotalCount;
+        let freshMyListBootstrap = null, entryCollection;
+        let fastCollection = null;
+        let fastCollectionSource = 'graphql';
+        const entryParent = dependencies.display.captureSource();
+        function finishInitialization({ resume = true, retry = null } = {}) {
+            initializationOwner.finish({ resume, retry });
+        }
+        function blockFailure(error, stage, timeoutMs, totalCount) {
+            initializationOwner.block();
+            dependencies.diagnostics.reportInitializationFailure(error, { stage: error?.stage || stage,
+                timeoutMs: error?.details?.timeoutMs ?? timeoutMs, details: error?.details || null });
+            dependencies.display.showInitializationFailure(error, totalCount);
+        }
+        function finishEmpty(reason, preparation = null) {
+            try {
+                if (preparation) dependencies.nativeCarousel.assertPreparation(preparation);
+                dependencies.nativeCarousel.sample(() => {
+                    const observed = dependencies.display.measureSource(section, scroller, track);
+                    const layout = { ...observed.layout, rowGap: dependencies.display.measureGap(section) };
+                    dependencies.nativeCarousel.assertObservation(observed);
+                    dependencies.display.publishEmpty(section, scroller, track, layout, initializationStarted,
+                        preparation ? preparation.reason : reason, observed);
+                });
+            } catch (error) {
+                if (error?.code !== 'NATIVE_SOURCE_REPLACED' && !session.isRouteSessionCancelledError(error)) throw error;
+                finishInitialization({ resume: false, retry: 'scheduled' });
+                return;
+            }
+            finishInitialization();
+        }
+        try {
+            entryCollection = await dependencies.listView.prepareEntry({ entryKind: session.entryKind, sessionToken,
+                hasNativeSource: Boolean(scroller && track),
+                readMountedBootstrap: () => tryMountedSinglePageFastBootstrap(section, scroller, track, sessionToken),
+                readMountedCards() {
+                    const mounted = dependencies.display.observePage();
+                    dependencies.nativeCarousel.assertObservation(mounted);
+                    return mounted.cards.length;
+                },
+                startReadiness: () => waitForNativeCarouselReady(section, scroller, track, sessionToken),
+                onCount: detail => log(tLog('totalCountDetected'), detail),
+                assertCurrent() {
+                    if (dependencies.display.captureSource() !== entryParent) throw session.initializationError('NATIVE_SOURCE_REPLACED',
+                        'list-entry', 'List entry parent changed during source selection');
+                } });
+            freshMyListBootstrap = entryCollection.bootstrap;
+            earlyTotalCount = entryCollection.totalCount;
+            session.assertRouteSession(sessionToken);
+        } catch (error) {
+            if (error?.code === 'NATIVE_SOURCE_REPLACED') {
+                log('Initial native card observation discarded after source replacement', { sessionToken });
+                finishInitialization({ resume: false, retry: 'scheduled' });
+                return;
+            }
+            if (!session.isRouteSessionCancelledError(error)) {
+                blockFailure(error, 'total-count-detection', TOTAL_COUNT_TIMEOUT_MS, null);
+            }
+            finishInitialization();
+            return;
+        }
+        if (earlyTotalCount === 0) return finishEmpty('totalCount-0');
+
+        // The My List heading can exist before the carousel itself. totalCount is
+        // already authoritative here: a positive count must produce a native source,
+        // otherwise initialization fails instead of being mistaken for an empty list.
+        if (!scroller || !track) {
+            let sourceWait;
+            try {
+                sourceWait = await dependencies.nativeCarousel.waitForSource(section, NATIVE_READY_TIMEOUT_MS, sessionToken);
+            } catch (error) {
+                if (!session.isRouteSessionCancelledError(error)) {
+                    warn(tLog('nativeSourceWaitFailed'), error);
+                }
+                finishInitialization();
+                return;
+            }
+            session.assertRouteSession(sessionToken);
+            if (sourceWait.nativeSection) {
+                dependencies.nativePopup.invalidate();
+                dependencies.gridView.dispose();
+                dependencies.display.discardSource();
+                finishInitialization({ retry: 'scheduled' });
+                return;
+            }
+            if (!sourceWait.found) {
+                const error = initializationTimeoutError(sourceWait.stage || 'native-source', sourceWait.timeoutMs || NATIVE_READY_TIMEOUT_MS, {
+                    elapsedMs: sourceWait.elapsedMs,
+                    totalCount: earlyTotalCount
+                });
+                initializationOwner.block({ section, scroller, track, sessionToken });
+                dependencies.diagnostics.reportInitializationFailure(error, {
+                    stage: error.stage,
+                    timeoutMs: error.details?.timeoutMs ?? null,
+                    details: error.details || null,
+                });
+                dependencies.display.showInitializationFailure(error, earlyTotalCount);
+                finishInitialization({ resume: false });
+                initializationOwner.recover('native-source-wait');
+                return;
+            }
+            scroller = sourceWait.scroller;
+            track = sourceWait.track;
+            dependencies.display.bindSource(dependencies.display.captureSource(), section, scroller, track);
+        }
+
+        // Netflix can expose the My List section before its virtual carousel has finished
+        // building. Do not alter the carousel (especially transition/animation styles)
+        // until the native page/slot structure has settled.
+        let readiness;
+        try {
+            readiness = await entryCollection.prepareReadiness(options =>
+                waitForNativeCarouselReady(section, scroller, track, sessionToken, options));
+        } catch (error) {
+            if (error?.code === 'NATIVE_SOURCE_REPLACED') {
+                finishInitialization({ resume: false });
+                initializationOwner.recover('readiness-source-replaced');
+                return;
+            }
+            if (!session.isRouteSessionCancelledError(error)) {
+                warn(tLog('nativeCarouselReadinessCheckFailed'), error);
+            }
+            finishInitialization();
+            return;
+        }
+        if (!readiness.ready) {
+            initializationOwner.block({ section, scroller, track, sessionToken });
+            finishInitialization({ resume: false });
+            if (initializationOwner.recover('readiness-' + readiness.reason)) return;
+            const readinessError = readiness.reason === 'timeout'
+                ? initializationTimeoutError(readiness.stage || 'native-carousel-readiness', readiness.timeoutMs || NATIVE_READY_TIMEOUT_MS, {
+                    elapsedMs: readiness.elapsedMs,
+                    state: readiness.state
+                })
+                : session.initializationError('NATIVE_CAROUSEL_NOT_READY', 'native-carousel-readiness', `Native carousel not ready: ${readiness.reason}`, readiness);
+            dependencies.diagnostics.reportInitializationFailure(readinessError, {
+                stage: readinessError.stage,
+                timeoutMs: readinessError.details?.timeoutMs ?? null,
+            });
+            dependencies.display.showInitializationFailure(readinessError, earlyTotalCount);
+            return;
+        }
+        if (readiness.empty) return finishEmpty(null, readiness);
+        const mountedMode = dependencies.display.observeSource()?.mode || 'unknown';
+
+        // A manual/order-mismatch reinitialization can start while Netflix still has
+        // page 0 selected with a one-card-shifted mounted window after a My List delta.
+        // The fresh CarouselPage response gives us an authoritative first video ID.
+        // Normalize only legacy/indicator SPA sessions, before source-scan mode starts,
+        // so normal initial-load performance and logical/Hawkins behavior are untouched.
+        {
+            try {
+                await entryCollection.prepareAnchor({ mode: mountedMode, normalize: firstVideoId =>
+                    dependencies.nativeCarousel.anchorPageZero({ section, scroller, track, firstVideoId, sessionToken,
+                        columns: dependencies.display.captureSource()?.layout?.columns }) });
+            } catch (error) {
+                if (!session.isRouteSessionCancelledError(error)) {
+                    blockFailure(error, 'normalize-native-page-zero', null, earlyTotalCount);
+                }
+                finishInitialization();
+                return;
+            }
+        }
+
+        {
+            const countOwner = dependencies.display.captureSource();
+            try {
+                let countObservation;
+                const mountedCount = entryCollection.confirmCount({ mode: mountedMode, readNativeCount() {
+                    countObservation = dependencies.display.observeSource(countOwner, { count: 'required', provisionalTotalCount: earlyTotalCount });
+                    return countObservation.count;
+                }, assertNativeCurrent: () => dependencies.nativeCarousel.assertObservation(countObservation) });
+                if (mountedCount) {
+                    const mountedTotalCount = mountedCount.totalCount;
+                    if (mountedCount.changed) {
+                        warn('Netflix My List totalCount reconciled from mounted carousel', {
+                            provisionalTotalCount: earlyTotalCount, mountedTotalCount,
+                            readings: mountedCount.readings, entryKind: session.entryKind,
+                            provisionalSource: mountedCount.provisionalSource
+                        });
+                    } else {
+                        log('Netflix My List mounted totalCount confirmed', {
+                            totalCount: mountedTotalCount, readings: mountedCount.readings, entryKind: session.entryKind
+                        });
+                    }
+                    mountedCount.assertCurrent();
+                    earlyTotalCount = mountedTotalCount;
+                    dependencies.display.showCollectionProgress(countOwner, { totalCount: mountedTotalCount }, { assertCurrent: mountedCount.assertCurrent, header: false });
+                }
+            } catch (error) {
+                if (error?.code === 'NATIVE_SOURCE_REPLACED' || dependencies.display.captureSource() !== countOwner) {
+                    finishInitialization({ resume: false });
+                    if (!initializationOwner.recover('native-count-source-replaced')) scheduleRun(0, sessionToken);
+                    return;
+                }
+                if (!session.isRouteSessionCancelledError(error)) {
+                    blockFailure(error, 'native-react-total-count', null, earlyTotalCount);
+                }
+                finishInitialization();
+                return;
+            }
+        }
+
+        {
+            let graphqlGeometry, graphqlLayout, templateView;
+            try {
+                const preferred = await dependencies.listView.preparePreferred({ mode: mountedMode, bootstrap: freshMyListBootstrap,
+                    sessionToken, assertCurrent: () => dependencies.nativeCarousel.assertPreparation(readiness),
+                    readInput() {
+                        graphqlGeometry = dependencies.display.measureSource(section, scroller, track);
+                        graphqlLayout = graphqlGeometry.layout;
+                        templateView = dependencies.display.observePage(dependencies.display.captureSource(), { template: true });
+                        dependencies.nativeCarousel.assertObservation(templateView);
+                        dependencies.nativeCarousel.assertObservation(graphqlGeometry);
+                        return { totalCount: earlyTotalCount, columns: graphqlLayout.columns,
+                            templateSource: templateView.template, assertCurrent: () => dependencies.nativeCarousel.assertObservation(templateView) };
+                    },
+                    onPrepared(result) {
+                        const source = result.collectionSource || 'graphql';
+                        dependencies.nativeCarousel.assertObservation(graphqlGeometry);
+                        const accepted = dependencies.nativeCarousel.acceptCollection({ preparation: readiness,
+                            totalCount: earlyTotalCount, columns: graphqlLayout.columns, collectedCount: result.items.length });
+                        log(source === 'mounted-single-page'
+                            ? 'Mounted single-page My List fast collection prepared' : 'GraphQL My List fast collection prepared', {
+                            collectionSource: source, avoidedMembershipRequests: source === 'mounted-single-page' ? 1 : 0,
+                            totalCount: earlyTotalCount, collected: result.items.length,
+                            graphqlPageCount: result.bootstrap.pageCount || null, columns: graphqlLayout.columns,
+                            knownPageCount: accepted.knownPageCount
+                        });
+                        dependencies.nativeCarousel.assertMapping(accepted);
+                    },
+                    onIncomplete(result) {
+                        warn('GraphQL My List fast collection was incomplete; falling back to native scan', {
+                            totalCount: earlyTotalCount, bootstrapTotalCount: result.bootstrap?.totalCount,
+                            graphqlEdgeCount: result.bootstrap?.edgeCount || 0, graphqlPageCount: result.bootstrap?.pageCount || null,
+                            columns: graphqlLayout.columns
+                        });
+                    },
+                    onFailure(error) {
+                        warn('GraphQL My List fast collection failed; falling back to native scan', {
+                            code: error?.code || null, stage: error?.stage || 'graphql-fast-collection', error
+                        });
+                    } });
+                freshMyListBootstrap = preferred.bootstrap;
+                fastCollection = preferred;
+                fastCollectionSource = preferred.collectionSource || 'graphql';
+            } catch (error) {
+                if (session.isRouteSessionCancelledError(error)) {
+                    finishInitialization();
+                    return;
+                }
+                if (error?.code === 'NATIVE_SOURCE_REPLACED' || !dependencies.nativeCarousel.isPreparationCurrent(readiness)) {
+                    log('Fast My List collection discarded after native source replacement', { sessionToken });
+                    finishInitialization({ resume: false, retry: 'scheduled' });
+                    return;
+                }
+                fastCollection = null;
+                warn('GraphQL My List fast collection failed; falling back to native scan', {
+                    code: error?.code || null, stage: error?.stage || 'graphql-fast-collection', error
+                });
+            }
+        }
+
+        const initializationNative = dependencies.display.inspectSource(section, scroller, track);
+        log(tLog('initializationStarted'), {
+            version: session.version,
+            browserLanguage: navigator.language || '',
+            htmlLanguage: getHtmlLanguage(),
+            netflixLanguage: getNetflixLanguage(),
+            displayLanguage: getUiLocale(),
+            logLanguage: getLogLocale(),
+            viewport: { width: window.innerWidth, height: window.innerHeight },
+            devicePixelRatio: window.devicePixelRatio,
+            selectedPage: initializationNative?.selectedPage ?? null,
+            pages: initializationNative?.pageCount ?? null,
+            sourceSlots: initializationNative?.sourceSlots ?? 0,
+            sourceCards: initializationNative?.sourceCards ?? 0,
+            carouselDom: initializationNative?.carouselDom ?? null
+        });
+
+        let initializationRetry = null;
+        try {
+            const layoutObservation = dependencies.display.measureSource(section, scroller, track);
+            const layout = { ...layoutObservation.layout, rowGap: dependencies.display.measureGap(section) };
+            const totalCount = earlyTotalCount;
+            const measuredNative = dependencies.display.inspectSource(section, scroller, track);
+            const initialPages = measuredNative?.pageCount ?? null;
+            log(tLog('initialLayoutMeasured'), {
+                layout: dependencies.diagnostics.layoutSummary(layout),
+                totalCount,
+                initialPages,
+                selectedPage: measuredNative?.selectedPage ?? null,
+                currentPageCards: measuredNative?.currentPageCards ?? 0
+            });
+            dependencies.nativeCarousel.assertObservation(layoutObservation);
+
+            dependencies.display.showCollectionFrame(section, scroller, track, layout, totalCount, initializationStarted, layoutObservation);
+            const collectionState = dependencies.display.captureSource();
+            const collectionBinding = dependencies.nativeCarousel.borrowBinding(section, scroller, track);
+            const assertCollectionCurrent = () => {
+                session.assertRouteSession(sessionToken);
+                dependencies.nativeCarousel.assertBinding(collectionBinding);
+                if (dependencies.display.captureSource() !== collectionState) throw session.initializationError('NATIVE_SOURCE_REPLACED',
+                    'native-collection', 'Collection parent was replaced');
+            };
+            let emptyObservation;
+            const collected = await dependencies.listView.collectForPublication({ preferred: fastCollection, totalCount, sessionToken,
+                assertCurrent: assertCollectionCurrent,
+                onPreferred(items) {
+                    const fastNative = dependencies.display.inspectSource(section, scroller, track);
+                    log(fastCollectionSource === 'mounted-single-page'
+                        ? 'Mounted single-page My List fast collection used' : 'GraphQL My List fast collection used', {
+                        collectionSource: fastCollectionSource, collected: items.length, totalCount,
+                        pages: fastNative?.pageCount ?? null, sourceCards: fastNative?.sourceCards ?? 0,
+                        carouselDom: fastNative?.carouselDom ?? null
+                    });
+                },
+                beforeNative() {
+                    // Keep native layout and slot detection intact while scanning.
+                    dependencies.display.presentSource(section, scroller, track, { phase: 'scan' });
+                    const scanNative = dependencies.display.inspectSource(section, scroller, track);
+                    log(tLog('nativeCarouselScanModeStarted'), {
+                        selectedPage: scanNative?.selectedPage ?? null, pages: scanNative?.pageCount ?? null,
+                        sourceSlots: scanNative?.sourceSlots ?? 0, sourceCards: scanNative?.sourceCards ?? 0,
+                        carouselDom: scanNative?.carouselDom ?? null
+                    });
+                },
+                collectNative: () => collectAllItems(section, scroller, track, totalCount, sessionToken),
+                readEmpty() {
+                    emptyObservation = dependencies.nativeCarousel.observeSource({ section, scroller, track, binding: collectionBinding,
+                        sessionToken, readiness: true, assertCurrent: assertCollectionCurrent });
+                    const facts = emptyObservation.readiness;
+                    dependencies.nativeCarousel.assertObservation(emptyObservation);
+                    return facts;
+                },
+                createFailure(facts) {
+                    if (facts.code === 'NO_NATIVE_CARDS') return Object.assign(new Error(tLog('noNativeNetflixCardsCouldBeCollected')),
+                        { code: facts.code });
+                    const error = session.initializationError(facts.code, 'validate-count',
+                        `Collected ${facts.collected} of ${facts.totalCount} My List items`,
+                        { collected: facts.collected, totalCount: facts.totalCount,
+                            endingPage: dependencies.display.inspectSource(section, scroller, track)?.selectedPage ?? null });
+                    warn(tLog('collectedCountDoesNotMatchTotalCount'), {
+                        collected: facts.collected, totalCount: facts.totalCount, stage: error.stage, code: error.code
+                    });
+                    return error;
+                } });
+            assertCollectionCurrent();
+            if (collected.status === 'empty') {
+                dependencies.nativeCarousel.assertObservation(emptyObservation);
+                dependencies.display.publishEmpty(section, scroller, track, layout, initializationStarted, 'collection-confirmed-empty', emptyObservation);
+                return;
+            }
+            const items = collected.transfer.records;
+
+            log(tLog('fullCollectionResultFinalized'), {
+                collected: items.length,
+                totalCount,
+                endingPage: dependencies.display.inspectSource(section, scroller, track)?.selectedPage ?? null,
+                items: items.map(dependencies.diagnostics.itemSummary)
+            });
+            assertCollectionCurrent();
+
+            // Keep the native carousel at its normal position and size for React resynchronization.
+            dependencies.display.presentSource(section, scroller, track, { phase: 'parked' });
+            const standbyNative = dependencies.display.inspectSource(section, scroller, track);
+            log(tLog('nativeCarouselStandbyMode'), {
+                selectedPage: standbyNative?.selectedPage ?? null,
+                parked: standbyNative?.sourceParked ?? false
+            });
+            assertCollectionCurrent();
+            await dependencies.display.publishCollection(section, scroller, collected.transfer, layout, totalCount, initializationStarted, sessionToken);
+
+            log(tLog('initializationCompleted'), {
+                collected: items.length,
+                totalCount,
+                    initialPages,
+                initialColumns: layout.columns,
+                initialCardWidth: layout.cardWidth,
+                initializationElapsedMs: Math.round(dependencies.display.captureSource().initializationElapsedMs),
+                snapshot: dependencies.diagnostics.collectRuntimeSnapshot()
+            });
+        } catch (error) {
+            if (session.isRouteSessionCancelledError(error)) {
+                log(tLog('initializationCancelledByRouteChange'), {
+                    sessionToken,
+                    url: location.href
+                });
+            } else if (error?.code === 'NATIVE_SOURCE_REPLACED') {
+                log('Native collection discarded after source replacement', { sessionToken });
+                initializationRetry = 'scheduled';
+            } else if (error?.code === 'GRID_BUILD_SOURCE_REPLACED') {
+                log('Grid construction discarded after native source replacement', { sessionToken });
+                session.cleanupTargetSessionDom();
+                dependencies.display.discardSource();
+                initializationRetry = 'immediate';
+            } else {
+                blockFailure(error, null, null, earlyTotalCount);
+            }
+        } finally {
+            // Keep queued deltas deferred until the replacement source has a
+            // complete grid, rather than applying them to an incomplete frame.
+            finishInitialization({ resume: !initializationRetry, retry: initializationRetry });
+        }
+    }
+
+
+    return Object.freeze({ run: runScript });
+}
