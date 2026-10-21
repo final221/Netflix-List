@@ -7,6 +7,45 @@ import { createDocument, Element, EventTarget } from './helpers/dom.js';
 import { createScheduler } from './helpers/scheduler.js';
 import { createBrowser } from './helpers/browser.js';
 import { mountPopulatedMyList } from './helpers/populated-browser.js';
+import { resolveObjectURL } from 'node:buffer';
+
+test('large browsing navigation retains useful page facts after route retirement', async t => {
+    const b = createBrowser(), saved = [];
+    b.window.netflix.reactContext = { models: { userInfo: { data: { userGuid: 'A' } } } };
+    b.context.GM_download = options => {
+        resolveObjectURL(options.url).text().then(text => { saved.push(text); options.onload(); });
+        return { abort() {} };
+    };
+    const row = b.document.body.appendChild(new Element('section'));
+    row.appendChild(new Element('h2')).textContent = 'Retained browsing row';
+    for (let index = 0; index < 40; index++) {
+        const slot = row.appendChild(new Element('div')); slot.setAttribute('data-virtual-slot', String(index));
+        const card = slot.appendChild(new Element('a')); card.setAttribute('data-uia', 'standard-card');
+        card.setAttribute('href', '/title/' + (100000000 + index));
+    }
+    const arrow = row.appendChild(new Element('button')); arrow.className = 'handleNext';
+    const app = createApplication({ environment: b.context, version: 'test' }); app.start();
+    for (let index = 0; index < 20; index++) {
+        b.document.dispatchEvent({ type: 'click', target: arrow }); await b.scheduler.advance(5000);
+    }
+    const original = app.diagnostics().recommendations;
+    assert.ok(JSON.stringify(original).length > 128 * 1024, `exercise the former snapshot-size discard: ${JSON.stringify(original).length}`);
+    assert.equal(original.navigation.recent.length, 20);
+    const requests = b.requests.length;
+    await b.navigate('/watch/123'); await b.navigate('/login');
+    const button = b.document.getElementById('tm-netflix-copylogs');
+    button.dispatchEvent({ type: 'click', preventDefault() {} }); await b.scheduler.flush();
+    assert.equal(saved.length, 1); assert.equal(b.requests.length, requests);
+    const history = JSON.parse(saved[0].split('\n').find(line => line.startsWith('previousPages: ')).slice(15));
+    const page = history.find(item => item.feature === 'Browsing');
+    assert.equal(page.mode, 'signals'); assert.equal(page.facts.unavailable, undefined);
+    assert.equal(page.facts.navigation.recent.length, 20);
+    assert.equal(page.facts.navigation.recent[0].before.label, 'Retained browsing row');
+    assert.equal(page.facts.navigation.recent.at(-1).samples.at(-1).firstObservedCount, 0);
+    assert.equal(page.facts.navigation.recent[0].samples[0].state.base, 'before');
+    t.diagnostic(`raw page ${JSON.stringify(original).length}; retained page ${JSON.stringify(page.facts).length} characters`);
+    app.dispose(); assert.equal(b.scheduler.timers.size, 0); assert.equal(b.scheduler.frames.size, 0);
+});
 
 async function populatedApplication({count=2,drain=true,nativeAll=false,browser=null,application=null,beforeStart=()=>{}}={}) {
     const b = browser || createBrowser({ pathname: '/browse/my-list' });

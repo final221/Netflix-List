@@ -124,10 +124,10 @@ export function createMyListDiagnostics(providers) {
         };
     }
 
-    async function copyDiagnosticLogs(options = {}) {
-        log(tLog('copyLogsRequested'), { detailed: Boolean(options.detailed) });
+    async function copyDiagnosticLogs() {
+        log(tLog('copyLogsRequested'));
         try {
-            const method = await diagnosticReport.copy(options);
+            const method = await diagnosticReport.copy();
             log(tLog('copyLogsCompleted'), { method, entries: logger.size() });
             return method;
         } catch (error) {

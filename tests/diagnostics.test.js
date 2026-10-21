@@ -83,6 +83,12 @@ test('logger preserves error, DOM, circular detail and timestamp formatting', ()
     assert.equal(copied.self, '[Circular]');
     assert.equal(copied.node, '<a#title.first.second>');
     assert.equal(copied.error.stack, 'stack');
+    const shared = { preparing: false, pendingIntent: false };
+    const aliased = { hover: shared, work: { hover: shared }, error };
+    aliased.self = aliased;
+    const saved = JSON.parse(logger.formatValue(aliased));
+    assert.deepEqual(saved.hover, saved.work.hover, 'reused copied facts are not circular references');
+    assert.equal(saved.self, '[Circular]');
     const timestamp = logger.formatTimestamp();
     assert.match(timestamp, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.789[+-]\d{2}:\d{2}$/);
     assert.equal(Date.parse(timestamp), Date.parse('2026-10-02T12:34:56.789Z'));
@@ -116,6 +122,91 @@ function reportFixture({ providers = {} } = {}) {
     return { logger, report, copied: () => copied, reads: () => reads };
 }
 
+test('CopyLogs has one signal format regardless of former export options', async () => {
+    const e = reportFixture();
+    e.logger.warn('Native failure', { code: 'REPLACED', stage: 'hover', error: new Error('source changed') });
+    await e.report.copy(); const normal = e.copied();
+    await e.report.copy({ detailed: true });
+    assert.equal(e.copied(), normal);
+    assert.match(normal, /exportMode: signals/);
+    assert.match(normal, /REPLACED/); assert.match(normal, /source changed/);
+});
+
+function browsingHistoryFixture() {
+    const row = (index, mounted = 23) => ({ rowId: 'native-row-' + index, label: 'Browsing row ' + index,
+        mounted, visible: index === 34 ? 0 : 7, hidden: 3, offscreen: mounted - 7, pageCapacity: 7,
+        ids: Array.from({ length: mounted }, (_, id) => String(index * 100 + id)),
+        visibleIds: Array.from({ length: 7 }, (_, id) => String(index * 100 + id)),
+        cardPositions: Array.from({ length: mounted }, (_, id) => ({ id: String(index * 100 + id), rect: [id * 100, 565, 100, 177] })),
+        layout: { row: [0, 565, 1920, 209], contentHeight: 177, nextGap: 32,
+            arrows: [{ direction: 'next', rect: [1832, 565, 88, 177], topDelta: 0, heightDelta: 0 }] },
+        next: true, previous: true, loading: [{ component: 'Carousel', fields: ['isLoading', 'hasNextPage'] }],
+        retained: { known: 35, filtered: 23, ahead: 14, shortfall: 0, order: 'first-observed', presentation: 'candidate-only' } });
+    const clone = value => JSON.parse(JSON.stringify(value));
+    const rows = Array.from({ length: 35 }, (_, index) => row(index));
+    const recent = Array.from({ length: 12 }, (_, index) => {
+        const before = row(index < 5 ? 0 : 1), after = clone(before);
+        after.visibleIds = after.visibleIds.map(id => String(Number(id) + 7));
+        return { sequence: index + 1, direction: 'next', before, afterAtExport: clone(after),
+            samples: ['200ms', '1200ms', '5000ms'].map((reason, at) => ({ reason, at: index * 5000 + at * 1000,
+                state: clone(after), addedCount: 7, firstObservedCount: index < 9 ? 7 : 0 })),
+            loading: { detailed: false }, requests: { matched: 1, failures: 0, attribution: 'time-window-only' } };
+    });
+    return { recommendations: { work: { scans: 424, maxScanMs: 43 }, rows: { total: 35, truncated: false, rows },
+        nativeRows: { failures: 0, rows: [{ reason: 'server-exhausted', projection: { matches: true }, hasNextPage: false }] },
+        navigation: { interactions: 12, failures: 0, recent, actions: [],
+            movements: Array.from({ length: 80 }, (_, at) => ({ at, kind: 'hover', id: String(at), x: at, y: 500, scrollY: 0 })) } } };
+}
+
+test('signal reports compress realistic repeated browsing history without losing navigation or late failures', async t => {
+    const raw = browsingHistoryFixture(), unchanged = JSON.stringify(raw);
+    const e = reportFixture({ providers: { readRuntime: () => raw } });
+    for (let index = 0; index < 120; index++) e.logger.log('Row observed', { rowId: 'row-' + index,
+        reason: 'buffer-ready', elapsedMs: index === 73 ? 900 : 10 });
+    e.logger.warn('Native failure', { code: 'NATIVE_SOURCE_REPLACED', stage: 'mapping', error: { message: 'changed', stack: 'at native' } });
+    await e.report.copy(); const text = e.copied();
+    assert.ok(text.length < 65000, `Unified export is ${text.length} characters`);
+    assert.match(text, /occurrences: 120/);
+    assert.match(text, /"elapsedMs":900/); assert.match(text, /NATIVE_SOURCE_REPLACED/);
+    assert.match(text, /server-exhausted/); assert.match(text, /"matches":true/);
+    assert.match(text, /native-row-34/); // A later empty row is a distinct diagnostic condition.
+    const snapshot = JSON.parse(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+    const recent = snapshot.recommendations.navigation.recent;
+    assert.deepEqual(recent.map(record => record.sequence), Array.from({ length: 12 }, (_, i) => i + 1));
+    assert.equal(recent[11].samples.at(-1).firstObservedCount, 0);
+    assert.deepEqual(recent[0].before.layout.arrows[0].rect, [1832, 565, 88, 177]);
+    const retained = e.report.snapshot();
+    assert.ok(JSON.stringify(retained).length < 128 * 1024);
+    assert.equal(retained.runtime.recommendations.nativeRows.rows[0].reason, 'server-exhausted');
+    assert.equal(JSON.stringify(raw), unchanged, 'export cannot mutate feature diagnostics');
+    const history = [{ feature: 'Browsing', facts: retained }];
+    const next = reportFixture({ providers: { readHistory: () => history } });
+    await next.report.copy();
+    const saved = JSON.parse(next.copied().split('\n').find(line => line.startsWith('previousPages: ')).slice(15));
+    assert.deepEqual(saved, JSON.parse(JSON.stringify(history)), 'a route change must preserve projected navigation and omission counts');
+    t.diagnostic(`report ${text.length} characters; retained facts ${JSON.stringify(retained).length}; old report 165210`);
+});
+
+test('signal projection preserves short ID lists and groups repeated warnings by failure signature', async () => {
+    const e = reportFixture({ providers: { readRuntime: () => ({
+        five: ['1','2','3','4','5'], six: ['1','2','3','4','5','6'], rect: [1,2,3,4],
+        histogram: Array.from({ length: 30 }, (_, index) => index % 10) }) } });
+    for (let i = 0; i < 200; i++) e.logger.warn('Native failed', { rowId: String(i), code: 'STALE', stage: 'mapping',
+        elapsedMs: i === 150 ? 800 : 5, error: { name: 'Error', message: 'source replaced', stack: 'at native\n'.repeat(12) } });
+    e.logger.warn('Native failed', { code: 'STALE', stage: 'hover', error: { name: 'Error', message: 'source replaced' } });
+    e.logger.warn('Native failed', { code: 'STALE', stage: 'mapping', error: { name: 'TypeError', message: 'source replaced' } });
+    const entries = e.logger.entries();
+    await e.report.copy();
+    const text = e.copied(), snapshot = JSON.parse(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+    assert.deepEqual(snapshot.five.samples, ['1','2','3','4','5']); assert.equal(snapshot.five.omitted, 0);
+    assert.equal(snapshot.six.omitted, 0); assert.deepEqual(snapshot.rect, [1,2,3,4]);
+    assert.deepEqual(e.report.summarize(snapshot), snapshot, 'retained frequency tables remain stable');
+    assert.match(text, /occurrences: 200/); assert.match(text, /"elapsedMs":800/);
+    assert.match(text, /"stage":"hover"/); assert.match(text, /TypeError/); assert.match(text, /more stack lines/);
+    assert.deepEqual(e.logger.entries(), entries);
+    assert.ok(text.length < 6000, `repeated warnings: ${text.length} characters`);
+});
+
 test('report copies current explicit summaries and chronological logs only on request', async () => {
     const e = reportFixture();
     assert.equal(e.reads(), 0);
@@ -133,7 +224,7 @@ test('report copies current explicit summaries and chronological logs only on re
     assert.ok(text.endsWith('\n'));
 });
 
-test('compact reports summarize large collections and repeated events while detailed exports retain every entry', async () => {
+test('signal reports summarize large collections and keep repeated-event counts and timing extrema', async () => {
     const series = Array.from({ length: 500 }, (_, index) => ({ title: 'Series ' + index,
         status: index < 300 ? 'complete' : 'unknown', reason: index < 300 ? 'latest-episode-complete' : 'unavailable-episode-progress' }));
     const e = reportFixture({ providers: { readSeriesViewing: () => series } });
@@ -149,14 +240,12 @@ test('compact reports summarize large collections and repeated events while deta
     assert.match(compact, /"seq":0/);
     assert.match(compact, /"seq":999/);
     assert.match(compact, /"seq":400,"elapsedMs":900/);
-    assert.match(compact, /"count":500,"samples":.*"omitted":497/);
+    assert.match(compact, /"count":500,"samples":.*"omitted":498/);
     assert.match(compact, /WARN.*NATIVE_SOURCE_REPLACED/);
     assert.equal(e.logger.size(), 1001);
     await e.report.copy({ detailed: true });
-    assert.match(e.copied(), /exportMode: detailed/);
-    assert.equal(JSON.parse(e.copied().split('\n').find(line => line.startsWith('seriesViewing: ')).slice(15)).length, 500);
-    assert.ok(e.copied().includes(e.logger.entries()[400]));
-    assert.ok(e.copied().length > compact.length * 20);
+    assert.equal(e.copied(), compact, 'former detailed argument cannot request a second format');
+    assert.equal(e.logger.entries().length, 1001, 'export leaves the diagnostic ring intact');
 });
 
 test('compact export retains late decisions and warnings even when essential summaries exceed the target', async () => {
@@ -194,7 +283,7 @@ test('compact aggregation retains intermediate outcomes, nested timing totals an
     assert.match(text, /"phase":"retry"/);
     assert.match(text, /distinct failure/);
     const snapshot = JSON.parse(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
-    assert.deepEqual(snapshot.readings.values, [{ value: 500, count: 3 }, { value: 10, count: 1 }]);
+    assert.deepEqual(snapshot.readings, [500, 500, 500, 10]);
     const summary = JSON.parse(text.split('\n').find(line => line.includes('eventSummary: ') && line.includes('"occurrences":2')).split('eventSummary: ')[1]);
     assert.deepEqual(summary.numbers.elapsedMs, { count: 2, min: 10, max: 20, total: 30 });
     assert.deepEqual(summary.numbers['nested.settleMs'], { count: 2, min: 2, max: 4, total: 6 });
@@ -212,9 +301,9 @@ test('compact reports distinguish manual and automatic results and retain long d
     assert.equal(summary.groups.length, 2);
     assert.equal(summary.groups[0].samples[0].manualChoice, 'complete');
     assert.equal(summary.groups[1].samples[0].automaticStatus, 'complete');
+    const normal = e.copied();
     await e.report.copy({ detailed: true });
-    assert.ok(e.copied().includes(reason));
-    assert.deepEqual(JSON.parse(e.copied().split('\n').find(line => line.startsWith('seriesViewing: ')).slice(15)), series);
+    assert.equal(e.copied(), normal);
 });
 
 test('report delegates exact content and results to its writer without touching clipboard or DOM', async () => {
@@ -235,7 +324,7 @@ test('report delegates exact content and results to its writer without touching 
         else assert.throws(() => e.report.copy({ detailed: true }), error => error === failure);
         assert.equal(calls, 1);
         assert.equal(e.reads(), 1);
-        assert.match(text, /exportMode: detailed/);
+        assert.match(text, /exportMode: signals/);
         assert.match(text, /seriesViewing: .*Weeds/);
         assert.ok(text.endsWith('\n'));
         assert.equal(e.logger.size(), 0, 'report leaves transport failure reporting to its caller');
@@ -363,7 +452,7 @@ test('Copy Logs guards inactive routes and isolates private probe failures', () 
 });
 
 
-test('compact logs preserve bounded navigation order, four-coordinate rectangles and deeply nested action samples', async () => {
+test('signal logs preserve navigation order and geometry while summarizing movement repetition', async () => {
     const { logger } = loggerFixture(); let text;
     const navigation = { recent: [{ loading: { control: { parents: [{ rect: [0, 565, 2560, 279] }] } } }],
         movements: Array.from({ length: 12 }, (_, at) => ({ at, kind: 'hover', id: String(at) })),
@@ -373,7 +462,12 @@ test('compact logs preserve bounded navigation order, four-coordinate rectangles
         readSeriesViewing: () => [], readThumbnails: () => ({}), readNativePopup: () => ({}) });
     await report.copy();
     const snapshot = JSON.parse(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
-    assert.deepEqual(snapshot.recommendations.navigation, navigation);
+    const saved = snapshot.recommendations.navigation;
+    assert.deepEqual(saved.recent, navigation.recent);
+    assert.equal(saved.movements.count, 12);
+    assert.deepEqual(saved.movements.samples.map(sample => sample.at), [0, 11]);
+    assert.deepEqual(saved.actions[0].samples[0].state.changes.cardPositions[0].rect, [10,20,30,40]);
+    assert.deepEqual(saved.actions[0].samples[0].state.removed, ['ids']);
 });
 
 

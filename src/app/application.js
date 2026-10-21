@@ -26,31 +26,27 @@ export function createApplication({ environment = globalThis, version = '', crea
             htmlLanguage: context.getHtmlLanguage(), netflixLanguage: context.getNetflixLanguage(), displayLanguage: i18n.getUiLocale(),
             logLanguage: i18n.getLogLocale(), viewport: `${window.innerWidth}x${window.innerHeight}`, devicePixelRatio: window.devicePixelRatio }),
         readRuntime: diagnostics, readSeriesViewing: () => [], readThumbnails: () => null, readNativePopup: () => null, readHistory: () => logHistory });
-    async function copyBrowsingLogs(options) {
-        logger.log(i18n.tLog('copyLogsRequested'), { detailed: Boolean(options?.detailed) });
-        try { const file = await browsingReport.copy(options); logger.log(i18n.tLog('copyLogsCompleted'), { file }); return file; }
+    async function copyBrowsingLogs() {
+        logger.log(i18n.tLog('copyLogsRequested'));
+        try { const file = await browsingReport.copy(); logger.log(i18n.tLog('copyLogsCompleted'), { file }); return file; }
         catch (error) { logger.warn(i18n.tLog('copyLogsFailed'), error); throw error; }
     }
     const knowledge = createKnowledge({ ...userscript, activeProfile: context.activeProfile, now: Date.now, queueMicrotask });
     const focus = () => knowledge.resync();
     const recommendations = createRecommendations({ environment, context, userscript, knowledge, tUi: i18n.tUi, log: logger.log, warn: logger.warn });
     const logControl = createLogControl({ document, tLog: i18n.tLog, setTimeout: environment.setTimeout, clearTimeout: environment.clearTimeout, queueMicrotask,
-        copyLogs: options => session ? session.copyLogs(options) : copyBrowsingLogs(options) });
+        copyLogs: () => session ? session.copyLogs() : copyBrowsingLogs() });
     function isTargetPage() { return location.origin === 'https://www.netflix.com' && location.pathname === '/browse/my-list'; }
-    function rememberPage(feature, read, compactRead, url) {
+    function rememberPage(feature, read, url) {
         try {
-            let facts = read(), mode = 'detailed';
-            if (logger.formatValue(facts).length > 128 * 1024) { facts = compactRead(); mode = 'compact'; }
-            const serialized = logger.formatValue(facts);
-            if (serialized.length > 128 * 1024) { facts = { unavailable: 'snapshot-size-limit' }; mode = 'bounded'; }
-            logHistory.push({ feature, url, capturedAt: logger.formatTimestamp(), mode, facts: JSON.parse(logger.formatValue(facts)) });
+            const facts = browsingReport.summarize(read());
+            logHistory.push({ feature, url, capturedAt: logger.formatTimestamp(), mode: 'signals', facts });
             if (logHistory.length > 4) logHistory.shift();
         } catch (error) { logger.warn('Final page diagnostic snapshot unavailable', { message: error.message }); }
     }
     function retireSession(reason, url = lastObservedUrl) {
         const previous = session; session = null;
-        if (previous) rememberPage('My List', () => previous.diagnosticSnapshot?.() || previous.diagnostics(),
-            () => previous.diagnosticSnapshot?.(false) || previous.diagnostics(), url);
+        if (previous) rememberPage('My List', () => previous.diagnosticSnapshot?.() || previous.diagnostics(), url);
         previous?.dispose(reason);
     }
     function routeChanged(source = 'unknown') {
@@ -64,12 +60,12 @@ export function createApplication({ environment = globalThis, version = '', crea
         if (!target) {
             retireSession(`route:${source}`, previousUrl);
             const facts = recommendations.diagnostics();
-            if (source !== 'initial' && facts.active) rememberPage('Browsing', () => facts, () => facts, previousUrl);
+            if (source !== 'initial' && facts.active) rememberPage('Browsing', () => facts, previousUrl);
             try { recommendations.check(); } catch (error) { logger.warn('Recommendation controls unavailable', { message: error.message }); }
             return;
         }
         const browsingFacts = recommendations.diagnostics();
-        if (browsingFacts.active) rememberPage('Browsing', () => browsingFacts, () => browsingFacts, previousUrl);
+        if (browsingFacts.active) rememberPage('Browsing', () => browsingFacts, previousUrl);
         recommendations.dispose();
         if (session) { session.check(); return; }
         const owner = revision;

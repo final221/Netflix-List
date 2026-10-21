@@ -201,11 +201,11 @@ test('generated CopyLogs saves reports through Save As and retains logs across r
     assert.ok(saved[1].includes('CopyLogs completed'));
     assert.equal(saved[1].split('\n').filter(line => /^\[.*\] INFO\s+Script started(?: |$)/.test(line)).length, 1);
     assert.match(saved[1], /omitted event groups: 0/);
-    const beforeDetailed = b.requests.length;
+    const beforeShift = b.requests.length;
     await copy(true);
-    assert.match(saved[2], /exportMode: detailed/);
+    assert.match(saved[2], /exportMode: signals/);
     assert.equal(saved[2].match(/Script started/g).length, 1);
-    assert.equal(b.requests.length, beforeDetailed);
+    assert.equal(b.requests.length, beforeShift);
     await b.navigate('/browse');
 });
 
@@ -229,7 +229,7 @@ test('one universal CopyLogs button survives Netflix routes and exports the reti
     const history = JSON.parse(saved[0].split('\n').find(line => line.startsWith('previousPages: ')).slice(15));
     const myList = history.find(page => page.feature === 'My List'); assert.ok(myList);
     assert.equal(myList.url, 'https://www.netflix.com/browse/my-list');
-    assert.ok(myList.facts.runtime); assert.ok(Array.isArray(myList.facts.seriesViewing));
+    assert.ok(myList.facts.runtime); assert.equal(myList.facts.seriesViewing.count, 0);
     assert.match(saved[0], /Script started/); assert.match(saved[0], /Route change detected/);
     assert.match(b.document.querySelector('[role="status"]').textContent, /Saved/);
 });
@@ -666,14 +666,14 @@ test('generated CopyLogs can export again after a missing download completion wi
     click(false); await b.scheduler.flush(); assert.equal(button.disabled, false);
     assert.equal(downloads.length, 2); assert.equal(aborted, 1); assert.equal(resolveObjectURL(downloads[0].url), undefined);
     const report = await resolveObjectURL(downloads[1].url).text();
-    assert.match(report, /exportMode: compact/); assert.match(report, /CopyLogs requested/);
+    assert.match(report, /exportMode: signals/); assert.match(report, /CopyLogs requested/);
     downloads[0].onload(); await b.scheduler.flush();
     assert.equal(b.document.querySelector('[role="status"]').hidden, true);
     downloads[1].onload(); await b.scheduler.flush();
     assert.match(b.document.querySelector('[role="status"]').textContent, /Saved/); assert.equal(button.disabled, false);
 });
 
-test('generated detailed homepage export includes native arrow before and after facts without requiring a dismissal', async () => {
+test('generated signal homepage export includes native arrow before and after facts without requiring a dismissal', async () => {
     const b = browser(), saved = [], stored = new Map();
     b.window.netflix.reactContext = { models: { userInfo: { data: { userGuid: 'A' } } } };
     b.context.GM_getValue = (key, fallback) => stored.get(key) ?? fallback; b.context.GM_setValue = (key, value) => stored.set(key, value);
@@ -687,6 +687,6 @@ test('generated detailed homepage export includes native arrow before and after 
     const report = saved[0]; assert.match(report, /Native recommendation arrow clicked/);
     const snapshot = JSON.parse(report.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
     const facts = snapshot.recommendations.navigation.recent[0];
-    assert.equal(facts.before.label, 'Arrow test row'); assert.equal(facts.before.mounted, 1); assert.equal(facts.afterAtExport.mounted, 2);
+    assert.equal(facts.before.label, 'Arrow test row'); assert.equal(facts.before.mounted, 1); assert.equal(facts.afterAtExport.changes.mounted, 2);
     assert.deepEqual(facts.addedIdSample, ['2']); assert.equal(snapshot.recommendations.refill.checks, 0);
 });

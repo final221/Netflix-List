@@ -19,7 +19,7 @@ export function createLogControl({ document, tLog, copyLogs, setTimeout = global
             control.disabled = true; message.hidden = true;
             queueMicrotask(() => { if (current()) control.disabled = false; });
             try {
-                const file = await copyLogs({ detailed: Boolean(event.shiftKey) });
+                const file = await copyLogs();
                 if (!current()) return;
                 message.textContent = tLog('copied') + ' ' + file; message.hidden = false;
                 feedbackTimer = setTimeout(() => {

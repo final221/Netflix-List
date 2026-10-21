@@ -22,15 +22,16 @@ export function createLogger({ name, version, Element, console, now = () => new 
         }
         if (typeof value === 'string') return value;
         try {
-            const seen = new WeakSet();
-            return JSON.stringify(value, (key, item) => {
+            const ancestors = [];
+            return JSON.stringify(value, function(key, item) {
+                while (ancestors.length && ancestors.at(-1) !== this) ancestors.pop();
                 if (item instanceof Element) return formatLogValue(item);
                 if (item instanceof Error) {
-                    return { name: item.name, message: item.message, stack: item.stack || '' };
+                    item = { name: item.name, message: item.message, stack: item.stack || '' };
                 }
                 if (item && typeof item === 'object') {
-                    if (seen.has(item)) return '[Circular]';
-                    seen.add(item);
+                    if (ancestors.includes(item)) return '[Circular]';
+                    ancestors.push(item);
                 }
                 return item;
             });

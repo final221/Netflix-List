@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.14
+// @version      1.11.15
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -7022,6 +7022,141 @@ ${CARD_ACTION_STYLES}
     });
   }
 
+  // src/diagnostics/signals.js
+  var DIAGNOSTIC_FIELD = /status|outcome|reason|code|mode|strategy|source|phase|stage|method|failure|error|manualChoice|entryKind|generation|kind|operation|direction|action|targetGroup|placement|disposition/i;
+  var IDENTITY_FIELD = /^(?:rowId|sectionId|graphqlKey|videoId|id|href|title|label|name|sequence|seq|token)$/i;
+  var BULK_CONTEXT = /^(?:snapshot|before|afterAtExport|state|layout|performanceWork)$/;
+  function diagnosticFacts(value, prefix = "", facts = [], depth = 0) {
+    if (!value || typeof value !== "object" || Array.isArray(value) || depth >= 8) return facts;
+    for (const [key, item] of Object.entries(value)) {
+      if (IDENTITY_FIELD.test(key) && !(key === "name" && /(?:^|\.)error$/i.test(prefix)) || BULK_CONTEXT.test(key)) continue;
+      const path = prefix ? prefix + "." + key : key;
+      if (typeof item === "boolean" || typeof item === "string" && (DIAGNOSTIC_FIELD.test(key) || key === "message" || key === "name" && /(?:^|\.)error$/i.test(prefix) || /(?:^|\.)fields\./.test(path))) facts.push([path, item]);
+      else if (typeof item === "number" && /^(visible|remaining|pending|failed|shortfall)$/.test(key)) facts.push([path + ".zero", item === 0]);
+      else if (item && typeof item === "object") diagnosticFacts(item, path, facts, depth + 1);
+    }
+    return facts.sort(([a], [b]) => a.localeCompare(b));
+  }
+  function numericFacts(value, numbers, prefix = "", depth = 0) {
+    if (!value || typeof value !== "object" || depth >= 8) return;
+    if (Array.isArray(value) && (value.length > 4 || !value.every(Number.isFinite))) return;
+    for (const [key, item] of Object.entries(value)) {
+      if (BULK_CONTEXT.test(key)) continue;
+      const path = prefix ? prefix + "." + key : key;
+      if (typeof item === "number" && Number.isFinite(item)) {
+        const stat = numbers[path] ||= {
+          count: 0,
+          min: item,
+          max: item,
+          .../Ms$/.test(key) ? { total: 0 } : {}
+        };
+        stat.count++;
+        stat.min = Math.min(stat.min, item);
+        stat.max = Math.max(stat.max, item);
+        if ("total" in stat) stat.total += item;
+      } else if (item && typeof item === "object") numericFacts(item, numbers, path, depth + 1);
+    }
+  }
+  function stateChanges(before, current) {
+    if (!before || !current || typeof current !== "object") return current;
+    if (current.base === "before" && current.changes) return current;
+    const changes = Object.fromEntries(Object.entries(current).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(before[key])));
+    const removed = Object.keys(before).filter((key) => !Object.hasOwn(current, key));
+    return { base: "before", changes, ...removed.length ? { removed } : {} };
+  }
+  function navigationRecord(record, depth) {
+    const result = Object.fromEntries(Object.entries(record).filter(([key]) => !["samples", "afterAtExport"].includes(key)).map(([key, value]) => [key, summarizeSignals(value, depth + 1, key)]));
+    if (Object.hasOwn(record, "afterAtExport")) {
+      result.afterAtExport = stateChanges(result.before, summarizeSignals(record.afterAtExport, depth + 1, "state"));
+    }
+    if (Array.isArray(record.samples)) result.samples = record.samples.map((sample) => Object.fromEntries(
+      Object.entries(sample).map(([key, value]) => [key, key === "state" ? stateChanges(result.before, summarizeSignals(value, depth + 1, key)) : summarizeSignals(value, depth + 1, key)])
+    ));
+    return result;
+  }
+  function navigationSummary(value, depth) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      key,
+      ["recent", "actions"].includes(key) && Array.isArray(item) ? item.map((record) => navigationRecord(record, depth + 1)) : summarizeSignals(item, depth + 1, key)
+    ]));
+  }
+  function arraySummary(value, depth, key) {
+    if (value.length <= 4 || key === "visibleIds" || key === "arrows") {
+      return value.map((item) => summarizeSignals(item, depth + 1));
+    }
+    if (value.every((item) => item === null || ["string", "number", "boolean"].includes(typeof item))) {
+      const counts = /* @__PURE__ */ new Map();
+      for (const item of value) counts.set(item, (counts.get(item) || 0) + 1);
+      if (counts.size <= 12 && counts.size < value.length) return {
+        count: value.length,
+        values: [...counts].map(([item, count]) => ({ value: summarizeSignals(item), count }))
+      };
+      const indices2 = [.../* @__PURE__ */ new Set([0, 1, 2, value.length - 3, value.length - 2, value.length - 1])];
+      return { count: value.length, unique: counts.size, samples: indices2.map((index) => summarizeSignals(value[index])), omitted: value.length - indices2.length };
+    }
+    const groups = /* @__PURE__ */ new Map();
+    for (let index = 0; index < value.length; index++) {
+      const item = value[index], signature = JSON.stringify(diagnosticFacts(item));
+      if (!groups.has(signature)) groups.set(signature, {
+        count: 0,
+        first: index,
+        last: index,
+        slowest: index,
+        elapsedMs: -Infinity,
+        numbers: /* @__PURE__ */ Object.create(null)
+      });
+      const group = groups.get(signature);
+      group.count++;
+      group.last = index;
+      numericFacts(item, group.numbers);
+      if (Number.isFinite(item?.elapsedMs) && item.elapsedMs > group.elapsedMs) {
+        group.elapsedMs = item.elapsedMs;
+        group.slowest = index;
+      }
+    }
+    const indices = /* @__PURE__ */ new Set();
+    for (const group of groups.values()) for (const index of [group.first, group.last, group.slowest]) indices.add(index);
+    const ordered = [...indices].sort((a, b) => a - b);
+    return {
+      count: value.length,
+      samples: ordered.map((index) => summarizeSignals(value[index], depth + 1)),
+      omitted: value.length - ordered.length,
+      groups: [...groups.values()].map((group) => ({
+        count: group.count,
+        sample: ordered.indexOf(group.first),
+        numbers: group.numbers
+      }))
+    };
+  }
+  function summarizeSignals(value, depth = 0, key = "") {
+    if (typeof value === "string") {
+      if (key === "stack") {
+        const lines = value.split("\n");
+        return lines.length > 6 ? lines.slice(0, 6).join("\n") + `
+[${lines.length - 6} more stack lines]` : value;
+      }
+      return value.length > 400 && !DIAGNOSTIC_FIELD.test(key) && key !== "message" ? value.slice(0, 400) + ` [truncated; original characters: ${value.length}]` : value;
+    }
+    if (!value || typeof value !== "object") return value;
+    if (Number.isSafeInteger(value.count) && (Array.isArray(value.samples) && Number.isSafeInteger(value.omitted) || Array.isArray(value.values) && value.values.every((item) => Number.isSafeInteger(item?.count) && Object.hasOwn(item, "value")))) return value;
+    if (depth >= 16) return { omitted: true, kind: Array.isArray(value) ? "array" : "object", reason: "diagnostic-depth-limit" };
+    if (key === "navigation" && Array.isArray(value.recent)) return navigationSummary(value, depth);
+    if (Array.isArray(value)) return arraySummary(value, depth, key);
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, summarizeSignals(item, depth + 1, name)]));
+  }
+  function seriesSummary(rows) {
+    if (!Array.isArray(rows)) return summarizeSignals(rows);
+    const groups = /* @__PURE__ */ new Map();
+    for (const row of rows) {
+      const key = JSON.stringify([row.status, row.reason, diagnosticFacts(row)]);
+      if (!groups.has(key)) groups.set(key, { status: row.status, reason: row.reason, count: 0, samples: [] });
+      const group = groups.get(key);
+      group.count++;
+      if (!group.samples.length) group.samples.push(summarizeSignals(row));
+    }
+    return { count: rows.length, groups: [...groups.values()] };
+  }
+
   // src/diagnostics/report.js
   function createReport({
     logger,
@@ -7034,83 +7169,12 @@ ${CARD_ACTION_STYLES}
     readNativePopup,
     readHistory = () => []
   }) {
-    const COMPACT_TARGET_CHARACTERS = 2e4;
-    const DIAGNOSTIC_FIELD = /status|outcome|reason|code|mode|strategy|source|phase|stage|method|failure|error|manualChoice|graphqlKey|rowId|sectionId|entryKind|generation/i;
-    function diagnosticFacts(value, prefix = "", facts = [], depth = 0) {
-      if (!value || typeof value !== "object" || Array.isArray(value) || depth >= 8) return facts;
-      for (const [key, item] of Object.entries(value)) {
-        const path = prefix ? prefix + "." + key : key;
-        if (typeof item === "boolean" || typeof item === "string" && (DIAGNOSTIC_FIELD.test(key) || /(?:^|\.)fields\./.test(path))) facts.push([path, item]);
-        else if (item && typeof item === "object") diagnosticFacts(item, path, facts, depth + 1);
-      }
-      return facts.sort(([a], [b]) => a.localeCompare(b));
-    }
-    function numericFacts(value, numbers, prefix = "", depth = 0) {
-      if (!value || typeof value !== "object" || Array.isArray(value) || depth >= 8) return;
-      for (const [key, item] of Object.entries(value)) {
-        const path = prefix ? prefix + "." + key : key;
-        if (typeof item === "number" && Number.isFinite(item)) {
-          const stat = numbers[path] ||= {
-            count: 0,
-            min: item,
-            max: item,
-            .../Ms$/.test(key) ? { total: 0 } : {}
-          };
-          stat.count++;
-          stat.min = Math.min(stat.min, item);
-          stat.max = Math.max(stat.max, item);
-          if ("total" in stat) stat.total += item;
-        } else if (item && typeof item === "object") numericFacts(item, numbers, path, depth + 1);
-      }
-    }
-    function compact(value, depth = 0, key = "") {
-      if (key === "nativeRows" && value && Array.isArray(value.rows) && value.rows.length <= 4) return value;
-      if (key === "navigation" && value && typeof value === "object" && Array.isArray(value.recent) && Array.isArray(value.movements)) return value;
-      if (typeof value === "string") return value.length > 400 && !DIAGNOSTIC_FIELD.test(key) ? value.slice(0, 400) + " [truncated; original characters: " + value.length + "]" : value;
-      if (!value || typeof value !== "object") return value;
-      if (depth >= 8) return { omitted: true, kind: Array.isArray(value) ? "array" : "object" };
-      if (Array.isArray(value)) {
-        if (value.length <= 3) return value.map((item) => compact(item, depth + 1));
-        if (value.every((item) => item === null || ["string", "number", "boolean"].includes(typeof item))) {
-          const counts = /* @__PURE__ */ new Map();
-          for (const item of value) counts.set(item, (counts.get(item) || 0) + 1);
-          if (counts.size <= 12) return { count: value.length, values: [...counts].map(([item, count]) => ({ value: compact(item), count })) };
-        }
-        const indices = /* @__PURE__ */ new Set([0, 1, 2]), outcomes = /* @__PURE__ */ new Set();
-        value.forEach((item, index) => {
-          const facts = diagnosticFacts(item);
-          if (!facts.length) return;
-          const signature = JSON.stringify(facts);
-          if (!outcomes.has(signature)) {
-            outcomes.add(signature);
-            indices.add(index);
-          }
-        });
-        return {
-          count: value.length,
-          samples: [...indices].map((index) => compact(value[index], depth + 1)),
-          omitted: value.length - indices.size
-        };
-      }
-      return Object.fromEntries(Object.entries(value).map(([key2, item]) => [key2, compact(item, depth + 1, key2)]));
-    }
-    function seriesSummary(rows) {
-      if (!Array.isArray(rows)) return compact(rows);
-      const groups = /* @__PURE__ */ new Map();
-      for (const row of rows) {
-        const key = JSON.stringify([row.status, row.reason, diagnosticFacts(row)]);
-        if (!groups.has(key)) groups.set(key, { status: row.status, reason: row.reason, count: 0, samples: [] });
-        const group = groups.get(key);
-        group.count++;
-        if (!group.samples.length) group.samples.push(compact(row));
-      }
-      return { count: rows.length, groups: [...groups.values()] };
-    }
-    function compactEntry(entry) {
+    const TARGET_CHARACTERS = 2e4;
+    function summarizeEntry(entry) {
       const offset = entry.indexOf(" {");
       if (offset < 0) return entry;
       try {
-        return entry.slice(0, offset + 1) + logger.formatValue(compact(JSON.parse(entry.slice(offset + 1))));
+        return entry.slice(0, offset + 1) + logger.formatValue(summarizeSignals(JSON.parse(entry.slice(offset + 1))));
       } catch (_) {
         return entry;
       }
@@ -7119,20 +7183,18 @@ ${CARD_ACTION_STYLES}
       const groups = [], byOutcome = /* @__PURE__ */ new Map();
       entries.forEach((entry, index) => {
         const match = entry.match(/^\[([^\]]+)\]\s+(\w+)\s+(.*)$/);
-        const warning = !match || match[2] !== "INFO";
         const name = match?.[3].split(" {")[0];
         let payload = null;
         try {
           payload = JSON.parse(entry.slice(entry.indexOf(" {") + 1));
         } catch (_) {
         }
-        const key = JSON.stringify([name, diagnosticFacts(payload)]);
-        let group = warning ? null : byOutcome.get(key);
+        const key = JSON.stringify([match?.[2], name, diagnosticFacts(payload)]);
+        let group = byOutcome.get(key);
         if (!group) {
           group = {
             index,
             name,
-            warning,
             count: 0,
             first: entry,
             last: entry,
@@ -7143,7 +7205,7 @@ ${CARD_ACTION_STYLES}
             numbers: /* @__PURE__ */ Object.create(null)
           };
           groups.push(group);
-          if (!warning) byOutcome.set(key, group);
+          byOutcome.set(key, group);
         }
         group.count++;
         group.last = entry;
@@ -7156,20 +7218,24 @@ ${CARD_ACTION_STYLES}
       });
       return groups.map((group) => ({
         ...group,
-        // Warnings are kept verbatim. INFO payloads sample only bulk detail.
-        text: (group.warning ? group.first : compactEntry(group.first)) + (group.count > 1 ? "\n  occurrences: " + group.count + "\n  eventSummary: " + logger.formatValue({
+        // Repetition is summarized for every level; distinct failures stay separate.
+        text: summarizeEntry(group.first) + (group.count > 1 ? "\n  occurrences: " + group.count + "\n  eventSummary: " + logger.formatValue({
           occurrences: group.count,
           firstAt: group.firstAt,
           lastAt: group.lastAt,
           numbers: group.numbers
-        }) : ""),
-        examples: [.../* @__PURE__ */ new Set([group.last, group.slowest])].filter((entry) => entry !== group.first).map(compactEntry)
+        }) : "") + (group.slowest !== group.first ? "\n" + summarizeEntry(group.slowest) : ""),
+        examples: group.last !== group.first && group.last !== group.slowest ? [summarizeEntry(group.last)] : []
       }));
     }
-    function buildInvestigationLogText(detailed) {
+    function normalize(value) {
+      return value && typeof value === "object" ? JSON.parse(logger.formatValue(value)) : value;
+    }
+    const project = (value) => summarizeSignals(normalize(value));
+    function buildInvestigationLogText() {
       const snapshot2 = readRuntime();
       const environment = readEnvironment();
-      const format = (value) => logger.formatValue(detailed ? value : compact(value));
+      const format = (value) => logger.formatValue(project(value));
       const lines = [
         "My List for Netflix Diagnostic Log",
         `version: ${version}`,
@@ -7183,19 +7249,18 @@ ${CARD_ACTION_STYLES}
         `logLanguage: ${environment.logLanguage}`,
         `viewport: ${environment.viewport}`,
         `devicePixelRatio: ${environment.devicePixelRatio}`,
-        `exportMode: ${detailed ? "detailed" : "compact; sampled lists and grouped events"}`,
+        "exportMode: signals; grouped outcomes; navigation states with base:before encode field changes",
         `entries: ${logger.size()}`,
         `snapshot: ${format(snapshot2)}`,
         `previousPages: ${format(readHistory())}`,
-        `seriesViewing: ${logger.formatValue(detailed ? readSeriesViewing() : seriesSummary(readSeriesViewing()))}`,
+        `seriesViewing: ${logger.formatValue(seriesSummary(normalize(readSeriesViewing())))}`,
         `thumbnailDiagnostics: ${format(readThumbnails())}`,
         `nativePopupDiagnostics: ${format(readNativePopup())}`
       ];
       const entries = logger.entries();
-      if (detailed) return [...lines, "---", ...entries].join("\n") + "\n";
       const groups = groupedEntries(entries);
       const essentialSize = [...lines, "---", ...groups.map((group) => group.text)].join("\n").length + 400;
-      let budget = Math.max(0, COMPACT_TARGET_CHARACTERS - essentialSize), omittedExamples = 0;
+      let budget = Math.max(0, TARGET_CHARACTERS - essentialSize), omittedExamples = 0;
       const eventLines = groups.map((group) => {
         const selected = [group.text];
         for (const example of group.examples) {
@@ -7206,24 +7271,23 @@ ${CARD_ACTION_STYLES}
         }
         return selected.join("\n");
       });
-      const overflow = essentialSize > COMPACT_TARGET_CHARACTERS ? "; essential summaries exceed target" : "";
+      const overflow = essentialSize > TARGET_CHARACTERS ? "; essential summaries exceed target" : "";
       return [
         ...lines,
-        "exportLimits: target " + COMPACT_TARGET_CHARACTERS + " characters" + overflow + "; omitted event groups: 0; omitted sections: 0; omitted extra examples: " + omittedExamples + "; payload lists/long strings may be sampled; Shift-click CopyLogs for full detail",
+        "exportLimits: target " + TARGET_CHARACTERS + " characters" + overflow + "; omitted event groups: 0; omitted sections: 0; omitted extra examples: " + omittedExamples + "; repetitions and bulk payloads summarized; depth/string omissions explicit",
         "---",
         ...eventLines
       ].join("\n") + "\n";
     }
-    function snapshot(detailed = true) {
-      const facts = {
+    function snapshot() {
+      return project({
         runtime: readRuntime(),
-        seriesViewing: detailed ? readSeriesViewing() : seriesSummary(readSeriesViewing()),
+        seriesViewing: seriesSummary(normalize(readSeriesViewing())),
         thumbnails: readThumbnails(),
         nativePopup: readNativePopup()
-      };
-      return JSON.parse(logger.formatValue(detailed ? facts : compact(facts)));
+      });
     }
-    return Object.freeze({ copy: ({ detailed = false } = {}) => writeText(buildInvestigationLogText(detailed)), snapshot });
+    return Object.freeze({ copy: () => writeText(buildInvestigationLogText()), snapshot, summarize: project });
   }
 
   // src/app/my-list-diagnostics.js
@@ -7372,10 +7436,10 @@ ${CARD_ACTION_STYLES}
         pointer: { x: intent.pointerX, y: intent.pointerY }
       };
     }
-    async function copyDiagnosticLogs(options = {}) {
-      log(tLog("copyLogsRequested"), { detailed: Boolean(options.detailed) });
+    async function copyDiagnosticLogs() {
+      log(tLog("copyLogsRequested"));
       try {
-        const method2 = await diagnosticReport.copy(options);
+        const method2 = await diagnosticReport.copy();
         log(tLog("copyLogsCompleted"), { method: method2, entries: logger.size() });
         return method2;
       } catch (error) {
@@ -21380,7 +21444,7 @@ ${CARD_ACTION_STYLES}
     targetSessionSuspended: { en: "Target session suspended", ja: "\u5BFE\u8C61\u30BB\u30C3\u30B7\u30E7\u30F3\u4E2D\u65AD" },
     targetSessionStarted: { en: "Target session started", ja: "\u5BFE\u8C61\u30BB\u30C3\u30B7\u30E7\u30F3\u958B\u59CB" },
     routeChangeDetected: { en: "Route change detected", ja: "\u30DA\u30FC\u30B8\u9077\u79FB\u691C\u51FA" },
-    copyLogsTooltip: { en: "Save As a compact report; choose the repository logs folder. Shift-click for full detail", ja: "\u7C21\u6F54\u306A\u8A3A\u65AD\u30EC\u30DD\u30FC\u30C8\u3092\u4FDD\u5B58\u3057\u307E\u3059\u3002Shift\u30AF\u30EA\u30C3\u30AF\u3067\u8A73\u7D30\u3092\u4FDD\u5B58\u3057\u307E\u3059" },
+    copyLogsTooltip: { en: "Save As a diagnostic summary; choose the repository logs folder", ja: "\u7C21\u6F54\u306A\u8A3A\u65AD\u30EC\u30DD\u30FC\u30C8\u3092\u4FDD\u5B58\u3057\u307E\u3059" },
     copied: { en: "Saved.", ja: "\u4FDD\u5B58\u3057\u307E\u3057\u305F\u3002" },
     copyLogsRequested: { en: "CopyLogs requested", ja: "CopyLogs\u8981\u6C42" },
     copyLogsCompleted: { en: "CopyLogs completed", ja: "CopyLogs\u5B8C\u4E86" },
@@ -21603,15 +21667,16 @@ ${CARD_ACTION_STYLES}
       }
       if (typeof value === "string") return value;
       try {
-        const seen = /* @__PURE__ */ new WeakSet();
-        return JSON.stringify(value, (key, item) => {
+        const ancestors = [];
+        return JSON.stringify(value, function(key, item) {
+          while (ancestors.length && ancestors.at(-1) !== this) ancestors.pop();
           if (item instanceof Element) return formatLogValue(item);
           if (item instanceof Error) {
-            return { name: item.name, message: item.message, stack: item.stack || "" };
+            item = { name: item.name, message: item.message, stack: item.stack || "" };
           }
           if (item && typeof item === "object") {
-            if (seen.has(item)) return "[Circular]";
-            seen.add(item);
+            if (ancestors.includes(item)) return "[Circular]";
+            ancestors.push(item);
           }
           return item;
         });
@@ -21757,7 +21822,7 @@ ${CARD_ACTION_STYLES}
           if (current()) control.disabled = false;
         });
         try {
-          const file = await copyLogs({ detailed: Boolean(event.shiftKey) });
+          const file = await copyLogs();
           if (!current()) return;
           message.textContent = tLog("copied") + " " + file;
           message.hidden = false;
@@ -24327,10 +24392,10 @@ ${CARD_ACTION_STYLES}
       readNativePopup: () => null,
       readHistory: () => logHistory
     });
-    async function copyBrowsingLogs(options) {
-      logger.log(i18n.tLog("copyLogsRequested"), { detailed: Boolean(options?.detailed) });
+    async function copyBrowsingLogs() {
+      logger.log(i18n.tLog("copyLogsRequested"));
       try {
-        const file = await browsingReport.copy(options);
+        const file = await browsingReport.copy();
         logger.log(i18n.tLog("copyLogsCompleted"), { file });
         return file;
       } catch (error) {
@@ -24347,24 +24412,15 @@ ${CARD_ACTION_STYLES}
       setTimeout: environment.setTimeout,
       clearTimeout: environment.clearTimeout,
       queueMicrotask,
-      copyLogs: (options) => session ? session.copyLogs(options) : copyBrowsingLogs(options)
+      copyLogs: () => session ? session.copyLogs() : copyBrowsingLogs()
     });
     function isTargetPage() {
       return location.origin === "https://www.netflix.com" && location.pathname === "/browse/my-list";
     }
-    function rememberPage(feature, read, compactRead, url) {
+    function rememberPage(feature, read, url) {
       try {
-        let facts = read(), mode = "detailed";
-        if (logger.formatValue(facts).length > 128 * 1024) {
-          facts = compactRead();
-          mode = "compact";
-        }
-        const serialized = logger.formatValue(facts);
-        if (serialized.length > 128 * 1024) {
-          facts = { unavailable: "snapshot-size-limit" };
-          mode = "bounded";
-        }
-        logHistory.push({ feature, url, capturedAt: logger.formatTimestamp(), mode, facts: JSON.parse(logger.formatValue(facts)) });
+        const facts = browsingReport.summarize(read());
+        logHistory.push({ feature, url, capturedAt: logger.formatTimestamp(), mode: "signals", facts });
         if (logHistory.length > 4) logHistory.shift();
       } catch (error) {
         logger.warn("Final page diagnostic snapshot unavailable", { message: error.message });
@@ -24373,12 +24429,7 @@ ${CARD_ACTION_STYLES}
     function retireSession(reason, url = lastObservedUrl) {
       const previous = session;
       session = null;
-      if (previous) rememberPage(
-        "My List",
-        () => previous.diagnosticSnapshot?.() || previous.diagnostics(),
-        () => previous.diagnosticSnapshot?.(false) || previous.diagnostics(),
-        url
-      );
+      if (previous) rememberPage("My List", () => previous.diagnosticSnapshot?.() || previous.diagnostics(), url);
       previous?.dispose(reason);
     }
     function routeChanged(source = "unknown") {
@@ -24393,7 +24444,7 @@ ${CARD_ACTION_STYLES}
       if (!target) {
         retireSession(`route:${source}`, previousUrl);
         const facts = recommendations.diagnostics();
-        if (source !== "initial" && facts.active) rememberPage("Browsing", () => facts, () => facts, previousUrl);
+        if (source !== "initial" && facts.active) rememberPage("Browsing", () => facts, previousUrl);
         try {
           recommendations.check();
         } catch (error) {
@@ -24402,7 +24453,7 @@ ${CARD_ACTION_STYLES}
         return;
       }
       const browsingFacts = recommendations.diagnostics();
-      if (browsingFacts.active) rememberPage("Browsing", () => browsingFacts, () => browsingFacts, previousUrl);
+      if (browsingFacts.active) rememberPage("Browsing", () => browsingFacts, previousUrl);
       recommendations.dispose();
       if (session) {
         session.check();
@@ -24533,7 +24584,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.14";
+  var SCRIPT_VERSION = "1.11.15";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

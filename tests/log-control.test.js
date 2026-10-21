@@ -6,7 +6,7 @@ import { createDocument } from './helpers/dom.js';
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 const click = (button, shiftKey = false) => button.dispatchEvent({ type: 'click', shiftKey, preventDefault() {} });
-test('universal log control saves compact/detailed captures, prevents double clicks and shows download failure', async () => {
+test('universal log control uses identical ordinary and Shift-click exports and shows download failure', async () => {
     const document = createDocument(), pending = [], options = [];
     const control = createLogControl({ document, tLog: (key, data) => key + (data?.message || ''),
         copyLogs: value => { options.push(value); return new Promise((resolve, reject) => pending.push({ resolve, reject })); } });
@@ -14,7 +14,8 @@ test('universal log control saves compact/detailed captures, prevents double cli
     assert.equal(button.listenerCount('click'), 1); click(button); click(button, true); assert.equal(options.length, 1);
     pending[0].resolve('logs/capture.txt'); await flush();
     assert.match(document.querySelector('[role="status"]').textContent, /logs\/capture.txt/);
-    assert.equal(button.disabled, false); click(button, true); assert.deepEqual(options[1], { detailed: true });
+    assert.equal(button.disabled, false); click(button, true); assert.equal(options[1], options[0]);
+    assert.equal(options[1], undefined);
     pending[1].reject(new Error('Download cancelled')); await flush();
     assert.match(document.querySelector('[role="status"]').textContent, /Download cancelled/); control.dispose();
     assert.equal(button.listenerCount('click'), 0); assert.equal(document.head.querySelectorAll('style').length, 0);
@@ -52,7 +53,7 @@ test('missing completion does not lock CopyLogs and stale success or failure can
         copyLogs: options => new Promise((resolve, reject) => pending.push({ resolve, reject, options })) });
     control.start(); const button = document.getElementById('tm-netflix-copylogs'), message = document.querySelector('[role="status"]');
     click(button); click(button); assert.equal(pending.length, 1); await flush(); assert.equal(button.disabled, false);
-    click(button, true); await flush(); assert.equal(pending.length, 2); assert.equal(pending[1].options.detailed, true);
+    click(button, true); await flush(); assert.equal(pending.length, 2); assert.equal(pending[1].options, undefined);
     pending[0].resolve('stale.txt'); await flush(); assert.equal(message.hidden, true); assert.equal(button.disabled, false);
     pending[1].resolve('latest.txt'); await flush(); assert.match(message.textContent, /latest.txt/);
     click(button); await flush(); click(button); await flush();

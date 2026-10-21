@@ -2,7 +2,9 @@
 
 ## Current implementation measurements
 
-Release **1.11.14**, 2026-10-21: **88 authored runtime modules / 19,034 physical lines**; generated output is separately **24,548 lines**. Baseline 1.11.7 was 70 modules / 18,705 source lines and 23,781 generated lines. All **780 tests pass**. Stage 7 separates recommendation-dom (262) from private inspection (220), retaining passive diagnostic shapes, opt-in detail and exact observer/response retirement.
+Release **1.11.15**, 2026-10-21: **89 authored runtime modules / 19,101 physical lines**; generated output is separately **24,599 lines**. All **784 tests pass**. Unified diagnostic projection lives in private signals (127 lines); report composition is 98 lines, down from 155. Current and retired facts share that projection without a detailed/compact branch or caller-managed fallback. Report policy and payload projection can change independently of download/control lifetimes. Safe serialization distinguishes shared values from actual ancestor cycles. This adds 67 authored lines, without changing feature ownership or introducing a general framework.
+
+The seven-stage refactoring concluded at **1.11.14**, with **88 modules / 19,034 source lines**, **24,548 generated lines** and **780 passing tests**. Baseline 1.11.7 was 70 modules / 18,705 source lines and 23,781 generated lines. Stage 7 separates recommendation-dom (262) from private inspection (220), retaining passive diagnostic shapes, opt-in detail and exact observer/response retirement.
 
 | Runtime file under src/ | Before | After | Retained responsibility |
 | --- | ---: | ---: | --- |

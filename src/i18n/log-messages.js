@@ -6,7 +6,7 @@ export const LOG_MESSAGES = {
     targetSessionSuspended: { en: 'Target session suspended', ja: '\u5bfe\u8c61\u30bb\u30c3\u30b7\u30e7\u30f3\u4e2d\u65ad' },
     targetSessionStarted: { en: 'Target session started', ja: '\u5bfe\u8c61\u30bb\u30c3\u30b7\u30e7\u30f3\u958b\u59cb' },
     routeChangeDetected: { en: 'Route change detected', ja: '\u30da\u30fc\u30b8\u9077\u79fb\u691c\u51fa' },
-    copyLogsTooltip: { en: 'Save As a compact report; choose the repository logs folder. Shift-click for full detail', ja: '\u7c21\u6f54\u306a\u8a3a\u65ad\u30ec\u30dd\u30fc\u30c8\u3092\u4fdd\u5b58\u3057\u307e\u3059\u3002Shift\u30af\u30ea\u30c3\u30af\u3067\u8a73\u7d30\u3092\u4fdd\u5b58\u3057\u307e\u3059' },
+    copyLogsTooltip: { en: 'Save As a diagnostic summary; choose the repository logs folder', ja: '\u7c21\u6f54\u306a\u8a3a\u65ad\u30ec\u30dd\u30fc\u30c8\u3092\u4fdd\u5b58\u3057\u307e\u3059' },
     copied: { en: 'Saved.', ja: '\u4fdd\u5b58\u3057\u307e\u3057\u305f\u3002' },
     copyLogsRequested: { en: 'CopyLogs requested', ja: 'CopyLogs\u8981\u6c42' },
     copyLogsCompleted: { en: 'CopyLogs completed', ja: 'CopyLogs\u5b8c\u4e86' },

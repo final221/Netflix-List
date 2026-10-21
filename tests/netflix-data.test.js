@@ -386,7 +386,7 @@ test('live row identity overrides stale listener and cached rows while compact d
         await report.copy();
         const exported = copied.split('\n').find(line => line.includes('INFO  Fresh Netflix My List carousel bootstrap fetched'));
         assert.deepEqual(JSON.parse(exported.slice(exported.indexOf(' {') + 1)).rowSelection, details.rowSelection);
-        assert.match(copied, /exportMode: compact/);
+        assert.match(copied, /exportMode: signals/);
         assert.equal(e.requests.length, 1);
     }
 });
