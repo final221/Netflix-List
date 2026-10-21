@@ -21,6 +21,13 @@ function area(file) {
 
 function allowedImport(from, to) {
     if (from === 'src/legacy.js' || to === 'src/legacy.js') return false;
+    const privateOwners = ['src/netflix/list-data', 'src/netflix/native-popup', 'src/netflix/recommendation-dom',
+        'src/app/my-list-initialization', 'src/app/my-list-interaction', 'src/app/responsive'];
+    for (const entry of privateOwners) {
+        const directory = entry + '/';
+        if (to.startsWith(directory)) return from === entry + '.js' || from.startsWith(directory);
+        if (from.startsWith(directory) && area(to) === 'app') return false;
+    }
     const displayPrivate = 'src/app/my-list-display/';
     if (to.startsWith(displayPrivate)) {
         return from === 'src/app/my-list-display.js' || from.startsWith(displayPrivate);

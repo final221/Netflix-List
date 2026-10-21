@@ -389,6 +389,16 @@ test('importing authored application/session source does not activate the runtim
     assert.equal(typeof session.createMyListSession, 'function');
 });
 
+test('production graph rejects another native adapter importing private list protocol', async () => {
+    const { checkUserscript } = await import('../scripts/check.mjs');
+    await fixture(async directory => {
+        const file = path.join(directory, 'src/netflix/viewing-data.js');
+        await writeFile(file, "import { listCount } from './list-data/protocol.js';\n" +
+            await readFile(file, 'utf8') + '\nglobalThis.forbiddenListProtocol = listCount;\n');
+        await assert.rejects(checkUserscript({ root: directory }), /Forbidden production import.*viewing-data\.js.*list-data\/protocol\.js/);
+    });
+});
+
 test('production graph rejects app callers importing private display helpers', async () => {
     const { checkUserscript } = await import('../scripts/check.mjs');
     await fixture(async directory => {

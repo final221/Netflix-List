@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.9
+// @version      1.11.10
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -7580,14 +7580,198 @@ ${CARD_ACTION_STYLES}
     });
   }
 
-  // src/netflix/list-data.js
-  function createListData({
+  // src/netflix/list-data/protocol.js
+  function listCount(value) {
+    if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return null;
+    const count = Number(value);
+    return Number.isSafeInteger(count) && count >= 0 ? count : null;
+  }
+  function isMyListGraphqlSection(value) {
+    if (!value || value.__typename !== "PinotCarouselSection") return false;
+    const listeners = Array.isArray(value.eventListeners) ? value.eventListeners : [];
+    const types = new Set(listeners.map((listener) => listener?.__typename).filter(Boolean));
+    const hasPlaylistMutationListeners = types.has("PinotAddToPlaylistEventListener") && types.has("PinotRemoveFromPlaylistEventListener");
+    const hasPlaylistNotification = listeners.some(
+      (listener) => listener?.notificationMessageRegex === "UPDATE_PLAYLIST"
+    );
+    return hasPlaylistMutationListeners || hasPlaylistNotification;
+  }
+  function graphqlSectionVideoIds(value) {
+    const ids = /* @__PURE__ */ new Set();
+    for (const edge of value?.entities?.edges || []) {
+      const ref = String(edge?.node?.__ref || "");
+      const match = ref.match(/(?:standardBoxshot_Video:|Video:)(\d+)/);
+      if (match) ids.add(match[1]);
+    }
+    return ids;
+  }
+  function serializedSection(text, markerIndex) {
+    const start = text.lastIndexOf("{", markerIndex);
+    if (start < 0) return null;
+    let depth = 0, quoted = false, escaped = false;
+    for (let index = start; index < text.length; index++) {
+      const char = text[index];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') quoted = false;
+      } else if (char === '"') quoted = true;
+      else if (char === "{") depth++;
+      else if (char === "}" && --depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, index + 1));
+        } catch (_) {
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+  function extractFreshMyListBootstrap(html) {
+    const text = String(html || "");
+    const notificationMarker = '"notificationMessageRegex":"UPDATE_PLAYLIST"';
+    const sectionMarker = '"__typename":"PinotCarouselSection"';
+    let from = 0;
+    while (from < text.length) {
+      const notificationIndex = text.indexOf(notificationMarker, from);
+      if (notificationIndex < 0) break;
+      const sectionStart = text.lastIndexOf(sectionMarker, notificationIndex);
+      if (sectionStart >= 0 && notificationIndex - sectionStart <= 5e4) {
+        const value = serializedSection(text, sectionStart);
+        if (isMyListGraphqlSection(value) && listCount(value.entities?.totalCount) !== null) {
+          return {
+            totalCount: listCount(value.entities.totalCount),
+            firstVideoId: [...graphqlSectionVideoIds(value)][0] || firstVideoIdFromCarouselNode(value),
+            rowMetadataReason: typeof value._id === "string" && value._id ? "usable-section" : "opaque-id-unavailable",
+            entry: typeof value._id === "string" && value._id ? { key: null, value, reason: "fresh-page-bootstrap" } : null
+          };
+        }
+        const block = text.slice(sectionStart, notificationIndex + notificationMarker.length + 1024);
+        const totalMatch = block.match(/"entities":\{"totalCount":(\d+)/);
+        if (totalMatch) {
+          const firstVideoMatch = block.match(/standardBoxshot_Video:(\d+)/);
+          return {
+            rowMetadataReason: "section-json-unavailable",
+            totalCount: Number(totalMatch[1]),
+            firstVideoId: firstVideoMatch?.[1] || "",
+            sectionStart,
+            notificationIndex
+          };
+        }
+      }
+      from = notificationIndex + notificationMarker.length;
+    }
+    return null;
+  }
+  function carouselArtworkVariables(direction) {
+    const standard = { width: 342, height: 192 }, highRes = { width: 665, height: 375 };
+    const formats = ["WEBP", "JPG", "PNG"], rtl = direction === "rtl";
+    const artwork = (artworkType, dimension, options) => ({ artworkType, dimension, ...options });
+    const variables = {};
+    const families = {
+      StandardBoxart: ["SDP", { fallbackStrategy: "STILL", enableLockBadgeChecks: true }],
+      ContinueWatchingBoxart: ["SDP", { fallbackStrategy: "STILL" }],
+      CloudGameBoxart: ["SDP", { fallbackStrategy: "STILL" }],
+      PodcastEpisodicStill: ["SEGMENT_STILL", { graybox: false }, "COVER"]
+    };
+    for (const [family, [type, features, scaleStrategy]] of Object.entries(families)) {
+      for (const [suffix, size] of [["", standard], ["HighRes", highRes]]) {
+        variables["imageParamsFor" + family + suffix] = artwork(
+          type,
+          scaleStrategy ? { ...size, scaleStrategy } : size,
+          { features }
+        );
+      }
+    }
+    return {
+      ...variables,
+      imageParamsForPodcastEpisodicLogo: artwork(
+        "LOGO_HORIZONTAL_CROPPED",
+        { width: 800, height: 126, scaleStrategy: "CONTAIN" },
+        { features: { tone: "LIGHT" } }
+      ),
+      imageParamsForRankedBoxart: artwork(
+        "BOXSHOT",
+        { width: 426, height: 607 },
+        { features: { fallbackStrategy: "STILL", suppressTop10Badge: true } }
+      ),
+      imageParamsForMobileGameBoxart: artwork("APP_ICON", { width: 200, height: 200 }, { formats }),
+      imageParamsForCharacterCircle: artwork("SQUAREHEADSHOT_1000x1000", { width: 200, height: 200 }, { formats }),
+      imageParamsForChannel: artwork(rtl ? "CHANNEL_TILE_BACKGROUND_RTL" : "CHANNEL_TILE_BACKGROUND", standard, { formats }),
+      imageParamsForChannelLogo: artwork("CHANNEL_LOGO_COLOR_CROPPED", { height: 44 }, { formats: ["WEBP", "PNG"] }),
+      imageParamsForEntryPointBackground: artwork(
+        rtl ? "MLP_ENTRY_POINT_BACKGROUND_RTL" : "MLP_ENTRY_POINT_BACKGROUND",
+        { width: 1024 },
+        { features: { fallbackStrategy: "STILL" } }
+      ),
+      imageParamsForEntryPointLogo: artwork("LOGO_STACKED_CROPPED", { height: 260 }, { formats })
+    };
+  }
+  function firstVideoIdFromCarouselNode(node) {
+    return videoIdFromGraphqlNode(node?.entities?.edges?.[0]?.node);
+  }
+  function videoIdFromGraphqlNode(node) {
+    if (!node || typeof node !== "object") return "";
+    const seen = /* @__PURE__ */ new Set();
+    const stack = [node];
+    while (stack.length) {
+      const value = stack.pop();
+      if (!value || typeof value !== "object" || seen.has(value)) continue;
+      seen.add(value);
+      const direct = value.videoId;
+      if (Number.isFinite(Number(direct)) && Number(direct) > 0) return String(direct);
+      const id = typeof value.id === "string" ? value.id : "";
+      const match = id.match(/(?:standardBoxshot_)?Video:(\d+)/);
+      if (match) return match[1];
+      for (const child of Object.values(value)) {
+        if (child && typeof child === "object") stack.push(child);
+      }
+    }
+    return "";
+  }
+  function firstGraphqlString(value, keys, accepts, maxDepth, depth = 0, seen = /* @__PURE__ */ new Set()) {
+    if (depth > maxDepth || value == null) return "";
+    if (typeof value === "string") {
+      const text = value.trim();
+      return accepts(text) ? text : "";
+    }
+    if (typeof value !== "object" || seen.has(value)) return "";
+    seen.add(value);
+    for (const key of keys) {
+      const result = firstGraphqlString(value[key], keys, accepts, maxDepth, depth + 1, seen);
+      if (result) return result;
+    }
+    for (const child of Object.values(value)) {
+      const result = firstGraphqlString(child, keys, accepts, maxDepth, depth + 1, seen);
+      if (result) return result;
+    }
+    return "";
+  }
+  function firstGraphqlText(value) {
+    return firstGraphqlString(
+      value,
+      ["text", "value", "title", "name", "label", "displayString"],
+      (text) => Boolean(text) && !/^https?:\/\//i.test(text) && text.length <= 240,
+      5
+    );
+  }
+  function firstGraphqlImageUrl(value) {
+    return firstGraphqlString(
+      value,
+      ["url", "imageUrl", "artwork", "image", "src", "uri"],
+      (text) => /^https?:\/\//i.test(text) && (/(?:\.webp|\.jpe?g|\.png)(?:[?#]|$)/i.test(text) || /nflxso\.net|nflximg\.net/i.test(text)),
+      7
+    );
+  }
+
+  // src/netflix/list-data/fresh-collection.js
+  function createFreshCollection({
     context,
     pageDom,
     location,
     fetch,
     performance,
-    now = () => Date.now(),
+    now,
     assertCurrent,
     isCancelled,
     createError,
@@ -7597,110 +7781,13 @@ ${CARD_ACTION_STYLES}
     inspection,
     log,
     warn,
-    tLog,
-    requestTimeoutMs = 1e4
+    requestTimeoutMs,
+    findMyListGraphqlEntry,
+    observeSelectedRow
   }) {
     const FRESH_MY_LIST_FETCH_TIMEOUT_MS = requestTimeoutMs;
-    const GRAPHQL_COLLECTION_PAGE_SIZE = 75;
-    const GRAPHQL_COLLECTION_MAX_PAGES = 8;
-    const graphqlData = context.readGraphqlBootstrap;
+    const GRAPHQL_COLLECTION_PAGE_SIZE = 75, GRAPHQL_COLLECTION_MAX_PAGES = 8;
     const continuations = /* @__PURE__ */ new WeakMap();
-    let myListGraphqlKey = null;
-    function listCount(value) {
-      if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return null;
-      const count = Number(value);
-      return Number.isSafeInteger(count) && count >= 0 ? count : null;
-    }
-    function isMyListGraphqlSection(value) {
-      if (!value || value.__typename !== "PinotCarouselSection") return false;
-      const listeners = Array.isArray(value.eventListeners) ? value.eventListeners : [];
-      const types = new Set(listeners.map((listener) => listener?.__typename).filter(Boolean));
-      const hasPlaylistMutationListeners = types.has("PinotAddToPlaylistEventListener") && types.has("PinotRemoveFromPlaylistEventListener");
-      const hasPlaylistNotification = listeners.some(
-        (listener) => listener?.notificationMessageRegex === "UPDATE_PLAYLIST"
-      );
-      return hasPlaylistMutationListeners || hasPlaylistNotification;
-    }
-    function graphqlCarouselCandidates(data) {
-      return Object.entries(data || {}).filter(
-        ([, value]) => value && value.__typename === "PinotCarouselSection" && value.entities && listCount(value.entities.totalCount) !== null
-      );
-    }
-    function findMyListGraphqlEntry() {
-      const data = graphqlData();
-      if (!data) return null;
-      const anchor = pageDom.readMyListAnchor();
-      const candidates = graphqlCarouselCandidates(data);
-      if (anchor.sectionId) {
-        const matched = candidates.find(([, value]) => String(value.id || "") === anchor.sectionId);
-        myListGraphqlKey = matched?.[0] || null;
-        return matched ? { key: matched[0], value: matched[1], reason: "native-section-id" } : null;
-      }
-      if (myListGraphqlKey) {
-        const cached = data[myListGraphqlKey];
-        if (cached && cached.__typename === "PinotCarouselSection" && listCount(cached.entities?.totalCount) !== null) {
-          return { key: myListGraphqlKey, value: cached, reason: "cached-key" };
-        }
-        myListGraphqlKey = null;
-      }
-      for (const [key, value] of candidates) {
-        if (!isMyListGraphqlSection(value)) continue;
-        myListGraphqlKey = key;
-        return { key, value, reason: "playlist-event-listeners" };
-      }
-      if (anchor.videoIds.length) {
-        const domIds = new Set(anchor.videoIds);
-        if (domIds.size) {
-          let best = null;
-          let bestOverlap = 0;
-          for (const [key, value] of candidates) {
-            const ids = graphqlSectionVideoIds(value);
-            let overlap = 0;
-            for (const id of ids) if (domIds.has(id)) overlap++;
-            if (overlap > bestOverlap) {
-              bestOverlap = overlap;
-              best = { key, value };
-            }
-          }
-          if (best && bestOverlap >= Math.min(2, domIds.size)) {
-            myListGraphqlKey = best.key;
-            return { ...best, reason: "native-card-overlap", overlap: bestOverlap };
-          }
-        }
-      }
-      return null;
-    }
-    function graphqlSectionVideoIds(value) {
-      const ids = /* @__PURE__ */ new Set();
-      for (const edge of value?.entities?.edges || []) {
-        const ref = String(edge?.node?.__ref || "");
-        const match = ref.match(/(?:standardBoxshot_Video:|Video:)(\d+)/);
-        if (match) ids.add(match[1]);
-      }
-      return ids;
-    }
-    function serializedSection(text, markerIndex) {
-      const start = text.lastIndexOf("{", markerIndex);
-      if (start < 0) return null;
-      let depth = 0, quoted = false, escaped = false;
-      for (let index = start; index < text.length; index++) {
-        const char = text[index];
-        if (quoted) {
-          if (escaped) escaped = false;
-          else if (char === "\\") escaped = true;
-          else if (char === '"') quoted = false;
-        } else if (char === '"') quoted = true;
-        else if (char === "{") depth++;
-        else if (char === "}" && --depth === 0) {
-          try {
-            return JSON.parse(text.slice(start, index + 1));
-          } catch (_) {
-            return null;
-          }
-        }
-      }
-      return null;
-    }
     function mountedIdentity() {
       const anchor = pageDom.readMyListAnchor(3);
       return { sectionId: anchor.sectionId || "", firstVideoId: anchor.videoIds[0] || "" };
@@ -7717,142 +7804,6 @@ ${CARD_ACTION_STYLES}
           { requestedSectionId: identity.sectionId, nativeSectionId: current.sectionId || null }
         );
       }
-    }
-    function extractFreshMyListBootstrap(html) {
-      const text = String(html || "");
-      const notificationMarker = '"notificationMessageRegex":"UPDATE_PLAYLIST"';
-      const sectionMarker = '"__typename":"PinotCarouselSection"';
-      let from = 0;
-      while (from < text.length) {
-        const notificationIndex = text.indexOf(notificationMarker, from);
-        if (notificationIndex < 0) break;
-        const sectionStart = text.lastIndexOf(sectionMarker, notificationIndex);
-        if (sectionStart >= 0 && notificationIndex - sectionStart <= 5e4) {
-          const value = serializedSection(text, sectionStart);
-          if (isMyListGraphqlSection(value) && listCount(value.entities?.totalCount) !== null) {
-            return {
-              totalCount: listCount(value.entities.totalCount),
-              firstVideoId: [...graphqlSectionVideoIds(value)][0] || firstVideoIdFromCarouselNode(value),
-              rowMetadataReason: typeof value._id === "string" && value._id ? "usable-section" : "opaque-id-unavailable",
-              entry: typeof value._id === "string" && value._id ? { key: null, value, reason: "fresh-page-bootstrap" } : null
-            };
-          }
-          const block = text.slice(sectionStart, notificationIndex + notificationMarker.length + 1024);
-          const totalMatch = block.match(/"entities":\{"totalCount":(\d+)/);
-          if (totalMatch) {
-            const firstVideoMatch = block.match(/standardBoxshot_Video:(\d+)/);
-            return {
-              rowMetadataReason: "section-json-unavailable",
-              totalCount: Number(totalMatch[1]),
-              firstVideoId: firstVideoMatch?.[1] || "",
-              sectionStart,
-              notificationIndex
-            };
-          }
-        }
-        from = notificationIndex + notificationMarker.length;
-      }
-      return null;
-    }
-    function carouselArtworkVariables() {
-      const standard = { width: 342, height: 192 }, highRes = { width: 665, height: 375 };
-      const formats = ["WEBP", "JPG", "PNG"], rtl = context.pageDirection() === "rtl";
-      const artwork = (artworkType, dimension, options) => ({ artworkType, dimension, ...options });
-      const variables = {};
-      const families = {
-        StandardBoxart: ["SDP", { fallbackStrategy: "STILL", enableLockBadgeChecks: true }],
-        ContinueWatchingBoxart: ["SDP", { fallbackStrategy: "STILL" }],
-        CloudGameBoxart: ["SDP", { fallbackStrategy: "STILL" }],
-        PodcastEpisodicStill: ["SEGMENT_STILL", { graybox: false }, "COVER"]
-      };
-      for (const [family, [type, features, scaleStrategy]] of Object.entries(families)) {
-        for (const [suffix, size] of [["", standard], ["HighRes", highRes]]) {
-          variables["imageParamsFor" + family + suffix] = artwork(
-            type,
-            scaleStrategy ? { ...size, scaleStrategy } : size,
-            { features }
-          );
-        }
-      }
-      return {
-        ...variables,
-        imageParamsForPodcastEpisodicLogo: artwork(
-          "LOGO_HORIZONTAL_CROPPED",
-          { width: 800, height: 126, scaleStrategy: "CONTAIN" },
-          { features: { tone: "LIGHT" } }
-        ),
-        imageParamsForRankedBoxart: artwork(
-          "BOXSHOT",
-          { width: 426, height: 607 },
-          { features: { fallbackStrategy: "STILL", suppressTop10Badge: true } }
-        ),
-        imageParamsForMobileGameBoxart: artwork("APP_ICON", { width: 200, height: 200 }, { formats }),
-        imageParamsForCharacterCircle: artwork("SQUAREHEADSHOT_1000x1000", { width: 200, height: 200 }, { formats }),
-        imageParamsForChannel: artwork(rtl ? "CHANNEL_TILE_BACKGROUND_RTL" : "CHANNEL_TILE_BACKGROUND", standard, { formats }),
-        imageParamsForChannelLogo: artwork("CHANNEL_LOGO_COLOR_CROPPED", { height: 44 }, { formats: ["WEBP", "PNG"] }),
-        imageParamsForEntryPointBackground: artwork(
-          rtl ? "MLP_ENTRY_POINT_BACKGROUND_RTL" : "MLP_ENTRY_POINT_BACKGROUND",
-          { width: 1024 },
-          { features: { fallbackStrategy: "STILL" } }
-        ),
-        imageParamsForEntryPointLogo: artwork("LOGO_STACKED_CROPPED", { height: 260 }, { formats })
-      };
-    }
-    function firstVideoIdFromCarouselNode(node) {
-      return videoIdFromGraphqlNode(node?.entities?.edges?.[0]?.node);
-    }
-    function videoIdFromGraphqlNode(node) {
-      if (!node || typeof node !== "object") return "";
-      const seen = /* @__PURE__ */ new Set();
-      const stack = [node];
-      while (stack.length) {
-        const value = stack.pop();
-        if (!value || typeof value !== "object" || seen.has(value)) continue;
-        seen.add(value);
-        const direct = value.videoId;
-        if (Number.isFinite(Number(direct)) && Number(direct) > 0) return String(direct);
-        const id = typeof value.id === "string" ? value.id : "";
-        const match = id.match(/(?:standardBoxshot_)?Video:(\d+)/);
-        if (match) return match[1];
-        for (const child of Object.values(value)) {
-          if (child && typeof child === "object") stack.push(child);
-        }
-      }
-      return "";
-    }
-    function firstGraphqlString(value, keys, accepts, maxDepth, depth = 0, seen = /* @__PURE__ */ new Set()) {
-      if (depth > maxDepth || value == null) return "";
-      if (typeof value === "string") {
-        const text = value.trim();
-        return accepts(text) ? text : "";
-      }
-      if (typeof value !== "object" || seen.has(value)) return "";
-      seen.add(value);
-      for (const key of keys) {
-        const result = firstGraphqlString(value[key], keys, accepts, maxDepth, depth + 1, seen);
-        if (result) return result;
-      }
-      for (const child of Object.values(value)) {
-        const result = firstGraphqlString(child, keys, accepts, maxDepth, depth + 1, seen);
-        if (result) return result;
-      }
-      return "";
-    }
-    function firstGraphqlText(value) {
-      return firstGraphqlString(
-        value,
-        ["text", "value", "title", "name", "label", "displayString"],
-        (text) => Boolean(text) && !/^https?:\/\//i.test(text) && text.length <= 240,
-        5
-      );
-    }
-    function firstGraphqlImageUrl(value) {
-      return firstGraphqlString(
-        value,
-        ["url", "imageUrl", "artwork", "image", "src", "uri"],
-        (text) => /^https?:\/\//i.test(text) && (/(?:\.webp|\.jpe?g|\.png)(?:[?#]|$)/i.test(text) || /nflxso\.net|nflximg\.net/i.test(text)),
-        7
-      );
     }
     async function fetchMyListCarouselPage(request, cursor, signal, sessionToken) {
       assertCurrent(sessionToken);
@@ -7939,29 +7890,6 @@ ${CARD_ACTION_STYLES}
         finishRequest(fetchState);
       }
     }
-    function observeSelectedRow(entry) {
-      try {
-        const anchor = pageDom.readMyListAnchor(3);
-        const nativeSectionId = anchor.sectionId || null;
-        const requestedSectionId = String(entry?.value?.id || "") || null;
-        const nativeRow = nativeSectionId ? graphqlCarouselCandidates(graphqlData()).find(([, value]) => String(value.id || "") === nativeSectionId)?.[1] : null;
-        const selectedVideoIds = [...graphqlSectionVideoIds({ entities: {
-          edges: (entry?.value?.entities?.edges || []).slice(0, 3)
-        } })];
-        return {
-          available: Boolean(nativeSectionId),
-          nativeSectionId,
-          requestedSectionId,
-          sectionIdMatches: nativeSectionId && requestedSectionId ? nativeSectionId === requestedSectionId : null,
-          selectedCachedCount: listCount(entry?.value?.entities?.totalCount),
-          nativeRowCachedCount: listCount(nativeRow?.entities?.totalCount),
-          selectedVideoIds,
-          nativeVideoIds: anchor.videoIds.slice(0, 3)
-        };
-      } catch (_) {
-        return { available: false, reason: "observation-failed" };
-      }
-    }
     async function fetchFreshMyListBootstrapViaCarousel(sessionToken = null, recoveredEntry = null, identity = mountedIdentity()) {
       assertCurrent(sessionToken);
       assertMountedIdentity(identity, sessionToken);
@@ -7988,7 +7916,7 @@ ${CARD_ACTION_STYLES}
           operationName: "CarouselPage",
           variables: {
             rowId,
-            ...carouselArtworkVariables(),
+            ...carouselArtworkVariables(context.pageDirection()),
             carouselPageSize: GRAPHQL_COLLECTION_PAGE_SIZE,
             carouselAfterCursor: null,
             eddEnabled: false,
@@ -8189,61 +8117,6 @@ ${CARD_ACTION_STYLES}
         return fresh;
       }
     }
-    const pageFacts = Object.freeze({
-      readMembership(videoId2) {
-        try {
-          const entry = findMyListGraphqlEntry(), entities = entry?.value?.entities;
-          if (!entities || !Array.isArray(entities.edges)) return null;
-          const count = listCount(entities.totalCount), ids = /* @__PURE__ */ new Set();
-          for (const edge of entities.edges) {
-            const reference = String(edge?.node?.__ref || "").match(/(?:standardBoxshot_Video:|Video:)(\d+)/);
-            const id = reference?.[1] || videoIdFromGraphqlNode(edge?.node);
-            if (id) ids.add(id);
-          }
-          if (ids.has(String(videoId2))) return true;
-          return count !== null && ids.size === count && entities.edges.length === count && entities.pageInfo?.hasNextPage !== true ? false : null;
-        } catch (_) {
-          return null;
-        }
-      },
-      isAvailable() {
-        return Boolean(graphqlData());
-      },
-      myListDomIdentity() {
-        const entry = findMyListGraphqlEntry();
-        return {
-          sectionId: String(entry?.value?.id || ""),
-          videoIds: [...graphqlSectionVideoIds(entry?.value)]
-        };
-      },
-      readMyListTotalCount() {
-        try {
-          return listCount(findMyListGraphqlEntry()?.value?.entities?.totalCount);
-        } catch (_) {
-          return null;
-        }
-      },
-      detectMyListTotalCount() {
-        const entry = findMyListGraphqlEntry();
-        const count = listCount(entry?.value?.entities?.totalCount);
-        if (count === null) return null;
-        log(tLog("totalCountDetected"), {
-          totalCount: count,
-          graphqlKey: entry?.key || null,
-          detectionReason: entry?.reason || null
-        });
-        return count;
-      },
-      firstMyListVideoId() {
-        const entry = findMyListGraphqlEntry();
-        for (const edge of entry?.value?.entities?.edges || []) {
-          const ref = String(edge?.node?.__ref || "");
-          const match = ref.match(/(?:standardBoxshot_Video:|Video:)(\d+)/);
-          if (match) return match[1];
-        }
-        return "";
-      }
-    });
     function summarize(fresh, sessionToken) {
       const graphql = Array.isArray(fresh.graphqlEdges);
       const snapshot = Object.freeze({
@@ -8306,6 +8179,178 @@ ${CARD_ACTION_STYLES}
         return { bootstrap: current, records: null, error };
       }
     }
+    return Object.freeze({ fetchBootstrap, collectRecords });
+  }
+
+  // src/netflix/list-data.js
+  function createListData({
+    context,
+    pageDom,
+    location,
+    fetch,
+    performance,
+    now = () => Date.now(),
+    assertCurrent,
+    isCancelled,
+    createError,
+    beginRequest,
+    finishRequest,
+    runChunks,
+    inspection,
+    log,
+    warn,
+    tLog,
+    requestTimeoutMs = 1e4
+  }) {
+    const graphqlData = context.readGraphqlBootstrap;
+    let myListGraphqlKey = null;
+    function graphqlCarouselCandidates(data) {
+      return Object.entries(data || {}).filter(
+        ([, value]) => value && value.__typename === "PinotCarouselSection" && value.entities && listCount(value.entities.totalCount) !== null
+      );
+    }
+    function findMyListGraphqlEntry() {
+      const data = graphqlData();
+      if (!data) return null;
+      const anchor = pageDom.readMyListAnchor();
+      const candidates = graphqlCarouselCandidates(data);
+      if (anchor.sectionId) {
+        const matched = candidates.find(([, value]) => String(value.id || "") === anchor.sectionId);
+        myListGraphqlKey = matched?.[0] || null;
+        return matched ? { key: matched[0], value: matched[1], reason: "native-section-id" } : null;
+      }
+      if (myListGraphqlKey) {
+        const cached = data[myListGraphqlKey];
+        if (cached && cached.__typename === "PinotCarouselSection" && listCount(cached.entities?.totalCount) !== null) {
+          return { key: myListGraphqlKey, value: cached, reason: "cached-key" };
+        }
+        myListGraphqlKey = null;
+      }
+      for (const [key, value] of candidates) {
+        if (!isMyListGraphqlSection(value)) continue;
+        myListGraphqlKey = key;
+        return { key, value, reason: "playlist-event-listeners" };
+      }
+      if (anchor.videoIds.length) {
+        const domIds = new Set(anchor.videoIds);
+        if (domIds.size) {
+          let best = null;
+          let bestOverlap = 0;
+          for (const [key, value] of candidates) {
+            const ids = graphqlSectionVideoIds(value);
+            let overlap = 0;
+            for (const id of ids) if (domIds.has(id)) overlap++;
+            if (overlap > bestOverlap) {
+              bestOverlap = overlap;
+              best = { key, value };
+            }
+          }
+          if (best && bestOverlap >= Math.min(2, domIds.size)) {
+            myListGraphqlKey = best.key;
+            return { ...best, reason: "native-card-overlap", overlap: bestOverlap };
+          }
+        }
+      }
+      return null;
+    }
+    function observeSelectedRow(entry) {
+      try {
+        const anchor = pageDom.readMyListAnchor(3);
+        const nativeSectionId = anchor.sectionId || null;
+        const requestedSectionId = String(entry?.value?.id || "") || null;
+        const nativeRow = nativeSectionId ? graphqlCarouselCandidates(graphqlData()).find(([, value]) => String(value.id || "") === nativeSectionId)?.[1] : null;
+        const selectedVideoIds = [...graphqlSectionVideoIds({ entities: {
+          edges: (entry?.value?.entities?.edges || []).slice(0, 3)
+        } })];
+        return {
+          available: Boolean(nativeSectionId),
+          nativeSectionId,
+          requestedSectionId,
+          sectionIdMatches: nativeSectionId && requestedSectionId ? nativeSectionId === requestedSectionId : null,
+          selectedCachedCount: listCount(entry?.value?.entities?.totalCount),
+          nativeRowCachedCount: listCount(nativeRow?.entities?.totalCount),
+          selectedVideoIds,
+          nativeVideoIds: anchor.videoIds.slice(0, 3)
+        };
+      } catch (_) {
+        return { available: false, reason: "observation-failed" };
+      }
+    }
+    const pageFacts = Object.freeze({
+      readMembership(videoId2) {
+        try {
+          const entry = findMyListGraphqlEntry(), entities = entry?.value?.entities;
+          if (!entities || !Array.isArray(entities.edges)) return null;
+          const count = listCount(entities.totalCount), ids = /* @__PURE__ */ new Set();
+          for (const edge of entities.edges) {
+            const reference = String(edge?.node?.__ref || "").match(/(?:standardBoxshot_Video:|Video:)(\d+)/);
+            const id = reference?.[1] || videoIdFromGraphqlNode(edge?.node);
+            if (id) ids.add(id);
+          }
+          if (ids.has(String(videoId2))) return true;
+          return count !== null && ids.size === count && entities.edges.length === count && entities.pageInfo?.hasNextPage !== true ? false : null;
+        } catch (_) {
+          return null;
+        }
+      },
+      isAvailable() {
+        return Boolean(graphqlData());
+      },
+      myListDomIdentity() {
+        const entry = findMyListGraphqlEntry();
+        return {
+          sectionId: String(entry?.value?.id || ""),
+          videoIds: [...graphqlSectionVideoIds(entry?.value)]
+        };
+      },
+      readMyListTotalCount() {
+        try {
+          return listCount(findMyListGraphqlEntry()?.value?.entities?.totalCount);
+        } catch (_) {
+          return null;
+        }
+      },
+      detectMyListTotalCount() {
+        const entry = findMyListGraphqlEntry();
+        const count = listCount(entry?.value?.entities?.totalCount);
+        if (count === null) return null;
+        log(tLog("totalCountDetected"), {
+          totalCount: count,
+          graphqlKey: entry?.key || null,
+          detectionReason: entry?.reason || null
+        });
+        return count;
+      },
+      firstMyListVideoId() {
+        const entry = findMyListGraphqlEntry();
+        for (const edge of entry?.value?.entities?.edges || []) {
+          const ref = String(edge?.node?.__ref || "");
+          const match = ref.match(/(?:standardBoxshot_Video:|Video:)(\d+)/);
+          if (match) return match[1];
+        }
+        return "";
+      }
+    });
+    const { fetchBootstrap, collectRecords } = createFreshCollection({
+      context,
+      pageDom,
+      location,
+      fetch,
+      performance,
+      now,
+      assertCurrent,
+      isCancelled,
+      createError,
+      beginRequest,
+      finishRequest,
+      runChunks,
+      inspection,
+      log,
+      warn,
+      requestTimeoutMs,
+      findMyListGraphqlEntry,
+      observeSelectedRow
+    });
     function reset() {
       myListGraphqlKey = null;
     }
@@ -24204,7 +24249,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.9";
+  var SCRIPT_VERSION = "1.11.10";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
