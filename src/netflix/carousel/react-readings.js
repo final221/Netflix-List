@@ -1,7 +1,63 @@
 // Private synchronous Netflix readings; carousel owns their cache and admission.
-export function createReactReadings({ cardSelector }) {
+export function createReactReadings({ cardSelector, Element }) {
     const NETFLIX_DOM_SELECTORS = { standardCard: cardSelector };
-    return Object.freeze({
+    function diagnosticPrimitiveProps(props) {
+        if (!props || typeof props !== 'object') return null;
+        const keys = Object.keys(props);
+        const interesting = {};
+        const pattern = /(index|offset|position|slot|page|item|cursor|count|first|last|key|raw|virtual)/i;
+        for (const key of keys) {
+            if (!pattern.test(key)) continue;
+            const value = props[key];
+            if (value == null || ['string', 'number', 'boolean'].includes(typeof value)) {
+                interesting[key] = value;
+            }
+            if (Object.keys(interesting).length >= 24) break;
+        }
+        return { keys: keys.slice(0, 40), interesting };
+    }
+
+    function diagnosticFiberChain(node, maxDepth = 16) {
+        const fiber = reader.fiberForNode(node);
+        const chain = [];
+        let current = fiber;
+        const visited = new Set();
+        let depth = 0;
+        while (current && typeof current === 'object' && depth < maxDepth && !visited.has(current)) {
+            visited.add(current);
+            const stateNode = current.stateNode;
+            chain.push({
+                depth,
+                tag: current.tag ?? null,
+                key: current.key ?? null,
+                alternateKey: current.alternate?.key ?? null,
+                typeName: reader.typeName(current),
+                stateNodeName: stateNode instanceof Element ? stateNode.tagName.toLowerCase() : '',
+                stateVirtualSlot: stateNode instanceof Element ? (stateNode.getAttribute('data-virtual-slot') || '') : '',
+                memoizedProps: diagnosticPrimitiveProps(current.memoizedProps),
+                pendingProps: diagnosticPrimitiveProps(current.pendingProps)
+            });
+            current = current.return;
+            depth++;
+        }
+        return chain;
+    }
+
+    function diagnosticReactNode(node, label) {
+        if (!(node instanceof Element)) return { label, available: false };
+        const ownKeys = Object.getOwnPropertyNames(node);
+        return {
+            label,
+            available: true,
+            tagName: node.tagName.toLowerCase(),
+            virtualSlot: node.getAttribute('data-virtual-slot') || '',
+            reactKeys: ownKeys.filter(key => key.startsWith('__react')).slice(0, 20),
+            fiberChain: diagnosticFiberChain(node)
+        };
+    }
+
+    const reader = Object.freeze({
+        describeNode: diagnosticReactNode,
         fiberForNode(node) {
             if (!node) return null;
             for (const key of Object.getOwnPropertyNames(node)) {
@@ -73,6 +129,7 @@ export function createReactReadings({ cardSelector }) {
             return reading.value;
         }
     });
+    return reader;
 }
 
 export function readCardSignature(slots, cardSelector) {

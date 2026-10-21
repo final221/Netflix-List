@@ -4,7 +4,11 @@ Updated: 2026-10-21
 
 This file records the code-review findings and agreed follow-up work for My List for Netflix. The user selected A1-A5 from the 1.11.5 assessment and then both additional findings A6/A7. Releases 1.11.6 and 1.11.7 complete those selections. Necessary investigation and implementation toward stationary recommendation refill also remain authorized. Current release and remaining work come first; later completion records supersede historical pending-work statements.
 
-## Current structural assessment - 1.11.7
+## Selected seven-release ownership refactoring
+
+The user selected the complete staged plan on 2026-10-21: Carousel readings/resolution/observations; navigation resources and collection strategies; list-data protocol/fresh collection; display adoption and initialization attempts; hover preparation and responsive policy; popup resources and hover input; recommendation inspection. Releases proceed sequentially on main with offline checks and commit/push after each. Stage 1 is verified in **1.11.8**; stages 2-7 are pending. All 770 tests, focused carousel/hover/responsive/session checks, reproducibility/dependency checks and generated syntax pass. Interfaces retain separate card/revision, mapping/generation and observation admission; reset ordering is unchanged. Actual sizes and representative change locality are recorded in the Maintainability Map. R1/R2 below are incorporated into stages 1/2 and the earlier retention recommendations are superseded by the selected bounded ownership design. Baseline: 1.11.7 at `adf2c9d`, 70 modules / 18,705 authored lines, 23,781 generated lines, 769 passing tests. New public-remapping diagnostic characterization passes against the original implementation; existing sampling tests already assert read counts and fresh reads after asynchronous boundaries. One combined Windows/Firefox validation and normal CopyLogs remain pending after all seven releases. The private backup is excluded.
+
+## Historical structural assessment - 1.11.7
 
 Assessed with the refactor-codebase skill on 2026-10-21 at `02c7121abdf417e034b773a085df8b338e9b193f`. This is an **assessment**, with no runtime refactoring selected by this request. The inventory covers all **70 authored runtime modules / 18,705 physical lines**, including catalogs/styles; generated output is separately **23,781 lines**. Dependency analysis and `npm run check` find no import cycles or forbidden production edges. All **769 offline tests pass** again on this revision.
 

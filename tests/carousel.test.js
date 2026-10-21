@@ -619,10 +619,10 @@ test('discovery coalesces current deliveries and rejects route retirement before
     assert.equal(e.scheduler.frames.size, 0);
 });
 
-function nativeReadEnvironment(mode = 'logical') {
+function nativeReadEnvironment(mode = 'logical', overrides = {}) {
     const shape = { totalCount: 600, columns: 6 };
     const counts = { profile: 0, indicators: 0, filled: 0, rects: 0, indices: 0 };
-    const e = environment({ readListShape: () => shape, readGraphqlCount: () => shape.totalCount });
+    const e = environment({ readListShape: () => shape, readGraphqlCount: () => shape.totalCount, ...overrides });
     let track = e.track, slots = [], indicators = [];
     e.scroller.classList.add('scroller');
     e.scroller.getBoundingClientRect = () => { counts.rects++; return { left: 0, right: 600, width: 600, height: 60 }; };
@@ -672,6 +672,39 @@ function nativeReadEnvironment(mode = 'logical') {
         }
     };
 }
+
+test('public remapping diagnostics bound React keys, primitive props, deep and cyclic fibers', async () => {
+    const warnings = [];
+    const e = nativeReadEnvironment('logical', { warn: (...args) => warnings.push(args) });
+    const slots = e.mount([0, 1, 2]);
+    for (const slot of slots) {
+        delete slot.children[0].__reactFiber$test;
+        slot.__reactFiber$count = { memoizedProps: { totalCount: 600 } };
+    }
+    const node = slots[0].children[0];
+    const props = Object.fromEntries(Array.from({ length: 60 }, (_, index) => ['item' + index, index]));
+    props.itemObject = { private: true };
+    const fibers = Array.from({ length: 20 }, (_, index) => ({ key: String(index), memoizedProps: props }));
+    fibers.forEach((fiber, index) => { fiber.return = fibers[index + 1] || fibers[0]; });
+    for (let index = 0; index < 30; index++) node['__reactProps$' + index] = {};
+    node.__reactFiber$diagnostic = fibers[0];
+    const cyclic = slots[1].children[0];
+    cyclic.__reactFiber$diagnostic = { memoizedProps: {}, return: null };
+    cyclic.__reactFiber$diagnostic.return = cyclic.__reactFiber$diagnostic;
+    const result = await e.carousel.refreshMapping({ ...sourceOptions(e), totalCount: 600, columns: 6 });
+    assert.equal(result.status, 'deferred');
+    const diagnostic = warnings.find(([message]) => message === 'Netflix itemIndex diagnostic')[1];
+    const descriptions = diagnostic.entries.map(entry => entry.nodes.find(value => value.label === 'card'));
+    assert.equal(descriptions[0].reactKeys.length, 20);
+    assert.equal(descriptions[0].fiberChain.length, 16);
+    assert.equal(descriptions[0].fiberChain[0].memoizedProps.keys.length, 40);
+    assert.equal(Object.keys(descriptions[0].fiberChain[0].memoizedProps.interesting).length, 24);
+    assert.equal(descriptions[0].fiberChain[0].memoizedProps.interesting.itemObject, undefined);
+    assert.equal(descriptions[1].fiberChain.length, 1);
+    assert.deepEqual(descriptions[2].fiberChain, []);
+    props.item0 = 999;
+    assert.equal(descriptions[0].fiberChain[0].memoizedProps.interesting.item0, 0);
+});
 
 test('one native-state sample shares profile, filled-slot, rectangle, and React-index reads', () => {
     const e = nativeReadEnvironment();

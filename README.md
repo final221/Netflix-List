@@ -8,7 +8,7 @@ Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released u
 
 For copies installed from the former root location, open the released-userscript link once and confirm the update in Tampermonkey. The script name/namespace is unchanged; this release specifies the new URLs for future updates.
 
-Version **1.11.7** requires native confirmation before restoring a My List card through Undo, preserving its original position and retained markup when accepted before the native card remounts. Rejected recommendation-cache projections preserve intervening native updates; normal restoration keeps newer visible card fields. All seven selected assessment findings are corrected; 769 offline tests pass. Reload all Netflix tabs; live Firefox/Netflix compatibility and recommendation paging remain to be checked. See [findings](docs/findings.md#current-assessment-follow-up).
+Version **1.11.8** separates Carousel sampling, registered source resolution and observations while retaining binding/model authority and all public behavior. All 770 offline tests pass. This is stage 1 of the selected seven-release ownership refactoring; combined Windows/Firefox validation remains pending. See [findings](docs/findings.md#selected-seven-release-ownership-refactoring).
 
 Version **1.11.6** requires native confirmation before removing a My List card, repairs discovery when Netflix mounts late, coalesces cross-tab storage reloads and reduces browsing work for large viewing histories. Encountered title names no longer block new saved choices at the incidental-history limit. CopyLogs includes confirmation/reload counters.
 

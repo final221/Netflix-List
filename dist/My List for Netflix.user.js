@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.7
+// @version      1.11.8
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -10823,6 +10823,1439 @@ ${CARD_ACTION_STYLES}
     });
   }
 
+  // src/netflix/carousel/react-readings.js
+  function createReactReadings({ cardSelector, Element }) {
+    const NETFLIX_DOM_SELECTORS2 = { standardCard: cardSelector };
+    function diagnosticPrimitiveProps(props) {
+      if (!props || typeof props !== "object") return null;
+      const keys = Object.keys(props);
+      const interesting = {};
+      const pattern = /(index|offset|position|slot|page|item|cursor|count|first|last|key|raw|virtual)/i;
+      for (const key of keys) {
+        if (!pattern.test(key)) continue;
+        const value = props[key];
+        if (value == null || ["string", "number", "boolean"].includes(typeof value)) {
+          interesting[key] = value;
+        }
+        if (Object.keys(interesting).length >= 24) break;
+      }
+      return { keys: keys.slice(0, 40), interesting };
+    }
+    function diagnosticFiberChain(node, maxDepth = 16) {
+      const fiber = reader.fiberForNode(node);
+      const chain = [];
+      let current = fiber;
+      const visited = /* @__PURE__ */ new Set();
+      let depth = 0;
+      while (current && typeof current === "object" && depth < maxDepth && !visited.has(current)) {
+        visited.add(current);
+        const stateNode = current.stateNode;
+        chain.push({
+          depth,
+          tag: current.tag ?? null,
+          key: current.key ?? null,
+          alternateKey: current.alternate?.key ?? null,
+          typeName: reader.typeName(current),
+          stateNodeName: stateNode instanceof Element ? stateNode.tagName.toLowerCase() : "",
+          stateVirtualSlot: stateNode instanceof Element ? stateNode.getAttribute("data-virtual-slot") || "" : "",
+          memoizedProps: diagnosticPrimitiveProps(current.memoizedProps),
+          pendingProps: diagnosticPrimitiveProps(current.pendingProps)
+        });
+        current = current.return;
+        depth++;
+      }
+      return chain;
+    }
+    function diagnosticReactNode(node, label) {
+      if (!(node instanceof Element)) return { label, available: false };
+      const ownKeys = Object.getOwnPropertyNames(node);
+      return {
+        label,
+        available: true,
+        tagName: node.tagName.toLowerCase(),
+        virtualSlot: node.getAttribute("data-virtual-slot") || "",
+        reactKeys: ownKeys.filter((key) => key.startsWith("__react")).slice(0, 20),
+        fiberChain: diagnosticFiberChain(node)
+      };
+    }
+    const reader = Object.freeze({
+      describeNode: diagnosticReactNode,
+      fiberForNode(node) {
+        if (!node) return null;
+        for (const key of Object.getOwnPropertyNames(node)) {
+          if (!key.startsWith("__reactFiber$") && !key.startsWith("__reactInternalInstance$")) continue;
+          const fiber = node[key];
+          if (fiber && typeof fiber === "object") return fiber;
+        }
+        return null;
+      },
+      typeName(fiber) {
+        const type = fiber?.elementType || fiber?.type;
+        if (typeof type === "string") return type;
+        if (typeof type === "function") return type.displayName || type.name || "(anonymous)";
+        if (type && typeof type === "object") {
+          return String(type.displayName || type.name || type.$$typeof || "(object)");
+        }
+        return type == null ? "" : String(type);
+      },
+      readFiberProp(roots, property, isValid) {
+        for (const root of roots) {
+          let fiber = this.fiberForNode(root);
+          const visited = /* @__PURE__ */ new Set();
+          let depth = 0;
+          while (fiber && typeof fiber === "object" && depth < 16 && !visited.has(fiber)) {
+            visited.add(fiber);
+            const sources = [
+              ["memoizedProps", fiber.memoizedProps],
+              ["pendingProps", fiber.pendingProps],
+              ["alternate.memoizedProps", fiber.alternate?.memoizedProps],
+              ["alternate.pendingProps", fiber.alternate?.pendingProps]
+            ];
+            for (const [source, props] of sources) {
+              const value = props?.[property];
+              if (isValid(value)) {
+                return {
+                  value,
+                  depth,
+                  source,
+                  fiberKey: fiber.key ?? null,
+                  typeName: this.typeName(fiber)
+                };
+              }
+            }
+            fiber = fiber.return;
+            depth++;
+          }
+        }
+        return { value: null, depth: null, source: null, fiberKey: null, typeName: "" };
+      },
+      readItemIndex(slot) {
+        const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS2.standardCard) || null;
+        return this.readFiberProp(
+          [slot?.firstElementChild || null, card?.parentElement || null, card],
+          "itemIndex",
+          Number.isSafeInteger
+        );
+      },
+      readCarouselTotalCount(slot) {
+        const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS2.standardCard) || null;
+        const reading = this.readFiberProp(
+          [slot, slot?.firstElementChild || null, card?.parentElement || null, card],
+          "totalCount",
+          (value) => Number.isSafeInteger(value) && value >= 0
+        );
+        return reading.value;
+      }
+    });
+    return reader;
+  }
+  function readCardSignature(slots, cardSelector) {
+    return slots.map((slot) => {
+      const card = slot.querySelector(cardSelector);
+      return card?.href || card?.getAttribute("href") || "";
+    }).filter(Boolean).join("|");
+  }
+
+  // src/netflix/carousel/native-readings.js
+  function createNativeReadings({
+    netflixDom,
+    NETFLIX_DOM_SELECTORS: NETFLIX_DOM_SELECTORS2,
+    netflixReactCarousel,
+    readPosition,
+    pageCount,
+    selectedPage,
+    findMyListSection,
+    nativeCardIdentity,
+    listData,
+    layoutFormula,
+    initializationError,
+    logVirtualRawIndexDiagnostic,
+    readDiagnosticTotalCount
+  }) {
+    let nativeReadScope = null;
+    const layoutMeasurements = { formula: layoutFormula };
+    function createNativeReadScope() {
+      return {
+        profiles: /* @__PURE__ */ new WeakMap(),
+        indicators: /* @__PURE__ */ new WeakMap(),
+        filled: /* @__PURE__ */ new WeakMap(),
+        slots: /* @__PURE__ */ new WeakMap(),
+        rects: /* @__PURE__ */ new WeakMap(),
+        indices: /* @__PURE__ */ new WeakMap(),
+        layouts: /* @__PURE__ */ new WeakMap(),
+        domState: null
+      };
+    }
+    function withNativeReadScope(read) {
+      if (nativeReadScope) return read();
+      nativeReadScope = createNativeReadScope();
+      try {
+        return read();
+      } finally {
+        nativeReadScope = null;
+      }
+    }
+    function invalidateNativeReadScope() {
+      if (nativeReadScope) nativeReadScope = createNativeReadScope();
+    }
+    function nativeRect(node) {
+      if (!nativeReadScope) return node.getBoundingClientRect();
+      if (!nativeReadScope.rects.has(node)) nativeReadScope.rects.set(node, node.getBoundingClientRect());
+      return nativeReadScope.rects.get(node);
+    }
+    function nativeFilledSlots(track) {
+      if (!nativeReadScope) return netflixDom.filledSlots(track);
+      if (!nativeReadScope.filled.has(track)) nativeReadScope.filled.set(track, netflixDom.filledSlots(track));
+      return nativeReadScope.filled.get(track);
+    }
+    function nativeIndicatorItems(section) {
+      if (!section) return [];
+      if (!nativeReadScope) return [...section.querySelectorAll('[data-uia="carousel-page-indicator-item"]')];
+      if (!nativeReadScope.indicators.has(section)) {
+        nativeReadScope.indicators.set(section, [...section.querySelectorAll('[data-uia="carousel-page-indicator-item"]')]);
+      }
+      return nativeReadScope.indicators.get(section);
+    }
+    function detectCarouselDomProfile(section) {
+      if (section && nativeReadScope?.profiles.has(section)) return nativeReadScope.profiles.get(section);
+      const legacyLeft = section?.querySelector?.('[data-uia="carousel-left-button"]') || null;
+      const legacyRight = section?.querySelector?.('[data-uia="carousel-right-button"]') || null;
+      const hawkinsLeft = section?.querySelector?.('[data-uia="carousel-hawkins-left-button"]') || null;
+      const hawkinsRight = section?.querySelector?.('[data-uia="carousel-hawkins-right-button"]') || null;
+      const indicatorItems = nativeIndicatorItems(section);
+      const legacyControls = Boolean(legacyLeft || legacyRight);
+      const hawkinsControls = Boolean(hawkinsLeft || hawkinsRight);
+      const generation = legacyControls && hawkinsControls ? "hybrid" : legacyControls ? "generation1" : hawkinsControls ? "generation2" : "unknown";
+      const navigationMode = legacyControls ? "legacy" : hawkinsControls ? "hawkins" : "none";
+      const pageMode = legacyControls && indicatorItems.length > 0 ? "indicator" : legacyControls || hawkinsControls ? "logical" : "unknown";
+      const profile = {
+        generation,
+        navigationMode,
+        pageMode,
+        capabilities: {
+          legacyControls,
+          hawkinsControls,
+          pageIndicators: indicatorItems.length > 0,
+          selectedIndicator: indicatorItems.some((x) => x.getAttribute("data-indicator-selected") === "true"),
+          virtualSlots: Boolean(section?.querySelector?.(NETFLIX_DOM_SELECTORS2.virtualSlot)),
+          standardCards: Boolean(section?.querySelector?.(NETFLIX_DOM_SELECTORS2.standardCard))
+        },
+        indicatorCount: indicatorItems.length
+      };
+      if (section && nativeReadScope) nativeReadScope.profiles.set(section, profile);
+      Object.freeze(profile.capabilities);
+      return Object.freeze(profile);
+    }
+    function carouselMoveButton(section, scroller, direction) {
+      const profile = readPosition(section)?.profile || detectCarouselDomProfile(section);
+      const side = direction < 0 ? "left" : "right";
+      const selectors = profile.navigationMode === "legacy" ? [`[data-uia="carousel-${side}-button"]`, `[data-uia="carousel-hawkins-${side}-button"]`] : [`[data-uia="carousel-hawkins-${side}-button"]`, `[data-uia="carousel-${side}-button"]`];
+      for (const selector of selectors) {
+        const button = scroller?.querySelector?.(selector) || section?.querySelector?.(selector);
+        if (button) return { button, selector };
+      }
+      return { button: null, selector: selectors.join(" | ") };
+    }
+    function carouselMoveButtonDisabled(button) {
+      if (!button) return false;
+      return button.disabled === true || button.getAttribute("aria-disabled") === "true" || button.getAttribute("tabindex") === "-1";
+    }
+    function currentPageSlots(scroller, track) {
+      if (!nativeReadScope) return withNativeReadScope(() => currentPageSlots(scroller, track));
+      let byTrack = nativeReadScope.slots.get(scroller);
+      if (!byTrack) nativeReadScope.slots.set(scroller, byTrack = /* @__PURE__ */ new WeakMap());
+      if (byTrack.has(track)) return byTrack.get(track);
+      const all = nativeFilledSlots(track);
+      if (!all.length) {
+        byTrack.set(track, []);
+        return byTrack.get(track);
+      }
+      const sr = nativeRect(scroller);
+      const visible = all.map((slot) => ({ slot, rect: nativeRect(slot) })).filter((x) => {
+        const cx = x.rect.left + x.rect.width / 2;
+        return x.rect.width > 1 && cx >= sr.left && cx <= sr.right;
+      }).sort((a, b) => a.rect.left - b.rect.left).map((x) => x.slot);
+      const active = all.filter((slot) => {
+        const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+        return card?.getAttribute("tabindex") === "0";
+      });
+      let current = visible;
+      if (active.length) {
+        if (visible.length <= active.length) current = active.sort((a, b) => nativeRect(a).left - nativeRect(b).left);
+      }
+      byTrack.set(track, current);
+      return current;
+    }
+    function visibleSignature(slots) {
+      return readCardSignature(slots, NETFLIX_DOM_SELECTORS2.standardCard);
+    }
+    function nativeCarouselReadiness(section, scroller, track) {
+      if (!nativeReadScope) return withNativeReadScope(() => nativeCarouselReadiness(section, scroller, track));
+      const slots = netflixDom.directSlots(track);
+      const cards = nativeFilledSlots(track);
+      const currentSlots = currentPageSlots(scroller, track);
+      const pages = pageCount(section);
+      const formula = layoutMeasurements.formula(track);
+      const columns = Math.max(1, formula?.columns || currentSlots.length || cards.length || 1);
+      const runtime = readPosition(section);
+      const profile = runtime?.profile || detectCarouselDomProfile(section);
+      const leftControl = carouselMoveButton(section, scroller, -1).button;
+      const rightControl = carouselMoveButton(section, scroller, 1).button;
+      const controlsPresent = Boolean(leftControl || rightControl);
+      const controlsEnabled = leftControl?.getAttribute("tabindex") === "0" || rightControl?.getAttribute("tabindex") === "0";
+      const inlineTransform = track.style.getPropertyValue("transform") || "";
+      const inlineDisplay = track.style.getPropertyValue("display") || "";
+      const inlineWillChange = track.style.getPropertyValue("will-change") || "";
+      const trackInitialized = inlineDisplay === "flex" || inlineTransform && inlineTransform !== "none" || /\btransform\b/i.test(inlineWillChange);
+      const signature = [
+        pages,
+        slots.length,
+        cards.length,
+        currentSlots.length,
+        columns,
+        controlsPresent ? 1 : 0,
+        controlsEnabled ? 1 : 0,
+        trackInitialized ? 1 : 0,
+        profile.generation,
+        profile.navigationMode,
+        profile.pageMode,
+        visibleSignature(currentSlots)
+      ].join("||");
+      return {
+        connected: section.isConnected && scroller.isConnected && track.isConnected,
+        pages,
+        slots: slots.length,
+        cards: cards.length,
+        currentCards: currentSlots.length,
+        columns,
+        controlsPresent,
+        controlsEnabled,
+        trackInitialized,
+        domGeneration: profile.generation,
+        navigationMode: profile.navigationMode,
+        pageMode: profile.pageMode,
+        capabilities: { ...profile.capabilities },
+        signature
+      };
+    }
+    function readNativeMyListDomState() {
+      if (!nativeReadScope) return withNativeReadScope(() => readNativeMyListDomState());
+      if (nativeReadScope.domState) return nativeReadScope.domState;
+      const section = findMyListSection();
+      if (!section) {
+        const graphqlCount2 = listData.readMyListTotalCount();
+        return nativeReadScope.domState = {
+          section: null,
+          scroller: null,
+          track: null,
+          pages: 0,
+          selectedPage: 0,
+          pageSignature: "",
+          currentPageCount: 0,
+          sourceSlots: 0,
+          sourceCards: 0,
+          domExactCount: null,
+          graphqlCount: graphqlCount2,
+          exactCount: Number.isFinite(graphqlCount2) ? graphqlCount2 : null,
+          fingerprint: `none|${Number.isFinite(graphqlCount2) ? graphqlCount2 : "x"}`
+        };
+      }
+      const scroller = section.querySelector(NETFLIX_DOM_SELECTORS2.carouselScroller);
+      const track = scroller && netflixDom.findTrack(scroller);
+      const runtime = readPosition(section);
+      const profile = runtime?.profile || detectCarouselDomProfile(section);
+      const page = selectedPage(section);
+      const pages = pageCount(section);
+      const pageTopologyKnown = profile.pageMode === "indicator" ? profile.indicatorCount > 0 : Boolean(runtime?.pageCountFinalized);
+      const graphqlCount = listData.readMyListTotalCount();
+      if (!scroller || !track) {
+        return nativeReadScope.domState = {
+          section,
+          scroller: scroller || null,
+          track: track || null,
+          pages,
+          selectedPage: page,
+          pageSignature: "",
+          currentPageCount: 0,
+          sourceSlots: 0,
+          sourceCards: 0,
+          domExactCount: pageTopologyKnown && pages === 1 ? 0 : null,
+          graphqlCount,
+          exactCount: pageTopologyKnown && pages === 1 ? 0 : Number.isFinite(graphqlCount) ? graphqlCount : null,
+          fingerprint: `${pages}|${page}|0|0||${Number.isFinite(graphqlCount) ? graphqlCount : "x"}`
+        };
+      }
+      const current = currentPageSlots(scroller, track);
+      const identities = current.map(nativeCardIdentity).filter(Boolean);
+      const uniqueIdentities = [...new Set(identities)];
+      const pageSignature = uniqueIdentities.join("|");
+      const domExactCount = pageTopologyKnown && pages === 1 ? uniqueIdentities.length : null;
+      const exactCount = Number.isFinite(domExactCount) ? domExactCount : Number.isFinite(graphqlCount) ? graphqlCount : null;
+      const sourceSlots = netflixDom.directSlots(track).length;
+      const sourceCards = nativeFilledSlots(track).length;
+      return nativeReadScope.domState = {
+        section,
+        scroller,
+        track,
+        pages,
+        selectedPage: page,
+        pageSignature,
+        pageTopologyKnown,
+        currentPageCount: uniqueIdentities.length,
+        sourceSlots,
+        sourceCards,
+        domExactCount,
+        graphqlCount,
+        exactCount,
+        fingerprint: `${pages}|${page}|${uniqueIdentities.length}|${sourceSlots}|${sourceCards}|${pageSignature}|${Number.isFinite(graphqlCount) ? graphqlCount : "x"}`
+      };
+    }
+    function nativeReactCarouselTotalCount(scroller, track) {
+      const slots = currentPageSlots(scroller, track);
+      const readings = slots.map((slot) => netflixReactCarousel.readCarouselTotalCount(slot));
+      const finiteReadings = readings.filter((value) => Number.isSafeInteger(value) && value >= 0);
+      const unique = [...new Set(finiteReadings)];
+      return {
+        totalCount: unique.length === 1 ? unique[0] : null,
+        readings,
+        slots: slots.length,
+        uniqueReadings: unique
+      };
+    }
+    function requireNativeReactCarouselTotalCount(scroller, track, provisionalTotalCount = null, assertCurrent = () => {
+    }) {
+      const state = nativeReactCarouselTotalCount(scroller, track);
+      assertCurrent();
+      if (Number.isSafeInteger(state.totalCount) && state.totalCount >= 0) return state;
+      throw initializationError(
+        "NATIVE_TOTAL_COUNT_UNAVAILABLE",
+        "native-react-total-count",
+        "Could not read a consistent Netflix My List totalCount from the mounted carousel",
+        {
+          provisionalTotalCount,
+          slots: state.slots,
+          readings: state.readings,
+          uniqueReadings: state.uniqueReadings
+        }
+      );
+    }
+    function netflixItemIndexFromSlot(slot) {
+      if (!nativeReadScope || !slot) return netflixReactCarousel.readItemIndex(slot).value;
+      if (!nativeReadScope.indices.has(slot)) {
+        nativeReadScope.indices.set(slot, netflixReactCarousel.readItemIndex(slot).value);
+      }
+      return nativeReadScope.indices.get(slot);
+    }
+    function logicalSlotPositions(slots, totalCount) {
+      return slots.map((slot) => {
+        const itemIndex = netflixItemIndexFromSlot(slot);
+        return {
+          slot,
+          itemIndex,
+          logicalIndex: normalizeNetflixLogicalIndex(itemIndex, totalCount)
+        };
+      });
+    }
+    function nativeLogicalPageState(scroller, track, totalCount, columns) {
+      if (!nativeReadScope) return withNativeReadScope(() => nativeLogicalPageState(scroller, track, totalCount, columns));
+      const slots = currentPageSlots(scroller, track);
+      const positions = logicalSlotPositions(slots, totalCount);
+      const page = logicalPageFromSlotPositions(positions, totalCount, columns);
+      return {
+        slots,
+        positions,
+        page,
+        itemIndices: positions.map((position) => position.itemIndex),
+        logicalIndices: positions.map((position) => position.logicalIndex)
+      };
+    }
+    function requireNativeLogicalPageState(scroller, track, totalCount, columns, stage = "logical-item-index-detection") {
+      const state = nativeLogicalPageState(scroller, track, totalCount, columns);
+      if (state.positions.length && state.positions.every((position) => Number.isSafeInteger(position.itemIndex)) && Number.isFinite(state.page)) {
+        return state;
+      }
+      logVirtualRawIndexDiagnostic(state.slots, totalCount, columns, stage);
+      throw initializationError(
+        "NATIVE_LOGICAL_INDEX_UNAVAILABLE",
+        stage,
+        "Could not read a complete Netflix itemIndex page from the current My List carousel",
+        {
+          totalCount,
+          columns,
+          slots: state.slots.length,
+          itemIndices: state.itemIndices,
+          logicalIndices: state.logicalIndices,
+          resolvedPage: state.page
+        }
+      );
+    }
+    function viewportPageSlots(scroller, track, columns = 1) {
+      return withNativeReadScope(() => {
+        const all = nativeFilledSlots(track);
+        if (!all.length) return [];
+        const count = Math.max(1, columns || 1);
+        const sr = nativeRect(scroller);
+        const visible = all.map((slot) => ({ slot, rect: nativeRect(slot) })).filter((entry) => {
+          const cx = entry.rect.left + entry.rect.width / 2;
+          return entry.rect.width > 1 && cx >= sr.left && cx <= sr.right;
+        }).sort((a, b) => a.rect.left - b.rect.left).map((entry) => entry.slot);
+        return visible.length ? visible.slice(0, count) : currentPageSlots(scroller, track).slice().sort((a, b) => nativeRect(a).left - nativeRect(b).left).slice(0, count);
+      });
+    }
+    function cachedLayout(section, scroller, track, kind, read) {
+      let entries = nativeReadScope.layouts.get(section);
+      if (!entries) nativeReadScope.layouts.set(section, entries = []);
+      const prior = entries.find((entry) => entry.scroller === scroller && entry.track === track && entry.kind === kind);
+      if (prior) return prior.facts;
+      const facts = read();
+      entries.push({ scroller, track, kind, facts });
+      return facts;
+    }
+    function currentPageVideoIds(scroller, track) {
+      return currentPageSlots(scroller, track).map((slot) => {
+        const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+        return card ? netflixDom.videoIdFromHref(card.getAttribute("href") || card.href || "") : "";
+      }).filter(Boolean);
+    }
+    function slotDescriptor(slot, totalCount = void 0) {
+      try {
+        if (!slot) return null;
+        if (totalCount === void 0) totalCount = readDiagnosticTotalCount();
+        const card = slot.querySelector?.(NETFLIX_DOM_SELECTORS2.standardCard);
+        const href = card?.href || card?.getAttribute?.("href") || "";
+        const itemIndex = netflixItemIndexFromSlot(slot);
+        const rect = slot.getBoundingClientRect ? nativeRect(slot) : null;
+        const rectangle = rect ? Object.freeze(Object.fromEntries(["left", "top", "width", "height", "right", "bottom"].map((key) => [key, Math.round(rect[key] * 10) / 10]))) : null;
+        return Object.freeze({
+          slot: slot.getAttribute?.("data-virtual-slot") || "",
+          itemIndex,
+          logicalIndex: normalizeNetflixLogicalIndex(itemIndex, totalCount),
+          videoId: netflixDom.videoIdFromHref(href),
+          href,
+          ariaLabel: card?.getAttribute?.("aria-label") || "",
+          tabindex: card?.getAttribute?.("tabindex") || "",
+          connected: Boolean(slot.isConnected),
+          inlineTransform: slot.style?.getPropertyValue?.("transform") || "",
+          rect: rectangle
+        });
+      } catch (_) {
+        return null;
+      }
+    }
+    return Object.freeze({
+      withNativeReadScope,
+      invalidateNativeReadScope,
+      nativeRect,
+      nativeFilledSlots,
+      nativeIndicatorItems,
+      detectCarouselDomProfile,
+      carouselMoveButton,
+      carouselMoveButtonDisabled,
+      currentPageSlots,
+      visibleSignature,
+      nativeCarouselReadiness,
+      readNativeMyListDomState,
+      nativeReactCarouselTotalCount,
+      requireNativeReactCarouselTotalCount,
+      netflixItemIndexFromSlot,
+      logicalSlotPositions,
+      nativeLogicalPageState,
+      requireNativeLogicalPageState,
+      viewportPageSlots,
+      cachedLayout,
+      currentPageVideoIds,
+      slotDescriptor,
+      active: () => Boolean(nativeReadScope),
+      clear: () => {
+        nativeReadScope = null;
+      }
+    });
+  }
+
+  // src/netflix/carousel/source-resolution.js
+  function createSourceResolution({
+    scope,
+    performance,
+    setTimeout,
+    clearTimeout,
+    initializationError,
+    netflixDom,
+    NETFLIX_DOM_SELECTORS: NETFLIX_DOM_SELECTORS2,
+    borrowBinding,
+    assertBinding,
+    isBindingCurrent,
+    assertRouteSession,
+    captureCardAuthority,
+    captureResolutionAuthority,
+    readRuntime,
+    registerLogicalPageSignature,
+    navigation,
+    isHoverCancelled,
+    readHoverToken,
+    log,
+    warn,
+    trace,
+    tLog,
+    slotDescriptor,
+    withNativeReadScope,
+    currentPageSlots,
+    nativeFilledSlots,
+    nativeIndicatorItems,
+    netflixItemIndexFromSlot,
+    selectedPage,
+    pageCount,
+    detectCarouselDomProfile,
+    visibleSignature,
+    viewportPageSlots,
+    currentPageVideoIds
+  }) {
+    const sourceTickets = /* @__PURE__ */ new WeakMap(), mountedWaits = /* @__PURE__ */ new Set();
+    async function anchorPageZero({ section, scroller, track, firstVideoId, columns, sessionToken = null }) {
+      const owner = borrowBinding(section, scroller, track);
+      const assertSource2 = () => {
+        assertRouteSession(sessionToken);
+        assertBinding(owner);
+      };
+      assertSource2();
+      const expectedFirstVideoId = String(firstVideoId || "");
+      if (!expectedFirstVideoId) return true;
+      const runtime = readRuntime(section);
+      const profile = runtime?.profile || detectCarouselDomProfile(section);
+      if (profile?.pageMode !== "indicator") return true;
+      if (selectedPage(section) !== 0) {
+        const returned = await navigation.navigate(section, scroller, 0, null, sessionToken, false);
+        assertSource2();
+        if (returned !== 0 || selectedPage(section) !== 0) {
+          throw initializationError(
+            "NATIVE_PAGE_ZERO_NOT_REACHED",
+            "normalize-native-page-zero",
+            "Could not return the native My List carousel to page 0 before reinitialization",
+            { returnedPage: returned, selectedPage: selectedPage(section), expectedFirstVideoId }
+          );
+        }
+      }
+      let visibleIds = currentPageVideoIds(scroller, track);
+      if (visibleIds[0] === expectedFirstVideoId) {
+        log("Fresh Netflix My List page-0 anchor confirmed", {
+          expectedFirstVideoId,
+          visibleIds,
+          selectedPage: selectedPage(section),
+          pageMode: profile.pageMode
+        });
+        assertSource2();
+        return true;
+      }
+      log("Fresh Netflix My List page-0 anchor mismatch; refreshing native page 0", {
+        expectedFirstVideoId,
+        visibleIds,
+        selectedPage: selectedPage(section),
+        pages: pageCount(section),
+        pageMode: profile.pageMode
+      });
+      assertSource2();
+      if (pageCount(section) > 1) {
+        const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
+        const adjacent = await navigation.move(section, scroller, 1, null, sessionToken);
+        assertSource2();
+        if (adjacent !== 0) {
+          await navigation.stable(scroller, track, {
+            previousSignature: beforeSignature,
+            minimumSlots: Math.max(1, columns || currentPageSlots(scroller, track).length || 1),
+            timeout: 900,
+            sessionToken
+          });
+          assertSource2();
+          await navigation.move(section, scroller, -1, null, sessionToken);
+          assertSource2();
+        }
+      }
+      const requiredKey = `v:${expectedFirstVideoId}`;
+      await navigation.stable(scroller, track, {
+        minimumSlots: Math.max(1, columns || currentPageSlots(scroller, track).length || 1),
+        requiredKeys: /* @__PURE__ */ new Set([requiredKey]),
+        requiredStableFrames: 2,
+        timeout: 1200,
+        sessionToken
+      });
+      assertSource2();
+      visibleIds = currentPageVideoIds(scroller, track);
+      if (selectedPage(section) === 0 && visibleIds[0] === expectedFirstVideoId) {
+        log("Fresh Netflix My List page-0 anchor restored", {
+          expectedFirstVideoId,
+          visibleIds,
+          selectedPage: selectedPage(section),
+          pageMode: profile.pageMode
+        });
+        assertSource2();
+        return true;
+      }
+      throw initializationError(
+        "NATIVE_PAGE_ZERO_ANCHOR_MISMATCH",
+        "normalize-native-page-zero",
+        "Netflix My List page 0 is selected but its first mounted card does not match the fresh My List first item",
+        {
+          expectedFirstVideoId,
+          visibleIds,
+          selectedPage: selectedPage(section),
+          pages: pageCount(section),
+          pageMode: profile.pageMode
+        }
+      );
+    }
+    function isSourceCurrent(source) {
+      const ticket = sourceTickets.get(source);
+      if (!ticket || !isBindingCurrent(ticket.binding) || ticket.slot.isConnected === false || !ticket.authority.current()) return false;
+      return withNativeReadScope(() => {
+        if (!ticket.authority.refresh()) return false;
+        const card = ticket.slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+        const href = card?.href || card?.getAttribute("href") || "";
+        if (href !== ticket.href || netflixItemIndexFromSlot(ticket.slot) !== ticket.itemIndex || !nativeFilledSlots(ticket.binding.track).includes(ticket.slot)) return false;
+        if (ticket.authority.profile().pageMode === "indicator") {
+          const indicators = nativeIndicatorItems(ticket.binding.section);
+          const page = Math.max(0, indicators.findIndex((node) => node.getAttribute("data-indicator-selected") === "true"));
+          if (page !== ticket.page) return false;
+        }
+        return isBindingCurrent(ticket.binding) && ticket.authority.current();
+      });
+    }
+    function assertSource(source) {
+      if (!isSourceCurrent(source)) throw initializationError(
+        "NATIVE_SOURCE_REPLACED",
+        "native-card",
+        "Native source card or its page ownership changed"
+      );
+    }
+    function sourceHandle(binding, slot, page) {
+      assertBinding(binding);
+      const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+      const href = card?.href || card?.getAttribute("href") || "";
+      const itemIndex = netflixItemIndexFromSlot(slot);
+      const authority = captureCardAuthority(binding.section);
+      const source = Object.freeze({
+        href,
+        videoId: netflixDom.videoIdFromHref(href),
+        itemIndex: Number.isSafeInteger(itemIndex) && itemIndex >= 0 ? itemIndex : null,
+        page,
+        get slot() {
+          assertSource(source);
+          return slot;
+        },
+        isCurrent: () => isSourceCurrent(source)
+      });
+      sourceTickets.set(source, { binding, slot, href, itemIndex, page, authority });
+      assertSource(source);
+      return source;
+    }
+    function resolutionOperation({ section, scroller, track, item, mode = null, hoverToken = null, sessionToken = null }) {
+      assertRouteSession(sessionToken);
+      const binding = borrowBinding(section, scroller, track);
+      assertBinding(binding);
+      const assertMappingOwner = captureResolutionAuthority(section);
+      const target = Object.freeze({ href: String(item?.href || ""), videoId: String(item?.videoId || "") });
+      const diagnosticItem = mode === "preferred-refresh" || mode === "search" ? Object.freeze({ ...target, page: item?.page, ariaLabel: String(item?.ariaLabel || "") }) : null;
+      const guard = () => {
+        assertRouteSession(sessionToken);
+        assertBinding(binding);
+        assertMappingOwner();
+      };
+      return { binding, target, diagnosticItem, hoverToken, sessionToken, guard };
+    }
+    function mountedOperation(options, assertOperation = () => {
+    }) {
+      assertOperation();
+      const operation = resolutionOperation(options);
+      const { binding, guard: assertOwner } = operation;
+      const page = selectedPage(binding.section);
+      const guard = () => {
+        assertOperation();
+        assertOwner();
+        const section = binding.section;
+        const currentPage = selectedPage(section);
+        assertOwner();
+        assertOperation();
+        if (currentPage !== page) {
+          throw initializationError(
+            "NATIVE_SOURCE_REPLACED",
+            "native-mounted-card",
+            "Native source page or mapping changed during mounted-card resolution"
+          );
+        }
+      };
+      return { ...operation, activeOnly: options.activeOnly ?? true, page, guard };
+    }
+    function lookupMountedCard(operation) {
+      operation.guard();
+      const { binding, target, activeOnly, page } = operation;
+      const candidates = activeOnly ? currentPageSlots(binding.scroller, binding.track) : nativeFilledSlots(binding.track);
+      const slot = candidates.find((slot2) => {
+        const card = slot2.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+        if (!card) return false;
+        const href = card.href || card.getAttribute("href") || "";
+        return Boolean(target.href && href === target.href || target.videoId && netflixDom.videoIdFromHref(href) === target.videoId);
+      });
+      operation.guard();
+      return slot ? sourceHandle(binding, slot, page) : null;
+    }
+    function mountedCard(options) {
+      assertRouteSession(options.sessionToken);
+      if (isHoverCancelled(options.hoverToken ?? null) || !options.section?.isConnected || !options.scroller?.isConnected || !options.track?.isConnected) return null;
+      return withNativeReadScope(() => lookupMountedCard(mountedOperation(options)));
+    }
+    function mountedTick() {
+      return new Promise((resolve) => {
+        let closed = false, timer = null;
+        const ticket = { close() {
+          if (closed) return;
+          closed = true;
+          clearTimeout(timer);
+          mountedWaits.delete(ticket);
+          resolve();
+        } };
+        mountedWaits.add(ticket);
+        timer = setTimeout(ticket.close, 10);
+      });
+    }
+    function resetMountedWaits() {
+      for (const ticket of mountedWaits) ticket.close();
+    }
+    async function resolveMountedCard(options, assertOperation = () => {
+    }) {
+      assertRouteSession(options.sessionToken);
+      if (isHoverCancelled(options.hoverToken ?? null)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+      if (!options.section?.isConnected || !options.scroller?.isConnected || !options.track?.isConnected) {
+        return Object.freeze({ status: "unknown", reason: "native-binding-unavailable" });
+      }
+      const start = performance.now(), timeout = Number.isFinite(options.timeout) ? Math.max(0, options.timeout) : 500;
+      let operation;
+      let source = withNativeReadScope(() => {
+        operation = mountedOperation(options, assertOperation);
+        return lookupMountedCard(operation);
+      });
+      while (!source && performance.now() - start < timeout) {
+        await mountedTick();
+        assertRouteSession(operation.sessionToken);
+        if (isHoverCancelled(operation.hoverToken)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+        source = withNativeReadScope(() => lookupMountedCard(operation));
+      }
+      return source ? Object.freeze({ status: "found", source, page: source.page }) : Object.freeze({ status: "unknown", reason: "target-not-mounted" });
+    }
+    function mountedHints(operation) {
+      const { binding, target, hoverToken, sessionToken } = operation;
+      return {
+        section: binding.section,
+        scroller: binding.scroller,
+        track: binding.track,
+        item: target,
+        activeOnly: true,
+        hoverToken,
+        sessionToken
+      };
+    }
+    async function resolvePreferredCard(options) {
+      const operation = withNativeReadScope(() => resolutionOperation(options));
+      const { binding, guard, hoverToken: token, sessionToken, diagnosticItem } = operation;
+      const { section, scroller, track } = binding;
+      const preferredPage = options.preferredPage ?? options.item?.page ?? 0;
+      const total = pageCount(section);
+      guard();
+      if (total <= 0) return Object.freeze({ status: "unknown", reason: "native-pages-unavailable" });
+      const hints = mountedHints(operation);
+      await navigation.navigate(section, scroller, preferredPage, token, sessionToken, true, guard);
+      guard();
+      if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+      const current = withNativeReadScope(() => lookupMountedCard(mountedOperation(hints, guard)));
+      if (current) return Object.freeze({ status: "found", source: current, page: current.page, refreshed: false });
+      if (total > 1 && selectedPage(section) === preferredPage) {
+        const from = selectedPage(section);
+        const moved = await navigation.move(section, scroller, 1, token, sessionToken, guard);
+        guard();
+        if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+        if (moved !== from) {
+          await navigation.move(section, scroller, -1, token, sessionToken, guard);
+          guard();
+          if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+        }
+      }
+      await navigation.navigate(section, scroller, preferredPage, token, sessionToken, true, guard);
+      guard();
+      if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+      const result = await resolveMountedCard({ ...hints, timeout: 700 }, guard);
+      guard();
+      if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+      if (result.status !== "found") return result;
+      trace(() => ["Hover stale logical page refreshed without full carousel scan", {
+        item: diagnosticItem,
+        preferredPage,
+        selectedPage: result.page,
+        source: slotDescriptor(result.source.slot)
+      }]);
+      guard();
+      assertSource(result.source);
+      return Object.freeze({ ...result, refreshed: true });
+    }
+    async function searchSourceCard(options) {
+      const operation = withNativeReadScope(() => resolutionOperation(options));
+      const { binding, guard, hoverToken: token, sessionToken, diagnosticItem } = operation;
+      const { section, scroller, track } = binding;
+      const preferredPage = options.preferredPage ?? options.item?.page ?? 0;
+      const columns = Math.max(1, options.columns || 1), repair = options.repairLogicalMapping ?? true;
+      const total = pageCount(section), tried = /* @__PURE__ */ new Set(), order = [];
+      guard();
+      const push = (page) => {
+        if (page < 0 || page >= total || tried.has(page)) return;
+        tried.add(page);
+        order.push(page);
+      };
+      push(preferredPage);
+      const radius = Number.isFinite(options.maxRadius) ? Math.min(Math.max(0, Math.floor(options.maxRadius)), Math.max(0, total - 1)) : Math.max(0, total - 1);
+      for (let delta = 1; delta <= radius; delta++) {
+        push(preferredPage + delta);
+        push(preferredPage - delta);
+      }
+      Object.freeze(order);
+      const hints = mountedHints(operation);
+      const cancelled = (reason) => {
+        if (!isHoverCancelled(token)) return null;
+        if (reason) log(tLog("hoverSourceSearchCancelled"), { reason, token, hoverToken: readHoverToken() });
+        guard();
+        return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+      };
+      log(tLog("hoverSourceSearchStarted"), { item: diagnosticItem, preferredPage, selectedPage: selectedPage(section), pages: total, order });
+      guard();
+      for (const page of order) {
+        guard();
+        const beforePage = cancelled();
+        if (beforePage) return beforePage;
+        const beforeSignature = withNativeReadScope(() => visibleSignature(currentPageSlots(scroller, track)));
+        log(tLog("hoverSourceSearchPage"), { item: diagnosticItem, page, selectedBefore: selectedPage(section) });
+        guard();
+        const beforeMove = cancelled();
+        if (beforeMove) return beforeMove;
+        await navigation.navigate(section, scroller, page, token, sessionToken, true, guard);
+        guard();
+        const afterMove = cancelled("token-changed-after-page-move");
+        if (afterMove) return afterMove;
+        let result = await resolveMountedCard({ ...hints, timeout: page === preferredPage ? 500 : 280 }, guard);
+        guard();
+        const afterMount = cancelled("token-changed-after-mount-wait");
+        if (afterMount) return afterMount;
+        if (result.status !== "found") {
+          await navigation.stable(scroller, track, {
+            previousSignature: beforeSignature,
+            minElapsed: 120,
+            timeout: 520,
+            sessionToken,
+            hoverToken: token,
+            assertOperation: guard
+          });
+          guard();
+          const afterHydration = cancelled();
+          if (afterHydration) return afterHydration;
+          const source = withNativeReadScope(() => lookupMountedCard(mountedOperation(hints, guard)));
+          if (source) result = { status: "found", source };
+        }
+        if (result.status !== "found") continue;
+        const found = withNativeReadScope(() => {
+          guard();
+          const slot = result.source.slot, actual = selectedPage(section);
+          const visible = viewportPageSlots(scroller, track, columns), signature = visibleSignature(visible);
+          if (repair && readRuntime(section).profile.pageMode === "logical" && signature) {
+            registerLogicalPageSignature(section, signature, actual);
+          }
+          guard();
+          const sources = Object.freeze(visible.map((node) => sourceHandle(binding, node, actual)));
+          const source = sources.find((handle) => sourceTickets.get(handle).slot === slot) || sourceHandle(binding, slot, actual);
+          const visibleCards = Object.freeze(sources.map((handle) => Object.freeze({
+            href: handle.href,
+            videoId: handle.videoId,
+            itemIndex: handle.itemIndex
+          })));
+          guard();
+          assertSource(source);
+          return Object.freeze({ status: "found", source, sources, visibleCards, page: actual });
+        });
+        trace(() => [tLog("hoverSourceFound"), { item: diagnosticItem, actualPage: found.page, source: slotDescriptor(found.source.slot) }]);
+        guard();
+        assertSource(found.source);
+        return found;
+      }
+      warn(tLog("hoverSourceSearchFailed"), { item: diagnosticItem, preferredPage, selectedPage: selectedPage(section), pages: total });
+      guard();
+      return cancelled() || Object.freeze({ status: "unknown", reason: "source-search-exhausted" });
+    }
+    async function resolveCard(options) {
+      if (options.mode === "mounted") return resolveMountedCard(options);
+      const {
+        section,
+        scroller,
+        track,
+        expectedPage,
+        totalCount,
+        columns = 1,
+        pageItemCount = 1,
+        hoverToken = null,
+        sessionToken = null
+      } = options;
+      assertRouteSession(sessionToken);
+      if (isHoverCancelled(hoverToken)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
+      if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
+        return Object.freeze({ status: "unknown", reason: "native-binding-unavailable" });
+      }
+      if (options.mode === "preferred-refresh") return resolvePreferredCard(options);
+      if (options.mode === "search") return searchSourceCard(options);
+      const { binding, guard, target } = resolutionOperation(options);
+      guard();
+      const key = target.videoId ? "v:" + target.videoId : "h:" + target.href;
+      const keyOf = (slot2) => {
+        const card = slot2.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+        const href = card?.href || card?.getAttribute("href") || "";
+        const id = netflixDom.videoIdFromHref(href);
+        return id ? "v:" + id : "h:" + href;
+      };
+      const width = Math.max(1, columns || 1);
+      const expectedPageCount = Math.max(1, Math.ceil(Math.max(totalCount || 0, 1) / width));
+      const nativePageCount = pageCount(section);
+      if (nativePageCount !== expectedPageCount || expectedPage < 0 || expectedPage >= nativePageCount) {
+        log(tLog("hoverExpectedPageUnknown"), {
+          reason: "page-count-not-converged",
+          item: target,
+          expectedPage,
+          nativePageCount,
+          expectedPageCount,
+          legacyItemCount: totalCount,
+          columns: width
+        });
+        guard();
+        return Object.freeze({ status: "unknown", reason: "page-count-not-converged" });
+      }
+      const selectedBefore = selectedPage(section);
+      const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
+      await navigation.navigate(section, scroller, expectedPage, hoverToken, sessionToken, true, guard);
+      guard();
+      if (hoverToken !== null && hoverToken !== readHoverToken()) {
+        return Object.freeze({ status: "unknown", reason: "token-changed-after-page-move" });
+      }
+      if (selectedPage(section) !== expectedPage) {
+        log(tLog("hoverExpectedPageUnknown"), {
+          reason: "expected-page-not-reached",
+          item: target,
+          expectedPage,
+          selectedPage: selectedPage(section)
+        });
+        guard();
+        return Object.freeze({ status: "unknown", reason: "expected-page-not-reached" });
+      }
+      const foundResult = (slot2, slots, afterStabilityWait = false) => withNativeReadScope(() => {
+        guard();
+        const sources = Object.freeze(slots.map((node) => sourceHandle(binding, node, expectedPage)));
+        const source = sources[slots.indexOf(slot2)];
+        trace(() => [tLog("hoverExpectedPageMatch"), {
+          item: target,
+          expectedPage,
+          selectedPage: selectedPage(section),
+          source: slotDescriptor(slot2),
+          ...afterStabilityWait ? { afterStabilityWait: true } : {}
+        }]);
+        guard();
+        assertSource(source);
+        return Object.freeze({ status: "found", source, sources, page: expectedPage });
+      });
+      let pageSlots = viewportPageSlots(scroller, track, width);
+      let slot = pageSlots.find((node) => keyOf(node) === key) || null;
+      if (slot) return foundResult(slot, pageSlots);
+      const minimumSlots = Math.min(width, Math.max(1, pageItemCount));
+      const stableSlots = await navigation.stable(scroller, track, {
+        previousSignature: selectedBefore === expectedPage ? "" : beforeSignature,
+        requiredStableFrames: 2,
+        minimumSlots,
+        requiredKeys: /* @__PURE__ */ new Set([key]),
+        timeout: 650,
+        sessionToken,
+        hoverToken,
+        assertOperation: guard
+      });
+      guard();
+      if (hoverToken !== null && hoverToken !== readHoverToken()) {
+        return Object.freeze({ status: "unknown", reason: "token-changed-after-stability-wait" });
+      }
+      if (selectedPage(section) !== expectedPage) return Object.freeze({ status: "unknown", reason: "page-changed-during-stability-wait" });
+      pageSlots = viewportPageSlots(scroller, track, width);
+      slot = pageSlots.find((node) => keyOf(node) === key) || null;
+      if (slot) return foundResult(slot, pageSlots, true);
+      const visibleSlots = pageSlots.length ? pageSlots : stableSlots?.length ? stableSlots.slice(0, width) : [];
+      const visibleCards = Object.freeze(visibleSlots.map((node) => {
+        const href = node.querySelector(NETFLIX_DOM_SELECTORS2.standardCard)?.href || "";
+        const itemIndex = netflixItemIndexFromSlot(node);
+        return Object.freeze({
+          href,
+          videoId: netflixDom.videoIdFromHref(href),
+          itemIndex: Number.isSafeInteger(itemIndex) && itemIndex >= 0 ? itemIndex : null
+        });
+      }));
+      const visibleIds = Object.freeze(visibleCards.map((card) => card.videoId).filter(Boolean));
+      if (visibleSlots.length < minimumSlots || visibleIds.length < minimumSlots) {
+        log(tLog("hoverExpectedPageUnknown"), {
+          reason: "expected-page-not-fully-mounted",
+          item: target,
+          expectedPage,
+          minimumSlots,
+          slots: visibleSlots.length,
+          visibleIds
+        });
+        guard();
+        return Object.freeze({ status: "unknown", reason: "expected-page-not-fully-mounted", visibleIds, visibleCards });
+      }
+      log(tLog("hoverExpectedPageMismatch"), { item: target, expectedPage, visibleIds });
+      guard();
+      return Object.freeze({ status: "mismatch", reason: "target-not-in-expected-page", visibleIds, visibleCards });
+    }
+    function assertSourceBinding(source, section, scroller, track) {
+      assertSource(source);
+      const ticket = sourceTickets.get(source);
+      if (ticket.binding.section !== section || ticket.binding.scroller !== scroller || ticket.binding.track !== track) {
+        throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Resolved source does not belong to the observed binding");
+      }
+    }
+    return Object.freeze({
+      anchorPageZero,
+      resolveCard,
+      mountedCard,
+      isSourceCurrent,
+      assertSource,
+      sourceHandle,
+      assertSourceBinding,
+      resetMountedWaits,
+      pending: () => mountedWaits.size
+    });
+  }
+
+  // src/netflix/carousel/observations.js
+  function createObservations({
+    scope,
+    window,
+    initializationError,
+    assertRouteSession,
+    readBindingGeneration,
+    readAcceptedBinding,
+    observationOperation,
+    assertBinding,
+    isBindingCurrent,
+    findMyListSection,
+    netflixDom,
+    NETFLIX_DOM_SELECTORS: NETFLIX_DOM_SELECTORS2,
+    cardMarkup,
+    layoutMeasurements,
+    withNativeReadScope,
+    cachedLayout,
+    nativeRect,
+    nativeFilledSlots,
+    currentPageSlots,
+    viewportPageSlots,
+    readNativeMyListDomState,
+    selectedPage,
+    pageCount,
+    requireNativeReactCarouselTotalCount,
+    nativeReactCarouselTotalCount,
+    nativeCarouselReadiness,
+    logicalSlotPositions,
+    sourceHandle,
+    assertSource,
+    carouselDomProfileSummary
+  }) {
+    const observationTickets = /* @__PURE__ */ new WeakMap();
+    function observationResult(operation, facts, validate = () => {
+    }) {
+      operation.guard();
+      validate();
+      operation.guard();
+      const result = Object.freeze(facts);
+      observationTickets.set(result, { operation, validate });
+      return result;
+    }
+    function assertObservation(result) {
+      const ticket = observationTickets.get(result);
+      if (ticket) {
+        return withNativeReadScope(() => {
+          ticket.operation.guard();
+          ticket.operation.refresh?.();
+          ticket.operation.guard();
+          ticket.validate();
+          ticket.operation.guard();
+          return result;
+        });
+      }
+      throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native observation is no longer current");
+    }
+    function isObservationCurrent(result) {
+      try {
+        assertObservation(result);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    function discoverSource({ bindingOnly = false, sessionToken = null, assertCurrent = () => {
+    } } = {}) {
+      return withNativeReadScope(() => {
+        const generation = readBindingGeneration(), route = scope.token;
+        const guard = () => {
+          assertRouteSession(sessionToken);
+          assertCurrent();
+          if (generation !== readBindingGeneration() || route !== scope.token) {
+            throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Discovery admission changed");
+          }
+        };
+        const references = () => {
+          const section = findMyListSection();
+          const scroller = section?.querySelector(NETFLIX_DOM_SELECTORS2.carouselScroller) || null;
+          const track = scroller && netflixDom.findTrack(scroller);
+          return { section: section || null, scroller, track: track || null };
+        };
+        guard();
+        const facts = bindingOnly ? references() : readNativeMyListDomState();
+        const matchesBinding = Boolean(readAcceptedBinding() && isBindingCurrent(readAcceptedBinding()) && ["section", "scroller", "track"].every((key) => readAcceptedBinding()[key] === facts[key]));
+        return observationResult({ binding: { section: facts.section }, guard }, { ...facts, matchesBinding }, () => {
+          const currentReferences = references();
+          const current = bindingOnly ? currentReferences : readNativeMyListDomState();
+          const changedFields = Object.keys(facts).filter((key) => !Object.is(facts[key], current[key]));
+          if (changedFields.length || ["section", "scroller", "track"].some((key) => facts[key] !== currentReferences[key]) || facts.section?.isConnected === false || facts.scroller?.isConnected === false || facts.track?.isConnected === false) {
+            throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Observed My List source changed", { changedFields });
+          }
+        });
+      });
+    }
+    function captureMountedItem({ discovery, videoId: videoId2 }) {
+      return withNativeReadScope(() => {
+        assertObservation(discovery);
+        if (!discovery.track) return null;
+        let item = null;
+        try {
+          for (const slot of netflixDom.directSlots(discovery.track)) {
+            item = cardMarkup.capture(slot, discovery.selectedPage || 0, false);
+            assertObservation(discovery);
+            if (item?.videoId !== String(videoId2)) continue;
+            const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
+            const assertCapturedSlot = () => {
+              const current = cardMarkup.capture(slot, discovery.selectedPage || 0, false);
+              if (slot.isConnected === false || slot.parentElement !== discovery.track || slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard) !== card || !current || ["href", "videoId", "ariaLabel"].some((key) => current[key] !== item[key])) {
+                throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Captured native card changed");
+              }
+              assertObservation(discovery);
+            };
+            assertCapturedSlot();
+            item.snapshot = slot.cloneNode(true);
+            assertCapturedSlot();
+            return item;
+          }
+          assertObservation(discovery);
+          return null;
+        } catch (error) {
+          if (item) item.snapshot = null;
+          throw error;
+        }
+      });
+    }
+    function measureLayout({
+      section,
+      scroller = null,
+      track = null,
+      mode = "auto",
+      binding = null,
+      sessionToken = null,
+      assertCurrent = () => {
+      }
+    }) {
+      return withNativeReadScope(() => {
+        const generation = readBindingGeneration(), route = scope.token;
+        const guard = () => {
+          assertRouteSession(sessionToken);
+          assertCurrent();
+          if (!section || section.isConnected === false || scroller?.isConnected === false || track?.isConnected === false || readBindingGeneration() !== generation || scope.token !== route) {
+            throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Native layout admission changed");
+          }
+          if (binding) {
+            assertBinding(binding);
+            if (binding.section !== section || scroller && binding.scroller !== scroller || track && binding.track !== track) {
+              throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Layout binding does not match its source");
+            }
+          }
+        };
+        guard();
+        const kind = mode === "auto" ? scroller && track ? "visible" : "empty" : mode;
+        const read = () => {
+          return cachedLayout(section, scroller, track, kind, () => {
+            const rect = nativeRect(section);
+            const bounds = Object.freeze(Object.fromEntries(["left", "top", "right", "bottom", "width", "height"].map((key) => [key, rect[key]])));
+            const layout = kind === "bounds" ? null : kind === "visible" ? layoutMeasurements.visible(section, scroller, track) : layoutMeasurements.empty(section);
+            const facts2 = {
+              bounds,
+              viewportWidth: window.innerWidth,
+              ...layout ? { layout: Object.freeze({ ...layout }) } : {}
+            };
+            return facts2;
+          });
+        };
+        const facts = read();
+        const same = (left, right) => Boolean(left && right && Object.keys(left).length === Object.keys(right).length && Object.keys(left).every((key) => Object.is(left[key], right[key])));
+        return observationResult({ binding: { section }, guard }, { ...facts }, () => {
+          const current = read();
+          if (window.innerWidth !== facts.viewportWidth || !same(current.bounds, facts.bounds) || facts.layout && !same(current.layout, facts.layout)) {
+            throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Observed native layout changed");
+          }
+        });
+      });
+    }
+    function observeSource(options) {
+      return withNativeReadScope(() => {
+        const operation = observationOperation(options), runtime = operation.model.view;
+        const attempts = runtime.logicalRemapRetryCount;
+        const position = options.position ? Object.freeze({
+          page: selectedPage(operation.binding.section),
+          pages: pageCount(operation.binding.section)
+        }) : null;
+        const count = options.count === "required" ? requireNativeReactCarouselTotalCount(
+          operation.binding.scroller,
+          operation.binding.track,
+          options.provisionalTotalCount ?? null,
+          operation.guard
+        ) : options.count === "optional" ? nativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track) : null;
+        const countFacts = count ? Object.freeze({
+          ...count,
+          readings: Object.freeze([...count.readings]),
+          uniqueReadings: Object.freeze([...count.uniqueReadings])
+        }) : null;
+        const readinessState = options.readiness ? nativeCarouselReadiness(
+          operation.binding.section,
+          operation.binding.scroller,
+          operation.binding.track
+        ) : null;
+        const readiness = readinessState ? Object.freeze({
+          ...readinessState,
+          capabilities: Object.freeze({ ...readinessState.capabilities })
+        }) : null;
+        const presentationFacts = () => ({
+          parked: Boolean(operation.binding.scroller?.classList?.contains(SOURCE_PARKED_CLASS)),
+          hidden: operation.binding.section?.getAttribute(ORIGINAL_VISIBILITY_ATTR) === "false"
+        });
+        const presentation = options.presentation ? Object.freeze(presentationFacts()) : null;
+        return observationResult(operation, {
+          mode: runtime.profile.pageMode,
+          needsRemapping: Boolean(runtime.pageMappingStale),
+          remapAttempts: attempts,
+          ...countFacts ? { count: countFacts } : {},
+          ...position ? { position } : {},
+          ...readiness ? { readiness } : {},
+          ...presentation ? { presentation } : {}
+        }, () => {
+          if (runtime.logicalRemapRetryCount !== attempts) throw initializationError(
+            "NATIVE_SOURCE_REPLACED",
+            "native-observation",
+            "Native remapping observation changed"
+          );
+          if (position && (selectedPage(operation.binding.section) !== position.page || pageCount(operation.binding.section) !== position.pages)) {
+            throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native position observation changed");
+          }
+          if (countFacts) {
+            const current = nativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track);
+            if (current.totalCount !== countFacts.totalCount || current.slots !== countFacts.slots || current.readings.length !== countFacts.readings.length || !current.readings.every((value, index) => Object.is(value, countFacts.readings[index]))) {
+              throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native count observation changed");
+            }
+          }
+          if (readiness) {
+            const current = nativeCarouselReadiness(operation.binding.section, operation.binding.scroller, operation.binding.track);
+            if (current.signature !== readiness.signature || current.connected !== readiness.connected || Object.keys(current.capabilities).length !== Object.keys(readiness.capabilities).length || Object.keys(readiness.capabilities).some((key) => current.capabilities[key] !== readiness.capabilities[key])) {
+              throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native readiness observation changed");
+            }
+          }
+          if (presentation) {
+            const current = presentationFacts();
+            if (current.parked !== presentation.parked || current.hidden !== presentation.hidden) {
+              throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native presentation observation changed");
+            }
+          }
+        });
+      });
+    }
+    function pageCards(options) {
+      return withNativeReadScope(() => {
+        const operation = observationOperation(options);
+        const { section, scroller, track } = operation.binding;
+        const page = selectedPage(section);
+        operation.guard();
+        if (Number.isFinite(options.page) && options.page !== page) throw initializationError(
+          "NATIVE_SOURCE_REPLACED",
+          "native-observation",
+          "Mounted native page changed before preparation"
+        );
+        const columns = Math.max(1, options.columns || 1);
+        const viewport = options.window === "viewport", wantsTemplate = Boolean(options.template);
+        const readSlots = () => viewport ? viewportPageSlots(scroller, track, columns) : currentPageSlots(scroller, track);
+        const slots = readSlots().slice();
+        const mode = operation.model.view.profile.pageMode;
+        const tail = mode === "logical" ? wrappedTailLogicalPageInfo(logicalSlotPositions(slots, options.totalCount || 0), options.totalCount || 0, columns) : null;
+        const revision = operation.model.revision;
+        const cards = Object.freeze(slots.map((slot, index) => Object.freeze({
+          source: sourceHandle(operation.binding, slot, page),
+          inPage: !(tail && tail.page === page && index >= tail.wrapIndex)
+        })));
+        const signature = cards.map((entry) => entry.source.href).filter(Boolean).join("|");
+        const templateSlot = wantsTemplate ? slots[0] || nativeFilledSlots(track)[0] || null : null;
+        const template = templateSlot ? cards[0]?.source || sourceHandle(operation.binding, templateSlot, page) : null;
+        return observationResult(operation, { page, mode, cards, signature, ...wantsTemplate ? { template } : {} }, () => {
+          if (selectedPage(section) !== page || operation.model.revision !== revision) throw initializationError(
+            "NATIVE_SOURCE_REPLACED",
+            "native-observation",
+            "Observed native page mapping changed"
+          );
+          const current = readSlots();
+          if (current.length !== slots.length || current.some((slot, index) => slot !== slots[index])) {
+            throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Observed native card window changed");
+          }
+          if (wantsTemplate && (current[0] || nativeFilledSlots(track)[0] || null) !== templateSlot) {
+            throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native template selection changed");
+          }
+          for (const entry of cards) assertSource(entry.source);
+          if (template) assertSource(template);
+        });
+      });
+    }
+    function sourceDescription(source) {
+      try {
+        let { section, scroller = null, track = null } = source || {};
+        if (source?.discover) {
+          section ||= findMyListSection();
+          scroller ||= section?.querySelector?.(NETFLIX_DOM_SELECTORS2.carouselScroller) || null;
+          track ||= scroller && netflixDom.findTrack(scroller) || null;
+        }
+        if (!section) return null;
+        const page = selectedPage(section), pages = pageCount(section);
+        const profile = carouselDomProfileSummary(section);
+        return Object.freeze({
+          selectedPage: page,
+          pageCount: pages,
+          carouselDom: profile && Object.freeze({ ...profile, capabilities: Object.freeze({ ...profile.capabilities }) }),
+          sourceSlots: track ? netflixDom.directSlots(track).length : 0,
+          sourceCards: track ? nativeFilledSlots(track).length : 0,
+          currentPageCards: scroller && track ? currentPageSlots(scroller, track).length : 0,
+          sourceScan: Boolean(scroller?.classList?.contains(SOURCE_SCAN_CLASS)),
+          sourceParked: Boolean(scroller?.classList?.contains(SOURCE_PARKED_CLASS))
+        });
+      } catch (_) {
+        return null;
+      }
+    }
+    return Object.freeze({
+      sourceDescription,
+      observeSource,
+      pageCards,
+      measureLayout,
+      discoverSource,
+      captureMountedItem,
+      assertObservation,
+      isObservationCurrent
+    });
+  }
+
   // src/netflix/carousel/readiness.js
   function createReadiness({
     native,
@@ -13386,85 +14819,6 @@ ${CARD_ACTION_STYLES}
     });
   }
 
-  // src/netflix/carousel/react-readings.js
-  function createReactReadings({ cardSelector }) {
-    const NETFLIX_DOM_SELECTORS2 = { standardCard: cardSelector };
-    return Object.freeze({
-      fiberForNode(node) {
-        if (!node) return null;
-        for (const key of Object.getOwnPropertyNames(node)) {
-          if (!key.startsWith("__reactFiber$") && !key.startsWith("__reactInternalInstance$")) continue;
-          const fiber = node[key];
-          if (fiber && typeof fiber === "object") return fiber;
-        }
-        return null;
-      },
-      typeName(fiber) {
-        const type = fiber?.elementType || fiber?.type;
-        if (typeof type === "string") return type;
-        if (typeof type === "function") return type.displayName || type.name || "(anonymous)";
-        if (type && typeof type === "object") {
-          return String(type.displayName || type.name || type.$$typeof || "(object)");
-        }
-        return type == null ? "" : String(type);
-      },
-      readFiberProp(roots, property, isValid) {
-        for (const root of roots) {
-          let fiber = this.fiberForNode(root);
-          const visited = /* @__PURE__ */ new Set();
-          let depth = 0;
-          while (fiber && typeof fiber === "object" && depth < 16 && !visited.has(fiber)) {
-            visited.add(fiber);
-            const sources = [
-              ["memoizedProps", fiber.memoizedProps],
-              ["pendingProps", fiber.pendingProps],
-              ["alternate.memoizedProps", fiber.alternate?.memoizedProps],
-              ["alternate.pendingProps", fiber.alternate?.pendingProps]
-            ];
-            for (const [source, props] of sources) {
-              const value = props?.[property];
-              if (isValid(value)) {
-                return {
-                  value,
-                  depth,
-                  source,
-                  fiberKey: fiber.key ?? null,
-                  typeName: this.typeName(fiber)
-                };
-              }
-            }
-            fiber = fiber.return;
-            depth++;
-          }
-        }
-        return { value: null, depth: null, source: null, fiberKey: null, typeName: "" };
-      },
-      readItemIndex(slot) {
-        const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS2.standardCard) || null;
-        return this.readFiberProp(
-          [slot?.firstElementChild || null, card?.parentElement || null, card],
-          "itemIndex",
-          Number.isSafeInteger
-        );
-      },
-      readCarouselTotalCount(slot) {
-        const card = slot?.querySelector?.(NETFLIX_DOM_SELECTORS2.standardCard) || null;
-        const reading = this.readFiberProp(
-          [slot, slot?.firstElementChild || null, card?.parentElement || null, card],
-          "totalCount",
-          (value) => Number.isSafeInteger(value) && value >= 0
-        );
-        return reading.value;
-      }
-    });
-  }
-  function readCardSignature(slots, cardSelector) {
-    return slots.map((slot) => {
-      const card = slot.querySelector(cardSelector);
-      return card?.href || card?.getAttribute("href") || "";
-    }).filter(Boolean).join("|");
-  }
-
   // src/netflix/carousel/source-presentation.js
   function createSourcePresentation({ document, pageDom, scope, generation, invalidateReads, createError, warn }) {
     const owners = /* @__PURE__ */ new Map(), properties = /* @__PURE__ */ new WeakMap();
@@ -13902,18 +15256,57 @@ ${CARD_ACTION_STYLES}
     const nativeCardIdentity = (...args) => netflixDom.nativeCardIdentity(...args);
     const listData = { readMyListTotalCount: readGraphqlCount };
     const assertRouteSession = (token) => scope.assertCurrent(token);
-    let nativeReadScope = null;
     let models = /* @__PURE__ */ new WeakMap();
     let acceptedBinding = null;
     let bindingGeneration = 0;
     const bindingTickets = /* @__PURE__ */ new WeakMap();
-    const sourceTickets = /* @__PURE__ */ new WeakMap();
     const mappingTickets = /* @__PURE__ */ new WeakMap();
     const preparationTickets = /* @__PURE__ */ new WeakMap();
-    const observationTickets = /* @__PURE__ */ new WeakMap();
     let preparationOwner = null;
     let mappingSequence = 0;
-    const mountedWaits = /* @__PURE__ */ new Set();
+    const netflixReactCarousel = createReactReadings({ cardSelector: NETFLIX_DOM_SELECTORS2.standardCard, Element });
+    const readings = createNativeReadings({
+      netflixDom,
+      NETFLIX_DOM_SELECTORS: NETFLIX_DOM_SELECTORS2,
+      netflixReactCarousel,
+      readPosition(section) {
+        const runtime = getCarouselDomRuntime(section);
+        const profile = runtime?.profile || detectCarouselDomProfile(section);
+        return { profile, pageCountFinalized: runtime?.pageCountFinalized };
+      },
+      pageCount,
+      selectedPage,
+      findMyListSection,
+      nativeCardIdentity,
+      listData,
+      layoutFormula: (track) => layoutMeasurements.formula(track),
+      initializationError,
+      logVirtualRawIndexDiagnostic,
+      readDiagnosticTotalCount: () => acceptedBinding ? readListShape(acceptedBinding.section)?.totalCount : null
+    });
+    const {
+      withNativeReadScope,
+      invalidateNativeReadScope,
+      nativeRect,
+      nativeFilledSlots,
+      nativeIndicatorItems,
+      detectCarouselDomProfile,
+      carouselMoveButton,
+      carouselMoveButtonDisabled,
+      currentPageSlots,
+      visibleSignature,
+      nativeCarouselReadiness,
+      readNativeMyListDomState,
+      nativeReactCarouselTotalCount,
+      requireNativeReactCarouselTotalCount,
+      netflixItemIndexFromSlot,
+      logicalSlotPositions,
+      nativeLogicalPageState,
+      requireNativeLogicalPageState,
+      viewportPageSlots,
+      currentPageVideoIds,
+      slotDescriptor
+    } = readings;
     const layoutMeasurements = createLayout({
       pageDom: netflixDom,
       window,
@@ -14049,525 +15442,129 @@ ${CARD_ACTION_STYLES}
         completeCollection: (section, pages) => modelForWrite(section)?.finishCollection(pages)
       }
     });
-    function currentPageVideoIds(scroller, track) {
-      return currentPageSlots(scroller, track).map((slot) => {
-        const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
-        return card ? netflixDom.videoIdFromHref(card.getAttribute("href") || card.href || "") : "";
-      }).filter(Boolean);
-    }
-    async function anchorPageZero({ section, scroller, track, firstVideoId, columns, sessionToken = null }) {
-      const owner = borrowBinding(section, scroller, track);
-      const assertSource2 = () => {
-        assertRouteSession(sessionToken);
-        assertBinding(owner);
-      };
-      assertSource2();
-      const expectedFirstVideoId = String(firstVideoId || "");
-      if (!expectedFirstVideoId) return true;
-      const runtime = getCarouselDomRuntime(section);
-      const profile = runtime?.profile || detectCarouselDomProfile(section);
-      if (profile?.pageMode !== "indicator") return true;
-      if (selectedPage(section) !== 0) {
-        const returned = await navigation.navigate(section, scroller, 0, null, sessionToken, false);
-        assertSource2();
-        if (returned !== 0 || selectedPage(section) !== 0) {
-          throw initializationError(
-            "NATIVE_PAGE_ZERO_NOT_REACHED",
-            "normalize-native-page-zero",
-            "Could not return the native My List carousel to page 0 before reinitialization",
-            { returnedPage: returned, selectedPage: selectedPage(section), expectedFirstVideoId }
-          );
-        }
-      }
-      let visibleIds = currentPageVideoIds(scroller, track);
-      if (visibleIds[0] === expectedFirstVideoId) {
-        log("Fresh Netflix My List page-0 anchor confirmed", {
-          expectedFirstVideoId,
-          visibleIds,
-          selectedPage: selectedPage(section),
-          pageMode: profile.pageMode
-        });
-        assertSource2();
-        return true;
-      }
-      log("Fresh Netflix My List page-0 anchor mismatch; refreshing native page 0", {
-        expectedFirstVideoId,
-        visibleIds,
-        selectedPage: selectedPage(section),
-        pages: pageCount(section),
-        pageMode: profile.pageMode
-      });
-      assertSource2();
-      if (pageCount(section) > 1) {
-        const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
-        const adjacent = await navigation.move(section, scroller, 1, null, sessionToken);
-        assertSource2();
-        if (adjacent !== 0) {
-          await navigation.stable(scroller, track, {
-            previousSignature: beforeSignature,
-            minimumSlots: Math.max(1, columns || currentPageSlots(scroller, track).length || 1),
-            timeout: 900,
-            sessionToken
-          });
-          assertSource2();
-          await navigation.move(section, scroller, -1, null, sessionToken);
-          assertSource2();
-        }
-      }
-      const requiredKey = `v:${expectedFirstVideoId}`;
-      await navigation.stable(scroller, track, {
-        minimumSlots: Math.max(1, columns || currentPageSlots(scroller, track).length || 1),
-        requiredKeys: /* @__PURE__ */ new Set([requiredKey]),
-        requiredStableFrames: 2,
-        timeout: 1200,
-        sessionToken
-      });
-      assertSource2();
-      visibleIds = currentPageVideoIds(scroller, track);
-      if (selectedPage(section) === 0 && visibleIds[0] === expectedFirstVideoId) {
-        log("Fresh Netflix My List page-0 anchor restored", {
-          expectedFirstVideoId,
-          visibleIds,
-          selectedPage: selectedPage(section),
-          pageMode: profile.pageMode
-        });
-        assertSource2();
-        return true;
-      }
-      throw initializationError(
-        "NATIVE_PAGE_ZERO_ANCHOR_MISMATCH",
-        "normalize-native-page-zero",
-        "Netflix My List page 0 is selected but its first mounted card does not match the fresh My List first item",
-        {
-          expectedFirstVideoId,
-          visibleIds,
-          selectedPage: selectedPage(section),
-          pages: pageCount(section),
-          pageMode: profile.pageMode
-        }
-      );
-    }
-    function viewportPageSlots(scroller, track, columns = 1) {
-      return withNativeReadScope(() => {
-        const all = nativeFilledSlots(track);
-        if (!all.length) return [];
-        const count = Math.max(1, columns || 1);
-        const sr = nativeRect(scroller);
-        const visible = all.map((slot) => ({ slot, rect: nativeRect(slot) })).filter((entry) => {
-          const cx = entry.rect.left + entry.rect.width / 2;
-          return entry.rect.width > 1 && cx >= sr.left && cx <= sr.right;
-        }).sort((a, b) => a.rect.left - b.rect.left).map((entry) => entry.slot);
-        return visible.length ? visible.slice(0, count) : currentPageSlots(scroller, track).slice().sort((a, b) => nativeRect(a).left - nativeRect(b).left).slice(0, count);
+    const resolution = createSourceResolution({
+      scope,
+      performance,
+      setTimeout,
+      clearTimeout,
+      initializationError,
+      netflixDom,
+      NETFLIX_DOM_SELECTORS: NETFLIX_DOM_SELECTORS2,
+      borrowBinding,
+      assertBinding,
+      isBindingCurrent,
+      assertRouteSession,
+      captureCardAuthority,
+      captureResolutionAuthority,
+      readRuntime: (section) => ({ profile: getCarouselDomRuntime(section)?.profile }),
+      registerLogicalPageSignature,
+      navigation,
+      isHoverCancelled,
+      readHoverToken,
+      log,
+      warn,
+      trace,
+      tLog,
+      slotDescriptor,
+      withNativeReadScope,
+      currentPageSlots,
+      nativeFilledSlots,
+      nativeIndicatorItems,
+      netflixItemIndexFromSlot,
+      selectedPage,
+      pageCount,
+      detectCarouselDomProfile,
+      visibleSignature,
+      viewportPageSlots,
+      currentPageVideoIds
+    });
+    const { anchorPageZero, resolveCard, mountedCard, isSourceCurrent, assertSource, sourceHandle, resetMountedWaits } = resolution;
+    const observations = createObservations({
+      scope,
+      window,
+      initializationError,
+      assertRouteSession,
+      readBindingGeneration: () => bindingGeneration,
+      readAcceptedBinding: () => acceptedBinding,
+      observationOperation,
+      assertBinding,
+      isBindingCurrent,
+      findMyListSection,
+      netflixDom,
+      NETFLIX_DOM_SELECTORS: NETFLIX_DOM_SELECTORS2,
+      cardMarkup,
+      layoutMeasurements,
+      ...readings,
+      selectedPage,
+      pageCount,
+      sourceHandle,
+      assertSource,
+      carouselDomProfileSummary
+    });
+    const { observeSource, pageCards, measureLayout, discoverSource, captureMountedItem, assertObservation, isObservationCurrent, sourceDescription } = observations;
+    function captureCardAuthority(section) {
+      const model = getModel(section), revision = model.revision;
+      const current = () => models.get(section) === model && model.revision === revision;
+      return Object.freeze({
+        current,
+        refresh: () => getModel(section) === model && current(),
+        profile: () => model.view.profile
       });
     }
-    function isSourceCurrent(source) {
-      const ticket = sourceTickets.get(source);
-      if (!ticket || !isBindingCurrent(ticket.binding) || ticket.slot.isConnected === false || models.get(ticket.binding.section) !== ticket.model || ticket.model.revision !== ticket.revision) return false;
-      return withNativeReadScope(() => {
-        if (getModel(ticket.binding.section) !== ticket.model || ticket.model.revision !== ticket.revision) return false;
-        const card = ticket.slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
-        const href = card?.href || card?.getAttribute("href") || "";
-        if (href !== ticket.href || netflixItemIndexFromSlot(ticket.slot) !== ticket.itemIndex || !nativeFilledSlots(ticket.binding.track).includes(ticket.slot)) return false;
-        if (ticket.model.view.profile.pageMode === "indicator") {
-          const indicators = nativeIndicatorItems(ticket.binding.section);
-          const page = Math.max(0, indicators.findIndex((node) => node.getAttribute("data-indicator-selected") === "true"));
-          if (page !== ticket.page) return false;
-        }
-        return isBindingCurrent(ticket.binding) && models.get(ticket.binding.section) === ticket.model && ticket.model.revision === ticket.revision;
-      });
-    }
-    function assertSource(source) {
-      if (!isSourceCurrent(source)) throw initializationError(
-        "NATIVE_SOURCE_REPLACED",
-        "native-card",
-        "Native source card or its page ownership changed"
-      );
-    }
-    function sourceHandle(binding, slot, page) {
-      assertBinding(binding);
-      const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
-      const href = card?.href || card?.getAttribute("href") || "";
-      const itemIndex = netflixItemIndexFromSlot(slot);
-      const model = getModel(binding.section);
-      const source = Object.freeze({
-        href,
-        videoId: netflixDom.videoIdFromHref(href),
-        itemIndex: Number.isSafeInteger(itemIndex) && itemIndex >= 0 ? itemIndex : null,
-        page,
-        get slot() {
-          assertSource(source);
-          return slot;
-        },
-        isCurrent: () => isSourceCurrent(source)
-      });
-      sourceTickets.set(source, { binding, slot, href, itemIndex, page, model, revision: model.revision });
-      assertSource(source);
-      return source;
-    }
-    function resolutionOperation({ section, scroller, track, item, mode = null, hoverToken = null, sessionToken = null }) {
-      assertRouteSession(sessionToken);
-      const binding = borrowBinding(section, scroller, track);
-      assertBinding(binding);
-      const model = getModel(section), mappingGeneration = model.mappingGeneration;
-      const target = Object.freeze({ href: String(item?.href || ""), videoId: String(item?.videoId || "") });
-      const diagnosticItem = mode === "preferred-refresh" || mode === "search" ? Object.freeze({ ...target, page: item?.page, ariaLabel: String(item?.ariaLabel || "") }) : null;
-      const guard = () => {
-        assertRouteSession(sessionToken);
-        assertBinding(binding);
-        if (models.get(section) !== model || model.mappingGeneration !== mappingGeneration) {
+    function captureResolutionAuthority(section) {
+      const model = getModel(section), generation = model.mappingGeneration;
+      return () => {
+        if (models.get(section) !== model || model.mappingGeneration !== generation) {
           throw initializationError("NATIVE_SOURCE_REPLACED", "native-resolution", "Native page mapping changed during source resolution");
         }
       };
-      return { binding, target, diagnosticItem, hoverToken, sessionToken, guard };
     }
-    function mountedOperation(options, assertOperation = () => {
+    function observationOperation({
+      section,
+      scroller = null,
+      track = null,
+      binding = null,
+      source = null,
+      sessionToken = null,
+      assertCurrent = () => {
+      }
     }) {
-      assertOperation();
-      const operation = resolutionOperation(options);
-      const { binding, guard: assertOwner } = operation;
-      const page = selectedPage(binding.section);
-      const guard = () => {
-        assertOperation();
-        assertOwner();
-        const section = binding.section;
-        const currentPage = selectedPage(section);
-        assertOwner();
-        assertOperation();
-        if (currentPage !== page) {
-          throw initializationError(
-            "NATIVE_SOURCE_REPLACED",
-            "native-mounted-card",
-            "Native source page or mapping changed during mounted-card resolution"
-          );
-        }
-      };
-      return { ...operation, activeOnly: options.activeOnly ?? true, page, guard };
-    }
-    function lookupMountedCard(operation) {
-      operation.guard();
-      const { binding, target, activeOnly, page } = operation;
-      const candidates = activeOnly ? currentPageSlots(binding.scroller, binding.track) : nativeFilledSlots(binding.track);
-      const slot = candidates.find((slot2) => {
-        const card = slot2.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
-        if (!card) return false;
-        const href = card.href || card.getAttribute("href") || "";
-        return Boolean(target.href && href === target.href || target.videoId && netflixDom.videoIdFromHref(href) === target.videoId);
-      });
-      operation.guard();
-      return slot ? sourceHandle(binding, slot, page) : null;
-    }
-    function mountedCard(options) {
-      assertRouteSession(options.sessionToken);
-      if (isHoverCancelled(options.hoverToken ?? null) || !options.section?.isConnected || !options.scroller?.isConnected || !options.track?.isConnected) return null;
-      return withNativeReadScope(() => lookupMountedCard(mountedOperation(options)));
-    }
-    function mountedTick() {
-      return new Promise((resolve) => {
-        let closed = false, timer = null;
-        const ticket = { close() {
-          if (closed) return;
-          closed = true;
-          clearTimeout(timer);
-          mountedWaits.delete(ticket);
-          resolve();
-        } };
-        mountedWaits.add(ticket);
-        timer = setTimeout(ticket.close, 10);
-      });
-    }
-    function resetMountedWaits() {
-      for (const ticket of mountedWaits) ticket.close();
-    }
-    async function resolveMountedCard(options, assertOperation = () => {
-    }) {
-      assertRouteSession(options.sessionToken);
-      if (isHoverCancelled(options.hoverToken ?? null)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
-      if (!options.section?.isConnected || !options.scroller?.isConnected || !options.track?.isConnected) {
-        return Object.freeze({ status: "unknown", reason: "native-binding-unavailable" });
-      }
-      const start = performance.now(), timeout = Number.isFinite(options.timeout) ? Math.max(0, options.timeout) : 500;
-      let operation;
-      let source = withNativeReadScope(() => {
-        operation = mountedOperation(options, assertOperation);
-        return lookupMountedCard(operation);
-      });
-      while (!source && performance.now() - start < timeout) {
-        await mountedTick();
-        assertRouteSession(operation.sessionToken);
-        if (isHoverCancelled(operation.hoverToken)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
-        source = withNativeReadScope(() => lookupMountedCard(operation));
-      }
-      return source ? Object.freeze({ status: "found", source, page: source.page }) : Object.freeze({ status: "unknown", reason: "target-not-mounted" });
-    }
-    function mountedHints(operation) {
-      const { binding, target, hoverToken, sessionToken } = operation;
-      return {
-        section: binding.section,
-        scroller: binding.scroller,
-        track: binding.track,
-        item: target,
-        activeOnly: true,
-        hoverToken,
-        sessionToken
-      };
-    }
-    async function resolvePreferredCard(options) {
-      const operation = withNativeReadScope(() => resolutionOperation(options));
-      const { binding, guard, hoverToken: token, sessionToken, diagnosticItem } = operation;
-      const { section, scroller, track } = binding;
-      const preferredPage = options.preferredPage ?? options.item?.page ?? 0;
-      const total = pageCount(section);
-      guard();
-      if (total <= 0) return Object.freeze({ status: "unknown", reason: "native-pages-unavailable" });
-      const hints = mountedHints(operation);
-      await navigation.navigate(section, scroller, preferredPage, token, sessionToken, true, guard);
-      guard();
-      if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
-      const current = withNativeReadScope(() => lookupMountedCard(mountedOperation(hints, guard)));
-      if (current) return Object.freeze({ status: "found", source: current, page: current.page, refreshed: false });
-      if (total > 1 && selectedPage(section) === preferredPage) {
-        const from = selectedPage(section);
-        const moved = await navigation.move(section, scroller, 1, token, sessionToken, guard);
-        guard();
-        if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
-        if (moved !== from) {
-          await navigation.move(section, scroller, -1, token, sessionToken, guard);
-          guard();
-          if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
-        }
-      }
-      await navigation.navigate(section, scroller, preferredPage, token, sessionToken, true, guard);
-      guard();
-      if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
-      const result = await resolveMountedCard({ ...hints, timeout: 700 }, guard);
-      guard();
-      if (isHoverCancelled(token)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
-      if (result.status !== "found") return result;
-      trace(() => ["Hover stale logical page refreshed without full carousel scan", {
-        item: diagnosticItem,
-        preferredPage,
-        selectedPage: result.page,
-        source: slotDescriptor(result.source.slot)
-      }]);
-      guard();
-      assertSource(result.source);
-      return Object.freeze({ ...result, refreshed: true });
-    }
-    async function searchSourceCard(options) {
-      const operation = withNativeReadScope(() => resolutionOperation(options));
-      const { binding, guard, hoverToken: token, sessionToken, diagnosticItem } = operation;
-      const { section, scroller, track } = binding;
-      const preferredPage = options.preferredPage ?? options.item?.page ?? 0;
-      const columns = Math.max(1, options.columns || 1), repair = options.repairLogicalMapping ?? true;
-      const total = pageCount(section), tried = /* @__PURE__ */ new Set(), order = [];
-      guard();
-      const push = (page) => {
-        if (page < 0 || page >= total || tried.has(page)) return;
-        tried.add(page);
-        order.push(page);
-      };
-      push(preferredPage);
-      const radius = Number.isFinite(options.maxRadius) ? Math.min(Math.max(0, Math.floor(options.maxRadius)), Math.max(0, total - 1)) : Math.max(0, total - 1);
-      for (let delta = 1; delta <= radius; delta++) {
-        push(preferredPage + delta);
-        push(preferredPage - delta);
-      }
-      Object.freeze(order);
-      const hints = mountedHints(operation);
-      const cancelled = (reason) => {
-        if (!isHoverCancelled(token)) return null;
-        if (reason) log(tLog("hoverSourceSearchCancelled"), { reason, token, hoverToken: readHoverToken() });
-        guard();
-        return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
-      };
-      log(tLog("hoverSourceSearchStarted"), { item: diagnosticItem, preferredPage, selectedPage: selectedPage(section), pages: total, order });
-      guard();
-      for (const page of order) {
-        guard();
-        const beforePage = cancelled();
-        if (beforePage) return beforePage;
-        const beforeSignature = withNativeReadScope(() => visibleSignature(currentPageSlots(scroller, track)));
-        log(tLog("hoverSourceSearchPage"), { item: diagnosticItem, page, selectedBefore: selectedPage(section) });
-        guard();
-        const beforeMove = cancelled();
-        if (beforeMove) return beforeMove;
-        await navigation.navigate(section, scroller, page, token, sessionToken, true, guard);
-        guard();
-        const afterMove = cancelled("token-changed-after-page-move");
-        if (afterMove) return afterMove;
-        let result = await resolveMountedCard({ ...hints, timeout: page === preferredPage ? 500 : 280 }, guard);
-        guard();
-        const afterMount = cancelled("token-changed-after-mount-wait");
-        if (afterMount) return afterMount;
-        if (result.status !== "found") {
-          await navigation.stable(scroller, track, {
-            previousSignature: beforeSignature,
-            minElapsed: 120,
-            timeout: 520,
-            sessionToken,
-            hoverToken: token,
-            assertOperation: guard
-          });
-          guard();
-          const afterHydration = cancelled();
-          if (afterHydration) return afterHydration;
-          const source = withNativeReadScope(() => lookupMountedCard(mountedOperation(hints, guard)));
-          if (source) result = { status: "found", source };
-        }
-        if (result.status !== "found") continue;
-        const found = withNativeReadScope(() => {
-          guard();
-          const slot = result.source.slot, actual = selectedPage(section);
-          const visible = viewportPageSlots(scroller, track, columns), signature = visibleSignature(visible);
-          if (repair && getModel(section).view.profile.pageMode === "logical" && signature) {
-            registerLogicalPageSignature(section, signature, actual);
-          }
-          guard();
-          const sources = Object.freeze(visible.map((node) => sourceHandle(binding, node, actual)));
-          const source = sources.find((handle) => sourceTickets.get(handle).slot === slot) || sourceHandle(binding, slot, actual);
-          const visibleCards = Object.freeze(sources.map((handle) => Object.freeze({
-            href: handle.href,
-            videoId: handle.videoId,
-            itemIndex: handle.itemIndex
-          })));
-          guard();
-          assertSource(source);
-          return Object.freeze({ status: "found", source, sources, visibleCards, page: actual });
-        });
-        trace(() => [tLog("hoverSourceFound"), { item: diagnosticItem, actualPage: found.page, source: slotDescriptor(found.source.slot) }]);
-        guard();
-        assertSource(found.source);
-        return found;
-      }
-      warn(tLog("hoverSourceSearchFailed"), { item: diagnosticItem, preferredPage, selectedPage: selectedPage(section), pages: total });
-      guard();
-      return cancelled() || Object.freeze({ status: "unknown", reason: "source-search-exhausted" });
-    }
-    async function resolveCard(options) {
-      if (options.mode === "mounted") return resolveMountedCard(options);
-      const {
-        section,
-        scroller,
-        track,
-        expectedPage,
-        totalCount,
-        columns = 1,
-        pageItemCount = 1,
-        hoverToken = null,
-        sessionToken = null
-      } = options;
       assertRouteSession(sessionToken);
-      if (isHoverCancelled(hoverToken)) return Object.freeze({ status: "unknown", reason: "hover-cancelled" });
-      if (!section?.isConnected || !scroller?.isConnected || !track?.isConnected) {
-        return Object.freeze({ status: "unknown", reason: "native-binding-unavailable" });
+      assertCurrent();
+      binding ||= borrowBinding(section, scroller, track);
+      assertBinding(binding);
+      if (binding.section !== section || scroller && binding.scroller !== scroller || track && binding.track !== track) {
+        throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Observation binding does not match its source");
       }
-      if (options.mode === "preferred-refresh") return resolvePreferredCard(options);
-      if (options.mode === "search") return searchSourceCard(options);
-      const { binding, guard, target } = resolutionOperation(options);
-      guard();
-      const key = target.videoId ? "v:" + target.videoId : "h:" + target.href;
-      const keyOf = (slot2) => {
-        const card = slot2.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
-        const href = card?.href || card?.getAttribute("href") || "";
-        const id = netflixDom.videoIdFromHref(href);
-        return id ? "v:" + id : "h:" + href;
+      const model = getModel(section), generation = model.mappingGeneration;
+      const guard = () => {
+        assertRouteSession(sessionToken);
+        assertCurrent();
+        assertBinding(binding);
+        if (models.get(section) !== model || model.mappingGeneration !== generation) {
+          throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Observed native interpretation changed");
+        }
+        if (source) {
+          resolution.assertSourceBinding(source, section, scroller, track);
+        }
       };
-      const width = Math.max(1, columns || 1);
-      const expectedPageCount = Math.max(1, Math.ceil(Math.max(totalCount || 0, 1) / width));
-      const nativePageCount = pageCount(section);
-      if (nativePageCount !== expectedPageCount || expectedPage < 0 || expectedPage >= nativePageCount) {
-        log(tLog("hoverExpectedPageUnknown"), {
-          reason: "page-count-not-converged",
-          item: target,
-          expectedPage,
-          nativePageCount,
-          expectedPageCount,
-          legacyItemCount: totalCount,
-          columns: width
-        });
-        guard();
-        return Object.freeze({ status: "unknown", reason: "page-count-not-converged" });
-      }
-      const selectedBefore = selectedPage(section);
-      const beforeSignature = visibleSignature(currentPageSlots(scroller, track));
-      await navigation.navigate(section, scroller, expectedPage, hoverToken, sessionToken, true, guard);
       guard();
-      if (hoverToken !== null && hoverToken !== readHoverToken()) {
-        return Object.freeze({ status: "unknown", reason: "token-changed-after-page-move" });
-      }
-      if (selectedPage(section) !== expectedPage) {
-        log(tLog("hoverExpectedPageUnknown"), {
-          reason: "expected-page-not-reached",
-          item: target,
-          expectedPage,
-          selectedPage: selectedPage(section)
-        });
-        guard();
-        return Object.freeze({ status: "unknown", reason: "expected-page-not-reached" });
-      }
-      const foundResult = (slot2, slots, afterStabilityWait = false) => withNativeReadScope(() => {
-        guard();
-        const sources = Object.freeze(slots.map((node) => sourceHandle(binding, node, expectedPage)));
-        const source = sources[slots.indexOf(slot2)];
-        trace(() => [tLog("hoverExpectedPageMatch"), {
-          item: target,
-          expectedPage,
-          selectedPage: selectedPage(section),
-          source: slotDescriptor(slot2),
-          ...afterStabilityWait ? { afterStabilityWait: true } : {}
-        }]);
-        guard();
-        assertSource(source);
-        return Object.freeze({ status: "found", source, sources, page: expectedPage });
-      });
-      let pageSlots = viewportPageSlots(scroller, track, width);
-      let slot = pageSlots.find((node) => keyOf(node) === key) || null;
-      if (slot) return foundResult(slot, pageSlots);
-      const minimumSlots = Math.min(width, Math.max(1, pageItemCount));
-      const stableSlots = await navigation.stable(scroller, track, {
-        previousSignature: selectedBefore === expectedPage ? "" : beforeSignature,
-        requiredStableFrames: 2,
-        minimumSlots,
-        requiredKeys: /* @__PURE__ */ new Set([key]),
-        timeout: 650,
-        sessionToken,
-        hoverToken,
-        assertOperation: guard
-      });
-      guard();
-      if (hoverToken !== null && hoverToken !== readHoverToken()) {
-        return Object.freeze({ status: "unknown", reason: "token-changed-after-stability-wait" });
-      }
-      if (selectedPage(section) !== expectedPage) return Object.freeze({ status: "unknown", reason: "page-changed-during-stability-wait" });
-      pageSlots = viewportPageSlots(scroller, track, width);
-      slot = pageSlots.find((node) => keyOf(node) === key) || null;
-      if (slot) return foundResult(slot, pageSlots, true);
-      const visibleSlots = pageSlots.length ? pageSlots : stableSlots?.length ? stableSlots.slice(0, width) : [];
-      const visibleCards = Object.freeze(visibleSlots.map((node) => {
-        const href = node.querySelector(NETFLIX_DOM_SELECTORS2.standardCard)?.href || "";
-        const itemIndex = netflixItemIndexFromSlot(node);
-        return Object.freeze({
-          href,
-          videoId: netflixDom.videoIdFromHref(href),
-          itemIndex: Number.isSafeInteger(itemIndex) && itemIndex >= 0 ? itemIndex : null
-        });
-      }));
-      const visibleIds = Object.freeze(visibleCards.map((card) => card.videoId).filter(Boolean));
-      if (visibleSlots.length < minimumSlots || visibleIds.length < minimumSlots) {
-        log(tLog("hoverExpectedPageUnknown"), {
-          reason: "expected-page-not-fully-mounted",
-          item: target,
-          expectedPage,
-          minimumSlots,
-          slots: visibleSlots.length,
-          visibleIds
-        });
-        guard();
-        return Object.freeze({ status: "unknown", reason: "expected-page-not-fully-mounted", visibleIds, visibleCards });
-      }
-      log(tLog("hoverExpectedPageMismatch"), { item: target, expectedPage, visibleIds });
-      guard();
-      return Object.freeze({ status: "mismatch", reason: "target-not-in-expected-page", visibleIds, visibleCards });
+      return { binding, guard, refresh: () => getModel(section), model: Object.freeze({
+        get revision() {
+          return model.revision;
+        },
+        view: Object.freeze({
+          get profile() {
+            return model.view.profile;
+          },
+          get logicalRemapRetryCount() {
+            return model.view.logicalRemapRetryCount;
+          },
+          get pageMappingStale() {
+            return model.view.pageMappingStale;
+          }
+        })
+      }) };
     }
     function mappingOperation({
       section,
@@ -14881,316 +15878,14 @@ ${CARD_ACTION_STYLES}
       owner.guard();
       return mappingResult({ binding: owner.binding, model: owner.model, totalCount, columns, guard: owner.guard }, "accepted");
     }
-    function observationOperation({
-      section,
-      scroller = null,
-      track = null,
-      binding = null,
-      source = null,
-      sessionToken = null,
-      assertCurrent = () => {
-      }
-    }) {
-      assertRouteSession(sessionToken);
-      assertCurrent();
-      binding ||= borrowBinding(section, scroller, track);
-      assertBinding(binding);
-      if (binding.section !== section || scroller && binding.scroller !== scroller || track && binding.track !== track) {
-        throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Observation binding does not match its source");
-      }
-      const model = getModel(section), generation = model.mappingGeneration;
-      const guard = () => {
-        assertRouteSession(sessionToken);
-        assertCurrent();
-        assertBinding(binding);
-        if (models.get(section) !== model || model.mappingGeneration !== generation) {
-          throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Observed native interpretation changed");
-        }
-        if (source) {
-          assertSource(source);
-          const ticket = sourceTickets.get(source);
-          if (ticket.binding.section !== section || ticket.binding.scroller !== scroller || ticket.binding.track !== track) {
-            throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Resolved source does not belong to the observed binding");
-          }
-        }
-      };
-      guard();
-      return { binding, model, guard };
-    }
-    function observationResult(operation, facts, validate = () => {
-    }) {
-      operation.guard();
-      validate();
-      operation.guard();
-      const result = Object.freeze(facts);
-      observationTickets.set(result, { operation, validate });
-      return result;
-    }
-    function assertObservation(result) {
-      const ticket = observationTickets.get(result);
-      if (ticket) {
-        return withNativeReadScope(() => {
-          ticket.operation.guard();
-          if (ticket.operation.model) getModel(ticket.operation.binding.section);
-          ticket.operation.guard();
-          ticket.validate();
-          ticket.operation.guard();
-          return result;
-        });
-      }
-      throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native observation is no longer current");
-    }
-    function isObservationCurrent(result) {
-      try {
-        assertObservation(result);
-        return true;
-      } catch (_) {
-        return false;
-      }
-    }
-    function discoverSource({ bindingOnly = false, sessionToken = null, assertCurrent = () => {
-    } } = {}) {
-      return withNativeReadScope(() => {
-        const generation = bindingGeneration, route = scope.token;
-        const guard = () => {
-          assertRouteSession(sessionToken);
-          assertCurrent();
-          if (generation !== bindingGeneration || route !== scope.token) {
-            throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Discovery admission changed");
-          }
-        };
-        const references = () => {
-          const section = findMyListSection();
-          const scroller = section?.querySelector(NETFLIX_DOM_SELECTORS2.carouselScroller) || null;
-          const track = scroller && netflixDom.findTrack(scroller);
-          return { section: section || null, scroller, track: track || null };
-        };
-        guard();
-        const facts = bindingOnly ? references() : readNativeMyListDomState();
-        const matchesBinding = Boolean(acceptedBinding && isBindingCurrent(acceptedBinding) && ["section", "scroller", "track"].every((key) => acceptedBinding[key] === facts[key]));
-        return observationResult({ binding: { section: facts.section }, guard }, { ...facts, matchesBinding }, () => {
-          const currentReferences = references();
-          const current = bindingOnly ? currentReferences : readNativeMyListDomState();
-          const changedFields = Object.keys(facts).filter((key) => !Object.is(facts[key], current[key]));
-          if (changedFields.length || ["section", "scroller", "track"].some((key) => facts[key] !== currentReferences[key]) || facts.section?.isConnected === false || facts.scroller?.isConnected === false || facts.track?.isConnected === false) {
-            throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Observed My List source changed", { changedFields });
-          }
-        });
-      });
-    }
-    function captureMountedItem({ discovery: discovery2, videoId: videoId2 }) {
-      return withNativeReadScope(() => {
-        assertObservation(discovery2);
-        if (!discovery2.track) return null;
-        let item = null;
-        try {
-          for (const slot of netflixDom.directSlots(discovery2.track)) {
-            item = cardMarkup.capture(slot, discovery2.selectedPage || 0, false);
-            assertObservation(discovery2);
-            if (item?.videoId !== String(videoId2)) continue;
-            const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
-            const assertCapturedSlot = () => {
-              const current = cardMarkup.capture(slot, discovery2.selectedPage || 0, false);
-              if (slot.isConnected === false || slot.parentElement !== discovery2.track || slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard) !== card || !current || ["href", "videoId", "ariaLabel"].some((key) => current[key] !== item[key])) {
-                throw initializationError("NATIVE_SOURCE_REPLACED", "native-discovery", "Captured native card changed");
-              }
-              assertObservation(discovery2);
-            };
-            assertCapturedSlot();
-            item.snapshot = slot.cloneNode(true);
-            assertCapturedSlot();
-            return item;
-          }
-          assertObservation(discovery2);
-          return null;
-        } catch (error) {
-          if (item) item.snapshot = null;
-          throw error;
-        }
-      });
-    }
-    function measureLayout({
-      section,
-      scroller = null,
-      track = null,
-      mode = "auto",
-      binding = null,
-      sessionToken = null,
-      assertCurrent = () => {
-      }
-    }) {
-      return withNativeReadScope(() => {
-        const generation = bindingGeneration, route = scope.token;
-        const guard = () => {
-          assertRouteSession(sessionToken);
-          assertCurrent();
-          if (!section || section.isConnected === false || scroller?.isConnected === false || track?.isConnected === false || bindingGeneration !== generation || scope.token !== route) {
-            throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Native layout admission changed");
-          }
-          if (binding) {
-            assertBinding(binding);
-            if (binding.section !== section || scroller && binding.scroller !== scroller || track && binding.track !== track) {
-              throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Layout binding does not match its source");
-            }
-          }
-        };
-        guard();
-        const kind = mode === "auto" ? scroller && track ? "visible" : "empty" : mode;
-        const read = () => {
-          let entries = nativeReadScope.layouts.get(section);
-          if (!entries) nativeReadScope.layouts.set(section, entries = []);
-          const prior = entries.find((entry) => entry.scroller === scroller && entry.track === track && entry.kind === kind);
-          if (prior) return prior.facts;
-          const rect = nativeRect(section);
-          const bounds = Object.freeze(Object.fromEntries(["left", "top", "right", "bottom", "width", "height"].map((key) => [key, rect[key]])));
-          const layout = kind === "bounds" ? null : kind === "visible" ? layoutMeasurements.visible(section, scroller, track) : layoutMeasurements.empty(section);
-          const facts2 = {
-            bounds,
-            viewportWidth: window.innerWidth,
-            ...layout ? { layout: Object.freeze({ ...layout }) } : {}
-          };
-          entries.push({ scroller, track, kind, facts: facts2 });
-          return facts2;
-        };
-        const facts = read();
-        const same = (left, right) => Boolean(left && right && Object.keys(left).length === Object.keys(right).length && Object.keys(left).every((key) => Object.is(left[key], right[key])));
-        return observationResult({ binding: { section }, guard }, { ...facts }, () => {
-          const current = read();
-          if (window.innerWidth !== facts.viewportWidth || !same(current.bounds, facts.bounds) || facts.layout && !same(current.layout, facts.layout)) {
-            throw initializationError("NATIVE_SOURCE_REPLACED", "native-layout", "Observed native layout changed");
-          }
-        });
-      });
-    }
-    function observeSource(options) {
-      return withNativeReadScope(() => {
-        const operation = observationOperation(options), runtime = operation.model.view;
-        const attempts = runtime.logicalRemapRetryCount;
-        const position = options.position ? Object.freeze({
-          page: selectedPage(operation.binding.section),
-          pages: pageCount(operation.binding.section)
-        }) : null;
-        const count = options.count === "required" ? requireNativeReactCarouselTotalCount(
-          operation.binding.scroller,
-          operation.binding.track,
-          options.provisionalTotalCount ?? null,
-          operation.guard
-        ) : options.count === "optional" ? nativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track) : null;
-        const countFacts = count ? Object.freeze({
-          ...count,
-          readings: Object.freeze([...count.readings]),
-          uniqueReadings: Object.freeze([...count.uniqueReadings])
-        }) : null;
-        const readinessState = options.readiness ? nativeCarouselReadiness(
-          operation.binding.section,
-          operation.binding.scroller,
-          operation.binding.track
-        ) : null;
-        const readiness = readinessState ? Object.freeze({
-          ...readinessState,
-          capabilities: Object.freeze({ ...readinessState.capabilities })
-        }) : null;
-        const presentationFacts = () => ({
-          parked: Boolean(operation.binding.scroller?.classList?.contains(SOURCE_PARKED_CLASS)),
-          hidden: operation.binding.section?.getAttribute(ORIGINAL_VISIBILITY_ATTR) === "false"
-        });
-        const presentation = options.presentation ? Object.freeze(presentationFacts()) : null;
-        return observationResult(operation, {
-          mode: runtime.profile.pageMode,
-          needsRemapping: Boolean(runtime.pageMappingStale),
-          remapAttempts: attempts,
-          ...countFacts ? { count: countFacts } : {},
-          ...position ? { position } : {},
-          ...readiness ? { readiness } : {},
-          ...presentation ? { presentation } : {}
-        }, () => {
-          if (runtime.logicalRemapRetryCount !== attempts) throw initializationError(
-            "NATIVE_SOURCE_REPLACED",
-            "native-observation",
-            "Native remapping observation changed"
-          );
-          if (position && (selectedPage(operation.binding.section) !== position.page || pageCount(operation.binding.section) !== position.pages)) {
-            throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native position observation changed");
-          }
-          if (countFacts) {
-            const current = nativeReactCarouselTotalCount(operation.binding.scroller, operation.binding.track);
-            if (current.totalCount !== countFacts.totalCount || current.slots !== countFacts.slots || current.readings.length !== countFacts.readings.length || !current.readings.every((value, index) => Object.is(value, countFacts.readings[index]))) {
-              throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native count observation changed");
-            }
-          }
-          if (readiness) {
-            const current = nativeCarouselReadiness(operation.binding.section, operation.binding.scroller, operation.binding.track);
-            if (current.signature !== readiness.signature || current.connected !== readiness.connected || Object.keys(current.capabilities).length !== Object.keys(readiness.capabilities).length || Object.keys(readiness.capabilities).some((key) => current.capabilities[key] !== readiness.capabilities[key])) {
-              throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native readiness observation changed");
-            }
-          }
-          if (presentation) {
-            const current = presentationFacts();
-            if (current.parked !== presentation.parked || current.hidden !== presentation.hidden) {
-              throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native presentation observation changed");
-            }
-          }
-        });
-      });
-    }
-    function slotDescriptor(slot, totalCount = void 0) {
-      try {
-        if (!slot) return null;
-        if (totalCount === void 0) totalCount = acceptedBinding ? readListShape(acceptedBinding.section)?.totalCount : null;
-        const card = slot.querySelector?.(NETFLIX_DOM_SELECTORS2.standardCard);
-        const href = card?.href || card?.getAttribute?.("href") || "";
-        const itemIndex = netflixItemIndexFromSlot(slot);
-        const rect = slot.getBoundingClientRect ? nativeRect(slot) : null;
-        const rectangle = rect ? Object.freeze(Object.fromEntries(["left", "top", "width", "height", "right", "bottom"].map((key) => [key, Math.round(rect[key] * 10) / 10]))) : null;
-        return Object.freeze({
-          slot: slot.getAttribute?.("data-virtual-slot") || "",
-          itemIndex,
-          logicalIndex: normalizeNetflixLogicalIndex(itemIndex, totalCount),
-          videoId: netflixDom.videoIdFromHref(href),
-          href,
-          ariaLabel: card?.getAttribute?.("aria-label") || "",
-          tabindex: card?.getAttribute?.("tabindex") || "",
-          connected: Boolean(slot.isConnected),
-          inlineTransform: slot.style?.getPropertyValue?.("transform") || "",
-          rect: rectangle
-        });
-      } catch (_) {
-        return null;
-      }
-    }
-    function sourceDescription(source) {
-      try {
-        let { section, scroller = null, track = null } = source || {};
-        if (source?.discover) {
-          section ||= findMyListSection();
-          scroller ||= section?.querySelector?.(NETFLIX_DOM_SELECTORS2.carouselScroller) || null;
-          track ||= scroller && netflixDom.findTrack(scroller) || null;
-        }
-        if (!section) return null;
-        const page = selectedPage(section), pages = pageCount(section);
-        const profile = carouselDomProfileSummary(section);
-        return Object.freeze({
-          selectedPage: page,
-          pageCount: pages,
-          carouselDom: profile && Object.freeze({ ...profile, capabilities: Object.freeze({ ...profile.capabilities }) }),
-          sourceSlots: track ? netflixDom.directSlots(track).length : 0,
-          sourceCards: track ? nativeFilledSlots(track).length : 0,
-          currentPageCards: scroller && track ? currentPageSlots(scroller, track).length : 0,
-          sourceScan: Boolean(scroller?.classList?.contains(SOURCE_SCAN_CLASS)),
-          sourceParked: Boolean(scroller?.classList?.contains(SOURCE_PARKED_CLASS))
-        });
-      } catch (_) {
-        return null;
-      }
-    }
     function diagnostics(options = {}) {
       const snapshot = {
         bindingGeneration,
-        readScopeActive: Boolean(nativeReadScope),
+        readScopeActive: readings.active(),
         navigation: navigation.diagnostics(),
         collection: collection.diagnostics(),
         collectionOperations: collection.pending(),
-        mountedSourceWaits: mountedWaits.size,
+        mountedSourceWaits: resolution.pending(),
         ...readinessPolling.diagnostics(),
         ...discovery.diagnostics(),
         presentation: sourcePresentation.diagnostics()
@@ -15210,49 +15905,6 @@ ${CARD_ACTION_STYLES}
         }
       }
       return snapshot;
-    }
-    function pageCards(options) {
-      return withNativeReadScope(() => {
-        const operation = observationOperation(options);
-        const { section, scroller, track } = operation.binding;
-        const page = selectedPage(section);
-        operation.guard();
-        if (Number.isFinite(options.page) && options.page !== page) throw initializationError(
-          "NATIVE_SOURCE_REPLACED",
-          "native-observation",
-          "Mounted native page changed before preparation"
-        );
-        const columns = Math.max(1, options.columns || 1);
-        const viewport = options.window === "viewport", wantsTemplate = Boolean(options.template);
-        const readSlots = () => viewport ? viewportPageSlots(scroller, track, columns) : currentPageSlots(scroller, track);
-        const slots = readSlots().slice();
-        const mode = operation.model.view.profile.pageMode;
-        const tail = mode === "logical" ? wrappedTailLogicalPageInfo(logicalSlotPositions(slots, options.totalCount || 0), options.totalCount || 0, columns) : null;
-        const revision = operation.model.revision;
-        const cards = Object.freeze(slots.map((slot, index) => Object.freeze({
-          source: sourceHandle(operation.binding, slot, page),
-          inPage: !(tail && tail.page === page && index >= tail.wrapIndex)
-        })));
-        const signature = cards.map((entry) => entry.source.href).filter(Boolean).join("|");
-        const templateSlot = wantsTemplate ? slots[0] || nativeFilledSlots(track)[0] || null : null;
-        const template = templateSlot ? cards[0]?.source || sourceHandle(operation.binding, templateSlot, page) : null;
-        return observationResult(operation, { page, mode, cards, signature, ...wantsTemplate ? { template } : {} }, () => {
-          if (selectedPage(section) !== page || operation.model.revision !== revision) throw initializationError(
-            "NATIVE_SOURCE_REPLACED",
-            "native-observation",
-            "Observed native page mapping changed"
-          );
-          const current = readSlots();
-          if (current.length !== slots.length || current.some((slot, index) => slot !== slots[index])) {
-            throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Observed native card window changed");
-          }
-          if (wantsTemplate && (current[0] || nativeFilledSlots(track)[0] || null) !== templateSlot) {
-            throw initializationError("NATIVE_SOURCE_REPLACED", "native-observation", "Native template selection changed");
-          }
-          for (const entry of cards) assertSource(entry.source);
-          if (template) assertSource(template);
-        });
-      });
     }
     function getModel(section) {
       if (!section) return null;
@@ -15328,79 +15980,6 @@ ${CARD_ACTION_STYLES}
       acceptedBinding = null;
       invalidateNativeReadScope();
     }
-    const netflixReactCarousel = createReactReadings({ cardSelector: NETFLIX_DOM_SELECTORS2.standardCard });
-    function createNativeReadScope() {
-      return {
-        profiles: /* @__PURE__ */ new WeakMap(),
-        indicators: /* @__PURE__ */ new WeakMap(),
-        filled: /* @__PURE__ */ new WeakMap(),
-        slots: /* @__PURE__ */ new WeakMap(),
-        rects: /* @__PURE__ */ new WeakMap(),
-        indices: /* @__PURE__ */ new WeakMap(),
-        layouts: /* @__PURE__ */ new WeakMap(),
-        domState: null
-      };
-    }
-    function withNativeReadScope(read) {
-      if (nativeReadScope) return read();
-      nativeReadScope = createNativeReadScope();
-      try {
-        return read();
-      } finally {
-        nativeReadScope = null;
-      }
-    }
-    function invalidateNativeReadScope() {
-      if (nativeReadScope) nativeReadScope = createNativeReadScope();
-    }
-    function nativeRect(node) {
-      if (!nativeReadScope) return node.getBoundingClientRect();
-      if (!nativeReadScope.rects.has(node)) nativeReadScope.rects.set(node, node.getBoundingClientRect());
-      return nativeReadScope.rects.get(node);
-    }
-    function nativeFilledSlots(track) {
-      if (!nativeReadScope) return netflixDom.filledSlots(track);
-      if (!nativeReadScope.filled.has(track)) nativeReadScope.filled.set(track, netflixDom.filledSlots(track));
-      return nativeReadScope.filled.get(track);
-    }
-    function nativeIndicatorItems(section) {
-      if (!section) return [];
-      if (!nativeReadScope) return [...section.querySelectorAll('[data-uia="carousel-page-indicator-item"]')];
-      if (!nativeReadScope.indicators.has(section)) {
-        nativeReadScope.indicators.set(section, [...section.querySelectorAll('[data-uia="carousel-page-indicator-item"]')]);
-      }
-      return nativeReadScope.indicators.get(section);
-    }
-    function detectCarouselDomProfile(section) {
-      if (section && nativeReadScope?.profiles.has(section)) return nativeReadScope.profiles.get(section);
-      const legacyLeft = section?.querySelector?.('[data-uia="carousel-left-button"]') || null;
-      const legacyRight = section?.querySelector?.('[data-uia="carousel-right-button"]') || null;
-      const hawkinsLeft = section?.querySelector?.('[data-uia="carousel-hawkins-left-button"]') || null;
-      const hawkinsRight = section?.querySelector?.('[data-uia="carousel-hawkins-right-button"]') || null;
-      const indicatorItems = nativeIndicatorItems(section);
-      const legacyControls = Boolean(legacyLeft || legacyRight);
-      const hawkinsControls = Boolean(hawkinsLeft || hawkinsRight);
-      const generation = legacyControls && hawkinsControls ? "hybrid" : legacyControls ? "generation1" : hawkinsControls ? "generation2" : "unknown";
-      const navigationMode = legacyControls ? "legacy" : hawkinsControls ? "hawkins" : "none";
-      const pageMode = legacyControls && indicatorItems.length > 0 ? "indicator" : legacyControls || hawkinsControls ? "logical" : "unknown";
-      const profile = {
-        generation,
-        navigationMode,
-        pageMode,
-        capabilities: {
-          legacyControls,
-          hawkinsControls,
-          pageIndicators: indicatorItems.length > 0,
-          selectedIndicator: indicatorItems.some((x) => x.getAttribute("data-indicator-selected") === "true"),
-          virtualSlots: Boolean(section?.querySelector?.(NETFLIX_DOM_SELECTORS2.virtualSlot)),
-          standardCards: Boolean(section?.querySelector?.(NETFLIX_DOM_SELECTORS2.standardCard))
-        },
-        indicatorCount: indicatorItems.length
-      };
-      if (section && nativeReadScope) nativeReadScope.profiles.set(section, profile);
-      Object.freeze(profile.capabilities);
-      return Object.freeze(profile);
-    }
     function carouselDomProfileSummary(section) {
       const runtime = getCarouselDomRuntime(section);
       if (!runtime) return null;
@@ -15425,7 +16004,7 @@ ${CARD_ACTION_STYLES}
       return visibleSignature(currentPageSlots(scroller, track));
     }
     function selectedPage(section) {
-      if (!nativeReadScope) return withNativeReadScope(() => selectedPage(section));
+      if (!readings.active()) return withNativeReadScope(() => selectedPage(section));
       const runtime = getCarouselDomRuntime(section);
       const profile = runtime?.profile || detectCarouselDomProfile(section);
       if (profile.pageMode === "indicator") {
@@ -15470,301 +16049,6 @@ ${CARD_ACTION_STYLES}
       }
       return 1;
     }
-    function carouselMoveButton(section, scroller, direction) {
-      const profile = getCarouselDomRuntime(section)?.profile || detectCarouselDomProfile(section);
-      const side = direction < 0 ? "left" : "right";
-      const selectors = profile.navigationMode === "legacy" ? [`[data-uia="carousel-${side}-button"]`, `[data-uia="carousel-hawkins-${side}-button"]`] : [`[data-uia="carousel-hawkins-${side}-button"]`, `[data-uia="carousel-${side}-button"]`];
-      for (const selector of selectors) {
-        const button = scroller?.querySelector?.(selector) || section?.querySelector?.(selector);
-        if (button) return { button, selector };
-      }
-      return { button: null, selector: selectors.join(" | ") };
-    }
-    function carouselMoveButtonDisabled(button) {
-      if (!button) return false;
-      return button.disabled === true || button.getAttribute("aria-disabled") === "true" || button.getAttribute("tabindex") === "-1";
-    }
-    function currentPageSlots(scroller, track) {
-      if (!nativeReadScope) return withNativeReadScope(() => currentPageSlots(scroller, track));
-      let byTrack = nativeReadScope.slots.get(scroller);
-      if (!byTrack) nativeReadScope.slots.set(scroller, byTrack = /* @__PURE__ */ new WeakMap());
-      if (byTrack.has(track)) return byTrack.get(track);
-      const all = nativeFilledSlots(track);
-      if (!all.length) {
-        byTrack.set(track, []);
-        return byTrack.get(track);
-      }
-      const sr = nativeRect(scroller);
-      const visible = all.map((slot) => ({ slot, rect: nativeRect(slot) })).filter((x) => {
-        const cx = x.rect.left + x.rect.width / 2;
-        return x.rect.width > 1 && cx >= sr.left && cx <= sr.right;
-      }).sort((a, b) => a.rect.left - b.rect.left).map((x) => x.slot);
-      const active = all.filter((slot) => {
-        const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
-        return card?.getAttribute("tabindex") === "0";
-      });
-      let current = visible;
-      if (active.length) {
-        if (visible.length <= active.length) current = active.sort((a, b) => nativeRect(a).left - nativeRect(b).left);
-      }
-      byTrack.set(track, current);
-      return current;
-    }
-    function visibleSignature(slots) {
-      return readCardSignature(slots, NETFLIX_DOM_SELECTORS2.standardCard);
-    }
-    function nativeCarouselReadiness(section, scroller, track) {
-      if (!nativeReadScope) return withNativeReadScope(() => nativeCarouselReadiness(section, scroller, track));
-      const slots = netflixDom.directSlots(track);
-      const cards = nativeFilledSlots(track);
-      const currentSlots = currentPageSlots(scroller, track);
-      const pages = pageCount(section);
-      const formula = layoutMeasurements.formula(track);
-      const columns = Math.max(1, formula?.columns || currentSlots.length || cards.length || 1);
-      const runtime = getCarouselDomRuntime(section);
-      const profile = runtime?.profile || detectCarouselDomProfile(section);
-      const leftControl = carouselMoveButton(section, scroller, -1).button;
-      const rightControl = carouselMoveButton(section, scroller, 1).button;
-      const controlsPresent = Boolean(leftControl || rightControl);
-      const controlsEnabled = leftControl?.getAttribute("tabindex") === "0" || rightControl?.getAttribute("tabindex") === "0";
-      const inlineTransform = track.style.getPropertyValue("transform") || "";
-      const inlineDisplay = track.style.getPropertyValue("display") || "";
-      const inlineWillChange = track.style.getPropertyValue("will-change") || "";
-      const trackInitialized = inlineDisplay === "flex" || inlineTransform && inlineTransform !== "none" || /\btransform\b/i.test(inlineWillChange);
-      const signature = [
-        pages,
-        slots.length,
-        cards.length,
-        currentSlots.length,
-        columns,
-        controlsPresent ? 1 : 0,
-        controlsEnabled ? 1 : 0,
-        trackInitialized ? 1 : 0,
-        profile.generation,
-        profile.navigationMode,
-        profile.pageMode,
-        visibleSignature(currentSlots)
-      ].join("||");
-      return {
-        connected: section.isConnected && scroller.isConnected && track.isConnected,
-        pages,
-        slots: slots.length,
-        cards: cards.length,
-        currentCards: currentSlots.length,
-        columns,
-        controlsPresent,
-        controlsEnabled,
-        trackInitialized,
-        domGeneration: profile.generation,
-        navigationMode: profile.navigationMode,
-        pageMode: profile.pageMode,
-        capabilities: { ...profile.capabilities },
-        signature
-      };
-    }
-    function readNativeMyListDomState() {
-      if (!nativeReadScope) return withNativeReadScope(() => readNativeMyListDomState());
-      if (nativeReadScope.domState) return nativeReadScope.domState;
-      const section = findMyListSection();
-      if (!section) {
-        const graphqlCount2 = listData.readMyListTotalCount();
-        return nativeReadScope.domState = {
-          section: null,
-          scroller: null,
-          track: null,
-          pages: 0,
-          selectedPage: 0,
-          pageSignature: "",
-          currentPageCount: 0,
-          sourceSlots: 0,
-          sourceCards: 0,
-          domExactCount: null,
-          graphqlCount: graphqlCount2,
-          exactCount: Number.isFinite(graphqlCount2) ? graphqlCount2 : null,
-          fingerprint: `none|${Number.isFinite(graphqlCount2) ? graphqlCount2 : "x"}`
-        };
-      }
-      const scroller = section.querySelector(NETFLIX_DOM_SELECTORS2.carouselScroller);
-      const track = scroller && netflixDom.findTrack(scroller);
-      const runtime = getCarouselDomRuntime(section);
-      const profile = runtime?.profile || detectCarouselDomProfile(section);
-      const page = selectedPage(section);
-      const pages = pageCount(section);
-      const pageTopologyKnown = profile.pageMode === "indicator" ? profile.indicatorCount > 0 : Boolean(runtime?.pageCountFinalized);
-      const graphqlCount = listData.readMyListTotalCount();
-      if (!scroller || !track) {
-        return nativeReadScope.domState = {
-          section,
-          scroller: scroller || null,
-          track: track || null,
-          pages,
-          selectedPage: page,
-          pageSignature: "",
-          currentPageCount: 0,
-          sourceSlots: 0,
-          sourceCards: 0,
-          domExactCount: pageTopologyKnown && pages === 1 ? 0 : null,
-          graphqlCount,
-          exactCount: pageTopologyKnown && pages === 1 ? 0 : Number.isFinite(graphqlCount) ? graphqlCount : null,
-          fingerprint: `${pages}|${page}|0|0||${Number.isFinite(graphqlCount) ? graphqlCount : "x"}`
-        };
-      }
-      const current = currentPageSlots(scroller, track);
-      const identities = current.map(nativeCardIdentity).filter(Boolean);
-      const uniqueIdentities = [...new Set(identities)];
-      const pageSignature = uniqueIdentities.join("|");
-      const domExactCount = pageTopologyKnown && pages === 1 ? uniqueIdentities.length : null;
-      const exactCount = Number.isFinite(domExactCount) ? domExactCount : Number.isFinite(graphqlCount) ? graphqlCount : null;
-      const sourceSlots = netflixDom.directSlots(track).length;
-      const sourceCards = nativeFilledSlots(track).length;
-      return nativeReadScope.domState = {
-        section,
-        scroller,
-        track,
-        pages,
-        selectedPage: page,
-        pageSignature,
-        pageTopologyKnown,
-        currentPageCount: uniqueIdentities.length,
-        sourceSlots,
-        sourceCards,
-        domExactCount,
-        graphqlCount,
-        exactCount,
-        fingerprint: `${pages}|${page}|${uniqueIdentities.length}|${sourceSlots}|${sourceCards}|${pageSignature}|${Number.isFinite(graphqlCount) ? graphqlCount : "x"}`
-      };
-    }
-    function nativeReactCarouselTotalCount(scroller, track) {
-      const slots = currentPageSlots(scroller, track);
-      const readings = slots.map((slot) => netflixReactCarousel.readCarouselTotalCount(slot));
-      const finiteReadings = readings.filter((value) => Number.isSafeInteger(value) && value >= 0);
-      const unique = [...new Set(finiteReadings)];
-      return {
-        totalCount: unique.length === 1 ? unique[0] : null,
-        readings,
-        slots: slots.length,
-        uniqueReadings: unique
-      };
-    }
-    function requireNativeReactCarouselTotalCount(scroller, track, provisionalTotalCount = null, assertCurrent = () => {
-    }) {
-      const state = nativeReactCarouselTotalCount(scroller, track);
-      assertCurrent();
-      if (Number.isSafeInteger(state.totalCount) && state.totalCount >= 0) return state;
-      throw initializationError(
-        "NATIVE_TOTAL_COUNT_UNAVAILABLE",
-        "native-react-total-count",
-        "Could not read a consistent Netflix My List totalCount from the mounted carousel",
-        {
-          provisionalTotalCount,
-          slots: state.slots,
-          readings: state.readings,
-          uniqueReadings: state.uniqueReadings
-        }
-      );
-    }
-    function netflixItemIndexFromSlot(slot) {
-      if (!nativeReadScope || !slot) return netflixReactCarousel.readItemIndex(slot).value;
-      if (!nativeReadScope.indices.has(slot)) {
-        nativeReadScope.indices.set(slot, netflixReactCarousel.readItemIndex(slot).value);
-      }
-      return nativeReadScope.indices.get(slot);
-    }
-    function logicalSlotPositions(slots, totalCount) {
-      return slots.map((slot) => {
-        const itemIndex = netflixItemIndexFromSlot(slot);
-        return {
-          slot,
-          itemIndex,
-          logicalIndex: normalizeNetflixLogicalIndex(itemIndex, totalCount)
-        };
-      });
-    }
-    function nativeLogicalPageState(scroller, track, totalCount, columns) {
-      if (!nativeReadScope) return withNativeReadScope(() => nativeLogicalPageState(scroller, track, totalCount, columns));
-      const slots = currentPageSlots(scroller, track);
-      const positions = logicalSlotPositions(slots, totalCount);
-      const page = logicalPageFromSlotPositions(positions, totalCount, columns);
-      return {
-        slots,
-        positions,
-        page,
-        itemIndices: positions.map((position) => position.itemIndex),
-        logicalIndices: positions.map((position) => position.logicalIndex)
-      };
-    }
-    function requireNativeLogicalPageState(scroller, track, totalCount, columns, stage = "logical-item-index-detection") {
-      const state = nativeLogicalPageState(scroller, track, totalCount, columns);
-      if (state.positions.length && state.positions.every((position) => Number.isSafeInteger(position.itemIndex)) && Number.isFinite(state.page)) {
-        return state;
-      }
-      logVirtualRawIndexDiagnostic(state.slots, totalCount, columns, stage);
-      throw initializationError(
-        "NATIVE_LOGICAL_INDEX_UNAVAILABLE",
-        stage,
-        "Could not read a complete Netflix itemIndex page from the current My List carousel",
-        {
-          totalCount,
-          columns,
-          slots: state.slots.length,
-          itemIndices: state.itemIndices,
-          logicalIndices: state.logicalIndices,
-          resolvedPage: state.page
-        }
-      );
-    }
-    function diagnosticPrimitiveProps(props) {
-      if (!props || typeof props !== "object") return null;
-      const keys = Object.keys(props);
-      const interesting = {};
-      const pattern = /(index|offset|position|slot|page|item|cursor|count|first|last|key|raw|virtual)/i;
-      for (const key of keys) {
-        if (!pattern.test(key)) continue;
-        const value = props[key];
-        if (value == null || ["string", "number", "boolean"].includes(typeof value)) {
-          interesting[key] = value;
-        }
-        if (Object.keys(interesting).length >= 24) break;
-      }
-      return { keys: keys.slice(0, 40), interesting };
-    }
-    function diagnosticFiberChain(node, maxDepth = 16) {
-      const fiber = netflixReactCarousel.fiberForNode(node);
-      const chain = [];
-      let current = fiber;
-      const visited = /* @__PURE__ */ new Set();
-      let depth = 0;
-      while (current && typeof current === "object" && depth < maxDepth && !visited.has(current)) {
-        visited.add(current);
-        const stateNode = current.stateNode;
-        chain.push({
-          depth,
-          tag: current.tag ?? null,
-          key: current.key ?? null,
-          alternateKey: current.alternate?.key ?? null,
-          typeName: netflixReactCarousel.typeName(current),
-          stateNodeName: stateNode instanceof Element ? stateNode.tagName.toLowerCase() : "",
-          stateVirtualSlot: stateNode instanceof Element ? stateNode.getAttribute("data-virtual-slot") || "" : "",
-          memoizedProps: diagnosticPrimitiveProps(current.memoizedProps),
-          pendingProps: diagnosticPrimitiveProps(current.pendingProps)
-        });
-        current = current.return;
-        depth++;
-      }
-      return chain;
-    }
-    function diagnosticReactNode(node, label) {
-      if (!(node instanceof Element)) return { label, available: false };
-      const ownKeys = Object.getOwnPropertyNames(node);
-      return {
-        label,
-        available: true,
-        tagName: node.tagName.toLowerCase(),
-        virtualSlot: node.getAttribute("data-virtual-slot") || "",
-        reactKeys: ownKeys.filter((key) => key.startsWith("__react")).slice(0, 20),
-        fiberChain: diagnosticFiberChain(node)
-      };
-    }
     function logVirtualRawIndexDiagnostic(slots, totalCount, columns, stage) {
       const entries = slots.slice(0, Math.min(slots.length, 6)).map((slot, index) => {
         const card = slot.querySelector(NETFLIX_DOM_SELECTORS2.standardCard);
@@ -15774,10 +16058,10 @@ ${CARD_ACTION_STYLES}
           index,
           descriptor: slotDescriptor(slot),
           nodes: [
-            diagnosticReactNode(slot, "slot"),
-            diagnosticReactNode(child, "slot-first-child"),
-            diagnosticReactNode(cardParent, "card-parent"),
-            diagnosticReactNode(card, "card")
+            netflixReactCarousel.describeNode(slot, "slot"),
+            netflixReactCarousel.describeNode(child, "slot-first-child"),
+            netflixReactCarousel.describeNode(cardParent, "card-parent"),
+            netflixReactCarousel.describeNode(card, "card")
           ]
         };
       });
@@ -15866,7 +16150,7 @@ ${CARD_ACTION_STYLES}
         clearBinding();
         collection.resetDiagnostics();
         models = /* @__PURE__ */ new WeakMap();
-        nativeReadScope = null;
+        readings.clear();
       },
       presentSource: sourcePresentation.present,
       cleanupArtifacts: sourcePresentation.cleanupArtifacts,
@@ -23766,7 +24050,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.7";
+  var SCRIPT_VERSION = "1.11.8";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
