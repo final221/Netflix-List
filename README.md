@@ -8,7 +8,7 @@ Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released u
 
 For copies installed from the former root location, open the released-userscript link once and confirm the update in Tampermonkey. The script name/namespace is unchanged; this release specifies the new URLs for future updates.
 
-Version **1.11.11** separates live-source adoption and ordered initialization attempts while retaining guarded publication, scheduling and recovery authority. All 773 offline tests pass. Stages 1-4 of the selected seven-release refactoring are complete; combined Windows/Firefox validation remains pending. See [findings](docs/findings.md#selected-seven-release-ownership-refactoring).
+Version **1.11.12** separates admitted hover preparation and pure responsive decisions. Native facts are captured once for classification; mismatch, recovery and refresh authority remain at their entry points. All 776 offline tests pass. Stages 1-5 of the selected seven-release refactoring are complete; combined Windows/Firefox validation remains pending. See [findings](docs/findings.md#selected-seven-release-ownership-refactoring).
 
 Version **1.11.6** requires native confirmation before removing a My List card, repairs discovery when Netflix mounts late, coalesces cross-tab storage reloads and reduces browsing work for large viewing histories. Encountered title names no longer block new saved choices at the incidental-history limit. CopyLogs includes confirmation/reload counters.
 

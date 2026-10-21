@@ -14,7 +14,7 @@ The user selected all seven stages on 2026-10-21, sequentially on main. Baseline
 | 2. Movement resources/collection strategies | Verified, 1.11.9 | 770 tests; logical/indicator traversal, cancellation serialization, fallback/restoration and resource release. Four unused return properties removed, transform/restoration page keys retained. |
 | 3. Protocol/fresh collection | Verified, 1.11.10 | 771 tests; privacy/import rejection, fallback/cursor/page limits, normalization, partial-cache membership. |
 | 4. Display adoption/initialization attempt | Verified, 1.11.11 | 773 tests; display/grid/responsive/session suites; lazy composition, atomic publication, replacement/empty recovery, exact completion ownership. |
-| 5. Preparation/responsive policy | Pending | Planned checks are not completion evidence. |
+| 5. Preparation/responsive policy | Verified, 1.11.12 | 776 tests; responsive/hover/session suites, combined-observation sampling count, parked/zoom/convergence guards and private-import checks. |
 | 6. Popup resources/hover input | Pending | Planned checks are not completion evidence. |
 | 7. Recommendation inspection | Pending | Planned checks are not completion evidence. |
 

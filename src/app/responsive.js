@@ -1,3 +1,5 @@
+import { layoutSignature, viewportSignature, responsiveLayoutMatches, classifyResponsiveChange } from './responsive/policy.js';
+
 export function createResponsive(options) {
     const { display, window, ResizeObserver, performance, setTimeout, clearTimeout, nativeCarousel,
         gridView, hover, listMutations, readSessionToken, isRouteSessionActive, assertRouteSession,
@@ -15,37 +17,13 @@ export function createResponsive(options) {
     function responsiveSignature(layout) {
         if (!readState()) return '';
         const observation = nativeSourceObservation(readState(), { position: true });
-        const signature = [
-            Math.max(1, layout.columns),
-            observation.position.pages,
-            Math.round(layout.cardWidth),
-            Math.round(layout.gridWidth),
-            Math.round(layout.gridLeft),
-            Math.round(layout.sidePadding || 0),
-            Math.round(layout.scrollerWidth)
-        ].join('|');
+        const signature = layoutSignature(layout, observation.position.pages);
         nativeCarousel.assertObservation(observation);
         return signature;
     }
 
 
-    function responsiveViewportSignature() {
-        const viewport = typeof window === 'undefined' ? {} : window;
-        const visual = viewport.visualViewport;
-        return [viewport.innerWidth, viewport.innerHeight, viewport.devicePixelRatio,
-            visual?.width, visual?.height, visual?.scale, visual?.offsetLeft, visual?.offsetTop].join('|');
-    }
-
-
-    function responsiveLayoutMatches(previous, next, ignoreScrollerHeight = false) {
-        if (!previous) return false;
-        return ['columns', 'cardWidth', 'gridWidth', 'gridLeft', 'sidePadding', 'sidePaddingLeft',
-            'sidePaddingRight', 'scrollerWidth', 'scrollerHeight', 'gap', 'rowGap']
-            .every(key => (ignoreScrollerHeight && key === 'scrollerHeight') ||
-                Math.abs((previous[key] || 0) - (next[key] || 0)) <= 0.5);
-    }
-
-
+    const responsiveViewportSignature = () => viewportSignature(window);
     function cancelResizeHover() {
         hover.cancel('resize');
         counters.hoverCancelled++;
@@ -344,31 +322,26 @@ export function createResponsive(options) {
                     const observed = nativeLayoutObservation(state.section, state.scroller, state.track, 'auto', state);
                     const measured = { ...observed.layout };
                     measured.rowGap = state.layout?.rowGap || measureNativeCarouselGap(state.section);
-                    const result = { measured, signature: responsiveSignature(measured), geometry: currentGridGeometry(state.section, measured), observed };
+                    const sourceObservation = nativeSourceObservation(state, { position: true, presentation: true });
+                    const signature = layoutSignature(measured, sourceObservation.position.pages);
+                    nativeCarousel.assertObservation(sourceObservation);
+                    const result = { measured, signature, sourceObservation, geometry: currentGridGeometry(state.section, measured), observed };
                     nativeCarousel.assertObservation(observed);
                     return result;
                 });
                 const measured = sample.measured;
                 const sig = sample.signature;
                 if (readState() !== state) return;
-                const sourceObservation = nativeSourceObservation(state, { presentation: true });
+                const sourceObservation = sample.sourceObservation;
                 const logicalMappingStale = Boolean(sourceObservation?.needsRemapping);
-                const applied = state.grid.__tmAppliedGeometry;
-                const layoutUnchanged = responsiveLayoutMatches(state.layout, measured);
-                // Parking a hidden source changes its own height, not the displayed
-                // grid. Preserve the first hover only after all other checks agree.
-                const parkedHeightOnlyChange = !layoutUnchanged && lastResponsiveReason === 'ResizeObserver' &&
-                    sig === lastResponsiveSignature && !logicalMappingStale &&
-                    sourceObservation.presentation.hidden && sourceObservation.presentation.parked &&
-                    state.resizeViewportSignature === responsiveViewportSignature() &&
-                    Number.isFinite(state.layout?.scrollerHeight) && state.layout.scrollerHeight > 1.5 &&
-                    Number.isFinite(measured.scrollerHeight) && measured.scrollerHeight >= 1 && measured.scrollerHeight <= 1.5 &&
-                    responsiveLayoutMatches(state.layout, measured, true);
-                const geometryUnchanged = (layoutUnchanged || parkedHeightOnlyChange) && applied &&
-                    ['width', 'left', 'columns'].every(key => Math.abs(applied[key] - sample.geometry[key]) <= 0.5);
+                const decision = classifyResponsiveChange({ previousLayout: state.layout, measured, sig,
+                    previousSignature: lastResponsiveSignature, reason: lastResponsiveReason, mappingStale: logicalMappingStale,
+                    presentation: sourceObservation.presentation, previousViewport: state.resizeViewportSignature,
+                    viewport: responsiveViewportSignature(), applied: state.grid.__tmAppliedGeometry, geometry: sample.geometry });
+                const parkedHeightOnlyChange = decision === 'parked-height-only';
                 if (!nativeCarousel.isObservationCurrent(sourceObservation)) return;
                 if (!nativeCarousel.isObservationCurrent(sample.observed)) return;
-                if (sig === lastResponsiveSignature && geometryUnchanged && !logicalMappingStale) {
+                if (decision === 'unchanged' || parkedHeightOnlyChange) {
                     const previousScrollerHeight = state.layout.scrollerHeight;
                     display.applyLayout(state, measured);
                     realignActiveSource();
@@ -397,31 +370,21 @@ export function createResponsive(options) {
                 // settles (for example, after the Undo window) without changing responsive
                 // geometry. Treat that as content-state convergence, not a responsive relayout,
                 // so an active hover is not invalidated unnecessarily.
-                if (lastResponsiveReason === 'ResizeObserver') {
-                    const previousParts = String(lastResponsiveSignature || '').split('|');
-                    const currentParts = String(sig || '').split('|');
-                    const pageCountOnlyChanged =
-                        previousParts.length === 7 &&
-                        currentParts.length === 7 &&
-                        previousParts[1] !== currentParts[1] &&
-                        previousParts.every((part, index) => index === 1 || part === currentParts[index]);
-
-                    if (pageCountOnlyChanged && geometryUnchanged && !logicalMappingStale) {
-                        const previousSignature = lastResponsiveSignature;
-                        display.applyLayout(state, measured);
-                        lastResponsiveSignature = sig;
-                        realignActiveSource();
-                        counters.unchanged++;
-                        if (hover.hasInteraction()) counters.hoverPreserved++;
-                        log(tLog('responsiveRemeasurementNoShapeChange'), {
-                            reason: lastResponsiveReason,
-                            signature: sig,
-                            previousSignature,
-                            pageCountOnlyChange: true,
-                            layout: layoutSummary(measured)
-                        });
-                        return;
-                    }
+                if (decision === 'page-count-only') {
+                    const previousSignature = lastResponsiveSignature;
+                    display.applyLayout(state, measured);
+                    lastResponsiveSignature = sig;
+                    realignActiveSource();
+                    counters.unchanged++;
+                    if (hover.hasInteraction()) counters.hoverPreserved++;
+                    log(tLog('responsiveRemeasurementNoShapeChange'), {
+                        reason: lastResponsiveReason,
+                        signature: sig,
+                        previousSignature,
+                        pageCountOnlyChange: true,
+                        layout: layoutSummary(measured)
+                    });
+                    return;
                 }
 
                 const refreshPromise = refreshResponsiveLayout(sessionToken);

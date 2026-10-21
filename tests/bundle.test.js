@@ -400,7 +400,8 @@ test('production graph rejects another native adapter importing private list pro
 });
 
 for (const [relative, name] of [['my-list-initialization/attempt.js', 'createInitializationAttempt'],
-    ['my-list-display/adoption.js', 'createSourceAdoption']]) {
+    ['my-list-display/adoption.js', 'createSourceAdoption'],
+    ['my-list-interaction/preparation.js', 'createHoverPreparation'], ['responsive/policy.js', 'layoutSignature']]) {
     test(`production graph rejects app callers importing private ${relative}`, async () => {
         const { checkUserscript } = await import('../scripts/check.mjs');
         await fixture(async directory => {

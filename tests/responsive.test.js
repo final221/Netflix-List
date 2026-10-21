@@ -73,6 +73,21 @@ async function completeRefresh(f) {
     await stable;
 }
 
+test('responsive classification captures position and presentation in one native observation', async () => {
+    const readings = [];
+    const f = transactionFixture({ observeSource(_parent, options) {
+        readings.push(options);
+        return { position: { pages: 4 }, presentation: { hidden: false, parked: false }, needsRemapping: false };
+    } });
+    readings.length = 0;
+    f.owner.requestCheck(0, 'ResizeObserver');
+    await f.scheduler.advance();
+    assert.deepEqual(readings, [{ position: true, presentation: true }]);
+    assert.equal(f.owner.diagnostics().resize.unchanged, 1);
+    f.owner.dispose();
+    assert.equal(f.scheduler.timers.size, 0);
+});
+
 test('responsive page publication preserves mode-specific page bounds, clone eligibility and changed counts', async () => {
     for (const mode of ['indicator', 'logical']) {
         const hints = new Map(), writes = [], copies = [], logs = [];
