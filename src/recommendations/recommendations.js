@@ -6,6 +6,7 @@ import { createRowBuffer } from './row-buffer.js';
 import { createSavedChoicesPanel, SAVED_CHOICES_PANEL_STYLES } from './saved-choices-panel.js';
 import { createNavigationDiagnostics } from './navigation.js';
 import { createLifecycleDiagnostics } from './lifecycle.js';
+import { createRecommendationPerformance } from './performance.js';
 import { createBrowsingViewing, createKnowledge } from '../viewing/viewing.js';
 
 export function createRecommendations({ environment, context, userscript, tUi, viewingData, knowledge, log = () => {}, warn = () => {} }) {
@@ -49,6 +50,10 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     const allowed = () => location.origin === 'https://www.netflix.com' &&
         (location.pathname === '/browse' || (location.pathname.startsWith('/browse/') && location.pathname !== '/browse/my-list') || location.pathname === '/search');
     const readProfile = () => { const value = context.activeProfile(); return typeof value === 'string' && value ? value : null; };
+    const timing = createRecommendationPerformance({ environment, now,
+        admitted: () => active && allowed() && Boolean(profile) && readProfile() === profile,
+        readWork: () => ({ scans: work.scans, scannedCards: work.scannedCards, viewingPasses: work.viewingPasses,
+            paintCalls: work.paintCalls, controlWrites: work.controlWrites }) });
     const viewing = createBrowsingViewing({ environment, context, userscript, knowledge, data: viewingData,
         isCurrent: () => active && allowed() && Boolean(profile) && readProfile() === profile, onChange: viewingChanged, log, warn });
     const savedPanel = createSavedChoicesPanel({ document, tUi,
@@ -67,6 +72,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     function observeViewing() { work.viewingPasses++; return viewing.observe([...entries.values()]); }
     function viewingChanged(ids = null, replenish = true) {
         if (!active || !profile || readProfile() !== profile || !allowed()) return;
+        const task = timing.begin('viewing');
         try {
             const latest = read(profile);
             choices = latest.choices;
@@ -77,6 +83,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             if (replenish) observeViewing();
             savedPanel.paint(); updateRefill(); nativeRows.refresh();
         } catch (error) { warn('Browsing viewing migration unavailable', { reason: error.message }); }
+        finally { task.finish({ selected: ids?.length ?? null, entries: entries.size }); }
     }
     const refill = createRefill({ environment, dom, readChoices: visibleChoices,
         admitted: () => active && allowed() && Boolean(profile) && !failed && readProfile() === profile,
@@ -96,6 +103,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     }
     function updateRefill(dismissal = null) { refill.update(new Set([...entries.values()].map(entry => entry.row)), dismissal); }
     function scroll() {
+        timing.sample('scroll');
         if (scrollTimer !== null) return;
         scrollTimer = environment.setTimeout(() => { scrollTimer = null; if (active && allowed()) { navigation.movement('scroll'); } }, 250);
     }
@@ -109,6 +117,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         if (next === profile) return;
         nativeRows.dispose(); refill.dispose(); navigation.dispose(); viewing.dispose();
         lifecycle.reset();
+        timing.reset();
         for (const entry of [...entries.values()]) release(entry);
         profile = next; choices = {}; failed = false; viewingDisabled = null; epoch++; pending.clear(); queued = false;
         inventories.clear(); inventoryLimit = false;
@@ -157,7 +166,8 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         savedPanel.mount();
         if (!profile) return;
         if (previous !== profile) roots = [document];
-        const scanStart = now(); work.scans++; work.scanRoots += roots.length;
+        const scanStart = now(), task = timing.begin('scan');
+        work.scans++; work.scanRoots += roots.length;
         const changedRows = new Set(), candidates = new Set();
         let disconnected = 0, invalidated = 0;
         for (const root of roots) {
@@ -180,12 +190,14 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             }
         }
         for (const row of inventories.keys()) if (!row.isConnected) inventories.delete(row);
+        task.phase('validation');
         const discovered = roots.flatMap(root => dom.scan(root)), byRow = new Map(); work.scannedCards += discovered.length;
         for (const value of discovered) {
             if (!byRow.has(value.row)) byRow.set(value.row, []);
             byRow.get(value.row).push(value);
         }
         for (const [row, items] of byRow) retain(row, items);
+        task.phase('discovery');
         for (const value of discovered) {
             decorate(value);
             if (value.title) try { knowledge.remember(value.id, { name: value.title }); } catch (_) {}
@@ -194,7 +206,9 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         }
         const rows = new Set([...entries.values()].map(entry => entry.row));
         lifecycle.population(rows, entries.size, { roots: roots.length, disconnected, invalidated });
+        task.phase('decoration');
         if (observeViewing()) viewingChanged(discovered.map(value => value.id), false);
+        task.phase('viewing');
         for (const value of discovered) { const entry = entries.get(value.host); if (entry) paint(entry); }
         if (!style) {
             style = document.createElement('style');
@@ -203,8 +217,13 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             document.head.appendChild(style);
             environment.window?.addEventListener('resize', resize);
         }
+        task.phase('paint');
         for (const row of new Set([...byRow.keys(), ...changedRows])) dom.updateArrows(row);
-        updateRefill(); nativeRows.observe(rows); nativeRows.refresh(); work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
+        task.phase('arrows');
+        updateRefill(); nativeRows.observe(rows); nativeRows.refresh();
+        task.phase('nativeRows');
+        work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
+        task.finish({ roots: roots.length, fullDocument: roots.includes(document), entries: entries.size, discovered: discovered.length });
     }
     function schedule(root) {
         // Feature-owned host identity remains available even when native markup is invalid.
@@ -219,6 +238,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         });
     }
     function click(event) {
+        timing.sample('click');
         navigation.click(event.target, { detailed: event.shiftKey === true }); navigation.movement('click', event.target, { x: event.clientX, y: event.clientY });
         const target = dom.navigationTarget(event.target); if (target) nativeRows.interact(target.row);
         const button = event.target?.closest?.('button'), input = buttons.get(button) || savedPanel.inputFor(button);
@@ -257,6 +277,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             warn('Recommendation choice could not be saved', { reason: error.message }); }
     }
     function pointer(event) {
+        timing.sample('hover');
         navigation.movement('hover', event.target, { x: event.clientX, y: event.clientY });
         if (!allowed()) { check(); return; }
         if (readProfile() !== profile) { scan(); observe(); return; }
@@ -306,11 +327,12 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         document.removeEventListener('click', click, true); document.removeEventListener('pointerover', pointer, true);
         savedPanel.dispose(); inventories.clear(); inventoryLimit = false;
         lifecycle.reset();
+        timing.reset();
         for (const entry of [...entries.values()]) release(entry);
         style?.remove(); style = null; profile = null; choices = {}; failed = false; viewingDisabled = null;
         selectedIds = selectedHides = null; selectedChoices = {};
     }
     return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(visibleChoices()).length,
         storageFailed: failed, work: { ...work }, layout: dom.layoutDiagnostics(), nativeRows: nativeRows.diagnostics(), inventory: { rows: inventories.size, limitReached: inventoryLimit }, refill: refill.diagnostics(), viewing: viewing.diagnostics(),
-        rows: rowDiagnostics(), navigation: navigation.snapshot(), rowLifecycle: lifecycle.snapshot() }) });
+        rows: rowDiagnostics(), navigation: navigation.snapshot(), rowLifecycle: lifecycle.snapshot(), workTiming: timing.snapshot() }) });
 }

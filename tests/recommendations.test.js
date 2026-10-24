@@ -44,6 +44,27 @@ function nextControl(b, row, click, hawkins = true) {
     button.setAttribute('data-uia', hawkins ? 'carousel-hawkins-right-button' : 'carousel-right-button'); button.click = click;
     return button;
 }
+
+test('recommendation timing measures actual scan phases and retires activity probes on profile and route changes', async () => {
+    const b = setup(), a = mount(b);
+    const describe = a.card.getAttribute.bind(a.card);
+    let clock = 0;
+    b.context.performance.now = () => clock++;
+    a.card.getAttribute = name => { clock += 2; return describe(name); };
+    b.feature.check(); await b.scheduler.flush();
+    const timing = b.feature.diagnostics().workTiming;
+    assert.ok(timing.tasks > 0); assert.ok(timing.worstTask.elapsedMs > 16);
+    assert.ok(Object.hasOwn(timing.worstTask.phases, 'validation'));
+    assert.ok(Object.hasOwn(timing.worstTask.phases, 'nativeRows'));
+    clock += 100; await b.scheduler.frame();
+    assert.ok(b.feature.diagnostics().workTiming.worstFrame.work.scans > 0);
+    const old = [...b.scheduler.frames.values()][0];
+    b.select('B'); b.feature.check(); await b.scheduler.flush();
+    const before = b.feature.diagnostics().workTiming.callbacks; old();
+    assert.equal(b.feature.diagnostics().workTiming.callbacks, before);
+    b.location.pathname = '/watch/1'; b.feature.check();
+    assert.equal(b.scheduler.frames.size, 0);
+});
 test('dismissals preserve the page while native flow pulls mounted later cards into view', async () => {
     for (const label of ['Mark watched', 'Mark caught up', 'Hide suggestion']) {
         const b = setup({ viewingData: seriesMetadata() }), a = mount(b), second = mount(b, '2'), buffered = mount(b, '3'), other = mount(b, '4');

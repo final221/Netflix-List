@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.19
+// @version      1.11.20
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -7140,7 +7140,7 @@ ${CARD_ACTION_STYLES}
     if (!value || typeof value !== "object") return value;
     if (Number.isSafeInteger(value.count) && (Array.isArray(value.samples) && Number.isSafeInteger(value.omitted) || Array.isArray(value.values) && value.values.every((item) => Number.isSafeInteger(item?.count) && Object.hasOwn(item, "value")))) return value;
     if (depth >= 16) return { omitted: true, kind: Array.isArray(value) ? "array" : "object", reason: "diagnostic-depth-limit" };
-    if (key === "rowLifecycle") return value;
+    if (key === "rowLifecycle" || key === "workTiming") return value;
     if (key === "navigation" && Array.isArray(value.recent)) return navigationSummary(value, depth);
     if (Array.isArray(value)) return arraySummary(value, depth, key);
     return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, summarizeSignals(item, depth + 1, name)]));
@@ -24128,6 +24128,146 @@ ${CARD_ACTION_STYLES}
     });
   }
 
+  // src/recommendations/performance.js
+  function createRecommendationPerformance({ environment, now, admitted, readWork }) {
+    const { document } = environment;
+    let owner = null, listening = false, generation = 0;
+    let tasks = 0, slowTasks = 0, droppedTasks = 0, worstTask = null;
+    let callbacks = 0, over50 = 0, over100 = 0, droppedFrames = 0, worstFrame = null, hidden = 0, failures = 0;
+    const recentTasks = [], recentFrames = [];
+    const copy = (value) => JSON.parse(JSON.stringify(value));
+    const round = (value) => Math.round(Math.max(0, value) * 10) / 10;
+    const supported = typeof environment.requestAnimationFrame === "function" && typeof environment.cancelAnimationFrame === "function";
+    function stop() {
+      const previous = owner;
+      owner = null;
+      try {
+        if (previous?.frame != null) environment.cancelAnimationFrame(previous.frame);
+      } catch (_) {
+        failures++;
+      }
+    }
+    function visibility() {
+      if (document.visibilityState === "hidden") {
+        hidden++;
+        stop();
+      }
+    }
+    function sample(reason) {
+      try {
+        sampleActivity(reason);
+      } catch (_) {
+        failures++;
+        stop();
+      }
+    }
+    function sampleActivity(reason) {
+      if (!supported || !admitted() || document.visibilityState === "hidden") return;
+      if (owner) {
+        if (owner.reason !== reason) owner.reason = "mixed";
+        return;
+      }
+      if (!listening) {
+        document.addEventListener("visibilitychange", visibility);
+        listening = true;
+      }
+      const current = { frame: null, at: now(), counters: readWork(), remaining: 2, reason };
+      owner = current;
+      function frame() {
+        if (owner !== current) return;
+        try {
+          current.frame = null;
+          if (!admitted() || document.visibilityState === "hidden") {
+            stop();
+            return;
+          }
+          const at = now(), waitMs = round(at - current.at), counters = readWork();
+          callbacks++;
+          if (waitMs > 50) {
+            over50++;
+            if (waitMs > 100) over100++;
+            const record = {
+              at: round(at),
+              waitMs,
+              reason: current.reason,
+              work: Object.fromEntries(Object.entries(counters).map(([key, value]) => [key, Math.max(0, value - current.counters[key])]))
+            };
+            recentFrames.push(record);
+            if (recentFrames.length > 6) {
+              recentFrames.shift();
+              droppedFrames++;
+            }
+            if (!worstFrame || waitMs > worstFrame.waitMs) worstFrame = record;
+          }
+          if (--current.remaining === 0) {
+            owner = null;
+            return;
+          }
+          current.at = at;
+          current.counters = counters;
+          current.frame = environment.requestAnimationFrame(frame);
+        } catch (_) {
+          failures++;
+          stop();
+        }
+      }
+      current.frame = environment.requestAnimationFrame(frame);
+    }
+    function begin(kind) {
+      const token = generation, start = now(), phases = {};
+      let previous = start;
+      sample(kind);
+      return {
+        phase(name) {
+          const at = now();
+          phases[name] = round(at - previous);
+          previous = at;
+        },
+        finish(detail = {}) {
+          if (token !== generation) return;
+          tasks++;
+          const elapsedMs = round(now() - start);
+          if (elapsedMs < 16) return;
+          slowTasks++;
+          const record = { at: round(start), kind, elapsedMs, phases, ...detail };
+          recentTasks.push(record);
+          if (recentTasks.length > 6) {
+            recentTasks.shift();
+            droppedTasks++;
+          }
+          if (!worstTask || elapsedMs > worstTask.elapsedMs) worstTask = record;
+        }
+      };
+    }
+    function reset() {
+      generation++;
+      stop();
+      if (listening) document.removeEventListener("visibilitychange", visibility);
+      listening = false;
+      tasks = slowTasks = droppedTasks = callbacks = over50 = over100 = droppedFrames = hidden = failures = 0;
+      worstTask = worstFrame = null;
+      recentTasks.length = recentFrames.length = 0;
+    }
+    return Object.freeze({ begin, sample, reset, snapshot: () => copy({
+      scope: "work-duration-and-animation-callback-delay; correlation-only",
+      supported,
+      pending: owner !== null,
+      tasks,
+      slowTasks,
+      droppedTasks,
+      recentTasks,
+      worstTask,
+      callbacks,
+      over50,
+      over100,
+      hidden,
+      failures,
+      droppedFrames,
+      recentFrames,
+      worstFrame
+    }) });
+  }
+
   // src/recommendations/recommendations.js
   function createRecommendations({ environment, context, userscript, tUi, viewingData, knowledge, log = () => {
   }, warn = () => {
@@ -24198,6 +24338,18 @@ ${CARD_ACTION_STYLES}
       const value = context.activeProfile();
       return typeof value === "string" && value ? value : null;
     };
+    const timing = createRecommendationPerformance({
+      environment,
+      now,
+      admitted: () => active && allowed() && Boolean(profile) && readProfile() === profile,
+      readWork: () => ({
+        scans: work.scans,
+        scannedCards: work.scannedCards,
+        viewingPasses: work.viewingPasses,
+        paintCalls: work.paintCalls,
+        controlWrites: work.controlWrites
+      })
+    });
     const viewing = createBrowsingViewing({
       environment,
       context,
@@ -24238,6 +24390,7 @@ ${CARD_ACTION_STYLES}
     }
     function viewingChanged(ids = null, replenish = true) {
       if (!active || !profile || readProfile() !== profile || !allowed()) return;
+      const task = timing.begin("viewing");
       try {
         const latest = read(profile);
         choices = latest.choices;
@@ -24251,6 +24404,8 @@ ${CARD_ACTION_STYLES}
         nativeRows.refresh();
       } catch (error) {
         warn("Browsing viewing migration unavailable", { reason: error.message });
+      } finally {
+        task.finish({ selected: ids?.length ?? null, entries: entries.size });
       }
     }
     const refill = createRefill({
@@ -24291,6 +24446,7 @@ ${CARD_ACTION_STYLES}
       refill.update(new Set([...entries.values()].map((entry) => entry.row)), dismissal);
     }
     function scroll() {
+      timing.sample("scroll");
       if (scrollTimer !== null) return;
       scrollTimer = environment.setTimeout(() => {
         scrollTimer = null;
@@ -24316,6 +24472,7 @@ ${CARD_ACTION_STYLES}
       navigation.dispose();
       viewing.dispose();
       lifecycle.reset();
+      timing.reset();
       for (const entry of [...entries.values()]) release(entry);
       profile = next;
       choices = {};
@@ -24386,7 +24543,7 @@ ${CARD_ACTION_STYLES}
       savedPanel.mount();
       if (!profile) return;
       if (previous !== profile) roots = [document];
-      const scanStart = now();
+      const scanStart = now(), task = timing.begin("scan");
       work.scans++;
       work.scanRoots += roots.length;
       const changedRows = /* @__PURE__ */ new Set(), candidates = /* @__PURE__ */ new Set();
@@ -24412,6 +24569,7 @@ ${CARD_ACTION_STYLES}
         }
       }
       for (const row of inventories.keys()) if (!row.isConnected) inventories.delete(row);
+      task.phase("validation");
       const discovered = roots.flatMap((root) => dom.scan(root)), byRow = /* @__PURE__ */ new Map();
       work.scannedCards += discovered.length;
       for (const value of discovered) {
@@ -24419,6 +24577,7 @@ ${CARD_ACTION_STYLES}
         byRow.get(value.row).push(value);
       }
       for (const [row, items] of byRow) retain(row, items);
+      task.phase("discovery");
       for (const value of discovered) {
         decorate(value);
         if (value.title) try {
@@ -24430,7 +24589,9 @@ ${CARD_ACTION_STYLES}
       }
       const rows = new Set([...entries.values()].map((entry) => entry.row));
       lifecycle.population(rows, entries.size, { roots: roots.length, disconnected, invalidated });
+      task.phase("decoration");
       if (observeViewing()) viewingChanged(discovered.map((value) => value.id), false);
+      task.phase("viewing");
       for (const value of discovered) {
         const entry = entries.get(value.host);
         if (entry) paint(entry);
@@ -24442,11 +24603,15 @@ ${CARD_ACTION_STYLES}
         document.head.appendChild(style);
         environment.window?.addEventListener("resize", resize);
       }
+      task.phase("paint");
       for (const row of /* @__PURE__ */ new Set([...byRow.keys(), ...changedRows])) dom.updateArrows(row);
+      task.phase("arrows");
       updateRefill();
       nativeRows.observe(rows);
       nativeRows.refresh();
+      task.phase("nativeRows");
       work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
+      task.finish({ roots: roots.length, fullDocument: roots.includes(document), entries: entries.size, discovered: discovered.length });
     }
     function schedule(root) {
       for (let node = root; node; node = node.parentElement) if (entries.has(node)) {
@@ -24471,6 +24636,7 @@ ${CARD_ACTION_STYLES}
       });
     }
     function click(event) {
+      timing.sample("click");
       navigation.click(event.target, { detailed: event.shiftKey === true });
       navigation.movement("click", event.target, { x: event.clientX, y: event.clientY });
       const target = dom.navigationTarget(event.target);
@@ -24534,6 +24700,7 @@ ${CARD_ACTION_STYLES}
       }
     }
     function pointer(event) {
+      timing.sample("hover");
       navigation.movement("hover", event.target, { x: event.clientX, y: event.clientY });
       if (!allowed()) {
         check();
@@ -24624,6 +24791,7 @@ ${CARD_ACTION_STYLES}
       inventories.clear();
       inventoryLimit = false;
       lifecycle.reset();
+      timing.reset();
       for (const entry of [...entries.values()]) release(entry);
       style?.remove();
       style = null;
@@ -24647,7 +24815,8 @@ ${CARD_ACTION_STYLES}
       viewing: viewing.diagnostics(),
       rows: rowDiagnostics(),
       navigation: navigation.snapshot(),
-      rowLifecycle: lifecycle.snapshot()
+      rowLifecycle: lifecycle.snapshot(),
+      workTiming: timing.snapshot()
     }) });
   }
 
@@ -24894,7 +25063,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.19";
+  var SCRIPT_VERSION = "1.11.20";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

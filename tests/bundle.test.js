@@ -591,7 +591,10 @@ for (const viewingFailure of ['missing-context', 'http']) {
         assert.equal(b.window.listenerCount('resize'), viewingFailure === 'http' ? 1 : 0);
         // The retained native cards now belong to browsing recommendation controls.
         assert.equal(b.observers.filter(observer => observer.active).length, viewingFailure === 'http' ? 1 : 0);
-        assert.equal(b.scheduler.timers.size, 0); assert.equal(b.scheduler.frames.size, 0);
+        assert.equal(b.scheduler.timers.size, 0);
+        assert.ok(b.scheduler.frames.size <= 1, 'browsing owns at most one coalesced timing probe');
+        await b.scheduler.frame(); await b.scheduler.frame();
+        assert.equal(b.scheduler.frames.size, 0, 'the browsing probe stops after two callbacks');
         await b.navigate('/browse/my-list'); await settle(2); assertList();
         assert.notEqual(b.document.getElementById('tm-netflix-mylist-v15-grid'), firstRoot);
         assert.ok(cards().every(node => !firstCards.includes(node)));
@@ -600,7 +603,10 @@ for (const viewingFailure of ['missing-context', 'http']) {
         assert.equal(requests.filter(request => request.options?.method === 'POST').length, viewingFailure === 'http' ? 2 : 0,
             'one optional attempt per visit, no retry loop');
         await b.navigate('/browse');
-        assert.equal(b.scheduler.timers.size, 0); assert.equal(b.scheduler.frames.size, 0);
+        assert.equal(b.scheduler.timers.size, 0);
+        assert.ok(b.scheduler.frames.size <= 1, 'browsing owns at most one coalesced timing probe');
+        await b.scheduler.frame(); await b.scheduler.frame();
+        assert.equal(b.scheduler.frames.size, 0, 'the browsing probe stops after two callbacks');
     });
 }
 
@@ -654,7 +660,10 @@ test('generated populated viewing results update groups and independent filters 
     assert.equal(requests.length, requestsAtCompletion, 'filter changes reuse the completed result without requests');
     await b.navigate('/browse');
     assert.equal(root.isConnected, false);
-    assert.equal(b.scheduler.timers.size, 0); assert.equal(b.scheduler.frames.size, 0);
+    assert.equal(b.scheduler.timers.size, 0);
+    assert.ok(b.scheduler.frames.size <= 1, 'browsing owns at most one coalesced timing probe');
+    await b.scheduler.frame(); await b.scheduler.frame();
+    assert.equal(b.scheduler.frames.size, 0, 'the browsing probe stops after two callbacks');
 });
 
 test('generated CopyLogs can export again after a missing download completion without reloading Netflix', async () => {

@@ -6,6 +6,8 @@ import { createLogger } from '../src/diagnostics/logger.js';
 import { createReport } from '../src/diagnostics/report.js';
 import { summarizeSignals } from '../src/diagnostics/signals.js';
 import { createLifecycleDiagnostics } from '../src/recommendations/lifecycle.js';
+import { createRecommendationPerformance } from '../src/recommendations/performance.js';
+import { createBrowser } from './helpers/browser.js';
 import { createPopupInspection } from '../src/netflix/popup-inspection.js';
 
 function popupEnvironment() {
@@ -219,6 +221,18 @@ test('busy exports preserve exact projected facts within byte budgets, including
     }
     for (let index = 0; index < 40; index++) observe({ operation: 'restore', stage: 'returned', count: index });
     recommendations.rowLifecycle = lifecycle.snapshot();
+    const b = createBrowser(); let scans = 0;
+    const timing = createRecommendationPerformance({ environment: b.context, now: b.scheduler.performance.now,
+        admitted: () => true, readWork: () => ({ scans }) });
+    for (let index = 0; index < 9; index++) {
+        const task = timing.begin('scan'); scans++;
+        for (const phase of ['validation', 'discovery', 'decoration', 'viewing', 'paint', 'arrows', 'nativeRows']) {
+            await b.scheduler.advance(20); task.phase(phase);
+        }
+        task.finish({ roots: 1, fullDocument: false, entries: 807, discovered: 26 });
+        await b.scheduler.frame(50); await b.scheduler.frame(16);
+    }
+    recommendations.workTiming = timing.snapshot(); timing.reset();
     assert.equal(recommendations.rowLifecycle.incidents.length, 3);
     const current = reportFixture({ providers: { readRuntime: () => raw } });
     await current.report.copy();

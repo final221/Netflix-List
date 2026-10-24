@@ -110,7 +110,7 @@ export function summarizeSignals(value, depth = 0, key = '') {
         (Array.isArray(value.values) && value.values.every(item => Number.isSafeInteger(item?.count) && Object.hasOwn(item, 'value'))))) return value;
     if (depth >= 16) return { omitted: true, kind: Array.isArray(value) ? 'array' : 'object', reason: 'diagnostic-depth-limit' };
     // This owner already bounds copied scalar timelines and pins disruption context.
-    if (key === 'rowLifecycle') return value;
+    if (key === 'rowLifecycle' || key === 'workTiming') return value;
     if (key === 'navigation' && Array.isArray(value.recent)) return navigationSummary(value, depth);
     if (Array.isArray(value)) return arraySummary(value, depth, key);
     return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, summarizeSignals(item, depth + 1, name)]));
