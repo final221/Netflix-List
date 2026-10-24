@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.18
+// @version      1.11.19
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -7158,6 +7158,82 @@ ${CARD_ACTION_STYLES}
     return { count: rows.length, groups: [...groups.values()] };
   }
 
+  // src/diagnostics/encoding.js
+  var FORMAT = "shared-json-v1";
+  function utf8Bytes(text) {
+    let bytes = 0;
+    for (const char of text) {
+      const point = char.codePointAt(0);
+      bytes += point <= 127 ? 1 : point <= 2047 ? 2 : point <= 65535 ? 3 : 4;
+    }
+    return bytes;
+  }
+  function encodeDiagnostic(value) {
+    const plain = JSON.stringify(value), plainBytes = utf8Bytes(plain);
+    const reserved = value?.$diagnostic === FORMAT;
+    if (plainBytes < 4096 && !reserved) return { text: plain, plainBytes, bytes: plainBytes, packed: false };
+    const strings = /* @__PURE__ */ new Map(), schemas = [], values = [], schemaIds = /* @__PURE__ */ new Map(), valueIds = /* @__PURE__ */ new Map();
+    function count(item) {
+      if (typeof item === "string") strings.set(item, (strings.get(item) || 0) + 1);
+      else if (item && typeof item === "object") Object.values(item).forEach(count);
+    }
+    count(value);
+    function intern(item) {
+      const signature = JSON.stringify(item);
+      if (!valueIds.has(signature)) {
+        valueIds.set(signature, values.length);
+        values.push(item);
+      }
+      return [valueIds.get(signature)];
+    }
+    function encode(item) {
+      if (typeof item === "string") return item.length >= 4 && strings.get(item) > 1 ? intern(item) : item;
+      if (!item || typeof item !== "object") return item;
+      if (Array.isArray(item)) return intern([null, item.map(encode)]);
+      const keys = Object.keys(item), signature = JSON.stringify(keys);
+      if (!schemaIds.has(signature)) {
+        schemaIds.set(signature, schemas.length);
+        schemas.push(keys);
+      }
+      return intern([schemaIds.get(signature), keys.map((key) => encode(item[key]))]);
+    }
+    const root = encode(value), text = JSON.stringify({ $diagnostic: FORMAT, schemas, values, root });
+    const bytes = utf8Bytes(text);
+    return reserved || bytes < plainBytes * 0.9 ? { text, plainBytes, bytes, packed: true } : { text: plain, plainBytes, bytes: plainBytes, packed: false };
+  }
+  function decodeDiagnostic(value, { maxNodes = 1e6 } = {}) {
+    if (!value || value.$diagnostic !== FORMAT) return value;
+    const { schemas, values, root } = value;
+    if (!Array.isArray(schemas) || !Array.isArray(values)) throw Error("Invalid diagnostic tables");
+    let nodes = 0;
+    const active = /* @__PURE__ */ new Set();
+    function decode(item, depth = 0) {
+      if (++nodes > maxNodes || depth > 100) throw Error("Diagnostic expansion limit exceeded");
+      if (!Array.isArray(item)) {
+        if (item === null || ["string", "number", "boolean"].includes(typeof item)) return item;
+        throw Error("Invalid diagnostic value");
+      }
+      const index = item[0];
+      if (item.length !== 1 || !Number.isSafeInteger(index) || index < 0 || index >= values.length || active.has(index)) throw Error("Invalid diagnostic reference");
+      active.add(index);
+      try {
+        const stored = values[index];
+        if (typeof stored === "string") return stored;
+        if (!Array.isArray(stored) || stored.length !== 2 || !Array.isArray(stored[1])) throw Error("Invalid diagnostic record");
+        const [schema, members] = stored;
+        const decoded = members.map((member) => decode(member, depth + 1));
+        if (schema === null) return decoded;
+        const keys = schemas[schema];
+        if (!Number.isSafeInteger(schema) || schema < 0 || !Array.isArray(keys) || keys.length !== members.length || keys.some((key) => typeof key !== "string") || new Set(keys).size !== keys.length) throw Error("Invalid diagnostic schema");
+        return Object.fromEntries(keys.map((key, offset) => [key, decoded[offset]]));
+      } finally {
+        active.delete(index);
+      }
+    }
+    return decode(root);
+  }
+  var parseDiagnostic = (text) => decodeDiagnostic(JSON.parse(text));
+
   // src/diagnostics/report.js
   function createReport({
     logger,
@@ -7170,7 +7246,7 @@ ${CARD_ACTION_STYLES}
     readNativePopup,
     readHistory = () => []
   }) {
-    const TARGET_CHARACTERS = 2e4;
+    const TARGET_BYTES = 32 * 1024;
     function summarizeEntry(entry) {
       const offset = entry.indexOf(" {");
       if (offset < 0) return entry;
@@ -7236,7 +7312,13 @@ ${CARD_ACTION_STYLES}
     function buildInvestigationLogText() {
       const snapshot2 = readRuntime();
       const environment = readEnvironment();
-      const format = (value) => logger.formatValue(project(value));
+      const sizes = {};
+      const encode = (value, section) => {
+        const result = encodeDiagnostic(value);
+        sizes[section] = { plainBytes: result.plainBytes, bytes: result.bytes, packed: result.packed };
+        return result.text;
+      };
+      const format = (value, section) => encode(project(value), section);
       const lines = [
         "My List for Netflix Diagnostic Log",
         `version: ${version}`,
@@ -7251,31 +7333,34 @@ ${CARD_ACTION_STYLES}
         `viewport: ${environment.viewport}`,
         `devicePixelRatio: ${environment.devicePixelRatio}`,
         "exportMode: signals; grouped outcomes; navigation states with base:before encode field changes",
+        "jsonEncoding: plain JSON or shared-json-v1; [index] references values; [schema,members] records; null schema means array; schemas list object keys",
         `entries: ${logger.size()}`,
-        `snapshot: ${format(snapshot2)}`,
-        `previousPages: ${format(readHistory())}`,
-        `seriesViewing: ${logger.formatValue(seriesSummary(normalize(readSeriesViewing())))}`,
-        `thumbnailDiagnostics: ${format(readThumbnails())}`,
-        `nativePopupDiagnostics: ${format(readNativePopup())}`
+        `snapshot: ${format(snapshot2, "snapshot")}`,
+        `previousPages: ${format(readHistory(), "previousPages")}`,
+        `seriesViewing: ${encode(seriesSummary(normalize(readSeriesViewing())), "seriesViewing")}`,
+        `thumbnailDiagnostics: ${format(readThumbnails(), "thumbnailDiagnostics")}`,
+        `nativePopupDiagnostics: ${format(readNativePopup(), "nativePopupDiagnostics")}`,
+        `exportSizes: ${JSON.stringify(sizes)}`
       ];
       const entries = logger.entries();
       const groups = groupedEntries(entries);
-      const essentialSize = [...lines, "---", ...groups.map((group) => group.text)].join("\n").length + 400;
-      let budget = Math.max(0, TARGET_CHARACTERS - essentialSize), omittedExamples = 0;
+      const essentialSize = utf8Bytes([...lines, "---", ...groups.map((group) => group.text)].join("\n")) + 400;
+      let budget = Math.max(0, TARGET_BYTES - essentialSize), omittedExamples = 0;
       const eventLines = groups.map((group) => {
         const selected = [group.text];
         for (const example of group.examples) {
-          if (example.length + 1 <= budget) {
+          const bytes = utf8Bytes(example) + 1;
+          if (bytes <= budget) {
             selected.push(example);
-            budget -= example.length + 1;
+            budget -= bytes;
           } else omittedExamples++;
         }
         return selected.join("\n");
       });
-      const overflow = essentialSize > TARGET_CHARACTERS ? "; essential summaries exceed target" : "";
+      const overflow = essentialSize > TARGET_BYTES ? "; essential summaries exceed target" : "";
       return [
         ...lines,
-        "exportLimits: target " + TARGET_CHARACTERS + " characters" + overflow + "; omitted event groups: 0; omitted sections: 0; omitted extra examples: " + omittedExamples + "; repetitions and bulk payloads summarized; depth/string omissions explicit",
+        "exportLimits: target " + TARGET_BYTES + " UTF-8 bytes" + overflow + "; omitted event groups: 0; omitted sections: 0; omitted extra examples: " + omittedExamples + "; repetitions and bulk payloads summarized; depth/string omissions explicit",
         "---",
         ...eventLines
       ].join("\n") + "\n";
@@ -24809,7 +24894,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.18";
+  var SCRIPT_VERSION = "1.11.19";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

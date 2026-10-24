@@ -4,9 +4,11 @@ A Tampermonkey userscript that presents Netflix My List as a scrollable grid, us
 
 ## Installation
 
-Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released userscript](https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js) and install it. Visit `https://www.netflix.com/browse/my-list`. The existing menu command toggles the original Netflix list. The standalone bottom-right CopyLogs button saves diagnostic summaries with event outcomes and timing aggregates. Its size target limits extra examples; essential summaries can exceed it. Ordinary click and Shift-click produce the same information-dense report.
+Install [Tampermonkey](https://www.tampermonkey.net/), then open the [released userscript](https://raw.githubusercontent.com/final221/Netflix-List/refs/heads/main/dist/My%20List%20for%20Netflix.user.js) and install it. Visit `https://www.netflix.com/browse/my-list`. The existing menu command toggles the original Netflix list. The standalone bottom-right CopyLogs button saves diagnostic summaries with event outcomes and timing aggregates. Repeated JSON structure is encoded reversibly; its 32 KiB target limits extra examples, while essential summaries can exceed it explicitly. Ordinary click and Shift-click produce the same information-dense report.
 
 For copies installed from the former root location, open the released-userscript link once and confirm the update in Tampermonkey. The script name/namespace is unchanged; this release specifies the new URLs for future updates.
+
+Version **1.11.19** shares repeated JSON keys/values in CopyLogs without dropping any existing projected facts or chronology. A busy offline snapshot shrinks from 54,472 to 12,144 bytes (78%); the complete report is 13,485 bytes. Exact reconstruction and byte budgets guard busy sessions, pinned incidents and four retained pages. These measurements are fixture evidence, not a recompression of the removed 166 KB capture. Update/reload Netflix to use the new export format.
 
 Version **1.11.18** adds a bounded row-lifecycle timeline to CopyLogs for unexplained browse-feed replacement. It records population/page-identity changes and actual native-cache write/restoration stages on one clock, pinning before/after context around substantial loss or replacement. Old identities are fingerprinted; no new requests, polling or geometry surveys are added. All 802 offline tests pass. The cause of the supplied 1.11.17 disappearance remains unresolved; update, reload Netflix and save normal CopyLogs after it recurs.
 
@@ -73,6 +75,8 @@ For recommendation-loader investigation in 1.9.15: update and reload Netflix, cl
 
 Test released versions in Netflix on Windows. Save CopyLogs downloads under logs/ for review; [logs/knowledge.md](logs/knowledge.md) retains distilled observations. Follow [the log-review procedure](AGENTS.md#live-log-review-and-retention) for retention and issue extraction.
 
+Read export sizes with `node scripts/read-log.mjs "logs/<capture>.txt"`. Inspect selected facts with `node scripts/read-log.mjs "logs/<capture>.txt" --section snapshot --path recommendations.rowLifecycle.sequence`; output is bounded. For complete local analysis use `--expand "$env:TEMP\netflix-expanded.txt"`, which requires a new output filename; remove the temporary expansion after inspection. The reader accepts old plain JSON and the `shared-json-v1` envelope, reconstructing every projected field. `exportSizes` records original/plain and encoded UTF-8 section sizes. Compactness is a standing requirement: `npm test` verifies exact reconstruction, a 16 KiB routine fixture, a 32 KiB busy/incident fixture and a 64 KiB fixture with four distinct prior pages. Essential evidence is never dropped to satisfy these guards.
+
 ## Repository layout
 
 Paths are relative to the repository root.
@@ -91,7 +95,7 @@ logs/
   knowledge.md                      Bounded, version-specific live observations/provenance
   <version>-<timestamp>-<id>.txt     Temporary captures; removed after completed review
 src/                                Authored runtime modules
-scripts/                            Build/verification and offline recommendation experiment
+scripts/                            Build/verification, bounded log reader, offline recommendation experiment
 tests/                              Offline behavior, bundle and dependency checks
 .github/workflows/check.yml         Windows CI
 package.json / package-lock.json    Release version and locked tooling

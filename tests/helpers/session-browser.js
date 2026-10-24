@@ -1,3 +1,4 @@
+import { parseDiagnostic } from '../../src/diagnostics/encoding.js';
 import { storageClient } from './knowledge.js';
 import { resolveObjectURL } from 'node:buffer';
 import assert from 'node:assert/strict';
@@ -122,7 +123,7 @@ export function sessionBrowser({ count = 6, columns = 6, viewing = false, logica
         async snapshot() {
             const link = b.document.getElementById('tm-netflix-copylogs');
             link.dispatchEvent({ type: 'click', currentTarget: link, preventDefault() {} }); await b.scheduler.flush();
-            return JSON.parse(savedReports.at(-1).split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+            return parseDiagnostic(savedReports.at(-1).split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
         },
         dispose() { app.dispose(); assert.equal(b.scheduler.timers.size, 0); assert.equal(b.scheduler.frames.size, 0); }
     };

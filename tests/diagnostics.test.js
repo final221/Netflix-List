@@ -1,9 +1,11 @@
+import { parseDiagnostic } from '../src/diagnostics/encoding.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Element } from './helpers/dom.js';
 import { createLogger } from '../src/diagnostics/logger.js';
 import { createReport } from '../src/diagnostics/report.js';
 import { summarizeSignals } from '../src/diagnostics/signals.js';
+import { createLifecycleDiagnostics } from '../src/recommendations/lifecycle.js';
 import { createPopupInspection } from '../src/netflix/popup-inspection.js';
 
 function popupEnvironment() {
@@ -175,12 +177,13 @@ test('signal reports compress realistic repeated browsing history without losing
         reason: 'buffer-ready', elapsedMs: index === 73 ? 900 : 10 });
     e.logger.warn('Native failure', { code: 'NATIVE_SOURCE_REPLACED', stage: 'mapping', error: { message: 'changed', stack: 'at native' } });
     await e.report.copy(); const text = e.copied();
-    assert.ok(text.length < 65000, `Unified export is ${text.length} characters`);
+    assert.ok(Buffer.byteLength(text) < 16 * 1024, `Unified export is ${Buffer.byteLength(text)} bytes`);
     assert.match(text, /occurrences: 120/);
     assert.match(text, /"elapsedMs":900/); assert.match(text, /NATIVE_SOURCE_REPLACED/);
-    assert.match(text, /server-exhausted/); assert.match(text, /"matches":true/);
-    assert.match(text, /native-row-34/); // A later empty row is a distinct diagnostic condition.
-    const snapshot = JSON.parse(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+    const snapshot = parseDiagnostic(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+    assert.match(JSON.stringify(snapshot), /server-exhausted/); assert.match(JSON.stringify(snapshot), /"matches":true/);
+    assert.match(JSON.stringify(snapshot), /native-row-34/); // A later empty row remains distinguishable.
+    assert.deepEqual(snapshot, JSON.parse(JSON.stringify(e.report.summarize(raw))));
     const recent = snapshot.recommendations.navigation.recent;
     assert.deepEqual(recent.map(record => record.sequence), Array.from({ length: 12 }, (_, i) => i + 1));
     assert.equal(recent[11].samples.at(-1).firstObservedCount, 0);
@@ -192,9 +195,55 @@ test('signal reports compress realistic repeated browsing history without losing
     const history = [{ feature: 'Browsing', facts: retained }];
     const next = reportFixture({ providers: { readHistory: () => history } });
     await next.report.copy();
-    const saved = JSON.parse(next.copied().split('\n').find(line => line.startsWith('previousPages: ')).slice(15));
+    const saved = parseDiagnostic(next.copied().split('\n').find(line => line.startsWith('previousPages: ')).slice(15));
     assert.deepEqual(saved, JSON.parse(JSON.stringify(history)), 'a route change must preserve projected navigation and omission counts');
     t.diagnostic(`report ${text.length} characters; retained facts ${JSON.stringify(retained).length}; old report 165210`);
+});
+
+test('busy exports preserve exact projected facts within byte budgets, including pinned incidents and four prior pages', async t => {
+    const clone = value => JSON.parse(JSON.stringify(value));
+    const raw = browsingHistoryFixture(), recommendations = raw.recommendations;
+    const original = recommendations.navigation.recent;
+    recommendations.navigation.recent = Array.from({ length: 20 }, (_, index) => ({
+        ...clone(original[index % original.length]), sequence: index + 1 }));
+    let at = 0;
+    const lifecycle = createLifecycleDiagnostics({ now: () => ++at,
+        readIdentity: row => ({ rowKey: row.key, pageKey: row.page }) });
+    const rows = Array.from({ length: 44 }, (_, index) => ({ key: 'row-' + index, page: 'page-0' }));
+    lifecycle.population(rows, 807);
+    const observe = lifecycle.cacheObserver(rows[0]);
+    for (let incident = 0; incident < 3; incident++) {
+        for (let index = 0; index < 12; index++) observe({ operation: 'publish', stage: 'verified', added: index });
+        rows.forEach(row => { row.page = 'page-' + (incident + 1); row.key += '-new'; });
+        lifecycle.population(rows, 807, { cleanupReason: 'native-replacement' });
+    }
+    for (let index = 0; index < 40; index++) observe({ operation: 'restore', stage: 'returned', count: index });
+    recommendations.rowLifecycle = lifecycle.snapshot();
+    assert.equal(recommendations.rowLifecycle.incidents.length, 3);
+    const current = reportFixture({ providers: { readRuntime: () => raw } });
+    await current.report.copy();
+    const projected = clone(current.report.summarize(raw));
+    const line = current.copied().split('\n').find(line => line.startsWith('snapshot: ')).slice(10);
+    assert.deepEqual(parseDiagnostic(line), projected);
+    const plainBytes = Buffer.byteLength(JSON.stringify(projected)), bytes = Buffer.byteLength(current.copied());
+    assert.ok(bytes < 32 * 1024, `Busy export ${bytes} exceeds 32 KiB`);
+    const sizes = JSON.parse(current.copied().split('\n').find(line => line.startsWith('exportSizes: ')).slice(13));
+    assert.equal(sizes.snapshot.plainBytes, plainBytes); assert.equal(sizes.snapshot.bytes, Buffer.byteLength(line));
+    assert.equal(sizes.snapshot.packed, true);
+    const history = Array.from({ length: 4 }, (_, index) => ({ feature: 'Browsing', capturedAt: index,
+        facts: { ...JSON.parse(JSON.stringify(projected), (key, value) => {
+            if (key === 'at' && typeof value === 'number') return value + index * 100000;
+            if (key === 'rowId') return 'visit-' + index + '-' + value;
+            if (typeof value === 'string' && /^page-/.test(value)) return 'visit-' + index + '-' + value;
+            return value;
+        }), page: index } }));
+    const retained = reportFixture({ providers: { readRuntime: () => raw, readHistory: () => history } });
+    await retained.report.copy();
+    const saved = retained.copied().split('\n').find(line => line.startsWith('previousPages: ')).slice(15);
+    assert.deepEqual(parseDiagnostic(saved), clone(retained.report.summarize(history)));
+    const historyBytes = Buffer.byteLength(retained.copied());
+    assert.ok(historyBytes < 64 * 1024, `Four-page export ${historyBytes} exceeds 64 KiB`);
+    t.diagnostic(`busy snapshot ${plainBytes} plain bytes -> ${Buffer.byteLength(line)} packed; report ${bytes}; four-page report ${historyBytes}`);
 });
 
 test('signal projection preserves short ID lists and groups repeated warnings by failure signature', async () => {
@@ -207,7 +256,7 @@ test('signal projection preserves short ID lists and groups repeated warnings by
     e.logger.warn('Native failed', { code: 'STALE', stage: 'mapping', error: { name: 'TypeError', message: 'source replaced' } });
     const entries = e.logger.entries();
     await e.report.copy();
-    const text = e.copied(), snapshot = JSON.parse(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+    const text = e.copied(), snapshot = parseDiagnostic(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
     assert.deepEqual(snapshot.five.samples, ['1','2','3','4','5']); assert.equal(snapshot.five.omitted, 0);
     assert.equal(snapshot.six.omitted, 0); assert.deepEqual(snapshot.rect, [1,2,3,4]);
     assert.deepEqual(e.report.summarize(snapshot), snapshot, 'retained frequency tables remain stable');
@@ -243,7 +292,7 @@ test('signal reports summarize large collections and keep repeated-event counts 
     e.logger.warn('Source replaced', { code: 'NATIVE_SOURCE_REPLACED', videoId: '123' });
     await e.report.copy();
     const compact = e.copied();
-    const summary = JSON.parse(compact.split('\n').find(line => line.startsWith('seriesViewing: ')).slice(15));
+    const summary = parseDiagnostic(compact.split('\n').find(line => line.startsWith('seriesViewing: ')).slice(15));
     assert.equal(summary.count, 500);
     assert.deepEqual(summary.groups.map(group => [group.status, group.count, group.samples.length]), [['complete', 300, 1], ['unknown', 200, 1]]);
     assert.match(compact, /occurrences: 1000/);
@@ -292,7 +341,7 @@ test('compact aggregation retains intermediate outcomes, nested timing totals an
     assert.match(text, /"outcome":"mismatch"/);
     assert.match(text, /"phase":"retry"/);
     assert.match(text, /distinct failure/);
-    const snapshot = JSON.parse(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+    const snapshot = parseDiagnostic(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
     assert.deepEqual(snapshot.readings, [500, 500, 500, 10]);
     const summary = JSON.parse(text.split('\n').find(line => line.includes('eventSummary: ') && line.includes('"occurrences":2')).split('eventSummary: ')[1]);
     assert.deepEqual(summary.numbers.elapsedMs, { count: 2, min: 10, max: 20, total: 30 });
@@ -307,7 +356,7 @@ test('compact reports distinguish manual and automatic results and retain long d
     e.logger.log('Decision', { reason });
     await e.report.copy();
     assert.ok(e.copied().includes(reason));
-    const summary = JSON.parse(e.copied().split('\n').find(line => line.startsWith('seriesViewing: ')).slice(15));
+    const summary = parseDiagnostic(e.copied().split('\n').find(line => line.startsWith('seriesViewing: ')).slice(15));
     assert.equal(summary.groups.length, 2);
     assert.equal(summary.groups[0].samples[0].manualChoice, 'complete');
     assert.equal(summary.groups[1].samples[0].automaticStatus, 'complete');
@@ -471,7 +520,7 @@ test('signal logs preserve navigation order and geometry while summarizing movem
         readEnvironment: () => ({}), writeText: value => { text = value; }, readRuntime: () => ({ recommendations: { navigation } }),
         readSeriesViewing: () => [], readThumbnails: () => ({}), readNativePopup: () => ({}) });
     await report.copy();
-    const snapshot = JSON.parse(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+    const snapshot = parseDiagnostic(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
     const saved = snapshot.recommendations.navigation;
     assert.deepEqual(saved.recent, navigation.recent);
     assert.equal(saved.movements.count, 12);
@@ -488,6 +537,6 @@ test('normal exports retain all four bounded native loading outcomes and project
     const report = createReport({ logger, version: 'test', readEnvironment: () => ({}), writeText: value => { text = value; },
         readRuntime: () => ({ recommendations: { nativeRows } }), readSeriesViewing: () => [], readThumbnails: () => ({}), readNativePopup: () => ({}) });
     await report.copy();
-    const snapshot = JSON.parse(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+    const snapshot = parseDiagnostic(text.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
     assert.deepEqual(snapshot.recommendations.nativeRows, nativeRows);
 });

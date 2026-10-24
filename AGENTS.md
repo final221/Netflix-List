@@ -35,6 +35,7 @@ Instructions for assistants changing this repository. [README.md](README.md) pro
 - Review docs/context.md during each task. Add or change only durable knowledge. Ending without any changes requires a clear explanation why no context was added.
 - Keep optional implementation within the step the user selected. A request to explain or assess possible follow-up work is discussion, not approval to implement it.
 - Review the diff before finishing and run `git diff --check` for whitespace problems.
+- Diagnostic changes must preserve existing projected facts and chronology while keeping exports compact. Run exact round-trip and UTF-8 byte-budget regression tests for busy navigation, pinned incidents and retained pages; report measured sizes. Remove repeated representation before considering further sampling. Do not silently raise size guards or discard essential evidence to pass them. Use `scripts/read-log.mjs` for encoded captures; its default summary and explicit section/path selection keep inspection bounded.
 - After a repository-changing run, commit and push the changes to `origin`. The user has standing authorization for this in `docs/context.md`; do not ask for per-commit confirmation. Follow any separate sandbox or automated-review gate presented by the app.
 
 ## Live-log review and retention

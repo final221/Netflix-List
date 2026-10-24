@@ -1,3 +1,4 @@
+import { parseDiagnostic } from '../src/diagnostics/encoding.js';
 import { createSessionScope } from '../src/app/session-scope.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -36,7 +37,8 @@ test('large browsing navigation retains useful page facts after route retirement
     const button = b.document.getElementById('tm-netflix-copylogs');
     button.dispatchEvent({ type: 'click', preventDefault() {} }); await b.scheduler.flush();
     assert.equal(saved.length, 1); assert.equal(b.requests.length, requests);
-    const history = JSON.parse(saved[0].split('\n').find(line => line.startsWith('previousPages: ')).slice(15));
+    assert.ok(Buffer.byteLength(saved[0]) < 32 * 1024, `Real application export ${Buffer.byteLength(saved[0])} exceeds 32 KiB`);
+    const history = parseDiagnostic(saved[0].split('\n').find(line => line.startsWith('previousPages: ')).slice(15));
     const page = history.find(item => item.feature === 'Browsing');
     assert.equal(page.mode, 'signals'); assert.equal(page.facts.unavailable, undefined);
     assert.equal(page.facts.navigation.recent.length, 20);

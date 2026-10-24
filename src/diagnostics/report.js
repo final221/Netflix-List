@@ -1,10 +1,11 @@
 import { diagnosticFacts, numericFacts, summarizeSignals, seriesSummary } from './signals.js';
+import { encodeDiagnostic, utf8Bytes } from './encoding.js';
 
 // Providers return the existing serialized summaries; no feature state is retained here.
 export function createReport({ logger, version, readEnvironment, writeText,
     readRuntime, readSeriesViewing, readThumbnails, readNativePopup, readHistory = () => [] }) {
     // A target for optional examples, never a ceiling on diagnostic decisions.
-    const TARGET_CHARACTERS = 20000;
+    const TARGET_BYTES = 32 * 1024;
     function summarizeEntry(entry) {
         const offset = entry.indexOf(' {');
         if (offset < 0) return entry;
@@ -47,7 +48,13 @@ export function createReport({ logger, version, readEnvironment, writeText,
     function buildInvestigationLogText() {
         const snapshot = readRuntime();
         const environment = readEnvironment();
-        const format = value => logger.formatValue(project(value));
+        const sizes = {};
+        const encode = (value, section) => {
+            const result = encodeDiagnostic(value);
+            sizes[section] = { plainBytes: result.plainBytes, bytes: result.bytes, packed: result.packed };
+            return result.text;
+        };
+        const format = (value, section) => encode(project(value), section);
         const lines = [
             'My List for Netflix Diagnostic Log',
             `version: ${version}`,
@@ -62,29 +69,32 @@ export function createReport({ logger, version, readEnvironment, writeText,
             `viewport: ${environment.viewport}`,
             `devicePixelRatio: ${environment.devicePixelRatio}`,
             'exportMode: signals; grouped outcomes; navigation states with base:before encode field changes',
+            'jsonEncoding: plain JSON or shared-json-v1; [index] references values; [schema,members] records; null schema means array; schemas list object keys',
             `entries: ${logger.size()}`,
-            `snapshot: ${format(snapshot)}`,
-            `previousPages: ${format(readHistory())}`,
-            `seriesViewing: ${logger.formatValue(seriesSummary(normalize(readSeriesViewing())))}`,
-            `thumbnailDiagnostics: ${format(readThumbnails())}`,
-            `nativePopupDiagnostics: ${format(readNativePopup())}`
+            `snapshot: ${format(snapshot, 'snapshot')}`,
+            `previousPages: ${format(readHistory(), 'previousPages')}`,
+            `seriesViewing: ${encode(seriesSummary(normalize(readSeriesViewing())), 'seriesViewing')}`,
+            `thumbnailDiagnostics: ${format(readThumbnails(), 'thumbnailDiagnostics')}`,
+            `nativePopupDiagnostics: ${format(readNativePopup(), 'nativePopupDiagnostics')}`,
+            `exportSizes: ${JSON.stringify(sizes)}`
         ];
         const entries = logger.entries();
         const groups = groupedEntries(entries);
         // Essential summaries always fit by allowing explicit target overflow.
         // Do not let a bulky snapshot or early routine events hide a later decision.
-        const essentialSize = [...lines, '---', ...groups.map(group => group.text)].join('\n').length + 400;
-        let budget = Math.max(0, TARGET_CHARACTERS - essentialSize), omittedExamples = 0;
+        const essentialSize = utf8Bytes([...lines, '---', ...groups.map(group => group.text)].join('\n')) + 400;
+        let budget = Math.max(0, TARGET_BYTES - essentialSize), omittedExamples = 0;
         const eventLines = groups.map(group => {
             const selected = [group.text];
             for (const example of group.examples) {
-                if (example.length + 1 <= budget) { selected.push(example); budget -= example.length + 1; }
+                const bytes = utf8Bytes(example) + 1;
+                if (bytes <= budget) { selected.push(example); budget -= bytes; }
                 else omittedExamples++;
             }
             return selected.join('\n');
         });
-        const overflow = essentialSize > TARGET_CHARACTERS ? '; essential summaries exceed target' : '';
-        return [...lines, 'exportLimits: target ' + TARGET_CHARACTERS + ' characters' + overflow +
+        const overflow = essentialSize > TARGET_BYTES ? '; essential summaries exceed target' : '';
+        return [...lines, 'exportLimits: target ' + TARGET_BYTES + ' UTF-8 bytes' + overflow +
             '; omitted event groups: 0; omitted sections: 0; omitted extra examples: ' + omittedExamples +
             '; repetitions and bulk payloads summarized; depth/string omissions explicit',
             '---', ...eventLines].join('\n') + '\n';

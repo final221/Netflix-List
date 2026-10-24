@@ -1,3 +1,4 @@
+import { parseDiagnostic } from '../src/diagnostics/encoding.js';
 import { knowledgeSnapshot, fact } from './helpers/knowledge.js';
 import { resolveObjectURL } from 'node:buffer';
 import { viewingVideo, atom, reference } from './helpers/fixtures.js';
@@ -226,7 +227,7 @@ test('one universal CopyLogs button survives Netflix routes and exports the reti
     }
     button.dispatchEvent({ type: 'click', shiftKey: true, preventDefault() {} }); await b.scheduler.flush();
     assert.equal(saved.length, 1); assert.equal(b.clipboard.length, 0);
-    const history = JSON.parse(saved[0].split('\n').find(line => line.startsWith('previousPages: ')).slice(15));
+    const history = parseDiagnostic(saved[0].split('\n').find(line => line.startsWith('previousPages: ')).slice(15));
     const myList = history.find(page => page.feature === 'My List'); assert.ok(myList);
     assert.equal(myList.url, 'https://www.netflix.com/browse/my-list');
     assert.ok(myList.facts.runtime); assert.equal(myList.facts.seriesViewing.count, 0);
@@ -685,7 +686,7 @@ test('generated signal homepage export includes native arrow before and after fa
     b.document.dispatchEvent({ type: 'click', target: arrow }); mount('2');
     const button = b.document.getElementById('tm-netflix-copylogs'); button.dispatchEvent({ type: 'click', shiftKey: true, preventDefault() {} }); await b.scheduler.flush();
     const report = saved[0]; assert.match(report, /Native recommendation arrow clicked/);
-    const snapshot = JSON.parse(report.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
+    const snapshot = parseDiagnostic(report.split('\n').find(line => line.startsWith('snapshot: ')).slice(10));
     const facts = snapshot.recommendations.navigation.recent[0];
     assert.equal(facts.before.label, 'Arrow test row'); assert.equal(facts.before.mounted, 1); assert.equal(facts.afterAtExport.changes.mounted, 2);
     assert.deepEqual(facts.addedIdSample, ['2']); assert.equal(snapshot.recommendations.refill.checks, 0);
