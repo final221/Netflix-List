@@ -57,3 +57,28 @@ test('hidden/profile/route retirement rejects late callbacks and does not carry 
     assert.equal(broken.snapshot().tasks, 1); assert.equal(broken.snapshot().failures, 1);
     broken.reset();
 });
+
+test('a failed callback continuation retires its probe and later activity can sample again', async () => {
+    const b = createBrowser();
+    const request = b.context.requestAnimationFrame;
+    let scheduled = 0;
+    b.context.requestAnimationFrame = callback => {
+        if (++scheduled === 2) throw Error('continuation unavailable');
+        return request(callback);
+    };
+    const timing = createRecommendationPerformance({ environment: b.context, now: b.scheduler.performance.now,
+        admitted: () => true, readWork: () => ({ scans: 0 }) });
+    timing.sample('click');
+    await b.scheduler.frame(60);
+    assert.equal(timing.snapshot().callbacks, 1);
+    assert.equal(timing.snapshot().failures, 1);
+    assert.equal(timing.snapshot().pending, false);
+    assert.equal(b.scheduler.frames.size, 0);
+    timing.sample('scroll');
+    await b.scheduler.frame(16);
+    await b.scheduler.frame(16);
+    assert.equal(timing.snapshot().callbacks, 3);
+    assert.equal(timing.snapshot().failures, 1);
+    assert.equal(timing.snapshot().pending, false);
+    timing.reset();
+});

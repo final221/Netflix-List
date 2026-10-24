@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.20
+// @version      1.11.21
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -7164,70 +7164,109 @@ ${CARD_ACTION_STYLES}
     let bytes = 0;
     for (const char of text) {
       const point = char.codePointAt(0);
-      bytes += point <= 127 ? 1 : point <= 2047 ? 2 : point <= 65535 ? 3 : 4;
+      if (point <= 127) bytes += 1;
+      else if (point <= 2047) bytes += 2;
+      else if (point <= 65535) bytes += 3;
+      else bytes += 4;
     }
     return bytes;
   }
   function encodeDiagnostic(value) {
-    const plain = JSON.stringify(value), plainBytes = utf8Bytes(plain);
+    const plain = JSON.stringify(value);
+    const plainBytes = utf8Bytes(plain);
     const reserved = value?.$diagnostic === FORMAT;
-    if (plainBytes < 4096 && !reserved) return { text: plain, plainBytes, bytes: plainBytes, packed: false };
-    const strings = /* @__PURE__ */ new Map(), schemas = [], values = [], schemaIds = /* @__PURE__ */ new Map(), valueIds = /* @__PURE__ */ new Map();
-    function count(item) {
-      if (typeof item === "string") strings.set(item, (strings.get(item) || 0) + 1);
-      else if (item && typeof item === "object") Object.values(item).forEach(count);
+    if (plainBytes < 4096 && !reserved) {
+      return { text: plain, plainBytes, bytes: plainBytes, packed: false };
     }
-    count(value);
+    const stringOccurrences = /* @__PURE__ */ new Map();
+    const schemaTable = [], valueTable = [];
+    const schemaIndices = /* @__PURE__ */ new Map(), valueIndices = /* @__PURE__ */ new Map();
+    function countStrings(item) {
+      if (typeof item === "string") {
+        stringOccurrences.set(item, (stringOccurrences.get(item) || 0) + 1);
+      } else if (item && typeof item === "object") {
+        Object.values(item).forEach(countStrings);
+      }
+    }
+    countStrings(value);
     function intern(item) {
       const signature = JSON.stringify(item);
-      if (!valueIds.has(signature)) {
-        valueIds.set(signature, values.length);
-        values.push(item);
+      if (!valueIndices.has(signature)) {
+        valueIndices.set(signature, valueTable.length);
+        valueTable.push(item);
       }
-      return [valueIds.get(signature)];
+      return [valueIndices.get(signature)];
     }
     function encode(item) {
-      if (typeof item === "string") return item.length >= 4 && strings.get(item) > 1 ? intern(item) : item;
+      if (typeof item === "string") {
+        return item.length >= 4 && stringOccurrences.get(item) > 1 ? intern(item) : item;
+      }
       if (!item || typeof item !== "object") return item;
       if (Array.isArray(item)) return intern([null, item.map(encode)]);
-      const keys = Object.keys(item), signature = JSON.stringify(keys);
-      if (!schemaIds.has(signature)) {
-        schemaIds.set(signature, schemas.length);
-        schemas.push(keys);
+      const keys = Object.keys(item);
+      const signature = JSON.stringify(keys);
+      if (!schemaIndices.has(signature)) {
+        schemaIndices.set(signature, schemaTable.length);
+        schemaTable.push(keys);
       }
-      return intern([schemaIds.get(signature), keys.map((key) => encode(item[key]))]);
+      return intern([schemaIndices.get(signature), keys.map((key) => encode(item[key]))]);
     }
-    const root = encode(value), text = JSON.stringify({ $diagnostic: FORMAT, schemas, values, root });
+    const root = encode(value);
+    const text = JSON.stringify({ $diagnostic: FORMAT, schemas: schemaTable, values: valueTable, root });
     const bytes = utf8Bytes(text);
-    return reserved || bytes < plainBytes * 0.9 ? { text, plainBytes, bytes, packed: true } : { text: plain, plainBytes, bytes: plainBytes, packed: false };
+    if (reserved || bytes < plainBytes * 0.9) return { text, plainBytes, bytes, packed: true };
+    return { text: plain, plainBytes, bytes: plainBytes, packed: false };
   }
   function decodeDiagnostic(value, { maxNodes = 1e6 } = {}) {
     if (!value || value.$diagnostic !== FORMAT) return value;
-    const { schemas, values, root } = value;
-    if (!Array.isArray(schemas) || !Array.isArray(values)) throw Error("Invalid diagnostic tables");
-    let nodes = 0;
-    const active = /* @__PURE__ */ new Set();
+    const { schemas: schemaTable, values: valueTable, root } = value;
+    if (!Array.isArray(schemaTable) || !Array.isArray(valueTable)) {
+      throw Error("Invalid diagnostic tables");
+    }
+    let expandedNodes = 0;
+    const expanding = /* @__PURE__ */ new Set();
+    function referenceIndex(reference) {
+      const index = reference[0];
+      if (reference.length !== 1 || !Number.isSafeInteger(index)) {
+        throw Error("Invalid diagnostic reference");
+      }
+      if (index < 0 || index >= valueTable.length || expanding.has(index)) {
+        throw Error("Invalid diagnostic reference");
+      }
+      return index;
+    }
+    function objectKeys(schemaIndex, memberCount) {
+      const keys = schemaTable[schemaIndex];
+      if (!Number.isSafeInteger(schemaIndex) || schemaIndex < 0 || !Array.isArray(keys)) {
+        throw Error("Invalid diagnostic schema");
+      }
+      if (keys.length !== memberCount || keys.some((key) => typeof key !== "string")) {
+        throw Error("Invalid diagnostic schema");
+      }
+      if (new Set(keys).size !== keys.length) throw Error("Invalid diagnostic schema");
+      return keys;
+    }
     function decode(item, depth = 0) {
-      if (++nodes > maxNodes || depth > 100) throw Error("Diagnostic expansion limit exceeded");
+      if (++expandedNodes > maxNodes || depth > 100) throw Error("Diagnostic expansion limit exceeded");
       if (!Array.isArray(item)) {
         if (item === null || ["string", "number", "boolean"].includes(typeof item)) return item;
         throw Error("Invalid diagnostic value");
       }
-      const index = item[0];
-      if (item.length !== 1 || !Number.isSafeInteger(index) || index < 0 || index >= values.length || active.has(index)) throw Error("Invalid diagnostic reference");
-      active.add(index);
+      const index = referenceIndex(item);
+      expanding.add(index);
       try {
-        const stored = values[index];
+        const stored = valueTable[index];
         if (typeof stored === "string") return stored;
-        if (!Array.isArray(stored) || stored.length !== 2 || !Array.isArray(stored[1])) throw Error("Invalid diagnostic record");
-        const [schema, members] = stored;
+        if (!Array.isArray(stored) || stored.length !== 2 || !Array.isArray(stored[1])) {
+          throw Error("Invalid diagnostic record");
+        }
+        const [schemaIndex, members] = stored;
         const decoded = members.map((member) => decode(member, depth + 1));
-        if (schema === null) return decoded;
-        const keys = schemas[schema];
-        if (!Number.isSafeInteger(schema) || schema < 0 || !Array.isArray(keys) || keys.length !== members.length || keys.some((key) => typeof key !== "string") || new Set(keys).size !== keys.length) throw Error("Invalid diagnostic schema");
+        if (schemaIndex === null) return decoded;
+        const keys = objectKeys(schemaIndex, members.length);
         return Object.fromEntries(keys.map((key, offset) => [key, decoded[offset]]));
       } finally {
-        active.delete(index);
+        expanding.delete(index);
       }
     }
     return decode(root);
@@ -24131,90 +24170,103 @@ ${CARD_ACTION_STYLES}
   // src/recommendations/performance.js
   function createRecommendationPerformance({ environment, now, admitted, readWork }) {
     const { document } = environment;
-    let owner = null, listening = false, generation = 0;
+    let pendingProbe = null;
+    let listening = false, taskGeneration = 0;
     let tasks = 0, slowTasks = 0, droppedTasks = 0, worstTask = null;
     let callbacks = 0, over50 = 0, over100 = 0, droppedFrames = 0, worstFrame = null, hidden = 0, failures = 0;
     const recentTasks = [], recentFrames = [];
     const copy = (value) => JSON.parse(JSON.stringify(value));
     const round = (value) => Math.round(Math.max(0, value) * 10) / 10;
     const supported = typeof environment.requestAnimationFrame === "function" && typeof environment.cancelAnimationFrame === "function";
-    function stop() {
-      const previous = owner;
-      owner = null;
+    function stopProbe() {
+      const previous = pendingProbe;
+      pendingProbe = null;
       try {
         if (previous?.frame != null) environment.cancelAnimationFrame(previous.frame);
       } catch (_) {
         failures++;
       }
     }
-    function visibility() {
-      if (document.visibilityState === "hidden") {
-        hidden++;
-        stop();
+    function visibilityChanged() {
+      if (document.visibilityState !== "hidden") return;
+      hidden++;
+      stopProbe();
+    }
+    function recordCallbackDelay(probe, at, counters) {
+      const waitMs = round(at - probe.at);
+      callbacks++;
+      if (!(waitMs > 50)) return;
+      over50++;
+      if (waitMs > 100) over100++;
+      const work = Object.fromEntries(Object.entries(counters).map(([key, value]) => [key, Math.max(0, value - probe.counters[key])]));
+      const record = { at: round(at), waitMs, reason: probe.reason, work };
+      recentFrames.push(record);
+      if (recentFrames.length > 6) {
+        recentFrames.shift();
+        droppedFrames++;
       }
+      if (!worstFrame || waitMs > worstFrame.waitMs) worstFrame = record;
+    }
+    function recordTask(start, kind, phases, detail) {
+      tasks++;
+      const elapsedMs = round(now() - start);
+      if (elapsedMs < 16) return;
+      slowTasks++;
+      const record = { at: round(start), kind, elapsedMs, phases, ...detail };
+      recentTasks.push(record);
+      if (recentTasks.length > 6) {
+        recentTasks.shift();
+        droppedTasks++;
+      }
+      if (!worstTask || elapsedMs > worstTask.elapsedMs) worstTask = record;
     }
     function sample(reason) {
       try {
         sampleActivity(reason);
       } catch (_) {
         failures++;
-        stop();
+        stopProbe();
       }
     }
     function sampleActivity(reason) {
       if (!supported || !admitted() || document.visibilityState === "hidden") return;
-      if (owner) {
-        if (owner.reason !== reason) owner.reason = "mixed";
+      if (pendingProbe) {
+        if (pendingProbe.reason !== reason) pendingProbe.reason = "mixed";
         return;
       }
       if (!listening) {
-        document.addEventListener("visibilitychange", visibility);
+        document.addEventListener("visibilitychange", visibilityChanged);
         listening = true;
       }
-      const current = { frame: null, at: now(), counters: readWork(), remaining: 2, reason };
-      owner = current;
-      function frame() {
-        if (owner !== current) return;
+      const probe = { frame: null, at: now(), counters: readWork(), remaining: 2, reason };
+      pendingProbe = probe;
+      function onFrame() {
+        if (pendingProbe !== probe) return;
         try {
-          current.frame = null;
+          probe.frame = null;
           if (!admitted() || document.visibilityState === "hidden") {
-            stop();
+            stopProbe();
             return;
           }
-          const at = now(), waitMs = round(at - current.at), counters = readWork();
-          callbacks++;
-          if (waitMs > 50) {
-            over50++;
-            if (waitMs > 100) over100++;
-            const record = {
-              at: round(at),
-              waitMs,
-              reason: current.reason,
-              work: Object.fromEntries(Object.entries(counters).map(([key, value]) => [key, Math.max(0, value - current.counters[key])]))
-            };
-            recentFrames.push(record);
-            if (recentFrames.length > 6) {
-              recentFrames.shift();
-              droppedFrames++;
-            }
-            if (!worstFrame || waitMs > worstFrame.waitMs) worstFrame = record;
-          }
-          if (--current.remaining === 0) {
-            owner = null;
+          const at = now(), counters = readWork();
+          recordCallbackDelay(probe, at, counters);
+          if (--probe.remaining === 0) {
+            pendingProbe = null;
             return;
           }
-          current.at = at;
-          current.counters = counters;
-          current.frame = environment.requestAnimationFrame(frame);
+          probe.at = at;
+          probe.counters = counters;
+          probe.frame = environment.requestAnimationFrame(onFrame);
         } catch (_) {
           failures++;
-          stop();
+          stopProbe();
         }
       }
-      current.frame = environment.requestAnimationFrame(frame);
+      probe.frame = environment.requestAnimationFrame(onFrame);
     }
     function begin(kind) {
-      const token = generation, start = now(), phases = {};
+      const generation = taskGeneration;
+      const start = now(), phases = {};
       let previous = start;
       sample(kind);
       return {
@@ -24224,34 +24276,34 @@ ${CARD_ACTION_STYLES}
           previous = at;
         },
         finish(detail = {}) {
-          if (token !== generation) return;
-          tasks++;
-          const elapsedMs = round(now() - start);
-          if (elapsedMs < 16) return;
-          slowTasks++;
-          const record = { at: round(start), kind, elapsedMs, phases, ...detail };
-          recentTasks.push(record);
-          if (recentTasks.length > 6) {
-            recentTasks.shift();
-            droppedTasks++;
-          }
-          if (!worstTask || elapsedMs > worstTask.elapsedMs) worstTask = record;
+          if (generation !== taskGeneration) return;
+          recordTask(start, kind, phases, detail);
         }
       };
     }
     function reset() {
-      generation++;
-      stop();
-      if (listening) document.removeEventListener("visibilitychange", visibility);
+      taskGeneration++;
+      stopProbe();
+      if (listening) document.removeEventListener("visibilitychange", visibilityChanged);
       listening = false;
-      tasks = slowTasks = droppedTasks = callbacks = over50 = over100 = droppedFrames = hidden = failures = 0;
-      worstTask = worstFrame = null;
-      recentTasks.length = recentFrames.length = 0;
+      tasks = 0;
+      slowTasks = 0;
+      droppedTasks = 0;
+      worstTask = null;
+      recentTasks.length = 0;
+      callbacks = 0;
+      over50 = 0;
+      over100 = 0;
+      droppedFrames = 0;
+      hidden = 0;
+      failures = 0;
+      worstFrame = null;
+      recentFrames.length = 0;
     }
     return Object.freeze({ begin, sample, reset, snapshot: () => copy({
       scope: "work-duration-and-animation-callback-delay; correlation-only",
       supported,
-      pending: owner !== null,
+      pending: pendingProbe !== null,
       tasks,
       slowTasks,
       droppedTasks,
@@ -25063,7 +25115,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.20";
+  var SCRIPT_VERSION = "1.11.21";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

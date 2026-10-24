@@ -18,11 +18,15 @@ This document owns the implemented architecture and continuing ownership, depend
 
 `diagnostics/report.js` retains semantic selection and event grouping. Its private pure `diagnostics/encoding.js` encodes already projected JSON using shared object-key schemas, repeated values and explicit references (`shared-json-v1`), choosing ordinary JSON when packing is not worthwhile. Decoding reconstructs every projected value, key, array order and lifecycle timestamp; it performs no further sampling. In-memory snapshots and retained page facts keep their ordinary object contract. Encoding runs only during explicit export, without observers, requests, timers or persistent dictionaries. Section accounting uses UTF-8 bytes. The report target limits optional examples; essential evidence remains present with explicit overflow.
 
+Encoding and decoding stay together as one format owner. Local names distinguish wire schemas/value tables from reconstructed values; explicit validation branches preserve the existing rejection order, expansion budgets and ordinary-JSON compatibility. Readability changes must retain exact encoded bytes for the same projected input, not merely decoded equivalence.
+
 `scripts/read-log.mjs` shares the decoder, accepts old literal sections, defaults to bounded size summaries and expands only explicitly selected facts or an exclusively created temporary file. The decoder validates references and bounds expansion without evaluating input. Export changes must pass exact round-trip and representative byte-budget regressions, including busy navigation, pinned incidents and four retained pages. A budget failure calls for removing duplication; dropping facts or increasing the guard requires an explicit, documented evidence tradeoff.
 
 ### Recommendation work timing
 
 Private `recommendations/performance.js` owns bounded copied slow-task records and animation-callback probes; recommendation reconciliation supplies phase checkpoints and existing work-counter reads. Scan, viewing and native-cache owners keep all behavior and admission authority. Explicit browsing activity or reconciliation requests at most two consecutive callbacks, coalescing concurrent requests without resetting the outstanding delay baseline. Probes stop after those callbacks; no continuous animation loop, geometry survey, network observer or request is added. Hidden-document notification and profile/route/disposal reset cancel the exact pending probe and reject late callbacks. Slow tasks and delayed callbacks retain six recent records plus their worst record, explicit eviction counts and monotonic timestamps. Callback gaps correlate with work-counter deltas and are not presented as proof of script causality, CPU time or actual rendered frames. `workTiming` is already bounded upstream and survives projection/re-export intact.
+
+The sampler keeps callback ownership, recording and reset in one module, with named local operations separating measurement from retention. Probe identity rejects late callbacks; task generation independently rejects late task completion. Neither guard substitutes for the other. Reformatting does not change snapshot fields, retention order, thresholds, error isolation or scheduling.
 
 ### Private ownership boundaries
 
@@ -72,6 +76,8 @@ Each feature's main file is its public capability; neighboring files are private
 | DOM names | Literal names with no runtime feature imports |
 
 These are the directions enforced by scripts/check.mjs. A declared Netflix entry does not grant access to another capability's private files. No production area imports app coordination. List/viewing changes reach grid through session wiring. Grid owns the My List displayed structure; recommendations owns its browsing-card controls, saved-choices panel and collapse leases. Native popup attaches or restores only its owned interaction properties on borrowed cards. Netflix DOM, React, protocol, endpoint and geometry interpretation stays in adapters. Passive diagnostics cannot authorize publication or trigger recovery, reject an otherwise admitted interaction, or change classification.
+
+Private-directory checks are development-time import constraints applied by `npm run check` and CI. For example, session coordinates through `my-list-display.js`; only display and its private siblings can import `my-list-display/source.js`. This keeps accepted source facts and resource admission with their owner, so another caller cannot independently reconstruct that protocol. The installed userscript is one bundle: folder names do not introduce browser permissions or a JavaScript access-control mechanism. Import checks preserve intended dependency direction; behavioral tests must separately establish correct publication, failure isolation and cleanup.
 
 ### Values and publication
 

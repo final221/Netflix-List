@@ -48,7 +48,7 @@ test('generated browsing series captures real Falcor coverage and expires shared
     assert.equal(paths.length, 6); await b.navigate('/watch/123'); assert.equal(b.scheduler.timers.size, 0);
 });
 
-test('generated release preserves the current browsing page after dismissal', async () => {
+test('generated dismissal preserves paging and supports playback cleanup, reentry and Undo', async () => {
     const b = browser(), stored = new Map(); let moves = 0;
     b.window.netflix.reactContext = { models: { userInfo: { data: { userGuid: 'A' } } } };
     b.context.GM_getValue = (key, fallback) => stored.get(key) ?? fallback;
@@ -68,34 +68,20 @@ test('generated release preserves the current browsing page after dismissal', as
     assert.equal(moves, 0); assert.equal(card.getAttribute('href'), '/title/123'); assert.equal(slot.style.getPropertyValue('display'), 'none');
     assert.equal(remaining.style.getPropertyValue('display'), ''); assert.equal(remainingCard.getAttribute('href'), '/title/789');
     assert.equal(fact(stored, 'A', '123', 'hidden')?.hidden, true); assert.equal(b.requests.length, 0);
-    await b.navigate('/watch/456'); assert.equal(b.scheduler.timers.size, 0); assert.equal(b.window.listenerCount('scroll'), 0);
-});
-
-test('generated browsing release saves a dismissal and restores native visibility before playback', async () => {
-    const b = browser(), stored = new Map();
-    b.window.netflix.reactContext = { models: { userInfo: { data: { userGuid: 'A' } } } };
-    b.context.GM_getValue = (key, fallback) => stored.get(key) ?? fallback;
-    b.context.GM_setValue = (key, value) => stored.set(key, value);
-    const row = b.document.body.appendChild(new Element('section'));
-    const slot = row.appendChild(new Element('div')); slot.setAttribute('data-virtual-slot', '0');
-    const card = slot.appendChild(new Element('a')); card.setAttribute('data-uia', 'standard-card'); card.setAttribute('href', '/title/123');
-    b.start();
-    const input = () => slot.querySelectorAll('button').find(button => button.textContent === 'Hide suggestion');
-    assert.ok(input());
-    b.document.dispatchEvent({ type: 'click', target: input(), preventDefault() {}, stopImmediatePropagation() {} });
-    assert.equal(card.style.visibility, 'hidden'); assert.ok(stored.size >= 1); assert.equal(b.requests.length, 0);
-    assert.equal(slot.style.getPropertyValue('display'), 'none');
-    await b.navigate('/watch/123'); assert.equal(card.style.visibility, undefined); assert.equal(slot.querySelectorAll('button').length, 0);
+    assert.equal(card.style.visibility, 'hidden'); assert.ok(stored.size >= 1);
+    await b.navigate('/watch/456');
+    assert.equal(b.scheduler.timers.size, 0); assert.equal(b.window.listenerCount('scroll'), 0);
+    assert.equal(card.style.visibility, undefined); assert.equal(slot.querySelectorAll('button').length, 0);
     assert.equal(slot.style.getPropertyValue('display'), '');
     await b.navigate('/browse'); assert.equal(card.style.visibility, 'hidden');
     const manager = b.document.querySelector('.tm-rec-manager');
     b.document.dispatchEvent({ type: 'click', target: manager.querySelector('button'), preventDefault() {}, stopImmediatePropagation() {} });
     const undo = manager.querySelector('.tm-rec-saved-row').querySelector('button');
     b.document.dispatchEvent({ type: 'click', target: undo, preventDefault() {}, stopImmediatePropagation() {} });
-    assert.equal(card.style.visibility, undefined); assert.equal(Object.keys(knowledgeSnapshot(stored, 'A').recommendations.choices).length, 0);
+    assert.equal(card.style.visibility, undefined);
+    assert.equal(Object.keys(knowledgeSnapshot(stored, 'A').recommendations.choices).length, 0);
     assert.equal(slot.style.getPropertyValue('display'), '');
 });
-
 
 test('generated userscript starts exactly once and hooks the existing page environment', async () => {
     const b = browser();
