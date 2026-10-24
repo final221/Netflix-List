@@ -12,7 +12,7 @@ export function createBrowser({ pathname = '/browse', grants = true, visualViewp
     const logs = [], menus = new Map(), observers = [], requests = [], clipboard = [];
     class MutationObserver {
         constructor(callback) { this.callback = callback; this.active = false; observers.push(this); }
-        observe() { this.active = true; }
+        observe(target, options) { this.active = true; this.target = target; this.options = options; }
         disconnect() { this.active = false; }
     }
     const history = {};

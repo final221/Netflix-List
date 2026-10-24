@@ -20,10 +20,6 @@ export function sessionBrowser({ count = 6, columns = 6, viewing = false, logica
     let getReply = () => ({ ok: true, status: 200, url: b.location.href,
         text: async () => pageBootstrapHtml(ids.length, ids[0]), json: async () => carouselPayload(ids.length, ids) });
     const rect = (left, w) => ({ left, top: 0, right: left + w, bottom: 60, width: w, height: 60 });
-    const baseObserver = b.context.MutationObserver;
-    b.context.MutationObserver = class extends baseObserver {
-        observe(target, options) { this.target = target; this.options = options; super.observe(); }
-    };
     class NativeEvent { constructor(type, facts) { this.type = type; Object.assign(this, facts); } }
     const api = storageClient(storage);
     Object.assign(b.context, { Node: Element, URLSearchParams, PointerEvent: NativeEvent, MouseEvent: NativeEvent,

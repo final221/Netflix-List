@@ -120,8 +120,14 @@ export function createRecommendationDom(environment) {
             return true;
         } catch (_) { return false; }
     }
+    function isRelevantMutation(record) {
+        if (record.type !== 'attributes' || record.attributeName !== 'class') return true;
+        const previous = new Set((record.oldValue || '').split(/\s+/));
+        return ['title-card', 'slider-item', 'slider', 'lolomoRow', 'continueWatching', 'handleNext', 'handlePrev']
+            .some(name => previous.has(name) !== record.target.classList.contains(name));
+    }
     function describe(card) {
-        if (!card?.isConnected) return null;
+        if (!card?.isConnected || !card.matches(selector)) return null;
         const host = card.closest('[data-virtual-slot], .slider-item') || card.parentElement;
         const row = card.closest('section, .lolomoRow');
         if (!host || !row || row.querySelector('[data-uia="progress-card"], .continueWatching') ||
@@ -155,7 +161,7 @@ export function createRecommendationDom(environment) {
         let hidden = false, originalVisibility = '', visibilityPriority = '', originalPointer = '', pointerPriority = '';
         let restoreDisplay = null;
         const originalAria = card.getAttribute('aria-hidden'), originalTab = card.getAttribute('tabindex');
-        function current() { const value = describe(card); return value?.host === host && value.id === id && value.scroller === scroller; }
+        function current() { const value = describe(card); return value?.host === host && value.id === id && value.scroller === scroller && value.row === row; }
         function restore() {
             if (!hidden) return;
             restoreDisplay?.(); restoreDisplay = null;
@@ -257,6 +263,6 @@ export function createRecommendationDom(environment) {
                 loading: loadingFacts(row, sample.firstCard) };
         } catch (_) { return null; }
     }
-    return Object.freeze({ scan, lease, updateArrows, batch, layoutDiagnostics: () => ({ ...layoutWork }), describe, refillState, loadingFacts, navigationTarget, rowDiagnostics,
+    return Object.freeze({ scan, lease, updateArrows, batch, isRelevantMutation, layoutDiagnostics: () => ({ ...layoutWork }), describe, refillState, loadingFacts, navigationTarget, rowDiagnostics,
         navigationStart, navigationRequests, observeRequests, queryBinding: (card, ids) => findRecommendationQuery(queryRoots(card), ids), queryPage: card => findRecommendationQuery(queryRoots(card), [], { paginationOnly: true }).pagination });
 }

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.16
+// @version      1.11.17
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -22931,8 +22931,13 @@ ${CARD_ACTION_STYLES}
         return false;
       }
     }
+    function isRelevantMutation(record) {
+      if (record.type !== "attributes" || record.attributeName !== "class") return true;
+      const previous = new Set((record.oldValue || "").split(/\s+/));
+      return ["title-card", "slider-item", "slider", "lolomoRow", "continueWatching", "handleNext", "handlePrev"].some((name) => previous.has(name) !== record.target.classList.contains(name));
+    }
     function describe(card) {
-      if (!card?.isConnected) return null;
+      if (!card?.isConnected || !card.matches(selector)) return null;
       const host = card.closest("[data-virtual-slot], .slider-item") || card.parentElement;
       const row = card.closest("section, .lolomoRow");
       if (!host || !row || row.querySelector('[data-uia="progress-card"], .continueWatching') || row.classList.contains("continueWatching")) return null;
@@ -22972,7 +22977,7 @@ ${CARD_ACTION_STYLES}
       const originalAria = card.getAttribute("aria-hidden"), originalTab = card.getAttribute("tabindex");
       function current() {
         const value = describe(card);
-        return value?.host === host && value.id === id && value.scroller === scroller;
+        return value?.host === host && value.id === id && value.scroller === scroller && value.row === row;
       }
       function restore() {
         if (!hidden) return;
@@ -23134,6 +23139,7 @@ ${CARD_ACTION_STYLES}
       lease,
       updateArrows,
       batch,
+      isRelevantMutation,
       layoutDiagnostics: () => ({ ...layoutWork }),
       describe,
       refillState,
@@ -23908,7 +23914,7 @@ ${CARD_ACTION_STYLES}
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
     let scrollTimer = null;
     const pending = /* @__PURE__ */ new Set();
-    const work = { scans: 0, scanRoots: 0, leaseChecks: 0, viewingPasses: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
+    const work = { scans: 0, scanRoots: 0, connectionChecks: 0, leaseChecks: 0, viewingPasses: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
     const now = () => environment.performance?.now() ?? Date.now();
     function property(node, name, value) {
       if (node[name] !== value) {
@@ -24107,7 +24113,7 @@ ${CARD_ACTION_STYLES}
       return dom.batch(() => scanRows(roots));
     }
     function scanRows(roots) {
-      if (!roots.length || !active || !allowed()) return;
+      if (!active || !allowed()) return;
       const previous = profile;
       syncProfile();
       savedPanel.mount();
@@ -24116,14 +24122,21 @@ ${CARD_ACTION_STYLES}
       const scanStart = now();
       work.scans++;
       work.scanRoots += roots.length;
-      const changedRows = /* @__PURE__ */ new Set();
+      const changedRows = /* @__PURE__ */ new Set(), candidates = /* @__PURE__ */ new Set();
       for (const root of roots) {
         const affected = root.closest?.("section, .lolomoRow");
         if (affected) changedRows.add(affected);
+        for (const controls of root.querySelectorAll(".tm-rec-controls")) {
+          const entry = entries.get(controls.parentElement);
+          if (entry?.controls === controls) candidates.add(entry);
+        }
       }
       for (const entry of [...entries.values()]) {
-        work.leaseChecks++;
-        if (!entry.lease.current()) {
+        work.connectionChecks++;
+        const detached = !entry.card.isConnected || !entry.host.isConnected || !entry.row.isConnected || !entry.scroller.isConnected || entry.controls.parentElement !== entry.host;
+        if (!detached && !candidates.has(entry)) continue;
+        if (!detached) work.leaseChecks++;
+        if (detached || !entry.lease.current()) {
           changedRows.add(entry.row);
           release(entry);
         }
@@ -24164,6 +24177,10 @@ ${CARD_ACTION_STYLES}
       work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
     }
     function schedule(root) {
+      for (let node = root; node; node = node.parentElement) if (entries.has(node)) {
+        root = node;
+        break;
+      }
       pending.add(root);
       if (pending.size > 24) {
         pending.clear();
@@ -24272,14 +24289,22 @@ ${CARD_ACTION_STYLES}
         }
         for (const record of records) {
           if (record.target?.closest?.(".tm-rec-controls, .tm-rec-manager") || record.target === style) continue;
-          if (record.type === "attributes") schedule(record.target.parentElement || document);
+          if (!dom.isRelevantMutation(record)) continue;
+          if (record.type === "attributes") schedule(record.target);
           else if (record.type === "childList") {
             if ([...record.addedNodes || [], ...record.removedNodes || []].every((node) => node === style || ["tm-rec-controls", "tm-rec-manager"].includes(node.className))) continue;
             schedule(record.target);
+            for (const node of record.removedNodes || []) if (node.nodeType === 1) schedule(node);
           }
         }
       });
-      observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["href", "data-uia"] });
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeOldValue: true,
+        attributeFilter: ["href", "data-uia", "class", "data-virtual-slot", "data-video-type"]
+      });
     }
     function resize() {
       schedule(document);
@@ -24595,7 +24620,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.16";
+  var SCRIPT_VERSION = "1.11.17";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

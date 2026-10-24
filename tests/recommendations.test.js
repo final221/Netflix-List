@@ -754,7 +754,7 @@ test('overlapping native mutation roots share one scan in the same observer turn
     assert.equal(b.feature.diagnostics().work.scans, scans + 1); b.feature.dispose();
 });
 
-test('sibling mutation roots share retained-card validation and metadata admission without repainting unrelated cards', async () => {
+test('sibling mutation roots validate only affected cards and share metadata admission without repainting unrelated cards', async () => {
     const b = setup(), cards = Array.from({ length: 40 }, (_, index) => mount(b, String(index + 1)));
     const row = cards[0].row;
     for (const item of cards.slice(1)) { row.appendChild(item.host); item.row.remove(); }
@@ -769,15 +769,103 @@ test('sibling mutation roots share retained-card validation and metadata admissi
     }
     for (const { host } of cards.slice(0, 20)) b.mutate(host, { addedNodes: [new Element('span')] });
     await b.scheduler.flush();
-    for (const { card } of cards.slice(20)) assert.equal(reads.get(card), 1, 'unrelated card identity is checked once per batch');
+    for (const { card } of cards.slice(20)) assert.equal(reads.get(card) || 0, 0, 'unrelated card identity is not reread');
     const work = b.feature.diagnostics().work;
     assert.equal(work.scans - before.scans, 1);
     assert.equal(work.scanRoots - before.scanRoots, 20);
-    assert.equal(work.leaseChecks - before.leaseChecks, 40);
+    assert.equal(work.connectionChecks - before.connectionChecks, 40);
+    assert.equal(work.leaseChecks - before.leaseChecks, 20);
     assert.equal(work.viewingPasses - before.viewingPasses, 1);
     assert.equal(work.scannedCards - before.scannedCards, 20);
     assert.equal(work.paintCalls - before.paintCalls, 20);
     b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
+});
+
+test('a mutation inside a card validates its owned host even after the native href becomes invalid', async () => {
+    const b = setup(), first = mount(b, '1'), other = mount(b, '2');
+    const inner = first.card.appendChild(new Element('span'));
+    b.feature.check(); b.click(first.host, 'Hide suggestion'); await b.scheduler.flush();
+    first.card.setAttribute('href', '/unavailable');
+    b.mutate(inner, { addedNodes: [new Element('span')] }); await b.scheduler.flush();
+    assert.equal(first.host.style.getPropertyValue('display'), '');
+    assert.equal(first.host.querySelectorAll('.tm-rec-controls').length, 0);
+    assert.equal(other.host.querySelectorAll('.tm-rec-controls').length, 1);
+    assert.equal(b.feature.diagnostics().decorated, 1); b.feature.dispose();
+});
+
+test('a moved scroller rebinds card leases to its new row using the removed subtree', async () => {
+    const b = setup(), first = mount(b, '1'), other = mount(b, '2');
+    const scroller = first.row.appendChild(new Element('div')); scroller.setAttribute('data-uia', 'carousel-scroller');
+    scroller.appendChild(first.host); const oldArrow = nextControl(b, first.row, () => {});
+    nextControl(b, other.row, () => {});
+    b.feature.check(); b.click(first.host, 'Hide suggestion'); await b.scheduler.flush();
+    const oldControls = first.host.querySelector('.tm-rec-controls');
+    assert.notEqual(oldArrow.style.getPropertyValue('height'), '');
+    other.row.appendChild(scroller);
+    b.mutate(first.row, { removedNodes: [scroller] }); await b.scheduler.flush();
+    assert.equal(oldArrow.style.getPropertyValue('height'), '');
+    assert.notEqual(first.host.querySelector('.tm-rec-controls'), oldControls);
+    assert.equal(oldControls.isConnected, false);
+    assert.equal(first.host.style.getPropertyValue('display'), 'none');
+    assert.equal(b.feature.diagnostics().decorated, 2);
+    b.feature.dispose(); assert.equal(scroller.style.getPropertyValue('padding-bottom'), '');
+});
+
+test('a mutation whose entire scope detached still retires disconnected hidden cards', async () => {
+    const b = setup(), first = mount(b, '1'), other = mount(b, '2');
+    b.feature.check(); b.click(first.host, 'Hide suggestion'); await b.scheduler.flush();
+    first.row.remove(); b.mutate(first.host, { addedNodes: [new Element('span')] }); await b.scheduler.flush();
+    assert.equal(first.host.style.getPropertyValue('display'), '');
+    assert.equal(first.host.querySelectorAll('.tm-rec-controls').length, 0);
+    assert.equal(first.row.style.getPropertyValue('padding-bottom'), '');
+    assert.equal(other.host.querySelectorAll('.tm-rec-controls').length, 1);
+    assert.equal(b.feature.diagnostics().decorated, 1); b.feature.dispose();
+});
+
+test('native row classification changes retire its cards through the observed class mutation', async () => {
+    const b = setup(), first = mount(b, '1'), other = mount(b, '2');
+    b.feature.check(); await b.scheduler.flush();
+    first.row.classList.add('continueWatching');
+    const observer = b.observers.find(observer => observer.active);
+    if (observer.options?.attributeFilter.includes('class')) observer.callback([{ type: 'attributes', target: first.row, attributeName: 'class' }]);
+    await b.scheduler.flush();
+    assert.equal(first.host.querySelectorAll('.tm-rec-controls').length, 0);
+    assert.equal(first.row.style.getPropertyValue('padding-bottom'), '');
+    assert.equal(other.host.querySelectorAll('.tm-rec-controls').length, 1); b.feature.dispose();
+});
+
+test('routine native hover classes do not schedule reconciliation and removing structural classes does', async () => {
+    const b = setup(), first = mount(b, '1', { legacy: true });
+    b.feature.check(); await b.scheduler.flush();
+    const observer = b.observers.find(observer => observer.active), before = b.feature.diagnostics().work.scans;
+    const oldValue = first.card.className;
+    first.card.classList.add('hovered');
+    observer.callback([{ type: 'attributes', attributeName: 'class', target: first.card, oldValue }]);
+    await b.scheduler.flush(); assert.equal(b.feature.diagnostics().work.scans, before);
+    const structural = first.card.className; first.card.classList.remove('title-card');
+    // Deliver the fields supplied by the subscribed native observer.
+    observer.callback([{ type: 'attributes', attributeName: 'class', target: first.card,
+        oldValue: observer.options.attributeOldValue ? structural : null }]);
+    await b.scheduler.flush();
+    assert.equal(first.host.querySelectorAll('.tm-rec-controls').length, 0);
+    assert.equal(first.row.style.getPropertyValue('padding-bottom'), ''); b.feature.dispose();
+});
+
+test('explicit checks and mutation-root overflow retain complete card validation', async () => {
+    for (const mode of ['check', 'overflow']) {
+        const b = setup(), cards = Array.from({ length: 30 }, (_, index) => mount(b, String(index + 1)));
+        b.feature.check(); b.click(cards[0].host, 'Hide suggestion'); await b.scheduler.flush();
+        // An unrelated title change omitted from this delivery must be found by a full pass.
+        cards[0].card.setAttribute('href', '/title/1000');
+        const before = b.feature.diagnostics().work.leaseChecks;
+        if (mode === 'check') b.feature.check();
+        else for (const { host } of cards.slice(1, 26)) b.mutate(host, { addedNodes: [new Element('span')] });
+        await b.scheduler.flush();
+        assert.equal(cards[0].host.style.getPropertyValue('display'), '');
+        assert.equal(cards[0].host.querySelectorAll('.tm-rec-controls').length, 1);
+        assert.equal(b.feature.diagnostics().work.leaseChecks - before, 30);
+        b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
+    }
 });
 
 test('a sibling mutation batch restores recycled hidden cards and preserves a shared row reservation', async () => {

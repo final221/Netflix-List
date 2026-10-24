@@ -40,7 +40,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
     let scrollTimer = null;
     const pending = new Set();
-    const work = { scans: 0, scanRoots: 0, leaseChecks: 0, viewingPasses: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
+    const work = { scans: 0, scanRoots: 0, connectionChecks: 0, leaseChecks: 0, viewingPasses: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
     const now = () => environment.performance?.now() ?? Date.now();
     function property(node, name, value) { if (node[name] !== value) { node[name] = value; work.controlWrites++; } }
     function attribute(node, name, value) { if (node.getAttribute(name) !== value) { node.setAttribute(name, value); work.controlWrites++; } }
@@ -148,20 +148,28 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     }
     function scan(roots = [document]) { return dom.batch(() => scanRows(roots)); }
     function scanRows(roots) {
-        if (!roots.length || !active || !allowed()) return;
+        if (!active || !allowed()) return;
         const previous = profile; syncProfile();
         savedPanel.mount();
         if (!profile) return;
         if (previous !== profile) roots = [document];
         const scanStart = now(); work.scans++; work.scanRoots += roots.length;
-        const changedRows = new Set();
+        const changedRows = new Set(), candidates = new Set();
         for (const root of roots) {
             const affected = root.closest?.('section, .lolomoRow');
             if (affected) changedRows.add(affected);
+            for (const controls of root.querySelectorAll('.tm-rec-controls')) {
+                const entry = entries.get(controls.parentElement);
+                if (entry?.controls === controls) candidates.add(entry);
+            }
         }
         for (const entry of [...entries.values()]) {
-            work.leaseChecks++;
-            if (!entry.lease.current()) { changedRows.add(entry.row); release(entry); }
+            work.connectionChecks++;
+            const detached = !entry.card.isConnected || !entry.host.isConnected || !entry.row.isConnected ||
+                !entry.scroller.isConnected || entry.controls.parentElement !== entry.host;
+            if (!detached && !candidates.has(entry)) continue;
+            if (!detached) work.leaseChecks++;
+            if (detached || !entry.lease.current()) { changedRows.add(entry.row); release(entry); }
         }
         for (const row of inventories.keys()) if (!row.isConnected) inventories.delete(row);
         const discovered = roots.flatMap(root => dom.scan(root)), byRow = new Map(); work.scannedCards += discovered.length;
@@ -189,6 +197,8 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         updateRefill(); nativeRows.observe(new Set([...entries.values()].map(entry => entry.row))); nativeRows.refresh(); work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
     }
     function schedule(root) {
+        // Feature-owned host identity remains available even when native markup is invalid.
+        for (let node = root; node; node = node.parentElement) if (entries.has(node)) { root = node; break; }
         pending.add(root); if (pending.size > 24) { pending.clear(); pending.add(document); } if (queued) return;
         queued = true; const owner = epoch;
         queueMicrotask(() => { if (!active || owner !== epoch) return; queued = false;
@@ -254,14 +264,17 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             if (!allowed()) { check(); return; }
             for (const record of records) {
                 if (record.target?.closest?.('.tm-rec-controls, .tm-rec-manager') || record.target === style) continue;
-                if (record.type === 'attributes') schedule(record.target.parentElement || document);
+                if (!dom.isRelevantMutation(record)) continue;
+                if (record.type === 'attributes') schedule(record.target);
                 else if (record.type === 'childList') {
                     if ([...(record.addedNodes || []), ...(record.removedNodes || [])].every(node => node === style || ['tm-rec-controls', 'tm-rec-manager'].includes(node.className))) continue;
                     schedule(record.target);
+                    for (const node of record.removedNodes || []) if (node.nodeType === 1) schedule(node);
                 }
             }
         });
-        observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['href', 'data-uia'] });
+        observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeOldValue: true,
+            attributeFilter: ['href', 'data-uia', 'class', 'data-virtual-slot', 'data-video-type'] });
     }
     function resize() { schedule(document); }
     function check() {
