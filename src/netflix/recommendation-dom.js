@@ -40,6 +40,9 @@ export function createRecommendationDom(environment) {
         } }
     }
     const retire = resource => { if (batchDepth) retirements.add(resource.retire); else resource.retire(); };
+    function releaseOwned(operation) {
+        try { operation(); } catch (_) { layoutWork.retirementErrors++; }
+    }
 
     function styleLease(node, name, value, priority = '') {
         const previous = node.style.getPropertyValue(name), previousPriority = node.style.getPropertyPriority(name);
@@ -54,7 +57,11 @@ export function createRecommendationDom(environment) {
         if (!resource) {
             const padding = Number.parseFloat(getComputedStyle?.(scroller).paddingBottom) || 0;
             resource = { users: 0, restore: styleLease(scroller, 'padding-bottom', `${padding + ACTION_SPACE}px`, 'important') };
-            resource.retire = () => { if (!resource.users && scrollerLeases.get(scroller) === resource) { resource.restore(); scrollerLeases.delete(scroller); layoutWork.spaceRestores++; } };
+            resource.retire = () => {
+                if (resource.users || scrollerLeases.get(scroller) !== resource) return;
+                scrollerLeases.delete(scroller);
+                releaseOwned(() => { resource.restore(); layoutWork.spaceRestores++; });
+            };
             scrollerLeases.set(scroller, resource); layoutWork.spaceWrites++;
         }
         resource.users++; let released = false;
@@ -68,10 +75,12 @@ export function createRecommendationDom(environment) {
         let resource = arrowRows.get(row);
         if (!resource) {
             resource = { users: 0, controls: new Map() };
-            resource.retire = () => { if (!resource.users && arrowRows.get(row) === resource) {
-                for (const value of resource.controls.values()) value.restore.forEach(release => release());
+            resource.retire = () => {
+                if (resource.users || arrowRows.get(row) !== resource) return;
+                const controls = [...resource.controls.values()];
                 resource.controls.clear(); arrowRows.delete(row);
-            } };
+                for (const value of controls) value.restore.forEach(releaseOwned);
+            };
             arrowRows.set(row, resource);
         }
         resource.users++; let released = false;
@@ -89,7 +98,7 @@ export function createRecommendationDom(environment) {
             const resource = arrowRows.get(row); if (!resource) return false; layoutWork.arrowRows++;
             const controls = [...row.querySelectorAll(arrowSelector)];
             for (const [control, value] of resource.controls) if (!controls.includes(control)) {
-                value.restore.forEach(release => release()); resource.controls.delete(control);
+                resource.controls.delete(control); value.restore.forEach(releaseOwned);
             }
             if (!controls.length) return false;
             let card, height;
@@ -177,25 +186,33 @@ export function createRecommendationDom(environment) {
         if (positioned) host.style.setProperty('position', 'relative');
         const restoreOverflow = styleLease(host, 'overflow', 'visible', 'important');
         const releaseSpace = reserveActions(scroller), releaseArrows = reserveArrows(row);
-        let hidden = false, originalVisibility = '', visibilityPriority = '', originalPointer = '', pointerPriority = '';
+        let hidden = false, released = false, originalVisibility = '', visibilityPriority = '', originalPointer = '', pointerPriority = '';
         let restoreDisplay = null;
         const originalAria = card.getAttribute('aria-hidden'), originalTab = card.getAttribute('tabindex');
-        function current() { const value = describe(card); return value?.host === host && value.id === id && value.scroller === scroller && value.row === row; }
+        function current() {
+            if (released) return false;
+            const value = describe(card);
+            return value?.host === host && value.id === id && value.scroller === scroller && value.row === row;
+        }
         function restore() {
             if (!hidden) return;
-            restoreDisplay?.(); restoreDisplay = null;
+            const display = restoreDisplay; restoreDisplay = null;
+            if (display) releaseOwned(display);
             for (const [key, applied, previous, priority] of [['visibility', 'hidden', originalVisibility, visibilityPriority],
                 ['pointer-events', 'none', originalPointer, pointerPriority]]) {
-                if (card.style.getPropertyValue(key) === applied) {
+                releaseOwned(() => {
+                    if (card.style.getPropertyValue(key) !== applied) return;
                     if (previous) card.style.setProperty(key, previous, priority); else card.style.removeProperty(key);
-                }
+                });
             }
-            if (card.getAttribute('aria-hidden') === 'true') {
+            releaseOwned(() => {
+                if (card.getAttribute('aria-hidden') !== 'true') return;
                 if (originalAria === null) card.removeAttribute('aria-hidden'); else card.setAttribute('aria-hidden', originalAria);
-            }
-            if (card.getAttribute('tabindex') === '-1') {
+            });
+            releaseOwned(() => {
+                if (card.getAttribute('tabindex') !== '-1') return;
                 if (originalTab === null) card.removeAttribute('tabindex'); else card.setAttribute('tabindex', originalTab);
-            }
+            });
             hidden = false;
         }
         return { current,
@@ -211,9 +228,15 @@ export function createRecommendationDom(environment) {
                 }
                 return true;
             },
-            release() { restore(); restoreOverflow(); releaseSpace(); releaseArrows(); if (positioned && host.style.getPropertyValue('position') === 'relative') {
-                if (previousPosition) host.style.setProperty('position', previousPosition, positionPriority); else host.style.removeProperty('position');
-            } }
+            release() {
+                if (released) return;
+                released = true;
+                for (const operation of [restore, restoreOverflow, releaseSpace, releaseArrows]) releaseOwned(operation);
+                releaseOwned(() => {
+                    if (!positioned || host.style.getPropertyValue('position') !== 'relative') return;
+                    if (previousPosition) host.style.setProperty('position', previousPosition, positionPriority); else host.style.removeProperty('position');
+                });
+            }
         };
     }
     function sampleRow(row, choices) {

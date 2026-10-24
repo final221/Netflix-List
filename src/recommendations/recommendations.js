@@ -40,9 +40,10 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     knowledge ||= createKnowledge({ ...userscript, getValue: (...args) => userscript.getValue(...args), setValue: (...args) => userscript.setValue(...args), activeProfile: context.activeProfile, queueMicrotask });
     let unsubscribe = null, viewingDisabled = null, selectedIds = null, selectedHides = null, selectedChoices = {};
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
-    let scrollTimer = null;
+    let scrollTimer = null, retiring = false, restartRequested = false;
     const pending = new Set();
-    const work = { scans: 0, scanRoots: 0, connectionChecks: 0, leaseChecks: 0, viewingPasses: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
+    const work = { scans: 0, scanRoots: 0, connectionChecks: 0, leaseChecks: 0, viewingPasses: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0, cleanupFailures: 0 };
+    const nativeRemove = environment.Element?.prototype?.remove;
     const now = () => environment.performance?.now() ?? Date.now();
     const lifecycle = createLifecycleDiagnostics({ now, readIdentity: nativeDom.lifecycleIdentity });
     function property(node, name, value) { if (node[name] !== value) { node[name] = value; work.controlWrites++; } }
@@ -111,7 +112,21 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         if (readProfile() !== p) throw new Error('profile-changed');
         return { choices: knowledge.hidden() };
     }
-    function release(entry) { entry.controls.remove(); entry.lease.release(); entries.delete(entry.host); }
+    function cleanup(operation) {
+        try { operation(); return true; }
+        catch (_) { work.cleanupFailures++; return false; }
+    }
+    function removeOwnedNode(node) {
+        if (!node) return;
+        if (!cleanup(() => node.remove()) && typeof nativeRemove === 'function') {
+            cleanup(() => nativeRemove.call(node));
+        }
+    }
+    function release(entry) {
+        if (entries.get(entry.host) === entry) entries.delete(entry.host);
+        removeOwnedNode(entry.controls);
+        cleanup(() => entry.lease.release());
+    }
     function syncProfile() {
         const next = readProfile();
         if (next === profile) return;
@@ -291,7 +306,8 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     }
     function observe() {
         if (observer || !profile || typeof MutationObserver !== 'function') return;
-        observer = new MutationObserver(records => {
+        const ownedObserver = new MutationObserver(records => {
+            if (!active || observer !== ownedObserver) return;
             if (!allowed()) { check(); return; }
             for (const record of records) {
                 if (record.target?.closest?.('.tm-rec-controls, .tm-rec-manager') || record.target === style) continue;
@@ -304,11 +320,13 @@ export function createRecommendations({ environment, context, userscript, tUi, v
                 }
             }
         });
+        observer = ownedObserver;
         observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeOldValue: true,
             attributeFilter: ['href', 'data-uia', 'class', 'data-virtual-slot', 'data-video-type'] });
     }
     function resize() { schedule(document); }
     function check() {
+        if (retiring) { restartRequested = allowed(); return; }
         if (!allowed()) { dispose(); return; }
         if (!active) { active = true; epoch++;
             unsubscribe = knowledge.subscribe(change => { if (active && allowed()) viewingChanged(change.ids); });
@@ -317,20 +335,40 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         scan(); observe();
     }
     function dispose() {
-        unsubscribe?.(); unsubscribe = null;
-        nativeRows.dispose(); refill.dispose(); navigation.dispose(); viewing.dispose();
-        if (ownsKnowledge) knowledge.dispose();
-        environment.window?.removeEventListener('scroll', scroll);
-        environment.window?.removeEventListener('resize', resize);
-        if (scrollTimer !== null) environment.clearTimeout(scrollTimer); scrollTimer = null;
-        active = false; epoch++; queued = false; pending.clear(); observer?.disconnect(); observer = null;
-        document.removeEventListener('click', click, true); document.removeEventListener('pointerover', pointer, true);
-        savedPanel.dispose(); inventories.clear(); inventoryLimit = false;
-        lifecycle.reset();
-        timing.reset();
-        for (const entry of [...entries.values()]) release(entry);
-        style?.remove(); style = null; profile = null; choices = {}; failed = false; viewingDisabled = null;
-        selectedIds = selectedHides = null; selectedChoices = {};
+        if (retiring) { restartRequested = false; return; }
+        retiring = true;
+        active = false;
+        epoch++;
+        queued = false;
+        pending.clear();
+        const retired = { unsubscribe, observer, style, scrollTimer, entries: [...entries.values()] };
+        unsubscribe = observer = style = scrollTimer = null;
+        entries.clear();
+        inventories.clear(); inventoryLimit = false;
+        try {
+            cleanup(() => retired.unsubscribe?.());
+            cleanup(() => environment.window?.removeEventListener('scroll', scroll));
+            cleanup(() => environment.window?.removeEventListener('resize', resize));
+            cleanup(() => document.removeEventListener('click', click, true));
+            cleanup(() => document.removeEventListener('pointerover', pointer, true));
+            cleanup(() => retired.observer?.disconnect());
+            if (retired.scrollTimer !== null) cleanup(() => environment.clearTimeout(retired.scrollTimer));
+            // Cache restoration still checks the retiring profile, while active admission is closed.
+            for (const owner of [nativeRows, refill, navigation, viewing]) cleanup(() => owner.dispose());
+            if (ownsKnowledge) cleanup(() => knowledge.dispose());
+            cleanup(() => savedPanel.dispose());
+            cleanup(() => lifecycle.reset());
+            cleanup(() => timing.reset());
+            for (const entry of retired.entries) release(entry);
+            removeOwnedNode(retired.style);
+        } finally {
+            profile = null; choices = {}; failed = false; viewingDisabled = null;
+            selectedIds = selectedHides = null; selectedChoices = {};
+            retiring = false;
+            const restart = restartRequested;
+            restartRequested = false;
+            if (restart && allowed()) check();
+        }
     }
     return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(visibleChoices()).length,
         storageFailed: failed, work: { ...work }, layout: dom.layoutDiagnostics(), nativeRows: nativeRows.diagnostics(), inventory: { rows: inventories.size, limitReached: inventoryLimit }, refill: refill.diagnostics(), viewing: viewing.diagnostics(),

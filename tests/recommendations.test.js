@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sessionBrowser } from './helpers/session-browser.js';
 import { createRecommendations } from '../src/recommendations/recommendations.js';
+import { createRecommendationDom } from '../src/netflix/recommendation-dom.js';
 import { createApplication } from '../src/app/application.js';
 import { createKnowledge } from '../src/viewing/knowledge.js';
 import { createI18n } from '../src/i18n/i18n.js';
@@ -44,6 +45,91 @@ function nextControl(b, row, click, hawkins = true) {
     button.setAttribute('data-uia', hawkins ? 'carousel-hawkins-right-button' : 'carousel-right-button'); button.click = click;
     return button;
 }
+
+test('retirement continues after a control removal failure and releases native leases and later cards', () => {
+    const b = setup(), first = mount(b), second = mount(b, '2');
+    b.feature.check(); b.click(first.host, 'Hide suggestion'); b.click(second.host, 'Hide suggestion');
+    first.host.querySelector('.tm-rec-controls').remove = () => { throw Error('remove failed'); };
+    assert.doesNotThrow(() => b.feature.dispose());
+    assert.equal(b.document.querySelectorAll('.tm-rec-controls').length, 0);
+    assert.equal(b.document.head.querySelectorAll('style').length, 0);
+    for (const item of [first, second]) {
+        assert.equal(item.host.style.getPropertyValue('display'), '');
+        assert.equal(item.row.style.getPropertyValue('padding-bottom'), '');
+        assert.equal(item.card.style.getPropertyValue('visibility'), '');
+    }
+    assert.equal(b.document.listenerCount('click'), 0);
+    assert.equal(b.scheduler.frames.size, 0); assert.equal(b.scheduler.timers.size, 0);
+    assert.equal(b.feature.diagnostics().work.cleanupFailures, 1);
+});
+
+test('a failed native property restoration cannot retain other properties or shared row leases', () => {
+    const b = setup(), first = mount(b), second = mount(b, '2');
+    first.row.appendChild(second.host); second.row.remove();
+    b.feature.check(); b.click(first.host, 'Hide suggestion'); b.click(second.host, 'Hide suggestion');
+    const remove = first.card.style.removeProperty.bind(first.card.style);
+    first.card.style.removeProperty = key => { if (key === 'visibility') throw Error('native property failed'); return remove(key); };
+    assert.doesNotThrow(() => b.feature.dispose());
+    assert.equal(first.card.style.getPropertyValue('pointer-events'), '');
+    assert.equal(first.card.getAttribute('aria-hidden'), null);
+    assert.equal(first.card.getAttribute('tabindex'), null);
+    assert.equal(first.row.style.getPropertyValue('padding-bottom'), '');
+    assert.equal(second.card.style.getPropertyValue('visibility'), '');
+    assert.equal(b.document.querySelectorAll('.tm-rec-controls').length, 0);
+    assert.equal(b.feature.diagnostics().layout.retirementErrors, 1);
+});
+
+test('a reentrant check starts only after retired leases finish and survives the old disposal', async () => {
+    const b = setup(), item = mount(b); b.feature.check();
+    const old = item.host.querySelector('.tm-rec-controls'), remove = old.remove.bind(old);
+    const oldDelivery = b.observers.find(observer => observer.active).callback;
+    const initialScans = b.feature.diagnostics().work.scans;
+    let checks = 0;
+    old.remove = () => { b.feature.check(); b.feature.check(); checks++; remove(); };
+    b.feature.dispose();
+    assert.equal(checks, 1);
+    assert.equal(b.feature.diagnostics().active, true);
+    assert.equal(b.feature.diagnostics().work.scans, initialScans + 1, 'reentrant checks coalesce into one activation');
+    const replacement = item.host.querySelector('.tm-rec-controls');
+    assert.ok(replacement); assert.notEqual(replacement, old);
+    assert.equal(b.document.querySelectorAll('.tm-rec-controls').length, 1);
+    assert.equal(b.document.head.querySelectorAll('style').length, 1);
+    assert.equal(b.window.listenerCount('resize'), 1);
+    assert.equal(item.row.style.getPropertyValue('padding-bottom'), '72px');
+    const scans = b.feature.diagnostics().work.scans;
+    oldDelivery([{ type: 'childList', target: item.row, addedNodes: [item.host] }]); await b.scheduler.flush();
+    assert.equal(b.feature.diagnostics().work.scans, scans, 'retired observer delivery cannot reconcile the replacement');
+    b.feature.dispose(); b.feature.dispose();
+    assert.equal(item.row.style.getPropertyValue('padding-bottom'), '');
+    assert.equal(b.document.querySelectorAll('.tm-rec-controls').length, 0);
+    assert.equal(b.scheduler.frames.size, 0); assert.equal(b.scheduler.timers.size, 0);
+});
+
+test('a nested disposal cancels an earlier reentrant restart request', () => {
+    const b = setup(), item = mount(b); b.feature.check();
+    const old = item.host.querySelector('.tm-rec-controls'), remove = old.remove.bind(old);
+    old.remove = () => { b.feature.check(); b.feature.dispose(); remove(); };
+    b.feature.dispose();
+    assert.equal(b.feature.diagnostics().active, false);
+    assert.equal(b.document.querySelectorAll('.tm-rec-controls').length, 0);
+    assert.equal(b.document.head.querySelectorAll('style').length, 0);
+    assert.equal(b.scheduler.frames.size, 0);
+});
+
+test('native card leases retire once and a repeated release cannot restore over a replacement', () => {
+    const b = createBrowser(), item = mount(b), dom = createRecommendationDom(b.context);
+    const value = dom.describe(item.card), old = dom.lease(value);
+    old.hide(true); old.release();
+    assert.equal(old.current(), false);
+    const replacement = dom.lease(value);
+    replacement.hide(true); old.release();
+    assert.equal(replacement.current(), true);
+    assert.equal(item.host.style.getPropertyValue('display'), 'none');
+    assert.equal(item.row.style.getPropertyValue('padding-bottom'), '72px');
+    replacement.release();
+    assert.equal(item.host.style.getPropertyValue('display'), '');
+    assert.equal(item.row.style.getPropertyValue('padding-bottom'), '');
+});
 
 test('recommendation timing measures actual scan phases and retires activity probes on profile and route changes', async () => {
     const b = setup(), a = mount(b);
@@ -327,14 +413,17 @@ test('live recommendation controls persist both reasons, hide duplicates and Und
     b.feature.dispose(); assert.equal(other.card.style.visibility, undefined);
     assert.equal(b.document.head.querySelectorAll('style').length, 0); assert.equal(b.requests.length, 0);
 });
-test('recommendation profile changes reject old controls and isolate saved choices', () => {
+test('recommendation profile changes reject old controls and isolate saved choices', async () => {
     const b = setup(), a = mount(b); b.feature.check(); b.click(a.host, 'Mark watched');
     b.select('B'); b.click(a.host, 'Mark watched'); assert.equal(a.card.style.visibility, undefined);
     assert.ok(b.saved.size >= 2); b.click(a.host, 'Hide suggestion');
     assert.equal(fact(b.saved, 'B', '1', 'hidden').hidden, true); b.select('A'); b.feature.check();
     assert.equal(a.host.style.getPropertyValue('display'), 'none');
+    const next = mount(b, '2'); b.mutate(next.row, { addedNodes: [next.host] }); await b.scheduler.flush();
+    assert.ok(next.host.querySelector('.tm-rec-controls'), 'the active observer remains admitted across profile changes');
     b.select(null); b.feature.check(); assert.equal(a.host.querySelectorAll('button').length, 0);
     assert.equal(a.card.style.visibility, undefined);
+    b.feature.dispose();
 });
 test('recycled native slots retire old visibility and controls; newly mounted titles receive choices', async () => {
     const b = setup(), a = mount(b); b.feature.check(); b.click(a.host, 'Hide suggestion');

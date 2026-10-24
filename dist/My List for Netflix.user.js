@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.21
+// @version      1.11.22
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -22980,6 +22980,13 @@ ${CARD_ACTION_STYLES}
       if (batchDepth) retirements.add(resource.retire);
       else resource.retire();
     };
+    function releaseOwned(operation) {
+      try {
+        operation();
+      } catch (_) {
+        layoutWork.retirementErrors++;
+      }
+    }
     function styleLease(node, name, value, priority = "") {
       const previous = node.style.getPropertyValue(name), previousPriority = node.style.getPropertyPriority(name);
       node.style.setProperty(name, value, priority);
@@ -22995,11 +23002,12 @@ ${CARD_ACTION_STYLES}
         const padding = Number.parseFloat(getComputedStyle?.(scroller).paddingBottom) || 0;
         resource = { users: 0, restore: styleLease(scroller, "padding-bottom", `${padding + ACTION_SPACE}px`, "important") };
         resource.retire = () => {
-          if (!resource.users && scrollerLeases.get(scroller) === resource) {
+          if (resource.users || scrollerLeases.get(scroller) !== resource) return;
+          scrollerLeases.delete(scroller);
+          releaseOwned(() => {
             resource.restore();
-            scrollerLeases.delete(scroller);
             layoutWork.spaceRestores++;
-          }
+          });
         };
         scrollerLeases.set(scroller, resource);
         layoutWork.spaceWrites++;
@@ -23018,11 +23026,11 @@ ${CARD_ACTION_STYLES}
       if (!resource) {
         resource = { users: 0, controls: /* @__PURE__ */ new Map() };
         resource.retire = () => {
-          if (!resource.users && arrowRows.get(row) === resource) {
-            for (const value of resource.controls.values()) value.restore.forEach((release) => release());
-            resource.controls.clear();
-            arrowRows.delete(row);
-          }
+          if (resource.users || arrowRows.get(row) !== resource) return;
+          const controls = [...resource.controls.values()];
+          resource.controls.clear();
+          arrowRows.delete(row);
+          for (const value of controls) value.restore.forEach(releaseOwned);
         };
         arrowRows.set(row, resource);
       }
@@ -23045,8 +23053,8 @@ ${CARD_ACTION_STYLES}
         layoutWork.arrowRows++;
         const controls = [...row.querySelectorAll(arrowSelector)];
         for (const [control, value] of resource.controls) if (!controls.includes(control)) {
-          value.restore.forEach((release) => release());
           resource.controls.delete(control);
+          value.restore.forEach(releaseOwned);
         }
         if (!controls.length) return false;
         let card, height;
@@ -23150,34 +23158,39 @@ ${CARD_ACTION_STYLES}
       if (positioned) host.style.setProperty("position", "relative");
       const restoreOverflow = styleLease(host, "overflow", "visible", "important");
       const releaseSpace = reserveActions(scroller), releaseArrows = reserveArrows(row);
-      let hidden = false, originalVisibility = "", visibilityPriority = "", originalPointer = "", pointerPriority = "";
+      let hidden = false, released = false, originalVisibility = "", visibilityPriority = "", originalPointer = "", pointerPriority = "";
       let restoreDisplay = null;
       const originalAria = card.getAttribute("aria-hidden"), originalTab = card.getAttribute("tabindex");
       function current() {
+        if (released) return false;
         const value = describe(card);
         return value?.host === host && value.id === id && value.scroller === scroller && value.row === row;
       }
       function restore() {
         if (!hidden) return;
-        restoreDisplay?.();
+        const display = restoreDisplay;
         restoreDisplay = null;
+        if (display) releaseOwned(display);
         for (const [key, applied, previous, priority] of [
           ["visibility", "hidden", originalVisibility, visibilityPriority],
           ["pointer-events", "none", originalPointer, pointerPriority]
         ]) {
-          if (card.style.getPropertyValue(key) === applied) {
+          releaseOwned(() => {
+            if (card.style.getPropertyValue(key) !== applied) return;
             if (previous) card.style.setProperty(key, previous, priority);
             else card.style.removeProperty(key);
-          }
+          });
         }
-        if (card.getAttribute("aria-hidden") === "true") {
+        releaseOwned(() => {
+          if (card.getAttribute("aria-hidden") !== "true") return;
           if (originalAria === null) card.removeAttribute("aria-hidden");
           else card.setAttribute("aria-hidden", originalAria);
-        }
-        if (card.getAttribute("tabindex") === "-1") {
+        });
+        releaseOwned(() => {
+          if (card.getAttribute("tabindex") !== "-1") return;
           if (originalTab === null) card.removeAttribute("tabindex");
           else card.setAttribute("tabindex", originalTab);
-        }
+        });
         hidden = false;
       }
       return {
@@ -23203,14 +23216,14 @@ ${CARD_ACTION_STYLES}
           return true;
         },
         release() {
-          restore();
-          restoreOverflow();
-          releaseSpace();
-          releaseArrows();
-          if (positioned && host.style.getPropertyValue("position") === "relative") {
+          if (released) return;
+          released = true;
+          for (const operation of [restore, restoreOverflow, releaseSpace, releaseArrows]) releaseOwned(operation);
+          releaseOwned(() => {
+            if (!positioned || host.style.getPropertyValue("position") !== "relative") return;
             if (previousPosition) host.style.setProperty("position", previousPosition, positionPriority);
             else host.style.removeProperty("position");
-          }
+          });
         }
       };
     }
@@ -24368,9 +24381,10 @@ ${CARD_ACTION_STYLES}
     knowledge ||= createKnowledge({ ...userscript, getValue: (...args) => userscript.getValue(...args), setValue: (...args) => userscript.setValue(...args), activeProfile: context.activeProfile, queueMicrotask });
     let unsubscribe = null, viewingDisabled = null, selectedIds = null, selectedHides = null, selectedChoices = {};
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
-    let scrollTimer = null;
+    let scrollTimer = null, retiring = false, restartRequested = false;
     const pending = /* @__PURE__ */ new Set();
-    const work = { scans: 0, scanRoots: 0, connectionChecks: 0, leaseChecks: 0, viewingPasses: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
+    const work = { scans: 0, scanRoots: 0, connectionChecks: 0, leaseChecks: 0, viewingPasses: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0, cleanupFailures: 0 };
+    const nativeRemove = environment.Element?.prototype?.remove;
     const now = () => environment.performance?.now() ?? Date.now();
     const lifecycle = createLifecycleDiagnostics({ now, readIdentity: nativeDom.lifecycleIdentity });
     function property(node, name, value) {
@@ -24511,10 +24525,25 @@ ${CARD_ACTION_STYLES}
       if (readProfile() !== p) throw new Error("profile-changed");
       return { choices: knowledge.hidden() };
     }
+    function cleanup(operation) {
+      try {
+        operation();
+        return true;
+      } catch (_) {
+        work.cleanupFailures++;
+        return false;
+      }
+    }
+    function removeOwnedNode(node) {
+      if (!node) return;
+      if (!cleanup(() => node.remove()) && typeof nativeRemove === "function") {
+        cleanup(() => nativeRemove.call(node));
+      }
+    }
     function release(entry) {
-      entry.controls.remove();
-      entry.lease.release();
-      entries.delete(entry.host);
+      if (entries.get(entry.host) === entry) entries.delete(entry.host);
+      removeOwnedNode(entry.controls);
+      cleanup(() => entry.lease.release());
     }
     function syncProfile() {
       const next = readProfile();
@@ -24773,7 +24802,8 @@ ${CARD_ACTION_STYLES}
     }
     function observe() {
       if (observer || !profile || typeof MutationObserver !== "function") return;
-      observer = new MutationObserver((records) => {
+      const ownedObserver = new MutationObserver((records) => {
+        if (!active || observer !== ownedObserver) return;
         if (!allowed()) {
           check();
           return;
@@ -24789,6 +24819,7 @@ ${CARD_ACTION_STYLES}
           }
         }
       });
+      observer = ownedObserver;
       observer.observe(document.body, {
         subtree: true,
         childList: true,
@@ -24801,6 +24832,10 @@ ${CARD_ACTION_STYLES}
       schedule(document);
     }
     function check() {
+      if (retiring) {
+        restartRequested = allowed();
+        return;
+      }
       if (!allowed()) {
         dispose();
         return;
@@ -24820,39 +24855,47 @@ ${CARD_ACTION_STYLES}
       observe();
     }
     function dispose() {
-      unsubscribe?.();
-      unsubscribe = null;
-      nativeRows.dispose();
-      refill.dispose();
-      navigation.dispose();
-      viewing.dispose();
-      if (ownsKnowledge) knowledge.dispose();
-      environment.window?.removeEventListener("scroll", scroll);
-      environment.window?.removeEventListener("resize", resize);
-      if (scrollTimer !== null) environment.clearTimeout(scrollTimer);
-      scrollTimer = null;
+      if (retiring) {
+        restartRequested = false;
+        return;
+      }
+      retiring = true;
       active = false;
       epoch++;
       queued = false;
       pending.clear();
-      observer?.disconnect();
-      observer = null;
-      document.removeEventListener("click", click, true);
-      document.removeEventListener("pointerover", pointer, true);
-      savedPanel.dispose();
+      const retired = { unsubscribe, observer, style, scrollTimer, entries: [...entries.values()] };
+      unsubscribe = observer = style = scrollTimer = null;
+      entries.clear();
       inventories.clear();
       inventoryLimit = false;
-      lifecycle.reset();
-      timing.reset();
-      for (const entry of [...entries.values()]) release(entry);
-      style?.remove();
-      style = null;
-      profile = null;
-      choices = {};
-      failed = false;
-      viewingDisabled = null;
-      selectedIds = selectedHides = null;
-      selectedChoices = {};
+      try {
+        cleanup(() => retired.unsubscribe?.());
+        cleanup(() => environment.window?.removeEventListener("scroll", scroll));
+        cleanup(() => environment.window?.removeEventListener("resize", resize));
+        cleanup(() => document.removeEventListener("click", click, true));
+        cleanup(() => document.removeEventListener("pointerover", pointer, true));
+        cleanup(() => retired.observer?.disconnect());
+        if (retired.scrollTimer !== null) cleanup(() => environment.clearTimeout(retired.scrollTimer));
+        for (const owner of [nativeRows, refill, navigation, viewing]) cleanup(() => owner.dispose());
+        if (ownsKnowledge) cleanup(() => knowledge.dispose());
+        cleanup(() => savedPanel.dispose());
+        cleanup(() => lifecycle.reset());
+        cleanup(() => timing.reset());
+        for (const entry of retired.entries) release(entry);
+        removeOwnedNode(retired.style);
+      } finally {
+        profile = null;
+        choices = {};
+        failed = false;
+        viewingDisabled = null;
+        selectedIds = selectedHides = null;
+        selectedChoices = {};
+        retiring = false;
+        const restart = restartRequested;
+        restartRequested = false;
+        if (restart && allowed()) check();
+      }
     }
     return Object.freeze({ check, dispose, diagnostics: () => ({
       active,
@@ -25115,7 +25158,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.21";
+  var SCRIPT_VERSION = "1.11.22";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

@@ -344,29 +344,30 @@ test('check rejects stale output/source and version disagreement without writing
         assert.equal(await readFile(output, 'utf8'), shipped);
     });
     await fixture(async directory => {
-        await writeFile(path.join(directory, distribution), shipped.replace(/(@version\s+)\S+/, (_match, prefix) => prefix + '0.0.0'));
-        await assert.rejects(checkUserscript({ root: directory }), /version/i);
-    });
-    await fixture(async directory => {
-        await writeFile(path.join(directory, distribution), shipped.replace(/(SCRIPT_VERSION = ["'])[^"']+/, (_match, prefix) => prefix + '0.0.0'));
-        await assert.rejects(checkUserscript({ root: directory }), /version/i);
+        for (const pattern of [/(@version\s+)\S+/, /(SCRIPT_VERSION = ["'])[^"']+/]) {
+            await writeFile(path.join(directory, distribution), shipped.replace(pattern, (_match, prefix) => prefix + '0.0.0'));
+            await assert.rejects(checkUserscript({ root: directory }), /version/i, String(pattern));
+        }
     });
 });
 
 test('check rejects altered grants and execution settings', async () => {
     const { checkUserscript } = await import('../scripts/check.mjs');
-    for (const [key, value] of Object.entries({ grant: ['GM_getValue'], sandbox: 'JavaScript',
-        'run-at': 'document-start', noframes: false, match: ['https://example.com/*'],
-        name: 'Changed script', namespace: 'changed.script.identity', updateURL: 'https://example.com/wrong.user.js',
-        downloadURL: 'https://example.com/wrong.user.js', require: ['https://example.com/runtime.js'] })) {
-        await fixture(async directory => {
-            const file = path.join(directory, 'userscript.meta.json');
-            const metadata = JSON.parse(await readFile(file, 'utf8'));
-            metadata[key] = value;
-            await writeFile(file, JSON.stringify(metadata));
-            await assert.rejects(checkUserscript({ root: directory }), /metadata/i);
-        });
-    }
+    await fixture(async directory => {
+        const file = path.join(directory, 'userscript.meta.json');
+        const original = await readFile(file, 'utf8');
+        try {
+            for (const [key, value] of Object.entries({ grant: ['GM_getValue'], sandbox: 'JavaScript',
+                'run-at': 'document-start', noframes: false, match: ['https://example.com/*'],
+                name: 'Changed script', namespace: 'changed.script.identity', updateURL: 'https://example.com/wrong.user.js',
+                downloadURL: 'https://example.com/wrong.user.js', require: ['https://example.com/runtime.js'] })) {
+                const metadata = JSON.parse(original);
+                metadata[key] = value;
+                await writeFile(file, JSON.stringify(metadata));
+                await assert.rejects(checkUserscript({ root: directory }), /metadata/i, key);
+            }
+        } finally { await writeFile(file, original); }
+    });
 });
 
 test('importing authored application/session source does not activate the runtime', async () => {

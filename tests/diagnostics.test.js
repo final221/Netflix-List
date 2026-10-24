@@ -166,7 +166,7 @@ function browsingHistoryFixture() {
                 state: clone(after), addedCount: 7, firstObservedCount: index < 9 ? 7 : 0 })),
             loading: { detailed: false }, requests: { matched: 1, failures: 0, attribution: 'time-window-only' } };
     });
-    return { recommendations: { work: { scans: 424, maxScanMs: 43 }, rows: { total: 35, truncated: false, rows },
+    return { recommendations: { work: { scans: 424, maxScanMs: 43, cleanupFailures: 2 }, rows: { total: 35, truncated: false, rows },
         nativeRows: { failures: 0, rows: [{ reason: 'server-exhausted', projection: { matches: true }, hasNextPage: false }] },
         navigation: { interactions: 12, failures: 0, recent, actions: [],
             movements: Array.from({ length: 80 }, (_, at) => ({ at, kind: 'hover', id: String(at), x: at, y: 500, scrollY: 0 })) } } };
@@ -186,6 +186,7 @@ test('signal reports compress realistic repeated browsing history without losing
     assert.match(JSON.stringify(snapshot), /server-exhausted/); assert.match(JSON.stringify(snapshot), /"matches":true/);
     assert.match(JSON.stringify(snapshot), /native-row-34/); // A later empty row remains distinguishable.
     assert.deepEqual(snapshot, JSON.parse(JSON.stringify(e.report.summarize(raw))));
+    assert.equal(snapshot.recommendations.work.cleanupFailures, 2);
     const recent = snapshot.recommendations.navigation.recent;
     assert.deepEqual(recent.map(record => record.sequence), Array.from({ length: 12 }, (_, i) => i + 1));
     assert.equal(recent[11].samples.at(-1).firstObservedCount, 0);

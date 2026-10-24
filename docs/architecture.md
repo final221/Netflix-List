@@ -28,6 +28,14 @@ Private `recommendations/performance.js` owns bounded copied slow-task records a
 
 The sampler keeps callback ownership, recording and reset in one module, with named local operations separating measurement from retention. Probe identity rejects late callbacks; task generation independently rejects late task completion. Neither guard substitutes for the other. Reformatting does not change snapshot fields, retention order, thresholds, error isolation or scheduling.
 
+### Recommendation retirement
+
+Recommendations invalidates activity and queued scans before calling external cleanup. Retirement captures and detaches its old entries/style, releases control removal and native leases independently, and records bounded failure counters without preventing other resources from retiring. A failed instance removal can fall back to the captured Element removal method. The native DOM adapter owns one-shot lease release and independent restoration of borrowed card/scroller/arrow properties; its existing retirement-error counter records failed restorations. Shared row/arrow ownership is detached before external restoration, protecting later leases.
+
+`check()` requests made synchronously during retirement coalesce until old native leases have been released; a nested disposal cancels an earlier pending restart. A valid pending check then starts against the current route/profile. This prevents partially retired state or inherited style baselines from becoming a replacement activation. The feature keeps the retiring profile available through native-cache restoration, then clears it before any restart. Cleanup remains inside the existing feature and native adapter, without a shared lifecycle framework.
+
+Mutation delivery is admitted against the exact current observer instance. Ordinary profile changes retain that observer while queued scans still carry their profile/route epoch; replacing the observer rejects its late deliveries without disabling observation for the new profile.
+
 ### Private ownership boundaries
 
 Stage 7 leaves recommendation discovery, visibility/action leases, arrow geometry, row sampling and query binding in `netflix/recommendation-dom.js`. Its private `recommendation-dom/inspection.js` owns bounded loading/component surveys, control hit facts and request-observation lifetimes, using a read-only scan operation. Detailed probing remains opt-in; construction starts no observer/request and public diagnostic shapes, budgets and disposal behavior remain unchanged. Only the entry point and inspection siblings may import this private directory.
