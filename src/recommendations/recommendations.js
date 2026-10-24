@@ -40,7 +40,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
     let scrollTimer = null;
     const pending = new Set();
-    const work = { scans: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
+    const work = { scans: 0, scanRoots: 0, leaseChecks: 0, viewingPasses: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
     const now = () => environment.performance?.now() ?? Date.now();
     function property(node, name, value) { if (node[name] !== value) { node[name] = value; work.controlWrites++; } }
     function attribute(node, name, value) { if (node.getAttribute(name) !== value) { node.setAttribute(name, value); work.controlWrites++; } }
@@ -62,7 +62,8 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         }
         return selectedChoices;
     }
-    function viewingChanged(ids = null) {
+    function observeViewing() { work.viewingPasses++; return viewing.observe([...entries.values()]); }
+    function viewingChanged(ids = null, replenish = true) {
         if (!active || !profile || readProfile() !== profile || !allowed()) return;
         try {
             const latest = read(profile);
@@ -71,13 +72,13 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             const all = !selected || viewingDisabled !== disabled; viewingDisabled = disabled;
             for (const entry of entries.values()) if (all || selected.has(entry.id)) paint(entry);
             // Refill the bounded metadata queue from mounted cards as slots become available.
-            viewing.observe([...entries.values()]);
+            if (replenish) observeViewing();
             savedPanel.paint(); updateRefill(); nativeRows.refresh();
         } catch (error) { warn('Browsing viewing migration unavailable', { reason: error.message }); }
     }
     const refill = createRefill({ environment, dom, readChoices: visibleChoices,
         admitted: () => active && allowed() && Boolean(profile) && !failed && readProfile() === profile,
-        onPage: row => scan(row), log, warn });
+        onPage: row => scan([row]), log, warn });
     const navigation = createNavigationDiagnostics({ environment, dom, readChoices: visibleChoices,
         admitted: () => active && allowed() && Boolean(profile) && readProfile() === profile, log });
     const nativeRows = createNativeRows({ environment, dom, readChoices: visibleChoices,
@@ -145,19 +146,25 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         }
         entries.set(value.host, entry); value.host.appendChild(controls); paint(entry);
     }
-    function scan(root = document) { return dom.batch(() => scanRows(root)); }
-    function scanRows(root) {
-        if (!active || !allowed()) return;
+    function scan(roots = [document]) { return dom.batch(() => scanRows(roots)); }
+    function scanRows(roots) {
+        if (!roots.length || !active || !allowed()) return;
         const previous = profile; syncProfile();
         savedPanel.mount();
         if (!profile) return;
-        if (previous !== profile) root = document;
-        const scanStart = now(); work.scans++;
-        const changedRows = new Set(), affected = root.closest?.('section, .lolomoRow');
-        if (affected) changedRows.add(affected);
-        for (const entry of [...entries.values()]) if (!entry.lease.current()) { changedRows.add(entry.row); release(entry); }
+        if (previous !== profile) roots = [document];
+        const scanStart = now(); work.scans++; work.scanRoots += roots.length;
+        const changedRows = new Set();
+        for (const root of roots) {
+            const affected = root.closest?.('section, .lolomoRow');
+            if (affected) changedRows.add(affected);
+        }
+        for (const entry of [...entries.values()]) {
+            work.leaseChecks++;
+            if (!entry.lease.current()) { changedRows.add(entry.row); release(entry); }
+        }
         for (const row of inventories.keys()) if (!row.isConnected) inventories.delete(row);
-        const discovered = dom.scan(root), byRow = new Map(); work.scannedCards += discovered.length;
+        const discovered = roots.flatMap(root => dom.scan(root)), byRow = new Map(); work.scannedCards += discovered.length;
         for (const value of discovered) {
             if (!byRow.has(value.row)) byRow.set(value.row, []);
             byRow.get(value.row).push(value);
@@ -169,7 +176,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             const legacy = knowledge.legacy(value.id);
             if (legacy?.watched && value.typeHint === 'movie' && !viewing.choice(value.id)) viewing.mark(value.id, value.title);
         }
-        if (viewing.observe([...entries.values()])) viewingChanged(discovered.map(value => value.id));
+        if (observeViewing()) viewingChanged(discovered.map(value => value.id), false);
         for (const value of discovered) { const entry = entries.get(value.host); if (entry) paint(entry); }
         if (!style) {
             style = document.createElement('style');
@@ -188,7 +195,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             const roots = [...pending]; pending.clear();
             const selected = roots.includes(document) ? [document] : roots.filter(node => node.isConnected &&
                 !roots.some(other => other !== node && other.isConnected && other.contains?.(node)));
-            for (const node of selected) scan(node);
+            scan(selected);
         });
     }
     function click(event) {
@@ -238,7 +245,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         if (!card) return;
         const value = dom.describe(card), entry = value && entries.get(value.host);
         if (entry?.lease.current() && entry.controls.parentElement === value.host) return;
-        scan(card.parentElement);
+        scan([card.parentElement]);
         observe();
     }
     function observe() {

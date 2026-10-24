@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.15
+// @version      1.11.16
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -23908,7 +23908,7 @@ ${CARD_ACTION_STYLES}
     let active = false, profile = null, choices = {}, failed = false, observer = null, style = null, queued = false, epoch = 0;
     let scrollTimer = null;
     const pending = /* @__PURE__ */ new Set();
-    const work = { scans: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
+    const work = { scans: 0, scanRoots: 0, leaseChecks: 0, viewingPasses: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
     const now = () => environment.performance?.now() ?? Date.now();
     function property(node, name, value) {
       if (node[name] !== value) {
@@ -23961,7 +23961,11 @@ ${CARD_ACTION_STYLES}
       }
       return selectedChoices;
     }
-    function viewingChanged(ids = null) {
+    function observeViewing() {
+      work.viewingPasses++;
+      return viewing.observe([...entries.values()]);
+    }
+    function viewingChanged(ids = null, replenish = true) {
       if (!active || !profile || readProfile() !== profile || !allowed()) return;
       try {
         const latest = read(profile);
@@ -23970,7 +23974,7 @@ ${CARD_ACTION_STYLES}
         const all = !selected || viewingDisabled !== disabled;
         viewingDisabled = disabled;
         for (const entry of entries.values()) if (all || selected.has(entry.id)) paint(entry);
-        viewing.observe([...entries.values()]);
+        if (replenish) observeViewing();
         savedPanel.paint();
         updateRefill();
         nativeRows.refresh();
@@ -23983,7 +23987,7 @@ ${CARD_ACTION_STYLES}
       dom,
       readChoices: visibleChoices,
       admitted: () => active && allowed() && Boolean(profile) && !failed && readProfile() === profile,
-      onPage: (row) => scan(row),
+      onPage: (row) => scan([row]),
       log,
       warn
     });
@@ -24099,26 +24103,33 @@ ${CARD_ACTION_STYLES}
       value.host.appendChild(controls);
       paint(entry);
     }
-    function scan(root = document) {
-      return dom.batch(() => scanRows(root));
+    function scan(roots = [document]) {
+      return dom.batch(() => scanRows(roots));
     }
-    function scanRows(root) {
-      if (!active || !allowed()) return;
+    function scanRows(roots) {
+      if (!roots.length || !active || !allowed()) return;
       const previous = profile;
       syncProfile();
       savedPanel.mount();
       if (!profile) return;
-      if (previous !== profile) root = document;
+      if (previous !== profile) roots = [document];
       const scanStart = now();
       work.scans++;
-      const changedRows = /* @__PURE__ */ new Set(), affected = root.closest?.("section, .lolomoRow");
-      if (affected) changedRows.add(affected);
-      for (const entry of [...entries.values()]) if (!entry.lease.current()) {
-        changedRows.add(entry.row);
-        release(entry);
+      work.scanRoots += roots.length;
+      const changedRows = /* @__PURE__ */ new Set();
+      for (const root of roots) {
+        const affected = root.closest?.("section, .lolomoRow");
+        if (affected) changedRows.add(affected);
+      }
+      for (const entry of [...entries.values()]) {
+        work.leaseChecks++;
+        if (!entry.lease.current()) {
+          changedRows.add(entry.row);
+          release(entry);
+        }
       }
       for (const row of inventories.keys()) if (!row.isConnected) inventories.delete(row);
-      const discovered = dom.scan(root), byRow = /* @__PURE__ */ new Map();
+      const discovered = roots.flatMap((root) => dom.scan(root)), byRow = /* @__PURE__ */ new Map();
       work.scannedCards += discovered.length;
       for (const value of discovered) {
         if (!byRow.has(value.row)) byRow.set(value.row, []);
@@ -24134,7 +24145,7 @@ ${CARD_ACTION_STYLES}
         const legacy = knowledge.legacy(value.id);
         if (legacy?.watched && value.typeHint === "movie" && !viewing.choice(value.id)) viewing.mark(value.id, value.title);
       }
-      if (viewing.observe([...entries.values()])) viewingChanged(discovered.map((value) => value.id));
+      if (observeViewing()) viewingChanged(discovered.map((value) => value.id), false);
       for (const value of discovered) {
         const entry = entries.get(value.host);
         if (entry) paint(entry);
@@ -24167,7 +24178,7 @@ ${CARD_ACTION_STYLES}
         const roots = [...pending];
         pending.clear();
         const selected = roots.includes(document) ? [document] : roots.filter((node) => node.isConnected && !roots.some((other) => other !== node && other.isConnected && other.contains?.(node)));
-        for (const node of selected) scan(node);
+        scan(selected);
       });
     }
     function click(event) {
@@ -24249,7 +24260,7 @@ ${CARD_ACTION_STYLES}
       if (!card) return;
       const value = dom.describe(card), entry = value && entries.get(value.host);
       if (entry?.lease.current() && entry.controls.parentElement === value.host) return;
-      scan(card.parentElement);
+      scan([card.parentElement]);
       observe();
     }
     function observe() {
@@ -24584,7 +24595,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.15";
+  var SCRIPT_VERSION = "1.11.16";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,

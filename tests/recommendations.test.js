@@ -754,6 +754,66 @@ test('overlapping native mutation roots share one scan in the same observer turn
     assert.equal(b.feature.diagnostics().work.scans, scans + 1); b.feature.dispose();
 });
 
+test('sibling mutation roots share retained-card validation and metadata admission without repainting unrelated cards', async () => {
+    const b = setup(), cards = Array.from({ length: 40 }, (_, index) => mount(b, String(index + 1)));
+    const row = cards[0].row;
+    for (const item of cards.slice(1)) { row.appendChild(item.host); item.row.remove(); }
+    b.feature.check(); await b.scheduler.flush();
+    const before = b.feature.diagnostics().work, reads = new Map();
+    for (const { card } of cards) {
+        const closest = card.closest.bind(card);
+        card.closest = selector => {
+            if (selector === '[data-virtual-slot], .slider-item') reads.set(card, (reads.get(card) || 0) + 1);
+            return closest(selector);
+        };
+    }
+    for (const { host } of cards.slice(0, 20)) b.mutate(host, { addedNodes: [new Element('span')] });
+    await b.scheduler.flush();
+    for (const { card } of cards.slice(20)) assert.equal(reads.get(card), 1, 'unrelated card identity is checked once per batch');
+    const work = b.feature.diagnostics().work;
+    assert.equal(work.scans - before.scans, 1);
+    assert.equal(work.scanRoots - before.scanRoots, 20);
+    assert.equal(work.leaseChecks - before.leaseChecks, 40);
+    assert.equal(work.viewingPasses - before.viewingPasses, 1);
+    assert.equal(work.scannedCards - before.scannedCards, 20);
+    assert.equal(work.paintCalls - before.paintCalls, 20);
+    b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
+});
+
+test('a sibling mutation batch restores recycled hidden cards and preserves a shared row reservation', async () => {
+    const b = setup(), first = mount(b, '1'), second = mount(b, '2');
+    first.row.appendChild(second.host); second.row.remove();
+    b.feature.check(); b.click(first.host, 'Hide suggestion'); await b.scheduler.flush();
+    assert.equal(first.host.style.getPropertyValue('display'), 'none');
+    const restored = [], remove = first.row.style.removeProperty.bind(first.row.style);
+    first.row.style.removeProperty = name => { if (name === 'padding-bottom') restored.push(name); return remove(name); };
+    first.card.setAttribute('href', '/browse?jbv=3'); second.card.setAttribute('href', '/browse?jbv=4');
+    b.mutate(first.card, { type: 'attributes' }); b.mutate(second.card, { type: 'attributes' });
+    await b.scheduler.flush();
+    assert.equal(first.host.style.getPropertyValue('display'), '');
+    assert.equal(first.card.getAttribute('aria-hidden'), null);
+    assert.equal(first.host.querySelectorAll('.tm-rec-controls').length, 1);
+    assert.equal(second.host.querySelectorAll('.tm-rec-controls').length, 1);
+    assert.deepEqual(restored, []); assert.equal(first.row.style.getPropertyValue('padding-bottom'), '72px');
+    assert.equal(knowledgeSnapshot(b.saved, 'A').recommendations.choices['1'], 'hide');
+    b.feature.dispose(); assert.deepEqual(restored, ['padding-bottom']);
+});
+
+test('queued sibling mutation batches cannot scan after profile or route retirement', async () => {
+    for (const replacement of ['profile', 'route', 'dispose']) {
+        const b = setup(), first = mount(b, '1'), second = mount(b, '2');
+        b.feature.check(); await b.scheduler.flush();
+        b.mutate(first.host, { addedNodes: [new Element('span')] }); b.mutate(second.host, { addedNodes: [new Element('span')] });
+        if (replacement === 'profile') { b.select('B'); b.feature.check(); }
+        else if (replacement === 'route') { b.location.pathname = '/watch/1'; b.feature.check(); }
+        else b.feature.dispose();
+        const scans = b.feature.diagnostics().work.scans;
+        await b.scheduler.flush(); assert.equal(b.feature.diagnostics().work.scans, scans);
+        if (replacement !== 'profile') assert.equal(b.document.querySelectorAll('.tm-rec-controls').length, 0);
+        b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
+    }
+});
+
 
 test('matched native query filtering feeds complete candidate pages through the real recommendation owner', async () => {
     const b = setup(), a = mount(b, '1'), second = mount(b, '2');
