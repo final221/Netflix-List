@@ -27,7 +27,7 @@ function carouselQuery(query) {
     return operations.length === 1 && operation.operation === 'query' && operation.name?.value === 'CarouselPage' &&
         Array.isArray(variables) && ['rowId', 'carouselAfterCursor', 'carouselPageSize'].every(name => variables.some(v => v?.variable?.name?.value === name));
 }
-export function findRecommendationQuery(card, mountedIds, { paginationOnly = false } = {}) {
+export function findRecommendationQuery(card, mountedIds, { paginationOnly = false, onCacheEvent } = {}) {
     const mounted = new Set(mountedIds), found = new Map(), fibers = new Set(); let pagination = null;
     const probe = { fibers: 0, hooks: 0, results: 0, namedQuery: 0, operation: 0, variables: 0, cacheApi: 0, connection: 0, maxOverlap: 0, mounted: mounted.size };
     const seen = new WeakSet(); let inspected = 0;
@@ -77,7 +77,7 @@ export function findRecommendationQuery(card, mountedIds, { paginationOnly = fal
     }
     if (paginationOnly) return { pagination };
     if (found.size !== 1) return { reason: found.size ? 'ambiguous-query' : 'no-matching-query', probe };
-    return { binding: createBinding([...found.values()][0]), pagination, probe };
+    return { binding: createBinding({ ...[...found.values()][0], onCacheEvent }), pagination, probe };
 }
 function variableKey(variables) {
     let visited = 0;
@@ -103,6 +103,15 @@ function createBinding(native) {
     const edges = new Map(), cursors = new Set(); let server = null, last = null, disabled = false, pendingServer = false;
     const key = edge => videoId(edge) || 'cursor:' + edge.cursor;
     const pageKey = info => variableKey(info && Object.fromEntries(Object.keys(info).filter(key => key !== '__typename').map(key => [key, own(info, key)])));
+    function notify(facts) { try { native.onCacheEvent?.(facts); } catch (_) { /* Passive evidence cannot change cache behavior. */ } }
+    function writeObserved(operation, input, data, assertCurrent) {
+        const value = connection(data), facts = { operation, edges: value.edges.length, totalCount: value.totalCount, hasNextPage: value.pageInfo.hasNextPage };
+        notify({ ...facts, stage: 'before-write' });
+        try { assertCurrent(); access(); }
+        catch (error) { notify({ ...facts, stage: 'cancelled' }); throw error; }
+        try { const result = write({ ...input, data, overwrite: true }); notify({ ...facts, stage: 'returned' }); return result; }
+        catch (error) { notify({ ...facts, stage: 'threw' }); throw error; }
+    }
     const signature = data => JSON.stringify([connection(data)?.edges?.map(key), connection(data)?.totalCount, pageKey(connection(data)?.pageInfo)]);
     function ownership() {
         const next = own(observable, 'options'), variables = own(next, 'variables');
@@ -133,13 +142,15 @@ function createBinding(native) {
         const output = copy(data, selected, { totalCount, pageInfo: server.pageInfo });
         if (signature(output) === signature(data)) return false;
         last = signature(output);
-        assertCurrent(); write({ ...input, data: output, overwrite: true }); assertCurrent();
+        assertCurrent(); writeObserved('publish', input, output, assertCurrent); assertCurrent();
         const observed = read(input); assertCurrent();
         const expected = connection(output), actual = connection(observed);
         projection = { matches: signature(observed) === last, edgeOrder: JSON.stringify(expected.edges.map(key)) === JSON.stringify(actual?.edges?.map(key)),
             totalCount: expected.totalCount === actual?.totalCount, pageInfo: pageKey(expected.pageInfo) === pageKey(actual?.pageInfo),
             expectedEdges: expected.edges.length, observedEdges: actual?.edges?.length ?? null, expectedTotal: expected.totalCount, observedTotal: actual?.totalCount ?? null,
             cursor: expected.pageInfo.endCursor === actual?.pageInfo?.endCursor, pageFlag: expected.pageInfo.hasNextPage === actual?.pageInfo?.hasNextPage };
+        notify({ operation: 'publish', stage: projection.matches ? 'verified' : 'rejected', matches: projection.matches,
+            edges: projection.observedEdges, totalCount: projection.observedTotal });
         if (!projection.matches) {
             // Mismatching readback may belong to a synchronous native update.
             // It gives us no ownership to overwrite the current cache.
@@ -176,7 +187,7 @@ function createBinding(native) {
         if (signature(data) !== last) return false;
         const visible = new Map(connection(data).edges.map(edge => [key(edge), edge]));
         const restored = [...edges.values()].map(edge => visible.get(key(edge)) || edge);
-        write({ ...input, data: copy(data, restored, server), overwrite: true }); last = null; return true;
+        writeObserved('restore', input, copy(data, restored, server), assertCurrent); last = null; return true;
     }
     ingest(native.data);
     return Object.freeze({ publish, load, restore, current,

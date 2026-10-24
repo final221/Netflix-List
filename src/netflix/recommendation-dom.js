@@ -28,7 +28,7 @@ export function createRecommendationDom(environment) {
     const { document, location, getComputedStyle } = environment;
     const selector = 'a[data-uia="standard-card"][href], .title-card';
     const { loadingFacts, navigationStart, navigationRequests, observeRequests } = createRecommendationInspection(environment, scan);
-    const scrollerLeases = new WeakMap(), arrowRows = new WeakMap();
+    const scrollerLeases = new WeakMap(), arrowRows = new WeakMap(), lifecycleIdentities = new WeakMap();
     const layoutWork = { batches: 0, spaceWrites: 0, spaceRestores: 0, arrowRows: 0, arrowCards: 0, arrowWrites: 0, retirementErrors: 0 };
     let batchDepth = 0; const retirements = new Set();
     function batch(operation) {
@@ -125,6 +125,25 @@ export function createRecommendationDom(environment) {
         const previous = new Set((record.oldValue || '').split(/\s+/));
         return ['title-card', 'slider-item', 'slider', 'lolomoRow', 'continueWatching', 'handleNext', 'handlePrev']
             .some(name => previous.has(name) !== record.target.classList.contains(name));
+    }
+    function lifecycleIdentity(row) {
+        const fingerprint = text => {
+            let hash = 2166136261;
+            for (const char of text) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+            return (hash >>> 0).toString(16).padStart(8, '0');
+        };
+        const id = row.id || row.getAttribute('data-list-id') || row.getAttribute('data-uia') || '';
+        const bounded = id.slice(0, 2048), cached = lifecycleIdentities.get(row);
+        if (cached?.id === bounded) return cached.facts;
+        let pageKey = null;
+        try {
+            if (id.length <= 2048) {
+                const value = JSON.parse(globalThis.atob(id));
+                if (typeof value?.pageId === 'string' && value.pageId.length <= 512) pageKey = fingerprint(value.pageId);
+            }
+        } catch (_) { /* Native page identity is optional. */ }
+        const facts = Object.freeze({ rowKey: fingerprint(bounded), pageKey, identityTruncated: id.length > 2048 });
+        lifecycleIdentities.set(row, { id: bounded, facts }); return facts;
     }
     function describe(card) {
         if (!card?.isConnected || !card.matches(selector)) return null;
@@ -263,6 +282,6 @@ export function createRecommendationDom(environment) {
                 loading: loadingFacts(row, sample.firstCard) };
         } catch (_) { return null; }
     }
-    return Object.freeze({ scan, lease, updateArrows, batch, isRelevantMutation, layoutDiagnostics: () => ({ ...layoutWork }), describe, refillState, loadingFacts, navigationTarget, rowDiagnostics,
-        navigationStart, navigationRequests, observeRequests, queryBinding: (card, ids) => findRecommendationQuery(queryRoots(card), ids), queryPage: card => findRecommendationQuery(queryRoots(card), [], { paginationOnly: true }).pagination });
+    return Object.freeze({ scan, lease, updateArrows, batch, isRelevantMutation, lifecycleIdentity, layoutDiagnostics: () => ({ ...layoutWork }), describe, refillState, loadingFacts, navigationTarget, rowDiagnostics,
+        navigationStart, navigationRequests, observeRequests, queryBinding: (card, ids, onCacheEvent) => findRecommendationQuery(queryRoots(card), ids, { onCacheEvent }), queryPage: card => findRecommendationQuery(queryRoots(card), [], { paginationOnly: true }).pagination });
 }

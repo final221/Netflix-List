@@ -754,6 +754,33 @@ test('overlapping native mutation roots share one scan in the same observer turn
     assert.equal(b.feature.diagnostics().work.scans, scans + 1); b.feature.dispose();
 });
 
+test('row replacement diagnostics retain native cache activity and population loss in one chronology', async () => {
+    const b = setup(), old = Array.from({ length: 6 }, (_, index) => mount(b, String(index * 2 + 1)));
+    for (const [index, item] of old.entries()) {
+        const second = mount(b, String(index * 2 + 2)); item.row.appendChild(second.host); second.row.remove();
+        item.row.id = Buffer.from(JSON.stringify({ pageId: 'private-old-page', sectionId: 'private-row-' + index })).toString('base64');
+    }
+    const native = queryFixture(['1', '2', '13']); native.attach(old[0].card);
+    b.feature.check(); b.click(old[0].host, 'Hide suggestion'); await b.scheduler.advance(200); await b.scheduler.flush();
+    const initial = b.feature.diagnostics().rowLifecycle;
+    assert.ok(initial?.recent.some(event => event.kind === 'cache' && event.operation === 'publish' && event.stage === 'verified'));
+    const incoming = [mount(b, '101'), mount(b, '102')];
+    for (const item of incoming) item.row.id = Buffer.from(JSON.stringify({ pageId: 'private-new-page', sectionId: 'private-new-row' })).toString('base64');
+    old.forEach(item => item.row.remove());
+    b.mutate(b.document.body, { removedNodes: old.map(item => item.row), addedNodes: incoming.map(item => item.row) });
+    await b.scheduler.flush();
+    const trace = b.feature.diagnostics().rowLifecycle, incident = trace.incidents.at(-1);
+    assert.equal(incident.event.beforeRows, 6); assert.equal(incident.event.rows, 2);
+    assert.equal(incident.event.removed, 6); assert.equal(incident.event.added, 2);
+    assert.equal(incident.event.pageChanged, true);
+    assert.ok(incident.before.some(event => event.kind === 'cache' && event.operation === 'publish'));
+    assert.ok(incident.after.some(event => event.kind === 'cache' && event.operation === 'restore'));
+    assert.doesNotMatch(JSON.stringify(trace), /private-|cursor|auth|variables|sectionId/);
+    trace.recent.length = 0; assert.ok(b.feature.diagnostics().rowLifecycle.recent.length);
+    b.feature.dispose(); assert.equal(b.scheduler.timers.size, 0);
+    assert.equal(b.feature.diagnostics().rowLifecycle.recent.length, 0);
+});
+
 test('sibling mutation roots validate only affected cards and share metadata admission without repainting unrelated cards', async () => {
     const b = setup(), cards = Array.from({ length: 40 }, (_, index) => mount(b, String(index + 1)));
     const row = cards[0].row;

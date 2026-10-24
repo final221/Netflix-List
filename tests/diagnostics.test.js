@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Element } from './helpers/dom.js';
 import { createLogger } from '../src/diagnostics/logger.js';
 import { createReport } from '../src/diagnostics/report.js';
+import { summarizeSignals } from '../src/diagnostics/signals.js';
 import { createPopupInspection } from '../src/netflix/popup-inspection.js';
 
 function popupEnvironment() {
@@ -36,6 +37,15 @@ function loggerFixture() {
         console: { log: (...args) => writes.push(args), warn: (...args) => writes.push(args) } });
     return { logger, writes, enableTrace: () => { verbose = true; } };
 }
+
+test('bounded row lifecycle chronology and incident context survive projection and re-export', () => {
+    const recent = Array.from({ length: 20 }, (_, sequence) => ({ sequence, at: sequence * 10,
+        kind: 'population', beforeRows: 40 - sequence, rows: 39 - sequence, removed: 1 }));
+    const input = { rowLifecycle: { recent, incidents: [{ event: recent[12], before: recent.slice(4, 12), after: recent.slice(13) }] } };
+    const result = summarizeSignals(input);
+    assert.deepEqual(result.rowLifecycle, input.rowLifecycle);
+    assert.deepEqual(summarizeSignals(result), result);
+});
 
 test('disabled traces avoid payload construction while warnings retain existing detail', () => {
     const e = loggerFixture();

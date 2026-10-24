@@ -5,6 +5,7 @@ import { createNativeRows } from './native-rows.js';
 import { createRowBuffer } from './row-buffer.js';
 import { createSavedChoicesPanel, SAVED_CHOICES_PANEL_STYLES } from './saved-choices-panel.js';
 import { createNavigationDiagnostics } from './navigation.js';
+import { createLifecycleDiagnostics } from './lifecycle.js';
 import { createBrowsingViewing, createKnowledge } from '../viewing/viewing.js';
 
 export function createRecommendations({ environment, context, userscript, tUi, viewingData, knowledge, log = () => {}, warn = () => {} }) {
@@ -42,6 +43,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     const pending = new Set();
     const work = { scans: 0, scanRoots: 0, connectionChecks: 0, leaseChecks: 0, viewingPasses: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
     const now = () => environment.performance?.now() ?? Date.now();
+    const lifecycle = createLifecycleDiagnostics({ now, readIdentity: nativeDom.lifecycleIdentity });
     function property(node, name, value) { if (node[name] !== value) { node[name] = value; work.controlWrites++; } }
     function attribute(node, name, value) { if (node.getAttribute(name) !== value) { node.setAttribute(name, value); work.controlWrites++; } }
     const allowed = () => location.origin === 'https://www.netflix.com' &&
@@ -82,6 +84,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
     const navigation = createNavigationDiagnostics({ environment, dom, readChoices: visibleChoices,
         admitted: () => active && allowed() && Boolean(profile) && readProfile() === profile, log });
     const nativeRows = createNativeRows({ environment, dom, readChoices: visibleChoices,
+        observeCache: lifecycle.cacheObserver,
         admitted: () => active && allowed() && Boolean(profile) && !failed && readProfile() === profile,
         canRestore: () => Boolean(profile) && readProfile() === profile });
     function rowDiagnostics() {
@@ -105,6 +108,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         const next = readProfile();
         if (next === profile) return;
         nativeRows.dispose(); refill.dispose(); navigation.dispose(); viewing.dispose();
+        lifecycle.reset();
         for (const entry of [...entries.values()]) release(entry);
         profile = next; choices = {}; failed = false; viewingDisabled = null; epoch++; pending.clear(); queued = false;
         inventories.clear(); inventoryLimit = false;
@@ -155,6 +159,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         if (previous !== profile) roots = [document];
         const scanStart = now(); work.scans++; work.scanRoots += roots.length;
         const changedRows = new Set(), candidates = new Set();
+        let disconnected = 0, invalidated = 0;
         for (const root of roots) {
             const affected = root.closest?.('section, .lolomoRow');
             if (affected) changedRows.add(affected);
@@ -169,7 +174,10 @@ export function createRecommendations({ environment, context, userscript, tUi, v
                 !entry.scroller.isConnected || entry.controls.parentElement !== entry.host;
             if (!detached && !candidates.has(entry)) continue;
             if (!detached) work.leaseChecks++;
-            if (detached || !entry.lease.current()) { changedRows.add(entry.row); release(entry); }
+            if (detached || !entry.lease.current()) {
+                if (detached) disconnected++; else invalidated++;
+                changedRows.add(entry.row); release(entry);
+            }
         }
         for (const row of inventories.keys()) if (!row.isConnected) inventories.delete(row);
         const discovered = roots.flatMap(root => dom.scan(root)), byRow = new Map(); work.scannedCards += discovered.length;
@@ -184,6 +192,8 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             const legacy = knowledge.legacy(value.id);
             if (legacy?.watched && value.typeHint === 'movie' && !viewing.choice(value.id)) viewing.mark(value.id, value.title);
         }
+        const rows = new Set([...entries.values()].map(entry => entry.row));
+        lifecycle.population(rows, entries.size, { roots: roots.length, disconnected, invalidated });
         if (observeViewing()) viewingChanged(discovered.map(value => value.id), false);
         for (const value of discovered) { const entry = entries.get(value.host); if (entry) paint(entry); }
         if (!style) {
@@ -194,7 +204,7 @@ export function createRecommendations({ environment, context, userscript, tUi, v
             environment.window?.addEventListener('resize', resize);
         }
         for (const row of new Set([...byRow.keys(), ...changedRows])) dom.updateArrows(row);
-        updateRefill(); nativeRows.observe(new Set([...entries.values()].map(entry => entry.row))); nativeRows.refresh(); work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
+        updateRefill(); nativeRows.observe(rows); nativeRows.refresh(); work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
     }
     function schedule(root) {
         // Feature-owned host identity remains available even when native markup is invalid.
@@ -295,11 +305,12 @@ export function createRecommendations({ environment, context, userscript, tUi, v
         active = false; epoch++; queued = false; pending.clear(); observer?.disconnect(); observer = null;
         document.removeEventListener('click', click, true); document.removeEventListener('pointerover', pointer, true);
         savedPanel.dispose(); inventories.clear(); inventoryLimit = false;
+        lifecycle.reset();
         for (const entry of [...entries.values()]) release(entry);
         style?.remove(); style = null; profile = null; choices = {}; failed = false; viewingDisabled = null;
         selectedIds = selectedHides = null; selectedChoices = {};
     }
     return Object.freeze({ check, dispose, diagnostics: () => ({ active, decorated: entries.size, hiddenCount: Object.keys(visibleChoices()).length,
         storageFailed: failed, work: { ...work }, layout: dom.layoutDiagnostics(), nativeRows: nativeRows.diagnostics(), inventory: { rows: inventories.size, limitReached: inventoryLimit }, refill: refill.diagnostics(), viewing: viewing.diagnostics(),
-        rows: rowDiagnostics(), navigation: navigation.snapshot() }) });
+        rows: rowDiagnostics(), navigation: navigation.snapshot(), rowLifecycle: lifecycle.snapshot() }) });
 }

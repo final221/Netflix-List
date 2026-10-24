@@ -1,5 +1,5 @@
 // Deferred work for visible or interacted rows. Native cache/query operations stay in the adapter.
-export function createNativeRows({ environment, dom, admitted, canRestore = admitted, readChoices }) {
+export function createNativeRows({ environment, dom, admitted, canRestore = admitted, readChoices, observeCache = () => undefined }) {
     const rows = new Map(), requests = [], stats = { attempts: 0, activated: 0, writes: 0, loads: 0, restored: 0, failures: 0, automatic: 0, automaticSuppressed: 0, blockedRetries: 0, pageLookups: 0, stops: {} };
     let generation = 0, visibility = null; const observed = new Map(); let backoff = new WeakMap();
     const now = () => environment.performance?.now() ?? Date.now();
@@ -24,7 +24,9 @@ export function createNativeRows({ environment, dom, admitted, canRestore = admi
             if (!values.length) return;
             if (!job.binding) {
                 job.lookups--;
-                const found = dom.queryBinding(values[0].card, values.map(value => value.id)); check();
+                let onCacheEvent;
+                try { onCacheEvent = observeCache(job.row); } catch (_) { /* Diagnostics cannot block native work. */ }
+                const found = dom.queryBinding(values[0].card, values.map(value => value.id), onCacheEvent); check();
                 job.probe = found.probe;
                 if (!found.binding) { job.reason = found.probe?.namedQuery && !found.probe.variables ? 'waiting-row-query' : found.reason;
                     if (job.source === 'visible') job.lookups = 0; return; }

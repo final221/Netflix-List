@@ -4,6 +4,40 @@ import { findRecommendationQuery } from '../src/netflix/recommendation-query.js'
 import { queryFixture } from './helpers/recommendation-query.js';
 
 const ids = data => data.node.entities.edges.map(edge => edge.node.unifiedEntity.videoId);
+test('cache diagnostics bracket actual writes and preserve verification, privacy and observer failures', () => {
+    const f = queryFixture(), events = [];
+    const { binding } = findRecommendationQuery(f.card(), ['1', '2'], { onCacheEvent: event => { events.push(event); throw Error('diagnostic failure'); } });
+    f.state.onWrite = () => assert.equal(events.at(-1)?.stage, 'before-write');
+    binding.publish({ 1: 'hide' }, () => {});
+    assert.deepEqual(events.map(event => [event.operation, event.stage]), [['publish', 'before-write'], ['publish', 'returned'], ['publish', 'verified']]);
+    assert.equal(events[0].edges, 2); assert.equal(events.at(-1).matches, true);
+    const count = events.length; binding.publish({ 1: 'hide' }, () => {}); assert.equal(events.length, count);
+    binding.restore(() => {});
+    assert.deepEqual(events.slice(-2).map(event => [event.operation, event.stage]), [['restore', 'before-write'], ['restore', 'returned']]);
+    assert.doesNotMatch(JSON.stringify(events), /private-|cursor|variables|query|auth/);
+});
+
+test('cache observation cannot lend a retired query permission to write', () => {
+    const f = queryFixture();
+    const { binding } = findRecommendationQuery(f.card(), ['1', '2'], { onCacheEvent(event) {
+        if (event.stage === 'before-write') f.result.observable.options.variables = { ...f.variables, rowId: 'replacement' };
+    } });
+    assert.throws(() => binding.publish({ 1: 'hide' }, () => {}), /owner-replaced/);
+    assert.equal(f.state.writes.length, 0);
+});
+
+test('cache diagnostics distinguish rejected projections from a throwing native write without changing errors', () => {
+    for (const mode of ['rejected', 'threw']) {
+        const f = queryFixture(), events = [], failure = Error('native write failed');
+        const { binding } = findRecommendationQuery(f.card(), ['1', '2'], { onCacheEvent: event => events.push(event) });
+        if (mode === 'rejected') f.state.rejectWrites = true;
+        else f.state.onWrite = () => { throw failure; };
+        assert.throws(() => binding.publish({ 1: 'hide' }, () => {}), error => mode === 'threw' ? error === failure : /projection-rejected/.test(error.message));
+        assert.equal(events.at(-1).stage, mode);
+        assert.equal(f.state.writes.length, 1);
+    }
+});
+
 test('matched native data is filtered before paging, preserves raw edges, and restores without server writes', () => {
     const f = queryFixture(['1', '2', '3', '4']), original = f.state.data;
     const { binding, pagination } = findRecommendationQuery(f.card(), ['1', '2']);

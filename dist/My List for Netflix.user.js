@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         My List for Netflix
-// @version      1.11.17
+// @version      1.11.18
 // @description  Displays your Netflix My List in an easy-to-browse grid.
 // @author       final221
 // @license      MIT
@@ -7140,6 +7140,7 @@ ${CARD_ACTION_STYLES}
     if (!value || typeof value !== "object") return value;
     if (Number.isSafeInteger(value.count) && (Array.isArray(value.samples) && Number.isSafeInteger(value.omitted) || Array.isArray(value.values) && value.values.every((item) => Number.isSafeInteger(item?.count) && Object.hasOwn(item, "value")))) return value;
     if (depth >= 16) return { omitted: true, kind: Array.isArray(value) ? "array" : "object", reason: "diagnostic-depth-limit" };
+    if (key === "rowLifecycle") return value;
     if (key === "navigation" && Array.isArray(value.recent)) return navigationSummary(value, depth);
     if (Array.isArray(value)) return arraySummary(value, depth, key);
     return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, summarizeSignals(item, depth + 1, name)]));
@@ -22523,7 +22524,7 @@ ${CARD_ACTION_STYLES}
     const operation = operations[0], variables = operation?.variableDefinitions;
     return operations.length === 1 && operation.operation === "query" && operation.name?.value === "CarouselPage" && Array.isArray(variables) && ["rowId", "carouselAfterCursor", "carouselPageSize"].every((name) => variables.some((v) => v?.variable?.name?.value === name));
   }
-  function findRecommendationQuery(card, mountedIds, { paginationOnly = false } = {}) {
+  function findRecommendationQuery(card, mountedIds, { paginationOnly = false, onCacheEvent } = {}) {
     const mounted = new Set(mountedIds), found = /* @__PURE__ */ new Map(), fibers = /* @__PURE__ */ new Set();
     let pagination = null;
     const probe = { fibers: 0, hooks: 0, results: 0, namedQuery: 0, operation: 0, variables: 0, cacheApi: 0, connection: 0, maxOverlap: 0, mounted: mounted.size };
@@ -22591,7 +22592,7 @@ ${CARD_ACTION_STYLES}
     }
     if (paginationOnly) return { pagination };
     if (found.size !== 1) return { reason: found.size ? "ambiguous-query" : "no-matching-query", probe };
-    return { binding: createBinding([...found.values()][0]), pagination, probe };
+    return { binding: createBinding({ ...[...found.values()][0], onCacheEvent }), pagination, probe };
   }
   function variableKey(variables) {
     let visited = 0;
@@ -22623,6 +22624,31 @@ ${CARD_ACTION_STYLES}
     let server = null, last = null, disabled = false, pendingServer = false;
     const key = (edge) => videoId(edge) || "cursor:" + edge.cursor;
     const pageKey = (info) => variableKey(info && Object.fromEntries(Object.keys(info).filter((key2) => key2 !== "__typename").map((key2) => [key2, own(info, key2)])));
+    function notify(facts) {
+      try {
+        native.onCacheEvent?.(facts);
+      } catch (_) {
+      }
+    }
+    function writeObserved(operation, input, data, assertCurrent) {
+      const value = connection(data), facts = { operation, edges: value.edges.length, totalCount: value.totalCount, hasNextPage: value.pageInfo.hasNextPage };
+      notify({ ...facts, stage: "before-write" });
+      try {
+        assertCurrent();
+        access();
+      } catch (error) {
+        notify({ ...facts, stage: "cancelled" });
+        throw error;
+      }
+      try {
+        const result = write({ ...input, data, overwrite: true });
+        notify({ ...facts, stage: "returned" });
+        return result;
+      } catch (error) {
+        notify({ ...facts, stage: "threw" });
+        throw error;
+      }
+    }
     const signature = (data) => JSON.stringify([connection(data)?.edges?.map(key), connection(data)?.totalCount, pageKey(connection(data)?.pageInfo)]);
     function ownership() {
       const next = own(observable, "options"), variables = own(next, "variables");
@@ -22670,7 +22696,7 @@ ${CARD_ACTION_STYLES}
       if (signature(output) === signature(data)) return false;
       last = signature(output);
       assertCurrent();
-      write({ ...input, data: output, overwrite: true });
+      writeObserved("publish", input, output, assertCurrent);
       assertCurrent();
       const observed = read(input);
       assertCurrent();
@@ -22687,6 +22713,13 @@ ${CARD_ACTION_STYLES}
         cursor: expected.pageInfo.endCursor === actual?.pageInfo?.endCursor,
         pageFlag: expected.pageInfo.hasNextPage === actual?.pageInfo?.hasNextPage
       };
+      notify({
+        operation: "publish",
+        stage: projection.matches ? "verified" : "rejected",
+        matches: projection.matches,
+        edges: projection.observedEdges,
+        totalCount: projection.observedTotal
+      });
       if (!projection.matches) {
         disabled = true;
         throw Error("cache-projection-rejected");
@@ -22744,7 +22777,7 @@ ${CARD_ACTION_STYLES}
       if (signature(data) !== last) return false;
       const visible = new Map(connection(data).edges.map((edge) => [key(edge), edge]));
       const restored = [...edges.values()].map((edge) => visible.get(key(edge)) || edge);
-      write({ ...input, data: copy(data, restored, server), overwrite: true });
+      writeObserved("restore", input, copy(data, restored, server), assertCurrent);
       last = null;
       return true;
     }
@@ -22798,7 +22831,7 @@ ${CARD_ACTION_STYLES}
     const { document, location, getComputedStyle } = environment;
     const selector = 'a[data-uia="standard-card"][href], .title-card';
     const { loadingFacts, navigationStart, navigationRequests, observeRequests } = createRecommendationInspection(environment, scan);
-    const scrollerLeases = /* @__PURE__ */ new WeakMap(), arrowRows = /* @__PURE__ */ new WeakMap();
+    const scrollerLeases = /* @__PURE__ */ new WeakMap(), arrowRows = /* @__PURE__ */ new WeakMap(), lifecycleIdentities = /* @__PURE__ */ new WeakMap();
     const layoutWork = { batches: 0, spaceWrites: 0, spaceRestores: 0, arrowRows: 0, arrowCards: 0, arrowWrites: 0, retirementErrors: 0 };
     let batchDepth = 0;
     const retirements = /* @__PURE__ */ new Set();
@@ -22935,6 +22968,27 @@ ${CARD_ACTION_STYLES}
       if (record.type !== "attributes" || record.attributeName !== "class") return true;
       const previous = new Set((record.oldValue || "").split(/\s+/));
       return ["title-card", "slider-item", "slider", "lolomoRow", "continueWatching", "handleNext", "handlePrev"].some((name) => previous.has(name) !== record.target.classList.contains(name));
+    }
+    function lifecycleIdentity(row) {
+      const fingerprint = (text) => {
+        let hash = 2166136261;
+        for (const char of text) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+        return (hash >>> 0).toString(16).padStart(8, "0");
+      };
+      const id = row.id || row.getAttribute("data-list-id") || row.getAttribute("data-uia") || "";
+      const bounded = id.slice(0, 2048), cached = lifecycleIdentities.get(row);
+      if (cached?.id === bounded) return cached.facts;
+      let pageKey = null;
+      try {
+        if (id.length <= 2048) {
+          const value = JSON.parse(globalThis.atob(id));
+          if (typeof value?.pageId === "string" && value.pageId.length <= 512) pageKey = fingerprint(value.pageId);
+        }
+      } catch (_) {
+      }
+      const facts = Object.freeze({ rowKey: fingerprint(bounded), pageKey, identityTruncated: id.length > 2048 });
+      lifecycleIdentities.set(row, { id: bounded, facts });
+      return facts;
     }
     function describe(card) {
       if (!card?.isConnected || !card.matches(selector)) return null;
@@ -23140,6 +23194,7 @@ ${CARD_ACTION_STYLES}
       updateArrows,
       batch,
       isRelevantMutation,
+      lifecycleIdentity,
       layoutDiagnostics: () => ({ ...layoutWork }),
       describe,
       refillState,
@@ -23149,7 +23204,7 @@ ${CARD_ACTION_STYLES}
       navigationStart,
       navigationRequests,
       observeRequests,
-      queryBinding: (card, ids) => findRecommendationQuery(queryRoots(card), ids),
+      queryBinding: (card, ids, onCacheEvent) => findRecommendationQuery(queryRoots(card), ids, { onCacheEvent }),
       queryPage: (card) => findRecommendationQuery(queryRoots(card), [], { paginationOnly: true }).pagination
     });
   }
@@ -23234,7 +23289,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/recommendations/native-rows.js
-  function createNativeRows({ environment, dom, admitted, canRestore = admitted, readChoices }) {
+  function createNativeRows({ environment, dom, admitted, canRestore = admitted, readChoices, observeCache = () => void 0 }) {
     const rows = /* @__PURE__ */ new Map(), requests = [], stats = { attempts: 0, activated: 0, writes: 0, loads: 0, restored: 0, failures: 0, automatic: 0, automaticSuppressed: 0, blockedRetries: 0, pageLookups: 0, stops: {} };
     let generation = 0, visibility = null;
     const observed = /* @__PURE__ */ new Map();
@@ -23276,7 +23331,12 @@ ${CARD_ACTION_STYLES}
         if (!values.length) return;
         if (!job.binding) {
           job.lookups--;
-          const found = dom.queryBinding(values[0].card, values.map((value) => value.id));
+          let onCacheEvent;
+          try {
+            onCacheEvent = observeCache(job.row);
+          } catch (_) {
+          }
+          const found = dom.queryBinding(values[0].card, values.map((value) => value.id), onCacheEvent);
           check();
           job.probe = found.probe;
           if (!found.binding) {
@@ -23864,6 +23924,125 @@ ${CARD_ACTION_STYLES}
     } });
   }
 
+  // src/recommendations/lifecycle.js
+  function createLifecycleDiagnostics({ now, readIdentity }) {
+    let tokens = /* @__PURE__ */ new WeakMap(), previous = /* @__PURE__ */ new Map(), nextToken = 0, sequence = 0, generation = 0;
+    let previousCards = 0, peakRows = 0, peakCards = 0, droppedRecent = 0, droppedIncidents = 0, failures = 0, disrupted = false;
+    const recent = [], incidents = [];
+    const copy = (value) => JSON.parse(JSON.stringify(value));
+    function identify(row) {
+      if (!tokens.has(row)) tokens.set(row, ++nextToken);
+      return { token: tokens.get(row), ...readIdentity(row) };
+    }
+    function record(facts, incident = false) {
+      const event = { sequence: ++sequence, at: now(), ...facts };
+      for (const entry of incidents) if (entry.after.length < 12) entry.after.push(event);
+      if (incident) {
+        incidents.push({ event, before: recent.slice(-8), after: [] });
+        if (incidents.length > 3) {
+          incidents.shift();
+          droppedIncidents++;
+        }
+      }
+      recent.push(event);
+      if (recent.length > 40) {
+        recent.shift();
+        droppedRecent++;
+      }
+    }
+    function population(rows, cards, detail = {}) {
+      try {
+        const next = new Map([...rows].map((row) => {
+          const facts = identify(row);
+          return [facts.token, facts];
+        }));
+        const added = [...next.values()].filter((row) => !previous.has(row.token));
+        const removed = [...previous.values()].filter((row) => !next.has(row.token));
+        const changed = [...next.values()].filter((row) => previous.has(row.token) && previous.get(row.token).rowKey !== row.rowKey);
+        const pages = (values) => [...new Set([...values].map((row) => row.pageKey).filter(Boolean))].sort();
+        const beforePages = pages(previous.values()), currentPages = pages(next.values());
+        const pageChanged = beforePages.length > 0 && currentPages.length > 0 && !beforePages.some((page) => currentPages.includes(page));
+        peakRows = Math.max(peakRows, next.size);
+        peakCards = Math.max(peakCards, cards);
+        const cardLoss = previousCards >= 20 && cards < previousCards / 2;
+        if (added.length || removed.length || changed.length || cardLoss) {
+          const loss = removed.length >= Math.max(3, previous.size / 2) || peakRows >= 8 && next.size <= peakRows / 2 || cardLoss;
+          const incident = pageChanged || changed.length >= Math.max(3, previous.size / 2) || loss && !disrupted;
+          record({
+            kind: "population",
+            reason: pageChanged || changed.length ? "row-replacement" : removed.length ? "row-loss" : "row-growth",
+            beforeRows: previous.size,
+            rows: next.size,
+            beforeCards: previousCards,
+            cards,
+            added: added.length,
+            removed: removed.length,
+            reidentified: changed.length,
+            pageChanged,
+            beforePages: beforePages.slice(0, 4),
+            pages: currentPages.slice(0, 4),
+            addedRows: added.slice(0, 6),
+            removedRows: removed.slice(0, 6),
+            changedRows: changed.slice(0, 6),
+            samplesTruncated: added.length > 6 || removed.length > 6 || changed.length > 6 || currentPages.length > 4 || beforePages.length > 4,
+            ...detail
+          }, incident);
+          if (loss) disrupted = true;
+        }
+        if (next.size >= peakRows * 0.75) disrupted = false;
+        previous = next;
+        previousCards = cards;
+      } catch (_) {
+        failures++;
+      }
+    }
+    function cacheObserver(row) {
+      const owner = generation;
+      let identity;
+      try {
+        identity = identify(row);
+      } catch (_) {
+        failures++;
+        identity = {};
+      }
+      return (facts) => {
+        if (owner !== generation) return;
+        try {
+          record({ kind: "cache", ...identity, ...facts });
+        } catch (_) {
+          failures++;
+        }
+      };
+    }
+    function reset() {
+      generation++;
+      tokens = /* @__PURE__ */ new WeakMap();
+      previous = /* @__PURE__ */ new Map();
+      nextToken = sequence = 0;
+      previousCards = peakRows = peakCards = droppedRecent = droppedIncidents = failures = 0;
+      disrupted = false;
+      recent.length = incidents.length = 0;
+    }
+    return Object.freeze({
+      population,
+      cacheObserver,
+      reset,
+      snapshot: () => copy({
+        capturedAt: now(),
+        sequence,
+        peakRows,
+        peakCards,
+        rows: previous.size,
+        cards: previousCards,
+        droppedRecent,
+        droppedIncidents,
+        failures,
+        recent,
+        incidents
+      })
+    });
+  }
+
   // src/recommendations/recommendations.js
   function createRecommendations({ environment, context, userscript, tUi, viewingData, knowledge, log = () => {
   }, warn = () => {
@@ -23916,6 +24095,7 @@ ${CARD_ACTION_STYLES}
     const pending = /* @__PURE__ */ new Set();
     const work = { scans: 0, scanRoots: 0, connectionChecks: 0, leaseChecks: 0, viewingPasses: 0, scannedCards: 0, maxScanMs: 0, paintCalls: 0, controlWrites: 0 };
     const now = () => environment.performance?.now() ?? Date.now();
+    const lifecycle = createLifecycleDiagnostics({ now, readIdentity: nativeDom.lifecycleIdentity });
     function property(node, name, value) {
       if (node[name] !== value) {
         node[name] = value;
@@ -24008,6 +24188,7 @@ ${CARD_ACTION_STYLES}
       environment,
       dom,
       readChoices: visibleChoices,
+      observeCache: lifecycle.cacheObserver,
       admitted: () => active && allowed() && Boolean(profile) && !failed && readProfile() === profile,
       canRestore: () => Boolean(profile) && readProfile() === profile
     });
@@ -24049,6 +24230,7 @@ ${CARD_ACTION_STYLES}
       refill.dispose();
       navigation.dispose();
       viewing.dispose();
+      lifecycle.reset();
       for (const entry of [...entries.values()]) release(entry);
       profile = next;
       choices = {};
@@ -24123,6 +24305,7 @@ ${CARD_ACTION_STYLES}
       work.scans++;
       work.scanRoots += roots.length;
       const changedRows = /* @__PURE__ */ new Set(), candidates = /* @__PURE__ */ new Set();
+      let disconnected = 0, invalidated = 0;
       for (const root of roots) {
         const affected = root.closest?.("section, .lolomoRow");
         if (affected) changedRows.add(affected);
@@ -24137,6 +24320,8 @@ ${CARD_ACTION_STYLES}
         if (!detached && !candidates.has(entry)) continue;
         if (!detached) work.leaseChecks++;
         if (detached || !entry.lease.current()) {
+          if (detached) disconnected++;
+          else invalidated++;
           changedRows.add(entry.row);
           release(entry);
         }
@@ -24158,6 +24343,8 @@ ${CARD_ACTION_STYLES}
         const legacy = knowledge.legacy(value.id);
         if (legacy?.watched && value.typeHint === "movie" && !viewing.choice(value.id)) viewing.mark(value.id, value.title);
       }
+      const rows = new Set([...entries.values()].map((entry) => entry.row));
+      lifecycle.population(rows, entries.size, { roots: roots.length, disconnected, invalidated });
       if (observeViewing()) viewingChanged(discovered.map((value) => value.id), false);
       for (const value of discovered) {
         const entry = entries.get(value.host);
@@ -24172,7 +24359,7 @@ ${CARD_ACTION_STYLES}
       }
       for (const row of /* @__PURE__ */ new Set([...byRow.keys(), ...changedRows])) dom.updateArrows(row);
       updateRefill();
-      nativeRows.observe(new Set([...entries.values()].map((entry) => entry.row)));
+      nativeRows.observe(rows);
       nativeRows.refresh();
       work.maxScanMs = Math.max(work.maxScanMs, Math.max(0, now() - scanStart));
     }
@@ -24351,6 +24538,7 @@ ${CARD_ACTION_STYLES}
       savedPanel.dispose();
       inventories.clear();
       inventoryLimit = false;
+      lifecycle.reset();
       for (const entry of [...entries.values()]) release(entry);
       style?.remove();
       style = null;
@@ -24373,7 +24561,8 @@ ${CARD_ACTION_STYLES}
       refill: refill.diagnostics(),
       viewing: viewing.diagnostics(),
       rows: rowDiagnostics(),
-      navigation: navigation.snapshot()
+      navigation: navigation.snapshot(),
+      rowLifecycle: lifecycle.snapshot()
     }) });
   }
 
@@ -24620,7 +24809,7 @@ ${CARD_ACTION_STYLES}
   }
 
   // src/main.js
-  var SCRIPT_VERSION = "1.11.17";
+  var SCRIPT_VERSION = "1.11.18";
   createApplication({ version: SCRIPT_VERSION, userscript: {
     registerMenu: typeof GM_registerMenuCommand === "function" ? (...args) => GM_registerMenuCommand(...args) : void 0,
     unregisterMenu: typeof GM_unregisterMenuCommand === "function" ? (...args) => GM_unregisterMenuCommand(...args) : void 0,
